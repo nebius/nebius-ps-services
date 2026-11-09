@@ -117,8 +117,10 @@ the registered checkout and expected revision. Workers never publish them.
    Intake registers the objective, run and binding; it does not create phase
    checkpoints. Before checkpoint reads, refinement, observation or routing,
    follow the first-start/resume branch in `references/state-schema.md`.
-   The bound coordinator initializes a fresh accepted run at `sdlc-start`,
-   `running`; an active pointer alone does not mean phase state exists.
+   For first initialization, invoke private `scripts/initialize_phase.py
+   --project-root <selected-project>` from the bound native coordinator.
+   It publishes `sdlc-start`, `running`; an active pointer alone does not mean
+   phase state exists. Preserve a blocked result and reconcile its evidence.
 3. Accept material steering with `accept --revise`, which fences dispatch and
    promotion before recording the adjacent objective revision. Stop affected
    native writers, record termination, reconcile them without admitting stale

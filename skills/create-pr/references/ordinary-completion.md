@@ -33,8 +33,9 @@ or implicit implementation/publication authority is introduced.
    Safe means a supported, bounded repair with a clear expected result and
    relevant validation. Stop for semantic choices, unsafe changes, unresolved
    human requested changes, or missing authority. Never self-dismiss objections.
-4. For each safe repair, reuse the same create-pr grant through its **private
-   preparation handoff**: validate/commit/synchronize, review the complete final
+4. Before checkout-dependent review or any repair, call the owner's
+   [private review execution](private-review.md) handoff. Reuse the same create-pr
+   grant and its subordinate execution context through **private preparation**: validate/commit/synchronize, review the complete final
    candidate, push/update the existing PR and return its new head. This handoff
    may use nested read-only code-review but never invokes review-pr or merge-pr,
    posts a passing GitHub review or closes the caller's grant. It is an internal

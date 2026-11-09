@@ -22,7 +22,8 @@ import pytest
 import yaml
 from test_strongswan_sessions import Endpoint, run
 
-from nebius_vpngw.agent.vm_ha.tunnel_observation import parse_sas
+from nebius_vpngw.agent.vm_ha.tunnel_observation import parse_sas, xfrm_records
+from nebius_vpngw.ipsec_observation import command as ipsec_command
 from nebius_vpngw.tunnel_state import collect_tunnel_state
 
 pytestmark = [
@@ -226,7 +227,7 @@ def identities(endpoint):
                 ]
             )
         )
-        for name, sa in parse_sas(endpoint.command("swanctl", "--list-sas", "--raw").stdout)
+        for name, sa in parse_sas(endpoint.command(*ipsec_command()).stdout)
         if sa.get("state") == "ESTABLISHED"
     }
 
@@ -268,7 +269,13 @@ def native_paths(tmp_path, request):
                 "ike_proposals": ["aes256-sha256-modp2048"],
                 "esp_proposals": ["aes256-sha256-modp2048"],
             },
-            "routing": {"bgp": {"hold_time_seconds": 3, "keepalive_seconds": 1}},
+            "routing": {
+                "bgp": {
+                    "hold_time_seconds": 3,
+                    "keepalive_seconds": 1,
+                    "graceful_restart": request.param == "bgp-graceful",
+                }
+            },
         },
         "connections": [],
     }
@@ -306,7 +313,7 @@ def native_paths(tmp_path, request):
             )
         gateway["connections"].append(connection)
     if request.param == "static-probes":
-        gateway["vm_ha"]["tunnel_probes"] = {
+        gateway["gateway"]["tunnel_probes"] = {
             name: {"source_ip": "10.200.1.1", "target_ip": "10.200.2.1"}
             for name in ("preferred", "backup")
         }
@@ -458,7 +465,7 @@ for path in ['/run','/etc/swanctl','/etc/frr','/var/lib/nebius-vpngw']:
 Path('/run/frr').mkdir()
 shutil.chown('/run/frr',user='frr',group='frr')
 Path('/run/nebius-vpngw').mkdir()
-os.execv('/usr/lib/ipsec/charon',['/usr/lib/ipsec/charon'])
+os.execv('/usr/sbin/charon-systemd',['/usr/sbin/charon-systemd'])
 """
             log = (tmp_path / f"native-{index}.log").open("w")
             logs.append(log)
@@ -478,11 +485,15 @@ os.execv('/usr/lib/ipsec/charon',['/usr/lib/ipsec/charon'])
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
-            node = Endpoint(namespace, process, path, address.split("/")[0])
+            node = Endpoint(
+                namespace, process, path, address.split("/")[0], tmp_path / f"native-{index}.log"
+            )
             nodes.append(node)
             wait_until(
                 lambda process=process: (
-                    run(
+                    Path(f"/proc/{process.pid}/exe").resolve()
+                    == Path("/usr/sbin/charon-systemd").resolve()
+                    and run(
                         "nsenter",
                         "-t",
                         str(process.pid),
@@ -581,7 +592,7 @@ os.execv('/usr/lib/ipsec/charon',['/usr/lib/ipsec/charon'])
         except AssertionError:
             pytest.fail("native readiness evidence: " + drive(nodes[0], "diagnose"))
         if behind_nat:
-            sas = parse_sas(nodes[0].command("swanctl", "--list-sas", "--raw").stdout)
+            sas = parse_sas(nodes[0].command(*ipsec_command()).stdout)
             sa = next(sa for name, sa in sas if name == "preferred")
             assert sa["local-host"] == "192.0.2.1" and sa["local-id"] == "203.0.113.1"
         yield nodes, mode, advertise
@@ -615,6 +626,15 @@ os.execv('/usr/lib/ipsec/charon',['/usr/lib/ipsec/charon'])
 
 
 @pytest.mark.parametrize("native_paths", ["static-single"], indirect=True)
+def test_prepared_static_native_health_preserves_fence_and_loader_admission(native_paths):
+    gateway = native_paths[0][0]
+    before = identities(gateway)
+    gateway.command("sysctl", "-w", "net.ipv4.ip_forward=0")
+    assert drive(gateway, "prepared-static-health") == "prepared-static-health-verified"
+    assert identities(gateway) == before
+
+
+@pytest.mark.parametrize("native_paths", ["static-single"], indirect=True)
 def test_single_connection_static_switch_survives_empty_suspension_configuration(native_paths):
     nodes, _, _ = native_paths
     gateway, peer, _ = nodes
@@ -629,8 +649,111 @@ def test_single_connection_static_switch_survives_empty_suspension_configuration
     assert set(identities(gateway)) == {"preferred"}
 
 
+@pytest.mark.parametrize("native_paths", ["static", "static-nat"], indirect=True)
+@pytest.mark.parametrize("operation", ["switch", "activation", "activation-policies-only"])
+def test_static_switch_removes_orphans_after_real_daemon_crash(native_paths, operation):
+    gateway, peer, _ = native_paths[0]
+
+    def kernel_states():
+        return xfrm_records(
+            gateway.command("ip", "xfrm", "state", "list", "nokeys").stdout, policy=False
+        )
+
+    def identity(state):
+        return state["src"], state["dst"], state["proto"], state["spi"]
+
+    before = kernel_states()
+    preferred = {identity(s) for s in before if int(str(s.get("if_id", 0)), 0) == 100}
+    unrelated = {identity(s) for s in before if int(str(s.get("if_id", 0)), 0) == 102}
+    assert preferred and unrelated
+    if operation.startswith("activation"):
+        # Retained selection is a fixture checkpoint, established before the
+        # crash. No selector transition may pre-satisfy activation cleanup.
+        assert drive(gateway, "activation-checkpoint") == "retained-backup-checkpoint"
+        gateway.command("sysctl", "-w", "net.ipv4.ip_forward=0")
+    old_process = gateway.process
+    # Keep the fixture's private mounts alive across SIGKILL. This process owns
+    # no product transition; the replacement daemon starts with an empty VICI
+    # inventory, and the real selector must perform configuration and teardown.
+    anchor = subprocess.Popen(
+        ["nsenter", "-t", str(old_process.pid), "-m", "-n", "--", "sleep", "120"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        wait_until(
+            lambda: (
+                Path(f"/proc/{anchor.pid}/ns/mnt").stat().st_ino
+                == Path(f"/proc/{old_process.pid}/ns/mnt").stat().st_ino
+            )
+        )
+        os.kill(old_process.pid, signal.SIGKILL)
+        old_process.wait(timeout=5)
+        with gateway.log.open("a") as log:
+            gateway.process = subprocess.Popen(
+                ["nsenter", "-t", str(anchor.pid), "-m", "-n", "--", "/usr/sbin/charon-systemd"],
+                env={**os.environ, "STRONGSWAN_CONF": str(gateway.config.parent / "charon-0.conf")},
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        wait_until(
+            lambda: (
+                run(
+                    "nsenter",
+                    "-t",
+                    str(gateway.process.pid),
+                    "-m",
+                    "-n",
+                    "--",
+                    "swanctl",
+                    "--stats",
+                    check=False,
+                ).returncode
+                == 0
+            )
+        )
+        assert identities(gateway) == {}
+        assert preferred.issubset({identity(s) for s in kernel_states()})
+        if operation == "activation-policies-only":
+            # Emulate expired SAs while retaining the kernel policies seen in
+            # the live failed upgrade. This is fault setup before activation.
+            for src, dst, proto, spi in preferred:
+                gateway.command(
+                    "ip",
+                    "xfrm",
+                    "state",
+                    "delete",
+                    "src",
+                    src,
+                    "dst",
+                    dst,
+                    "proto",
+                    proto,
+                    "spi",
+                    str(spi),
+                )
+        daemon_pid = gateway.process.pid
+        outcome = json.loads(drive(gateway, "failover" if operation == "switch" else "activation"))
+        assert outcome["phase"] == "succeeded" and outcome["selected"] == {"site": "backup"}
+        after = kernel_states()
+        assert not any(int(str(s.get("if_id", 0)), 0) == 100 for s in after)
+        rules = xfrm_records(gateway.command("ip", "-s", "xfrm", "policy").stdout, policy=True)
+        assert not any(int(str(rule.get("if_id", 0)), 0) == 100 for rule in rules)
+        assert unrelated.issubset({identity(s) for s in after})
+        assert gateway.process.pid == daemon_pid and gateway.process.poll() is None
+        if operation == "switch":
+            assert drive(gateway, "health") == "healthy"
+        for source, target in ((gateway, peer), (peer, gateway)):
+            source.command("ping", "-n", "-c", "3", "-W", "1", "-I", source.address, target.address)
+    finally:
+        if anchor.poll() is None:
+            anchor.terminate()
+            anchor.wait(timeout=5)
+
+
 @pytest.mark.parametrize("native_paths", ["bgp"], indirect=True)
-def test_unspecified_bgp_coverage_preserves_native_paths_and_rejects_selection(native_paths):
+def test_unspecified_bgp_coverage_preserves_native_paths_and_selects_learned_route(native_paths):
     gateway, peer, _ = native_paths[0]
     cfg = yaml.safe_load(gateway.config.read_text())
     connection = next(c for c in cfg["connections"] if c["name"] == "site")
@@ -641,13 +764,85 @@ def test_unspecified_bgp_coverage_preserves_native_paths_and_rejects_selection(n
     assert {"preferred", "backup", "unrelated"}.issubset(before)
     assert json.loads(drive(gateway, "tick")) == {}
     assert json.loads(drive(gateway, "reconcile")) == {}
-    with pytest.raises(AssertionError, match="selection is unavailable"):
-        drive(gateway, "failover")
+    outcome = json.loads(drive(gateway, "failover"))
+    assert outcome["phase"] == "succeeded"
+    assert outcome["selected"] == {"site": "backup"}
+    routes = json.loads(gateway.command("ip", "-j", "-4", "route", "show", "table", "main").stdout)
+    learned = [route for route in routes if route.get("dst") == "10.200.2.1"]
+    assert len(learned) == 1
+    assert learned[0]["dev"] == "xfrm1" and learned[0]["gateway"] == "169.254.2.2"
+    assert learned[0]["protocol"] == "bgp" and not learned[0].get("nexthops")
     assert identities(gateway) == before
     summary = json.loads(gateway.command("vtysh", "-c", "show bgp summary json").stdout)
     assert all(p["state"] == "Established" for p in summary["ipv4Unicast"]["peers"].values())
     for source, target in [(gateway, peer), (peer, gateway)]:
         source.command("ping", "-n", "-c", "3", "-W", "1", "-I", source.address, target.address)
+
+
+@pytest.mark.parametrize("native_paths", ["bgp"], indirect=True)
+def test_withdrawn_optional_bgp_prefix_retains_guard_without_blocking_health(native_paths):
+    gateway, peer, _ = native_paths[0]
+    cfg = yaml.safe_load(gateway.config.read_text())
+    cfg["connections"][0]["remote_prefixes"] = []
+    gateway.config.write_text(yaml.safe_dump(cfg))
+    assert drive(gateway, "protect-learned") == "learned-destination-protected"
+    assert drive(gateway, "health") == "healthy"
+    before = gateway.command("nft", "-j", "list", "table", "inet", "nebius_vpngw_forward").stdout
+    peer.command(
+        "vtysh",
+        "-c",
+        "configure terminal",
+        "-c",
+        "router bgp 65002",
+        "-c",
+        "address-family ipv4 unicast",
+        "-c",
+        "no network 10.200.2.1/32",
+    )
+
+    def withdrawn():
+        routes = json.loads(
+            gateway.command("ip", "-j", "-4", "route", "show", "table", "main").stdout
+        )
+        return not any(route.get("dst") in {"10.200.2.1", "10.200.2.1/32"} for route in routes)
+
+    wait_until(withdrawn)
+    assert drive(gateway, "health") == "healthy"
+    after = gateway.command("nft", "-j", "list", "table", "inet", "nebius_vpngw_forward").stdout
+    assert after == before
+    # A configured required destination remains mandatory despite the same withdrawal.
+    cfg["connections"][0]["remote_prefixes"] = ["10.200.2.1/32"]
+    gateway.config.write_text(yaml.safe_dump(cfg))
+    assert drive(gateway, "health") == "down"
+
+
+@pytest.mark.parametrize("native_paths", ["static-probes"], indirect=True)
+@pytest.mark.parametrize("ordinary", [False, True])
+def test_preferred_probe_uses_workload_target_while_backup_remains_selected(native_paths, ordinary):
+    gateway, peer, _ = native_paths[0]
+    if ordinary:
+        cfg = yaml.safe_load(gateway.config.read_text())
+        del cfg["vm_ha"]
+        gateway.config.write_text(yaml.safe_dump(cfg))
+    outcome = json.loads(drive(gateway, "failover"))
+    assert outcome["phase"] == "succeeded"
+    assert outcome["selected"] == {"site": "backup"}
+    # Managed Static VPN peers may not answer the synthetic inner address.
+    # Preserve the reachable, explicitly configured workload target instead.
+    peer.command("iptables", "-I", "INPUT", "-d", "169.254.1.2", "-p", "icmp", "-j", "DROP")
+    before = json.loads(gateway.command("ip", "-j", "-4", "route", "show", "table", "main").stdout)
+    end = time.monotonic() + 20
+    observed = []
+    while time.monotonic() < end:
+        observed.append(drive(gateway, "probe-preferred"))
+        if observed[-1] == "healthy":
+            break
+        time.sleep(1)
+    assert observed[-1] == "healthy", observed
+    after = json.loads(gateway.command("ip", "-j", "-4", "route", "show", "table", "main").stdout)
+    assert after == before
+    assert json.loads(drive(gateway, "tick")) == {"site": "backup"}
+    assert drive(gateway, "health") == "healthy"
 
 
 @pytest.mark.parametrize("native_paths", ["static-single"], indirect=True)
@@ -673,6 +868,10 @@ def test_native_manual_switch_preserves_unrelated_connection_and_reconciliation(
     unrelated_bgp = unrelated_bgp_evidence(nodes)
     assert "preferred" in before and "unrelated" in before
     assert ("backup" in before) == (mode == "bgp")
+    unchanged = json.loads(drive(gateway, "failback", "preferred"))
+    assert unchanged["phase"] == "succeeded"
+    assert identities(gateway) == before
+    assert unrelated_bgp_evidence(nodes) == unrelated_bgp
     outcome = json.loads(drive(gateway, "failover"))
     assert outcome == {"selected": {"site": "backup"}, "result": "verified", "phase": "succeeded"}
     assert identities(gateway)["unrelated"] == before["unrelated"]
@@ -705,6 +904,14 @@ def test_native_manual_switch_preserves_unrelated_connection_and_reconciliation(
     assert outcome["phase"] == "succeeded"
     assert outcome["selected"] == ({"site": "preferred"} if mode == "static" else {})
     assert identities(gateway)["unrelated"] == before["unrelated"]
+    assert unrelated_bgp_evidence(nodes) == unrelated_bgp
+    restored = identities(gateway)
+    # Even with the prior switch's episode retained, verification must neither
+    # consume another window nor recreate the already preferred native SAs.
+    unchanged = json.loads(drive(gateway, "failback", "preferred"))
+    assert unchanged["phase"] == "succeeded"
+    assert unchanged["selected"] == outcome["selected"]
+    assert identities(gateway) == restored
     assert unrelated_bgp_evidence(nodes) == unrelated_bgp
 
 
@@ -790,7 +997,7 @@ def test_native_path_failure_recovers_without_disturbing_other_connection(native
                 )
     finally:
         isolate_path(gateway, failed, enabled=False)
-    # Recovery does not automatically fail back a working Static selection.
+    # One recovery observation cannot satisfy the 60-second failback stability gate.
     if mode == "static":
         assert json.loads(drive(gateway, "tick")) == {"site": "backup"}
 
@@ -849,8 +1056,12 @@ def test_static_probe_loss_switches_with_live_ike_and_persisted_debounce(native_
 
 
 @pytest.mark.parametrize("native_paths", ["bgp", "bgp-no-advertise"], indirect=True)
-@pytest.mark.parametrize("scenario", ["activate", "verify", "release", "failed-selected"])
-def test_owner_bgp_restart_replays_only_after_fenced_activation(native_paths, scenario):
+@pytest.mark.parametrize(
+    "scenario", ["activate", "verify", "release", "failed-selected", "missing-protection"]
+)
+def test_owner_bgp_restart_replays_only_after_fenced_activation(
+    native_paths, scenario, record_property
+):
     gateway, _, _ = native_paths[0]
     try:
         result = subprocess.run(
@@ -873,40 +1084,86 @@ def test_owner_bgp_restart_replays_only_after_fenced_activation(native_paths, sc
             check=True,
             timeout=60,
         )
-    except subprocess.CalledProcessError as error:
-        pytest.fail(f"Restart driver failed:\n{error.stdout[-3500:]}\n{error.stderr[-3500:]}")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        # The harness retains the full stream. Truncation loses the transition
+        # that distinguishes slow effects from a stalled controller.
+        for stream in ("stdout", "stderr"):
+            value = getattr(error, stream) or ""
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", errors="replace")
+            record_property(f"restart_driver.{stream}", value)
+        pytest.fail(f"Restart driver {type(error).__name__}:\n{error.stdout}\n{error.stderr}")
+    record_property("restart_driver.stdout", result.stdout)
+    record_property("restart_driver.stderr", result.stderr)
     row = json.loads(result.stdout.strip().splitlines()[-1])
     assert row["active"]
     assert row["phase"] == ("failed" if scenario in {"release", "failed-selected"} else "succeeded")
 
 
+def owner_coverage_driver(gateway, record_property, *scenario):
+    assert gateway.process.poll() is None, "fixture charon exited"
+    try:
+        result = subprocess.run(
+            [
+                "nsenter",
+                "-t",
+                str(gateway.process.pid),
+                "-m",
+                "-n",
+                "--",
+                "env",
+                "PYTHONPATH=/workspace/src:/workspace",
+                sys.executable,
+                "/workspace/tests/systemd/ha_bgp_owner_driver.py",
+                str(gateway.config),
+                *scenario,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=20,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        for stream in ("stdout", "stderr"):
+            value = getattr(error, stream) or ""
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", errors="replace")
+            record_property(f"owner_driver.{stream}", value)
+        pytest.fail(f"Owner coverage driver {type(error).__name__}:\n{error.stdout}\n{error.stderr}")
+    record_property("owner_driver.stdout", result.stdout)
+    record_property("owner_driver.stderr", result.stderr)
+    return result
+
+
 @pytest.mark.parametrize("native_paths", ["bgp", "bgp-no-advertise"], indirect=True)
-def test_owner_bgp_sa_loss_repairs_only_failed_session(native_paths):
+def test_owner_bgp_sa_loss_retains_native_alternative_coverage(native_paths, record_property):
     gateway, peer, _ = native_paths[0]
     before = identities(gateway)
-    try:
-        result = gateway.command(
-            "env",
-            "PYTHONPATH=/workspace/src:/workspace",
-            sys.executable,
-            "/workspace/tests/systemd/ha_bgp_owner_driver.py",
-            str(gateway.config),
-        )
-    except subprocess.CalledProcessError as error:
-        pytest.fail(f"Owner repair driver failed:\n{error.stdout[-4000:]}\n{error.stderr[-4000:]}")
+    result = owner_coverage_driver(gateway, record_property)
     rows = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
     assert [row["label"] for row in rows] == [
         "baseline",
         "failed-preferred-sa",
-        "product-first-recovery",
-        "product-scoped-repair",
-        "backup-before-reset",
-        "backup-health-reset",
+        "native-alternative-recovery",
+        "backup-health-verification",
     ]
     assert rows[1]["receipt"] and rows[1]["digest_same"]
-    assert rows[1]["action"] == "repair-local-dataplane"
-    assert rows[2]["reasons"] == ["repair-health-verification-active"]
+    assert all(row["action"] is None for row in rows)
     assert all(row["readiness"] == [] and row["action"] is None for row in rows[2:])
+    after = identities(gateway)
+    assert after["backup"] == before["backup"]
+    assert after["unrelated"] == before["unrelated"]
+
+
+@pytest.mark.parametrize("native_paths", ["bgp-graceful"], indirect=True)
+def test_retained_graceful_bgp_route_does_not_prove_coverage(native_paths, record_property):
+    gateway, _, _ = native_paths[0]
+    before = identities(gateway)
+    result = owner_coverage_driver(gateway, record_property, "stale")
+    rows = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
+    assert rows[-1]["label"] == "retained-route-not-coverage"
+    assert "bgp-not-ready" in rows[-1]["readiness"]
+    assert all(row["action"] is None for row in rows)
     after = identities(gateway)
     assert after["backup"] == before["backup"]
     assert after["unrelated"] == before["unrelated"]

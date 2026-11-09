@@ -30,10 +30,21 @@ try:
     import _vpngw_ingress as ingress  # type: ignore[import-not-found]
     import _vpngw_ordinary_operations as operations  # type: ignore[import-not-found]
     import _vpngw_ordinary_routes as routes  # type: ignore[import-not-found]
+    import _vpngw_runtime_migration as migration  # type: ignore[import-not-found]
 except ModuleNotFoundError:
     from .. import ingress_policy as ingress
     from .. import ordinary_operations as operations
     from .. import ordinary_routes as routes
+    from .. import runtime_migration as migration
+
+try:
+    import _vpngw_python_package_recovery as python_packages  # type: ignore[import-not-found]
+except ModuleNotFoundError:
+    from .. import python_package_recovery as python_packages
+
+migration.PYTHON_PREPARE = lambda manifest, path: python_packages.prepare_payload(
+    manifest, path, command
+)
 
 CONFIG = Path("/etc/nebius-vpngw/config-resolved.yaml")
 BOOT = Path("/proc/sys/kernel/random/boot_id")
@@ -42,6 +53,25 @@ ROUTING_LOCK = Path("/run/nebius-vpngw/fix-routes.lock")
 DEADLINE = 0.0
 CHILD: subprocess.Popen | None = None
 OPERATION: operations.Operation | None = None
+DURABLE_PACKAGES = False
+
+
+def command_environment(args: list[str]) -> dict[str, str]:
+    environment = {
+        **os.environ,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "LC_ALL": "C",
+        "DEBIAN_FRONTEND": "noninteractive",
+    }
+    if "pip" in args[:4] and (DURABLE_PACKAGES or "--root" in args):
+        environment = {
+            k: v
+            for k, v in environment.items()
+            if not k.startswith("PIP_") and k not in {"PYTHONPATH", "PYTHONHOME"}
+        }
+        environment.update(PIP_CONFIG_FILE=os.devnull, PYTHONNOUSERSITE="1")
+    return environment
+
 
 # Shared with HA package preparation; runs under the caller's bounded process
 # group. Only selected, hash-verified wheels reach this installer. Never apply
@@ -86,8 +116,16 @@ def canonical(value: Any) -> str:
     return sha(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
 
 
-def command(args: list[str], *, limit: int = 30, required: bool = True) -> tuple[int, str]:
+def command(
+    args: list[str], *, limit: int = 30, required: bool = True, capture_stderr: bool = False
+) -> tuple[int, str]:
     global CHILD
+    package_effect = (
+        args[0] == "dpkg"
+        and any(action in args for action in ("--remove", "--unpack", "--configure"))
+    ) or ("pip" in args[:4] and "install" in args)
+    if DURABLE_PACKAGES and OPERATION is not None and package_effect:
+        return durable_command(args, required=required)
     remaining = min(limit, DEADLINE - (60 if OPERATION else 0) - time.monotonic())
     if remaining <= 0:
         raise RuntimeError("deadline")
@@ -95,9 +133,12 @@ def command(args: list[str], *, limit: int = 30, required: bool = True) -> tuple
     CHILD = subprocess.Popen(
         args,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT if capture_stderr else subprocess.DEVNULL,
         start_new_session=True,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+        env=command_environment(args),
+        # Projection and PID1-owned installation must create identical modes,
+        # regardless of the observing SSH process's inherited mask.
+        umask=0o022 if "pip" in args[:4] and "install" in args else -1,
     )
     try:
         if OPERATION is not None and effect is not None:
@@ -154,6 +195,54 @@ def command(args: list[str], *, limit: int = 30, required: bool = True) -> tuple
             OPERATION.update(effect, state="settled")
     if required and rc:
         raise RuntimeError("command")
+    return rc, output.decode("utf-8", errors="strict").strip()
+
+
+def durable_command(args: list[str], *, required: bool = True) -> tuple[int, str]:
+    """Wait for an admitted owner's child and descendants, independent of SSH.
+
+    No elapsed-time or output-volume event kills package work. Retain bounded
+    diagnostics while draining pipes. Parent death leaves the native effect
+    unresolved and systemd's cgroup prevents a replacement owner overlapping it.
+    """
+    assert OPERATION is not None
+    OPERATION.check()
+    from nebius_vpngw import package_worker
+
+    if args[0] == "dpkg":
+        with package_worker.native_lock("/var/lib/dpkg/lock"):
+            pass
+        OPERATION.check()
+    index = OPERATION.intent("process")
+    child = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        env=command_environment(args),
+        umask=0o022 if "pip" in args[:4] and "install" in args else -1,
+    )
+    OPERATION.process_started(index, child.pid)
+    output = bytearray()
+    assert child.stdout is not None
+    with child.stdout, selectors.DefaultSelector() as selector:
+        selector.register(child.stdout, selectors.EVENT_READ)
+        while selector.get_map():
+            for key, _events in selector.select(1):
+                chunk = os.read(key.fd, 65536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                else:
+                    output.extend(chunk[: max(0, 2 * 1024 * 1024 - len(output))])
+    rc = child.wait()
+    process = OPERATION.check()["effects"][index]["process"]
+    from nebius_vpngw import package_worker
+
+    while not operations.process_group_empty(process) or package_worker.children_running():
+        time.sleep(0.2)
+    OPERATION.update(index, state="settled")
+    if required and rc:
+        raise RuntimeError("package command failed after settlement")
     return rc, output.decode("utf-8", errors="strict").strip()
 
 
@@ -274,7 +363,38 @@ def inspect(
                 proof=CONFIG.parent / "ordinary-verification.json",
                 future=manifest["route_projection"],
             )
+    # This read-only projection preserves the caller's approved closure before a
+    # guest transaction exists. Execution still proves the original predecessor
+    # and admission through the operation owner before installing anything.
+    runtime_plan = (
+        manifest.get("runtime_plan")
+        if manifest.get("ha_parent") or manifest.get("command_approval")
+        else None
+    )
+    if runtime_plan is not None:
+        migration.validate_plan(runtime_plan)
+    pending_runtime = migration.pending(manifest.get("ha_parent"))
+    runtime_state = migration.state()
+    completion = None
+    if runtime_state and runtime_state["phase"] == "complete" and pending_runtime is None:
+        completion = {
+            "operation": runtime_state["operation"],
+            "approval": runtime_state["manifest"].get("command_approval"),
+            "manifest": canonical(
+                {
+                    key: value
+                    for key, value in runtime_state["manifest"].items()
+                    if key not in {"command_approval", "ha_parent"}
+                }
+            ),
+        }
     return {
+        "runtime": migration.native(),
+        "runtime_plan": runtime_plan
+        if runtime_plan is not None
+        else migration.plan(manifest.get("ha_parent")),
+        "runtime_pending": pending_runtime,
+        "runtime_completion": completion,
         "route_ownership": ownership,
         "boot_id": boot,
         "config_sha256": config_sha,
@@ -317,23 +437,22 @@ def stable_predecessor(observation: dict[str, Any]) -> str:
         {
             key: value
             for key, value in observation.items()
-            if key not in {"verified", "agent_state", "operation"}
+            if key
+            not in {
+                "verified",
+                "agent_state",
+                "operation",
+                "runtime",
+                "runtime_pending",
+                "runtime_completion",
+            }
         }
     )
 
 
 def _wait_final_settlement(operation: operations.Operation) -> None:
     """Observe admitted manager work without releasing the pending-operation guard."""
-    while True:
-        operation.check()
-        remaining = operation.manager.deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("ordinary_manager_unresolved")
-        if operation.manager.quiet((*operations.MANAGEMENT, *operations.DATAPLANE)):
-            if time.monotonic() >= operation.manager.deadline:
-                raise TimeoutError("ordinary_manager_unresolved")
-            return
-        time.sleep(min(0.1, max(0, operation.manager.deadline - time.monotonic())))
+    operations.wait_quiet(operation.manager, operation.check)
 
 
 def final_confirmation(
@@ -358,7 +477,8 @@ def final_confirmation(
             final = inspect(manifest, verify_runtime=False, route_locked=True)
             proof = CONFIG.parent / "ordinary-verification.json"
             if (
-                final["files"] != manifest["files"]
+                not final["runtime"]["ready"]
+                or final["files"] != manifest["files"]
                 or final["agent_state"] != "active"
                 or final["boot_id"] != current["boot_id"]
                 or final["config_sha256"] != manifest["config_sha256"]
@@ -400,6 +520,9 @@ def final_confirmation(
             if operation.manager.quiet((*operations.MANAGEMENT, *operations.DATAPLANE)):
                 if time.monotonic() >= operation.manager.deadline:
                     raise TimeoutError("ordinary_manager_unresolved")
+                migration.release()
+                # Timer activation was deliberately inhibited during package work.
+                operation.service("start", "nebius-vpngw-fix-routes.timer")
                 operation.complete()
                 return receipt
         # An activated timer can dispatch its guarded maintenance job after
@@ -498,12 +621,22 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
         for path, item in manifest["assets"].items():
             if "predecessors" in item and current["assets"].get(path) not in item["predecessors"]:
                 raise RuntimeError("ordinary_asset_conflict")
-        route_plan = routes.RouteRetirementPlan.build(
-            current["route_ownership"], manifest["route_projection"]
-        )
-        if route_plan.payload != manifest["route_plan"]:
-            raise RuntimeError("route_plan_changed")
+        resume = (current.get("operation") or {}).get("id") == request["request_id"]
+        if resume:
+            previous_operation = operations.Journal().read()
+            envelope = routes.RouteStore().envelope(previous_operation)
+            if envelope["plan"] != manifest["route_plan"]:
+                raise RuntimeError("route_plan_changed")
+            route_plan = routes.RouteRetirementPlan(envelope["plan"])
+        else:
+            route_plan = routes.RouteRetirementPlan.build(
+                current["route_ownership"], manifest["route_projection"]
+            )
+            if route_plan.payload != manifest["route_plan"]:
+                raise RuntimeError("route_plan_changed")
         stage = "stage"
+        migration.stage_payload(manifest, request)
+        migration.begin(manifest["runtime_plan"], request["request_id"], manifest)
         wheel = base64.b64decode(request["wheel"], validate=True)
         config = base64.b64decode(request["config"], validate=True)
         if sha(wheel) != manifest["wheel_sha256"] or sha(config) != manifest["config_sha256"]:
@@ -527,21 +660,12 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
             if wheel_path.parent != root or wheel_path.suffix != ".whl":
                 raise RuntimeError("artifact")
             wheel_path.write_bytes(wheel)
-            dependency_paths = []
-            for item in request["dependency_wheels"]:
-                path = root / item["name"]
-                raw = base64.b64decode(item["content"], validate=True)
-                if (
-                    path.parent != root
-                    or path.suffix != ".whl"
-                    or sha(raw) != manifest["dependency_wheels"].get(item["name"])
-                ):
-                    raise RuntimeError("dependency")
-                path.write_bytes(raw)
-                dependency_paths.append(str(path))
-            if len(dependency_paths) != len(manifest["dependency_wheels"]):
-                raise RuntimeError("dependency")
+            dependency_paths = [
+                str(migration.ROOT / migration.digest(manifest["runtime_plan"]) / "payload" / name)
+                for name in manifest["dependency_wheels"]
+            ]
             stage = "quiesce"
+            resume = (current.get("operation") or {}).get("id") == request["request_id"]
             with routing_lock():
                 fresh_routes = routes.RouteStore().snapshot(
                     previous,
@@ -553,7 +677,7 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
                 )
                 if fresh_routes != current["route_ownership"]:
                     raise RuntimeError("route_predecessor_changed")
-                if replacement is None:
+                if replacement is None and not resume:
                     routes.RouteStore().prepare(
                         {
                             "id": request["request_id"],
@@ -574,18 +698,28 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
                     network=network,
                     previous=(current.get("operation") or {}).get("digest"),
                 )
-            for name in operations.MANAGEMENT:
-                if not manager.unit(name).get("missing"):
+            migration.COMMAND = command
+            migration.CHECK = OPERATION.check
+            migration.inhibit()
+            for name in (
+                *operations.MANAGEMENT,
+                "strongswan-starter.service",
+                "strongswan-swanctl.service",
+                "strongswan.service",
+            ):
+                if not manager.unit(name).get("missing") or not manager.stopped(name):
                     OPERATION.service("stop", name)
                 if not manager.stopped(name):
                     raise RuntimeError("quiescence")
             stage = "install"
-            command(["apt-get", "install", "-y", "nftables"], limit=120)
             OPERATION.phase("install")
             with routing_lock():
                 quiescent = inspect(manifest, verify_runtime=False, route_locked=True)
-                if stable_predecessor(quiescent) != stable_predecessor(current):
+                if not resume and stable_predecessor(quiescent) != stable_predecessor(current):
                     raise RuntimeError("identity_drift")
+                if not manager.quiet((*operations.MANAGEMENT, *operations.DATAPLANE)):
+                    raise RuntimeError("package_quiescence_unproven")
+                migration.install()
                 if dependency_paths:
                     command(
                         [
@@ -602,18 +736,7 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
                     or current["package_version"] != manifest["version"]
                 ):
                     command(
-                        [
-                            sys.executable,
-                            "-B",
-                            "-m",
-                            "pip",
-                            "install",
-                            "--no-index",
-                            "--no-deps",
-                            "--force-reinstall",
-                            "--break-system-packages",
-                            str(wheel_path),
-                        ],
+                        migration.product_install_command(wheel_path),
                         limit=120,
                     )
                 stage = "publish"
@@ -630,7 +753,7 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
                 if current["config_sha256"] != manifest["config_sha256"]:
                     publish(CONFIG, config, 0o644)
                 OPERATION.reload_manager()
-                command(["systemctl", "enable", "nebius-vpngw-ingress.service"])
+                migration.enable_units(["nebius-vpngw-ingress.service"])
                 if not manager.management_admitted():
                     raise RuntimeError("ordinary_service_scope_unknown")
             if replacement is not None:
@@ -671,6 +794,7 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
                     },
                 }
             stage = "reconcile"
+            migration.activate()
             OPERATION.phase("reconcile")
             receipt = agent_receipt(
                 manifest["config_sha256"],
@@ -682,26 +806,62 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
                 raise RuntimeError("installed_artifact")
             stage = "activate"
             OPERATION.phase("activate")
-            active = [
-                "nebius-vpngw-agent.service",
-                "nebius-vpngw-fix-routes.timer",
-                "nebius-vpngw-health-monitor.service",
-            ]
-            OPERATION.enable(active)
-            for name in active:
-                OPERATION.service("start", name)
+            activate_management(OPERATION)
             stage = "verify"
             OPERATION.phase("verify")
             receipt = final_confirmation(manifest, current, request["request_id"], OPERATION)
             return {"status": "applied", "receipt": receipt}
-    except Exception:
+    except Exception as error:
         if OPERATION is not None:
             OPERATION.manager.deadline = DEADLINE
             OPERATION.fail()
-        return {"status": "failed", "stage": stage, "error_code": "ordinary_transaction_failed"}
+        # Closed diagnostic codes distinguish stale approval from failed local
+        # verification. Never return arbitrary command/configuration output.
+        code = str(error)
+        if code not in {
+            "stale_plan",
+            "runtime_drift",
+            "final_artifact",
+            "receipt",
+            "ordinary_environment_changed",
+            "ordinary_asset_conflict",
+            "route_plan_changed",
+            "route_predecessor_changed",
+            "identity_drift",
+            "package_quiescence_unproven",
+        }:
+            code = "ordinary_transaction_failed"
+        return {"status": "failed", "stage": stage, "error_code": code}
     finally:
         OPERATION = None
+        migration.COMMAND = migration.CHECK = None
         os.close(fd)
+
+
+def activate_management(operation: operations.Operation) -> None:
+    active = [
+        "nebius-vpngw-agent.service",
+        "nebius-vpngw-fix-routes.timer",
+        "nebius-vpngw-health-monitor.service",
+    ]
+    operation.enable(migration.units_to_enable(active))
+    # The timer's package-inhibition condition remains false until final
+    # confirmation releases the migration. That owner starts it after release.
+    for name in active:
+        if name != "nebius-vpngw-fix-routes.timer":
+            operation.service("start", name)
+
+
+def release_runtime(request: dict) -> dict:
+    value = migration.state()
+    if value is not None:
+        if value["manifest"]["wheel_sha256"] != request["artifact"]:
+            raise RuntimeError("runtime release artifact changed")
+        migration.release()
+        command(["systemctl", "start", "nebius-vpngw-fix-routes.timer"], limit=15)
+    elif not migration.native()["ready"]:
+        raise RuntimeError("runtime native verification failed")
+    return {"status": "released"}
 
 
 def main(*, deadline: float | None = None) -> None:
@@ -736,6 +896,13 @@ def main(*, deadline: float | None = None) -> None:
                     ),
                 }
                 if request["action"] in {"inspect", "inspect-package"}
+                else {
+                    "status": "staged",
+                    "receipt": migration.stage_payload(request["manifest"], request),
+                }
+                if request["action"] == "stage-package"
+                else release_runtime(request)
+                if request["action"] == "release-runtime"
                 else execute(request)
             )
     except Exception:

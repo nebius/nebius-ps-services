@@ -1,0 +1,22 @@
+# Package-history prerequisites and legacy daemon; no product/candidate Python.
+FROM ubuntu:24.04@sha256:186072bba1b2f436cbb91ef2567abca677337cfc786c86e107d25b7072feef0c
+ENV DEBIAN_FRONTEND=noninteractive container=docker PYTHONDONTWRITEBYTECODE=1
+# The minimal Ubuntu image excludes documentation while dpkg still lists it.
+# Retain complete package payloads so repeat checks can fail on any missing file.
+RUN rm -f /etc/dpkg/dpkg.cfg.d/excludes \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    systemd systemd-sysv dbus netplan.io iproute2 python3 python3-pip python3-venv \
+    sudo curl ca-certificates lsb-release \
+    && rm -rf /var/lib/apt/lists/*
+RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
+    && chmod 755 /usr/sbin/policy-rc.d \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends strongswan strongswan-swanctl \
+       strongswan-pki libcharon-extra-plugins ufw nftables iptables \
+    && curl -fsSL https://deb.frrouting.org/frr/keys.asc -o /usr/share/keyrings/frrouting.asc \
+    && printf 'deb [signed-by=/usr/share/keyrings/frrouting.asc] https://deb.frrouting.org/frr noble frr-stable\n' > /etc/apt/sources.list.d/frr.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends frr frr-pythontools \
+    && rm -rf /var/lib/apt/lists/*
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

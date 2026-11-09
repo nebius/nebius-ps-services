@@ -84,7 +84,7 @@ def publication_guard(project: Path, *, objective_sha256, basis_sha256):
             coordinator = read(run_dir / "execution" / feature / "coordinator.json")
             if (run.get("project_root") != str(selected)
                     or run.get("git_common_dir") != str(path.parent.parent)
-                    or coordinator.get("schema") != "workflow/execution-coordinator-v2"
+                    or coordinator.get("schema") != "workflow/execution-coordinator-v3"
                     or coordinator.get("run_id") != run_dir.name
                     or coordinator.get("execution_id") != feature
                     or coordinator.get("selected_project_root") != str(selected)):

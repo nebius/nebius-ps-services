@@ -73,12 +73,12 @@ from workflow_liveness import (  # noqa: E402
 )
 
 
-COORDINATOR_SCHEMA = "workflow/execution-coordinator-v2"
-WAVE_SCHEMA = "workflow/execution-wave-v2"
-TASK_SCHEMA = "workflow/execution-task-v2"
+COORDINATOR_SCHEMA = "workflow/execution-coordinator-v3"
+WAVE_SCHEMA = "workflow/execution-wave-v3"
+TASK_SCHEMA = "workflow/execution-task-v3"
 ASSIGNMENT_SCHEMA = "workflow/worker-assignment-v2"
-RESULT_SCHEMA = "workflow/worker-result-v3"
-INCOMING_HANDOFF_SCHEMA = "agentic-sdlc/incoming-handoff-v2"
+RESULT_SCHEMA = "workflow/worker-result-v4"
+INCOMING_HANDOFF_SCHEMA = "agentic-sdlc/incoming-handoff-v3"
 TASK_FINISH_INTENT_SCHEMA = "workflow/task-finish-intent-v3"
 WORKER_HEARTBEAT_SECONDS = 30
 WORKER_STANDARD_WARNING_SECONDS = 240
@@ -261,7 +261,7 @@ def _session_hash(value: str) -> str:
 def _validated_session_history(task_record: dict[str, Any]) -> list[str]:
     if task_record.get("schema") in {
         "agentic-sdlc/execution-task-v1",
-        "agentic-sdlc/execution-task-v2",
+        "agentic-sdlc/execution-task-v3",
         "agentic-sdlc/execution-task-v3",
     }:
         raise ExecutionError(
@@ -455,6 +455,45 @@ def _run(
 
 def git(cwd: Path, args: list[str], action: str, *, check: bool = True) -> str:
     return _run(["git", *args], cwd, action, check=check).stdout.strip()
+
+
+def _seal_message_git(cwd: Path, args: list[str], data: bytes | None = None) -> bytes:
+    """Preserve message bytes; diagnostics must never reflect Git/message output."""
+    try:
+        result = subprocess.run(
+            ["git", *args], cwd=cwd, env=git_environment(cwd), input=data,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ExecutionError("GIT_OPERATION_FAILED", "Git seal message operation failed") from error
+    if result.returncode != 0:
+        raise ExecutionError("GIT_OPERATION_FAILED", "Git seal message operation failed")
+    return result.stdout
+
+
+def canonical_seal_message(cwd: Path, message: str) -> bytes:
+    """Use Git's nonedited whitespace cleanup, retaining indentation and comments."""
+    try:
+        data = message.encode("utf-8")
+    except (AttributeError, UnicodeError) as error:
+        raise ExecutionError("EXECUTION_STATE_INVALID", "seal message is invalid") from error
+    return _seal_message_git(cwd, ["stripspace"], data)
+
+
+def sealed_commit_message(cwd: Path, commit: str) -> bytes:
+    """Read the raw message without pretty-format separators or encoding changes."""
+    if re.fullmatch(r"[0-9a-f]{40,64}", commit) is None:
+        raise ExecutionError("EXECUTION_STATE_INVALID", "seal commit identity is invalid")
+    raw = _seal_message_git(cwd, ["cat-file", "commit", commit])
+    _headers, separator, message = raw.partition(b"\n\n")
+    if not separator:
+        raise ExecutionError("EXECUTION_STATE_INVALID", "seal commit message is unavailable")
+    return message
+
+
+def _require_seal_message(cwd: Path, commit: str, message: str) -> None:
+    if sealed_commit_message(cwd, commit) != canonical_seal_message(cwd, message):
+        raise ExecutionError("WORKTREE_CONFLICT", "committed seal message differs from recorded intent")
 
 
 def git_root(cwd: Path) -> Path:
@@ -841,8 +880,10 @@ def tasks_conflict(left: TaskPlan, right: TaskPlan) -> bool:
     return False
 
 
-def build_dependency_waves(tasks: list[TaskPlan], *, prefix=()) -> list[list[TaskPlan]]:
-    """Freeze batches of at most four retained worktrees, independently of slots."""
+def build_dependency_waves(tasks: list[TaskPlan], *, prefix=(), wave_limit: int = 8) -> list[list[TaskPlan]]:
+    """Freeze bounded batches independently of current native worker slots."""
+    if type(wave_limit) is not int or wave_limit < 1:
+        raise ExecutionError("PLAN_INVALID", "wave task limit must be positive")
     waves: list[list[TaskPlan]] = [list(wave) for wave in prefix]
     wave_index = {task.task_id: index for index, wave in enumerate(waves) for task in wave}
     first_available = len(waves)
@@ -851,33 +892,21 @@ def build_dependency_waves(tasks: list[TaskPlan], *, prefix=()) -> list[list[Tas
             continue
         target = max(first_available, max((wave_index[item] for item in task.dependencies), default=-1) + 1)
         while target < len(waves) and (
-            len(waves[target]) >= 4 or any(tasks_conflict(task, peer) for peer in waves[target])
+            len(waves[target]) >= wave_limit or any(tasks_conflict(task, peer) for peer in waves[target])
         ):
             target += 1
         if target == len(waves):
             waves.append([])
         waves[target].append(task)
         wave_index[task.task_id] = target
-        while first_available < len(waves) and len(waves[first_available]) >= 4:
+        while first_available < len(waves) and len(waves[first_available]) >= wave_limit:
             first_available += 1
     return waves
 
 
 def effective_capacity(run_dir: Path, requested: int) -> int:
-    """Absent observed native capacity is a serial fallback, never a claim of parallelism."""
-    path = run_dir / "host-capacity.json"
-    if not path.exists():
-        return 1
-    observed = read_json(path)
-    if (observed.get("schema") != "workflow/host-capacity-v1"
-            or type(observed.get("native_slots")) is not int
-            or observed["native_slots"] < 1
-            or not isinstance(observed.get("evidence"), str) or not observed["evidence"].strip()):
-        raise ExecutionError("CAPACITY_UNAVAILABLE", "native worker capacity observation is invalid")
-    configured = observed.get("configured_worker_limit", 4)
-    if type(configured) is not int or configured < 1:
-        raise ExecutionError("EXECUTION_STATE_INVALID", "configured worker capacity must be a positive integer")
-    return min(4, requested, configured, observed["native_slots"], max(1, os.cpu_count() or 1))
+    from workflow_capacity import effective
+    return _impact("native capacity is unavailable", effective, run_dir, requested)
 
 
 def _wave_index(waves: list[list[TaskPlan]]) -> dict[str, str]:
@@ -972,6 +1001,7 @@ def _load_coordinator(run_dir: Path, execution_id: str) -> dict[str, Any]:
         "agentic-sdlc/execution-coordinator-v6",
         "agentic-sdlc/execution-coordinator-v7",
         "workflow/execution-coordinator-v1",
+        "workflow/execution-coordinator-v2",
     }:
         raise ExecutionError(
             "WORKFLOW_UPGRADE_REQUIRED",
@@ -1023,13 +1053,17 @@ def _save_coordinator(run_dir: Path, execution_id: str, value: dict[str, Any]) -
 
 def prepare_specifications(run_dir: Path, project_root: Path, execution_id: str) -> dict[str, Any]:
     """Allocate the sole Implement integration checkout before spec publication."""
-    return _prepare_execution(run_dir, project_root, execution_id, None, 1)
+    from workflow_state import lock
+    with lock(run_dir.parent):
+        return _prepare_execution(run_dir, project_root, execution_id, None, None)
 
 
 def prepare_execution(
     run_dir: Path, project_root: Path, execution_id: str, plan_path: Path, capacity: int,
 ) -> dict[str, Any]:
-    return _prepare_execution(run_dir, project_root, execution_id, plan_path, capacity)
+    from workflow_state import lock
+    with lock(run_dir.parent):
+        return _prepare_execution(run_dir, project_root, execution_id, plan_path, capacity)
 
 
 def _prepare_execution(
@@ -1040,6 +1074,8 @@ def _prepare_execution(
     capacity: int,
 ) -> dict[str, Any]:
     bootstrap = plan_path is None
+    from workflow_capacity import policy, reserve_integration
+    validation_plan_sha256 = None
     execution_id = _require_id(execution_id, EXECUTION_ID_RE, "execution ID")
     accepted_run, objective = check_dispatch(run_dir)
     if bootstrap and accepted_run["owner"] != "implement":
@@ -1072,6 +1108,8 @@ def _prepare_execution(
             "WORKTREE_CONFLICT",
             "private run directory must be outside Git worktrees and metadata",
         )
+    limits = policy(run_dir, worker_limit=capacity, initialize=True)
+    capacity = limits["worker_limit"]
     tasks: list[TaskPlan] = []
     waves: list[list[TaskPlan]] = []
     plan_digest = None
@@ -1092,7 +1130,6 @@ def _prepare_execution(
             )
         if capacity < 1:
             raise ExecutionError("PLAN_INVALID", "capacity must be positive")
-        capacity = effective_capacity(run_dir, capacity)
         plan_bytes = plan_path.read_bytes()
         plan_digest = sha256_bytes(plan_bytes)
         plan_text = plan_bytes.decode("utf-8")
@@ -1107,7 +1144,9 @@ def _prepare_execution(
         from workflow_program import slice_basis
         slice_basis(run_dir, selected_project_root, execution_id, tasks)
         _verify_claim_paths(project_root, project_scope, tasks)
-        waves = build_dependency_waves(tasks)
+        from workflow_validation import validate_plan, plan_path as validation_path
+        validation_plan_sha256 = canonical_digest(validate_plan(read_json(validation_path(plan_path)), [task.task_id for task in tasks]))
+        waves = build_dependency_waves(tasks, wave_limit=limits["wave_task_limit"])
         _impact(
             "objective impact verification failed",
             verify_current_objective_impact,
@@ -1239,7 +1278,7 @@ def _prepare_execution(
                 raise ExecutionError("REPLAN_REQUIRED", "bootstrap objective changed; retain the prior checkout")
             coordinator.update(plan_path=str(plan_path), plan_digest=plan_digest,
                                capacity=capacity, wave_ids=[f"WAVE-{i:03d}" for i in range(1, len(waves) + 1)],
-                               task_waves=_wave_index(waves),
+                               task_waves=_wave_index(waves), validation_plan_sha256=validation_plan_sha256,
                                status="specs_sealing")
             _save_coordinator(run_dir, execution_id, coordinator)
         elif coordinator.get("plan_digest") != plan_digest:
@@ -1273,6 +1312,7 @@ def _prepare_execution(
         integration_worktree = (
             run_dir / "worktrees" / execution_id / "integration"
         ).resolve()
+        _impact("integration budget is exhausted", reserve_integration, run_dir, project_root, execution_id)
         if integration_worktree.exists():
             raise ExecutionError(
                 "WORKTREE_COLLISION", "integration path already exists"
@@ -1310,7 +1350,8 @@ def _prepare_execution(
             "integration_head": base_head,
             "wave_ids": [f"WAVE-{index:03d}" for index in range(1, len(waves) + 1)],
             "task_waves": _wave_index(waves),
-            "retained_worker_limit": 4,
+            "policy_sha256": canonical_digest(limits),
+            "validation_plan_sha256": validation_plan_sha256,
             "active_wave": None,
             "promoted_head": None,
             "cleanup_retained": [],
@@ -1459,7 +1500,7 @@ def _prepare_execution(
             "admitted_task_ids": [],
             "capacity": capacity,
             "base_head": None,
-            "merged_task_ids": [],
+            "integrated_task_ids": [],
             "integration_head": None,
             "cleanup_retained": [],
         }
@@ -1545,7 +1586,12 @@ def _replan_future_locked(
     plan_path: Path,
     capacity: int,
 ) -> dict[str, Any]:
+    from workflow_validation import require_quiescent
+    require_quiescent(run_dir, execution_id)
     coordinator = _load_coordinator(run_dir, execution_id)
+    from workflow_capacity import policy
+    limits = policy(run_dir, worker_limit=capacity)
+    capacity = limits["worker_limit"]
     selected_project_root = Path(str(coordinator["selected_project_root"]))
     _impact(
         "objective impact verification failed",
@@ -1571,7 +1617,6 @@ def _replan_future_locked(
         )
     if capacity < 1:
         raise ExecutionError("PLAN_INVALID", "capacity must be positive")
-    capacity = effective_capacity(run_dir, capacity)
     raw = plan_path.read_bytes()
     digest = sha256_bytes(raw)
     if digest == coordinator.get("plan_digest"):
@@ -1610,7 +1655,7 @@ def _replan_future_locked(
             raise ExecutionError("REPLAN_REQUIRED", "replacement plan removes active history")
         prefix.append([by_id[task_id] for task_id in wave["task_ids"]])
         preserved += 1
-    new_waves = build_dependency_waves(tasks, prefix=prefix)
+    new_waves = build_dependency_waves(tasks, wave_limit=limits["wave_task_limit"], prefix=prefix)
     if len(new_waves) < preserved:
         raise ExecutionError(
             "REPLAN_REQUIRED", "replacement plan removes active history"
@@ -1719,7 +1764,7 @@ def _replan_future_locked(
                 "admitted_task_ids": [],
                 "capacity": capacity,
                 "base_head": None,
-                "merged_task_ids": [],
+                "integrated_task_ids": [],
                 "integration_head": None,
                 "cleanup_retained": [],
             },
@@ -1779,6 +1824,8 @@ def _replan_future_locked(
         updated = dict(coordinator)
         updated["plan_path"] = str(plan_path)
         updated["plan_digest"] = digest
+        from workflow_validation import validate_plan, plan_path as validation_path
+        updated["validation_plan_sha256"] = canonical_digest(validate_plan(read_json(validation_path(plan_path)), list(_wave_index(new_waves))))
         updated["capacity"] = capacity
         updated["wave_ids"] = new_wave_ids
         updated["task_waves"] = _wave_index(new_waves)
@@ -1834,16 +1881,10 @@ def seal_tdd_base(run_dir: Path, execution_id: str, message: str) -> dict[str, A
             ["rev-list", "--parents", "-n", "1", current_head],
             "inspect interrupted TDD seal",
         ).split()
-        subject = git(
-            integration,
-            ["show", "-s", "--format=%s", current_head],
-            "inspect interrupted TDD seal message",
-        )
         if (
             not clean(integration)
             or len(parents) != 2
             or parents[1] != recorded_head
-            or subject != message
             or not _journal_has_intent(
                 coordinator_journal, "tdd_seal_intent", recorded_head, message
             )
@@ -1851,6 +1892,7 @@ def seal_tdd_base(run_dir: Path, execution_id: str, message: str) -> dict[str, A
             raise ExecutionError(
                 "WORKTREE_CONFLICT", "integration HEAD drifted before TDD seal"
             )
+        _require_seal_message(integration, current_head, message)
         _verify_integration_commit(
             integration,
             recorded_head,
@@ -1865,10 +1907,11 @@ def seal_tdd_base(run_dir: Path, execution_id: str, message: str) -> dict[str, A
         git(integration, ["add", "-A"], "stage TDD base")
         try:
             _verify_staged_integration(integration, str(coordinator["project_scope"]))
-            git(integration, ["commit", "-m", message], "commit TDD base")
+            git(integration, ["commit", "--cleanup=whitespace", "-m", message], "commit TDD base")
         except ExecutionError:
             git(integration, ["restore", "--staged", ":/"], "unstage TDD base")
             raise
+        _require_seal_message(integration, head(integration), message)
     coordinator["integration_head"] = head(integration)
     coordinator["status"] = "tdd_sealed"
     _save_coordinator(run_dir, execution_id, coordinator)
@@ -2053,12 +2096,25 @@ def _validate_result_record(result: dict[str, Any], assignment: dict[str, Any]) 
     })
     payload = received["worker_result"]
     if (received["receipt_sha256"] != result.get("worker_result_receipt_sha256")
-            or payload["status"] != "implemented"
+            or payload["status"] not in {"implemented", "verified_no_change"}
+            or result.get("status") != payload["status"]
             or any(result.get(key) != payload[key] for key in (
                 "task_id", "assignment_digest", "summary", "decisions", "open_risks",
                 "spec_gaps", "validation", "review",
             ))):
         raise ExecutionError("RESULT_INVALID", "committed result differs from its native receipt")
+    if (SHA_RE.fullmatch(str(result.get("head"))) is None or SHA_RE.fullmatch(str(result.get("tree"))) is None
+            or (result["status"] == "implemented" and (result.get("commit") != result["head"] or not result.get("changed_paths")))
+            or (result["status"] == "verified_no_change" and (result.get("commit") is not None or result.get("changed_paths") != [] or result["head"] != assignment["base_head"]))):
+        raise ExecutionError("RESULT_INVALID", "tagged result Git proof is invalid")
+    repository = Path(assignment["git_root"])
+    if git_common_dir(repository) != Path(assignment["git_common_dir"]):
+        raise ExecutionError("RESULT_INVALID", "verified result repository identity changed")
+    if git(repository, ["rev-parse", result["head"] + "^{tree}"], "verify result tree") != result["tree"]:
+        raise ExecutionError("RESULT_INVALID", "verified result tree differs from Git")
+    if result["status"] == "verified_no_change":
+        from workflow_validation import verify_recorded_task
+        _impact("no-change acceptance proof is invalid", verify_recorded_task, assignment, result)
     expected_oracle = assignment.get("regression_oracle")
     evidence = result.get("regression_oracle_evidence")
     if expected_oracle:
@@ -2074,7 +2130,7 @@ def _validate_result_record(result: dict[str, Any], assignment: dict[str, Any]) 
             or evidence.get("diagnosis_id") != assignment.get("diagnosis_id")
             or evidence.get("oracle") != expected_oracle
             or evidence.get("outcome") != "passed"
-            or evidence.get("commit") != result.get("commit")
+            or evidence.get("commit") != result.get("head")
             or not isinstance(evidence.get("evidence_reference"), str)
             or not evidence["evidence_reference"].strip()
             or evidence_digest != sha256_json(evidence_unsigned)
@@ -2197,7 +2253,7 @@ def _build_incoming_handoff(
         unsigned_result = dict(dependency_result)
         result_digest = unsigned_result.pop("result_digest", None)
         if (
-            dependency_task.get("status") not in {"committed", "merged"}
+            dependency_task.get("status") not in {"finished", "merged"}
             or dependency_assignment.get("schema") != ASSIGNMENT_SCHEMA
             or assignment_digest != sha256_json(unsigned_assignment)
             or dependency_result.get("schema") != RESULT_SCHEMA
@@ -2214,7 +2270,10 @@ def _build_incoming_handoff(
                 "wave_id": dependency_wave,
                 "assignment_digest": dependency_assignment.get("assignment_digest"),
                 "result_digest": dependency_result.get("result_digest"),
+                "status": dependency_result["status"],
+                "head": dependency_result["head"], "tree": dependency_result["tree"],
                 "commit": dependency_result.get("commit"),
+                "acceptance_receipt_sha256": dependency_result.get("acceptance_receipt_sha256"),
                 "result_path": str(result_path(run_dir, execution_id, dependency_wave, dependency).relative_to(run_dir)),
                 "summary": str(dependency_result.get("summary", ""))[:512],
             }
@@ -2309,9 +2368,10 @@ def prepare_wave(run_dir: Path, execution_id: str, wave_id: str) -> list[dict[st
     if wave_id not in coordinator["wave_ids"]:
         raise ExecutionError("EXECUTION_STATE_INVALID", "unknown wave")
     wave = read_json(wave_path(run_dir, execution_id, wave_id))
-    if (coordinator.get("retained_worker_limit") != 4 or len(wave["task_ids"]) > 4
-            or int(coordinator["capacity"]) > 4):
-        raise ExecutionError("RESOURCE_LIMIT", "retained task worktree bound is invalid")
+    from workflow_capacity import policy, reserve_wave
+    limits = policy(run_dir)
+    if coordinator.get("policy_sha256") != canonical_digest(limits):
+        raise ExecutionError("RESOURCE_LIMIT", "frozen execution policy changed")
     if coordinator["status"] == "integrated" and wave["status"] != "planned":
         raise ExecutionError(
             "EXECUTION_STATE_INVALID",
@@ -2386,11 +2446,12 @@ def prepare_wave(run_dir: Path, execution_id: str, wave_id: str) -> list[dict[st
             "requirements_sha256": requirements_sha256,
             "design_sha256": design_sha256,
         }
+    reserve_wave(run_dir, Path(coordinator["git_root"]), execution_id, wave_id, wave["task_ids"])
     wave["status"] = "preparing"
     if wave["base_head"] is not None and wave["base_head"] != base_head:
         raise ExecutionError("REPLAN_REQUIRED", "wave base changed while refilling slots")
     wave["base_head"] = base_head
-    free = wave["capacity"] - len(wave["active_task_ids"])
+    free = max(0, effective_capacity(run_dir, limits["worker_limit"]) - len(wave["active_task_ids"]))
     newly_selected = wave["ready_task_ids"][:free]
     wave["active_task_ids"].extend(newly_selected)
     wave["ready_task_ids"] = wave["ready_task_ids"][free:]
@@ -2640,7 +2701,7 @@ def refill_wave(run_dir: Path, execution_id: str, wave_id: str) -> list[dict[str
         wave = read_json(path)
         if wave["status"] != "running":
             raise ExecutionError("EXECUTION_STATE_INVALID", "only a running wave can refill slots")
-        if not wave["ready_task_ids"] or len(wave["active_task_ids"]) >= wave["capacity"]:
+        if not wave["ready_task_ids"] or len(wave["active_task_ids"]) >= effective_capacity(run_dir, coordinator["capacity"]):
             return []
         wave["status"] = "preparing"
         write_json_atomic(path, wave)
@@ -2676,16 +2737,17 @@ def admit_task(run_dir: Path, execution_id: str, wave_id: str, task_id: str,
                 or termination.get("observer_session_hash") != validate_run(run_dir)[0]["coordinator_session_sha256"]):
             raise ExecutionError("WRITER_NOT_QUIESCENT", "a coordinator-observed native termination is required")
         worker = Path(assignment["worktree"])
-        parents = git(worker, ["rev-list", "--parents", "-n", "1", result["commit"]], "validate worker ancestry").split()
-        changed = git(worker, ["diff", "--name-only", "--no-renames", assignment["base_head"], result["commit"]], "validate worker paths").splitlines()
+        parents = git(worker, ["rev-list", "--parents", "-n", "1", result["head"]], "validate worker ancestry").split()
+        changed = git(worker, ["diff", "--name-only", "--no-renames", assignment["base_head"], result["head"]], "validate worker paths").splitlines()
         claims = [WriteClaim(**item) for item in assignment["write_claims"]]
-        if (task["status"] != "committed" or result["assignment_digest"] != assignment["assignment_digest"]
+        if (task["status"] != "finished" or result["assignment_digest"] != assignment["assignment_digest"]
                 or result.get("worker_session_hash") != task["worker_session_hash"]
-                or head(worker) != result["commit"] or not clean(worker)
+                or head(worker) != result["head"] or not clean(worker)
                 or branch(worker) != assignment["branch"]
                 or git_common_dir(worker) != Path(assignment["git_common_dir"])
-                or parents != [result["commit"], assignment["base_head"]]
-                or not changed or any(not _path_allowed(path, claims) for path in changed)):
+                or (result["status"] == "implemented" and (parents != [result["head"], assignment["base_head"]] or not changed))
+                or (result["status"] == "verified_no_change" and (result["head"] != assignment["base_head"] or changed))
+                or any(not _path_allowed(path, claims) for path in changed)):
             raise ExecutionError("RESULT_INVALID", "worker identity, ancestry, paths or result evidence changed")
         from workflow_resources import require_released
         require_released(run_dir, assignment)
@@ -2744,6 +2806,10 @@ def arm_task(
         wave = read_json(wave_path(run_dir, execution_id, wave_id))
         if task_id not in wave["active_task_ids"]:
             raise ExecutionError("EXECUTION_STATE_INVALID", "task does not own an active worker slot")
+        occupied = sum(1 for peer in wave["active_task_ids"] if peer != task_id
+                       and read_json(task_path(run_dir, execution_id, wave_id, peer)).get("dispatched_at") is not None)
+        if occupied >= effective_capacity(run_dir, coordinator["capacity"]):
+            raise ExecutionError("CAPACITY_WAIT", "native capacity is exhausted; wait for peers or a fresh observation")
         if task_record.get("status") != "assigned":
             raise ExecutionError(
                 "EXECUTION_STATE_INVALID", "only an assigned task can be armed"
@@ -3024,7 +3090,7 @@ def _validate_task_liveness(task_record: dict[str, Any]) -> None:
             raise ExecutionError(
                 "EXECUTION_STATE_INVALID", "inactive worker liveness state is invalid"
             )
-    elif task_record.get("status") in {"running", "committed"}:
+    elif task_record.get("status") in {"running", "finished"}:
         if (
             dispatched_at is None
             or started_at is None
@@ -3035,7 +3101,7 @@ def _validate_task_liveness(task_record: dict[str, Any]) -> None:
             raise ExecutionError(
                 "EXECUTION_STATE_INVALID", "active worker liveness state is invalid"
             )
-    if task_record.get("status") == "committed" and finish_intent is None:
+    if task_record.get("status") == "finished" and task_record.get("commit") is not None and finish_intent is None:
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "committed task finish intent is missing"
         )
@@ -3668,15 +3734,41 @@ def finish_task(
         )
 
 
+def _finish_no_change(run_dir, execution_id, wave_id, task_id, assignment, state, received, oracle):
+    from workflow_validation import verify
+    path, acceptance = _impact("no-change requires independent acceptance", verify, run_dir, execution_id, wave_id, task_id)
+    if state["status"] not in {"running", "finished"} or state.get("finish_intent") is not None:
+        raise ExecutionError("RESULT_INVALID", "no-change result cannot replace a commit intent")
+    payload = received["worker_result"]
+    expected = {"schema": RESULT_SCHEMA, "owner": assignment["owner"], "basis_sha256": assignment["basis_sha256"],
+        "worker_session_hash": state["worker_session_hash"], "execution_id": execution_id, "wave_id": wave_id,
+        "task_id": task_id, "assignment_digest": assignment["assignment_digest"],
+        "worker_result_receipt_sha256": received["receipt_sha256"], "status": "verified_no_change",
+        "head": acceptance["target"]["head"], "tree": acceptance["target"]["tree"], "commit": None,
+        "changed_paths": [], "acceptance_receipt_sha256": canonical_digest(acceptance),
+        "regression_oracle_evidence": _build_regression_oracle_evidence(assignment, oracle, acceptance["target"]["head"]),
+        "attempt": state["attempt"], **{key: payload[key] for key in ("summary", "decisions", "open_risks", "spec_gaps", "validation", "review")}}
+    result_file = result_path(run_dir, execution_id, wave_id, task_id)
+    if result_file.exists():
+        result = read_json(result_file)
+        _validate_result_record(result, assignment)
+        if any(result.get(key) != value for key, value in expected.items()):
+            raise ExecutionError("RESULT_INVALID", "immutable no-change result differs")
+    else:
+        result = {**expected, "completed_at": utc_now()}
+        result["result_digest"] = sha256_json(result)
+        write_json_atomic(result_file, result)
+    state.update(status="finished", commit=None, result_digest=result["result_digest"])
+    write_json_atomic(task_path(run_dir, execution_id, wave_id, task_id), state)
+    return result
+
+
 def _finish_task_locked(
     run_dir: Path, execution_id: str, wave_id: str, task_id: str,
     receipt: Path, message: str, *, termination: Path, session_identity: str,
     regression_oracle_evidence: dict[str, Any] | None,
     clock: Callable[[], datetime],
 ) -> dict[str, Any]:
-    if not isinstance(message, str) or not message.strip() or message != message.strip():
-        raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "canonical commit message is required")
-    _reject_sensitive_evidence(message)
     from workflow_reconcile import termination as observe_termination
     _impact("worker termination is required", observe_termination,
             run_dir, execution_id, wave_id, task_id, termination, session_identity)
@@ -3690,10 +3782,16 @@ def _finish_task_locked(
     task_record_path = task_path(run_dir, execution_id, wave_id, task_id)
     task_record = read_json(task_record_path)
     _validate_task_liveness(task_record)
-    from workflow_worker_results import implemented_result
-    received = _impact("worker completion requires a validated result", implemented_result,
+    from workflow_worker_results import successful_result
+    received = _impact("worker completion requires a validated result", successful_result,
                        assignment, task_record, receipt)
     payload = received["worker_result"]
+    _validate_assignment_handoff(run_dir, execution_id, coordinator, assignment, _task_plan_from_state(task_record))
+    if payload["status"] == "verified_no_change":
+        return _finish_no_change(run_dir, execution_id, wave_id, task_id, assignment, task_record, received, regression_oracle_evidence)
+    if not isinstance(message, str) or not message.strip() or message != message.strip():
+        raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "canonical commit message is required")
+    _reject_sensitive_evidence(message)
     validation, review = payload["validation"], payload["review"]
     summary_value = payload["summary"]
     decision_values, risk_values = payload["decisions"], payload["open_risks"]
@@ -3730,7 +3828,7 @@ def _finish_task_locked(
         open_risks=risk_values,
         regression_oracle_evidence=regression_oracle_evidence,
     )
-    if task_record["status"] == "committed":
+    if task_record["status"] == "finished":
         result = read_json(result_path(run_dir, execution_id, wave_id, task_id))
         _validate_result_record(result, assignment)
         adopted = _adopt_finish_commit(
@@ -3745,7 +3843,7 @@ def _finish_task_locked(
             assignment, regression_oracle_evidence, adopted
         )
         if (
-            adopted != result["commit"]
+            adopted != result["head"]
             or result.get("summary") != summary_value
             or result.get("decisions") != decision_values
             or result.get("open_risks") != risk_values
@@ -3930,6 +4028,10 @@ def _finish_task_locked(
         "task_id": task_id,
         "assignment_digest": assignment["assignment_digest"],
         "worker_result_receipt_sha256": worker_result_receipt_sha256,
+        "status": "implemented",
+        "head": task_head,
+        "tree": commit_tree,
+        "acceptance_receipt_sha256": None,
         "commit": task_head,
         "changed_paths": changed_paths,
         "summary": summary_value,
@@ -3954,7 +4056,7 @@ def _finish_task_locked(
         result = {**expected_result, "completed_at": utc_now()}
         result["result_digest"] = sha256_json(result)
         write_json_atomic(result_file, result)
-    task_record["status"] = "committed"
+    task_record["status"] = "finished"
     task_record["commit"] = task_head
     task_record["result_digest"] = result["result_digest"]
     write_json_atomic(task_record_path, task_record)
@@ -3997,7 +4099,7 @@ def integrate_wave(run_dir: Path, execution_id: str, wave_id: str) -> dict[str, 
     write_json_atomic(wave_file, wave)
     for task_id in wave["task_ids"]:
         task_record = read_json(task_path(run_dir, execution_id, wave_id, task_id))
-        if task_record["status"] != "committed":
+        if task_record["status"] != "finished":
             raise ExecutionError(
                 "EXECUTION_STATE_INVALID", f"{task_id} is not committed"
             )
@@ -4030,15 +4132,15 @@ def integrate_wave(run_dir: Path, execution_id: str, wave_id: str) -> dict[str, 
         worker = Path(assignment["worktree"])
         if (
             result["assignment_digest"] != assignment["assignment_digest"]
-            or head(worker) != result["commit"]
+            or head(worker) != result["head"]
             or not clean(worker)
         ):
             raise ExecutionError(
                 "WORKTREE_CONFLICT", f"{task_id} result identity drifted"
             )
-        if task_id in wave["merged_task_ids"]:
+        if task_id in wave["integrated_task_ids"]:
             ancestor = _run(
-                ["git", "merge-base", "--is-ancestor", result["commit"], "HEAD"],
+                ["git", "merge-base", "--is-ancestor", result["head"], "HEAD"],
                 integration,
                 "verify prior ordered merge",
                 check=False,
@@ -4048,19 +4150,25 @@ def integrate_wave(run_dir: Path, execution_id: str, wave_id: str) -> dict[str, 
                     "INTEGRATION_CONFLICT", "recorded merge is not reachable"
                 )
             continue
+        if result["status"] == "verified_no_change":
+            if _run(["git", "merge-base", "--is-ancestor", result["head"], "HEAD"], integration, "verify no-change base", check=False).returncode != 0:
+                raise ExecutionError("INTEGRATION_CONFLICT", "no-change base is not reachable")
+            wave["integrated_task_ids"].append(task_id)
+            write_json_atomic(wave_file, wave)
+            continue
         current_tip = head(integration)
         tip_parents = git(
             integration,
             ["rev-list", "--parents", "-n", "1", current_tip],
             "inspect interrupted ordered merge",
         ).split()
-        if len(tip_parents) >= 3 and tip_parents[2] == result["commit"]:
-            wave["merged_task_ids"].append(task_id)
+        if len(tip_parents) >= 3 and tip_parents[2] == result["head"]:
+            wave["integrated_task_ids"].append(task_id)
             write_json_atomic(wave_file, wave)
             continue
         append_journal(
             journal_path(run_dir, execution_id, wave_id),
-            {"event": "merge_intent", "task_id": task_id, "commit": result["commit"]},
+            {"event": "merge_intent", "task_id": task_id, "commit": result["head"]},
         )
         try:
             git(
@@ -4079,7 +4187,7 @@ def integrate_wave(run_dir: Path, execution_id: str, wave_id: str) -> dict[str, 
             wave["blocker"] = "INTEGRATION_CONFLICT"
             write_json_atomic(wave_file, wave)
             raise ExecutionError("INTEGRATION_CONFLICT", str(exc)) from exc
-        wave["merged_task_ids"].append(task_id)
+        wave["integrated_task_ids"].append(task_id)
         write_json_atomic(wave_file, wave)
     wave["status"] = "integrated"
     wave["integration_head"] = head(integration)
@@ -4100,7 +4208,9 @@ def _complete_wave_locked(
     run_dir: Path, execution_id: str, wave_id: str, evidence: str,
     *, failure: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if not evidence.strip():
+    from workflow_validation import require_quiescent
+    require_quiescent(run_dir, execution_id, wave_id=wave_id)
+    if not str(evidence).strip():
         raise ExecutionError(
             "INTEGRATION_VALIDATION_FAILED", "combined evidence is empty"
         )
@@ -4111,6 +4221,10 @@ def _complete_wave_locked(
     if failure is None and wave.get("combined_failure") is not None:
         raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "failed wave cannot be completed as passing")
     if wave["status"] == "done":
+        from workflow_validation import verify_recorded_wave
+        recorded_path, _ = _impact("historical wave proof is invalid", verify_recorded_wave, run_dir, execution_id, wave, coordinator)
+        if Path(evidence).absolute() != recorded_path.absolute():
+            raise ExecutionError("RESULT_INVALID", "wave completion requires its recorded receipt")
         # A historical replay must never rewind a later wave or its active owner.
         if coordinator.get("active_wave") == wave_id:
             _resolve_corrected_waves(run_dir, execution_id, coordinator, wave)
@@ -4138,6 +4252,11 @@ def _complete_wave_locked(
         write_json_atomic(wave_file, wave)
     elif wave.get("corrects"):
         _repair_authority(run_dir, execution_id, wave["repair_authority"], active=True)
+    if failure is None:
+        from workflow_validation import verify
+        admitted_path, admitted = _impact("combined wave validation failed", verify, run_dir, execution_id, wave_id, None, Path(evidence))
+        wave["validation_receipt_sha256"] = canonical_digest(admitted)
+        wave["validation_basis_sha256"] = admitted["target"]["basis_sha256"]
     retained: list[dict[str, str]] = []
     for task_id in reversed(wave["task_ids"]):
         assignment = read_json(assignment_path(run_dir, execution_id, wave_id, task_id))
@@ -4145,7 +4264,7 @@ def _complete_wave_locked(
         result = read_json(result_path(run_dir, execution_id, wave_id, task_id))
         _validate_assignment_record(assignment)
         _validate_result_record(result, assignment)
-        task_commit = result["commit"]
+        task_commit = result["head"]
         if not _cleanup_internal_resource(
             run_dir=run_dir,
             coordinator=coordinator,
@@ -4163,7 +4282,7 @@ def _complete_wave_locked(
                     "path": str(worker),
                 }
             )
-    wave["combined_evidence"] = evidence.strip()
+    wave["combined_evidence"] = str(evidence).strip()
     wave["cleanup_retained"] = retained
     if retained:
         wave["status"] = "blocked"
@@ -4266,11 +4385,13 @@ def fail_wave(run_dir, execution_id, wave_id, classification_id, dispatch_id, ev
 def _wave_satisfied(run_dir, execution_id, coordinator, wave_id):
     wave = read_json(wave_path(run_dir, execution_id, wave_id))
     if wave.get("status") == "done":
+        from workflow_validation import verify_recorded_wave
+        _impact("historical wave proof is invalid", verify_recorded_wave, run_dir, execution_id, wave, coordinator)
         return True
     if wave.get("status") == "superseded":
         from workflow_reconcile import validate_retained_wave
         validate_retained_wave(run_dir, execution_id, wave)
-        return not wave.get("active_task_ids") and not wave.get("merged_task_ids")
+        return not wave.get("active_task_ids") and not wave.get("integrated_task_ids")
     if wave.get("status") != "failed":
         return False
     _validated_wave_failure(run_dir, execution_id, wave)
@@ -4317,7 +4438,7 @@ def _resolution_record(run_dir, execution_id, failed, correcting):
         result = read_json(result_path(run_dir, execution_id, correcting["wave_id"], task_id))
         _validate_assignment_record(assignment)
         _validate_result_record(result, assignment)
-        if not _is_ancestor(repository, result["commit"], correcting["integration_head"]):
+        if not _is_ancestor(repository, result["head"], correcting["integration_head"]):
             raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "corrective task is not integrated")
         if assignment.get("diagnosis_id") != authority["diagnosis_id"] or assignment.get("regression_oracle") != authority["oracle"]:
             raise ExecutionError("INTEGRATION_VALIDATION_FAILED", "corrective result has a foreign oracle")
@@ -4370,6 +4491,8 @@ def _cleanup_internal_resource(
     expected_tip: str,
     reachable_tip: str,
 ) -> bool:
+    from workflow_validation import require_quiescent
+    require_quiescent(run_dir, coordinator["execution_id"])
     registration = worktrees(repo).get(worktree.resolve())
     path_present = os.path.lexists(worktree)
     ref = f"refs/heads/{branch_name}"
@@ -4496,16 +4619,10 @@ def _seal_feature_locked(
             ["rev-list", "--parents", "-n", "1", current_head],
             "inspect interrupted final seal",
         ).split()
-        subject = git(
-            integration,
-            ["show", "-s", "--format=%s", current_head],
-            "inspect interrupted final seal message",
-        )
         if (
             not clean(integration)
             or len(parents) != 2
             or parents[1] != recorded_head
-            or subject != message
             or not _journal_has_intent(
                 coordinator_journal, "feature_seal_intent", recorded_head, message
             )
@@ -4513,6 +4630,7 @@ def _seal_feature_locked(
             raise ExecutionError(
                 "WORKTREE_CONFLICT", "integration HEAD drifted before final seal"
             )
+        _require_seal_message(integration, current_head, message)
         _verify_integration_commit(
             integration,
             recorded_head,
@@ -4531,7 +4649,7 @@ def _seal_feature_locked(
         git(integration, ["add", "-A"], "stage final feature changes")
         try:
             _verify_staged_integration(integration, str(coordinator["project_scope"]))
-            git(integration, ["commit", "-m", message], "commit final feature changes")
+            git(integration, ["commit", "--cleanup=whitespace", "-m", message], "commit final feature changes")
         except ExecutionError:
             git(
                 integration,
@@ -4539,6 +4657,7 @@ def _seal_feature_locked(
                 "unstage final feature changes",
             )
             raise
+        _require_seal_message(integration, head(integration), message)
     coordinator["integration_head"] = head(integration)
     coordinator["final_evidence"] = evidence.strip()
     if normalized_issues is not None:

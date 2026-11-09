@@ -16,7 +16,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -31,7 +31,12 @@ from nebius_vpngw.agent.vm_ha.auto_healing import (
     project_local_policy,
 )
 from nebius_vpngw.agent.vm_ha.evidence import PeerEvidenceTracker
-from nebius_vpngw.agent.vm_ha.models import DigestSet, HeartbeatEvidence, PeerHeartbeat
+from nebius_vpngw.agent.vm_ha.models import (
+    DigestSet,
+    HeartbeatEvidence,
+    PeerHeartbeat,
+    RepairDisposition,
+)
 from nebius_vpngw.agent.vm_ha.mtls import ManagedMTLSStore, MTLSSnapshot
 from nebius_vpngw.agent.vm_ha.transport import (
     MutualTLSConfig,
@@ -59,6 +64,7 @@ from nebius_vpngw.deploy.vm_ha_cloud import (
     NebiusSDKCloudClient,
     VMHACloudAdapter,
     VMHACloudOperationJournal,
+    vm_ha_observation_budget,
 )
 from nebius_vpngw.deploy.vm_ha_routes import (
     AcceptedRouteOperation,
@@ -80,7 +86,7 @@ from nebius_vpngw.deploy.vm_ha_routes import (
     VerifiedAllocationOwnership,
     VMHARouteReconciler,
 )
-from nebius_vpngw.ha_tunnel_policy import ConnectionPolicy, connection_policies, covers
+from nebius_vpngw.ha_tunnel_policy import connection_policies, covers
 from nebius_vpngw.schema import (
     VMHAMigrationRouteBinding,
     VMHARouteTarget,
@@ -93,6 +99,9 @@ from nebius_vpngw.vm_ha_credentials import (
     credential_ids_from_payload,
     verify_sdk_service_account_profile,
 )
+
+from ... import ipsec_observation
+from .forwarding import DestinationProtection
 
 RUNTIME_IDENTITY_SCHEMA = "nebius-vpngw/vm-ha-runtime-identity-v1"
 RUNTIME_IDENTITY_FILENAME = "runtime-identity.json"
@@ -656,11 +665,11 @@ class BoundCloudRuntime:
                 owner_id = node.node_id
         if owner is not None and owner_id is None:
             raise RuntimeError("shared allocation has an unexpected Compute owner")
-        # The candidate Compute revision is the transfer epoch both before and
-        # after detachment.  That keeps every checkpoint on one resource and
-        # lets attachment prove a strictly newer post-mutation revision.
-        epoch = observed.candidate.resource_version
+        # Transfers retain raw candidate Compute revisions. An exact existing
+        # owner may retain its established epoch across a prepared SG-only CAS;
+        # alias/spec changes invalidate that receipt and expose the raw revision.
         exact = observed.candidate_attachment_exact
+        epoch = observed.candidate.ownership_epoch if exact else observed.candidate.resource_version
         if not exact:
             self._confirmed_candidate_revision = None
         elif self._attach_started_revision is None and self.local.role.value == "active":
@@ -681,7 +690,7 @@ class BoundCloudRuntime:
             observed_owner_epoch=(
                 epoch
                 if owner_id == self.local.node_id
-                else observed.former.resource_version
+                else observed.former.ownership_epoch
                 if owner_id == peer.node_id
                 else ""
             ),
@@ -802,7 +811,10 @@ def build_cloud_runtime(
     sleeper: Callable[[float], None] = time.sleep,
     operation_journal: VMHACloudOperationJournal | None = None,
     peer_binding_provider: Callable[[], VMHARuntimeNodeBinding] | None = None,
+    state_dir: Path | None = None,
 ) -> BoundCloudRuntime:
+    from .attachment_continuity import observe_epoch
+
     nodes = {node.node_id: node for node in binding.nodes}
     if local_node_id not in nodes or len(nodes) != 2:
         raise ValueError("VM-HA runtime binding does not contain the local node")
@@ -817,6 +829,11 @@ def build_cloud_runtime(
         attempts=attempts,
         poll_interval=poll_interval,
         sleeper=sleeper,
+        instance_epoch_provider=(
+            None
+            if state_dir is None
+            else lambda instance: observe_epoch(instance, state_dir=state_dir, binding=binding)
+        ),
     )
     return BoundCloudRuntime(
         binding,
@@ -884,6 +901,9 @@ class LocalDataPlaneObservation:
     established_ike_sa_count: int = 0
     bgp_export_state: BGPExportState = BGPExportState.UNKNOWN
     routing_hygiene_ready: bool = True
+    protection_ready: bool = False
+    failed_services: tuple[str, ...] = ()
+    ipsec_configuration_missing: bool = False
 
 
 @dataclass(frozen=True)
@@ -912,9 +932,13 @@ class LocalDataPlanePort(Protocol):
 
     def disable_active(self, action: ControllerAction) -> None: ...
 
-    def repair_local(self, action: ControllerAction) -> None: ...
+    def repair_local(self, action: ControllerAction) -> RepairDisposition: ...
 
     def prepare_candidate(self, action: ControllerAction) -> None: ...
+
+    def prepare_owner_origination(
+        self, action: ControllerAction, revalidate: Callable[[], None]
+    ) -> None: ...
 
     def enable_active(self, action: ControllerAction) -> None: ...
 
@@ -1037,16 +1061,25 @@ def _confirmed_down_bgp_sessions(value: object) -> frozenset[str]:
 
 
 def _learned_bgp_prefixes(value: object) -> set[str]:
-    if not isinstance(value, Mapping) or not isinstance(value.get("routes"), Mapping):
+    # FRR emits {} for an empty table, including before initial convergence.
+    # Other incomplete shapes cannot establish absence or authorize withdrawal.
+    if isinstance(value, Mapping) and not value:
         return set()
+    if not isinstance(value, Mapping) or not isinstance(value.get("routes"), Mapping):
+        raise RuntimeError("FRR RIB observation is malformed")
     learned: set[str] = set()
     for prefix, paths in value["routes"].items():
         try:
-            normalized = str(ipaddress.ip_network(str(prefix), strict=False))
-        except ValueError:
-            continue
-        if isinstance(paths, list) and paths:
-            learned.add(normalized)
+            normalized = ipaddress.IPv4Network(str(prefix), strict=False)
+        except ValueError as error:
+            raise RuntimeError("FRR RIB prefix is malformed") from error
+        if (
+            not isinstance(paths, list)
+            or not paths
+            or any(not isinstance(p, Mapping) for p in paths)
+        ):
+            raise RuntimeError("FRR RIB paths are incomplete")
+        learned.add(str(normalized))
     return learned
 
 
@@ -1066,17 +1099,11 @@ def _xfrm_if_ids(value: object) -> set[str]:
 
 
 def _ike_sa_ids(raw: str) -> tuple[str, ...]:
-    """Extract exact IKE_SA unique IDs from a complete raw VICI response."""
-
-    if not re.search(r"(?:^|\n)list-sas reply \{.*\}\s*$", raw, re.DOTALL):
-        raise RuntimeError("local IKE SA observation is malformed")
-    event_count = raw.count("list-sa event {")
-    observed = tuple(
-        re.findall(r"(?:^|\n)list-sa event \{[^{}\s]+ \{uniqueid=([1-9][0-9]*)\b", raw)
-    )
-    if len(observed) != event_count or len(set(observed)) != len(observed):
-        raise RuntimeError("local IKE SA observation is malformed")
-    return observed
+    """Extract exact IKE identities from the shared complete inventory."""
+    try:
+        return tuple(sa.unique_id for sa in ipsec_observation.Inventory.from_json(raw).sas)
+    except ValueError as error:
+        raise RuntimeError("local IKE SA observation is incomplete") from error
 
 
 def _usable_xfrm_devices(links: object, state: object, policies: object) -> set[str]:
@@ -1262,11 +1289,13 @@ class SystemDataPlaneRuntime:
         commands: DataPlaneCommandSet = DataPlaneCommandSet(),
         routing_lock_path: Path = Path("/run/nebius-vpngw/fix-routes.lock"),
         active_preparer: Callable[[], None] | None = None,
+        origination_verifier: Callable[[], bool] | None = None,
         blocked_preparer: Callable[[], None] | None = None,
         candidate_preparer: Callable[[], None] | None = None,
+        inactive_static_reconciler: Callable[[ControllerAction, bool], None] | None = None,
         static_tunnel_names: tuple[str, ...] | None = None,
         tunnel_cold_passive: bool = False,
-        bgp_path_policies: tuple[ConnectionPolicy, ...] = (),
+        destination_protection: DestinationProtection | None = None,
         passive_materialization_attempts: int = 12,
         passive_materialization_interval: float = 0.5,
         bgp_export_attempts: int = 60,
@@ -1316,11 +1345,13 @@ class SystemDataPlaneRuntime:
         self.commands = commands
         self.routing_lock_path = routing_lock_path
         self.active_preparer = active_preparer
+        self.origination_verifier = origination_verifier
         self.blocked_preparer = blocked_preparer
         self.candidate_preparer = candidate_preparer
+        self.inactive_static_reconciler = inactive_static_reconciler
         self.static_tunnel_names = static_tunnel_names
         self.tunnel_cold_passive = tunnel_cold_passive
-        self.bgp_path_policies = bgp_path_policies
+        self.destination_protection = destination_protection
         self.passive_materialization_attempts = passive_materialization_attempts
         self.passive_materialization_interval = passive_materialization_interval
         self.bgp_export_attempts = bgp_export_attempts
@@ -1329,7 +1360,36 @@ class SystemDataPlaneRuntime:
         self.monotonic_clock = monotonic_clock
         self.confirmed_down_bgp_sessions: frozenset[str] = frozenset()
         self.effective_export_provider: Callable[[], dict[str, frozenset[str]]] | None = None
+        self.ipsec_configuration_provider: (
+            Callable[[], ipsec_observation.ConfigurationInventory | None] | None
+        ) = None
+        self.ipsec_configuration_observer: (
+            Callable[[], ipsec_observation.ConfigurationInventory | None] | None
+        ) = None
         self.observation_deadline: float | None = None
+
+    def _missing_ipsec_configuration(
+        self, *, deadline: float | None = None, observation_only: bool = False
+    ) -> bool:
+        provider = (
+            self.ipsec_configuration_observer
+            if observation_only and self.ipsec_configuration_observer is not None
+            else self.ipsec_configuration_provider
+        )
+        if provider is None:
+            raise RuntimeError("current IPsec configuration authority is unavailable")
+        expected = provider()
+        if expected is None or not expected.connections:
+            return False
+        argv = (*ipsec_observation.command(), "--configuration")
+        result = self._run(*argv) if deadline is None else self._run_before(deadline, *argv)
+        if result.returncode:
+            raise RuntimeError("loaded IPsec configuration is unknown")
+        try:
+            loaded = ipsec_observation.ConfigurationInventory.from_json(result.stdout)
+        except (ValueError, TypeError):
+            raise RuntimeError("loaded IPsec configuration is incomplete") from None
+        return not loaded.includes(expected)
 
     def _write_guard(self, action: ControllerAction, mode: DataPlaneMode) -> None:
         _atomic_write_json(
@@ -1339,6 +1399,10 @@ class SystemDataPlaneRuntime:
                 "guard_boot_id": action.boot_id,
                 "data_plane_mode": mode.value,
                 "installed_at": time.time(),
+                "generation_id": action.generation_id,
+                "allocation_id": action.allocation_id,
+                "node_id": action.target_node_id,
+                "digests": asdict(action.digests),
             },
         )
 
@@ -1356,6 +1420,13 @@ class SystemDataPlaneRuntime:
     def _run(self, *argv: str) -> CommandResult:
         try:
             remaining = self.command_timeout
+            from ..local_commands import CURRENT
+
+            budget = CURRENT.get()
+            if budget is not None:
+                remaining = min(remaining, budget.deadline - self.monotonic_clock())
+                if remaining <= 0:
+                    raise TimeoutError
             if self.observation_deadline is not None:
                 remaining = min(remaining, self.observation_deadline - self.monotonic_clock())
                 if remaining <= 0:
@@ -1364,12 +1435,31 @@ class SystemDataPlaneRuntime:
         except (OSError, subprocess.SubprocessError, TimeoutError):
             raise RuntimeError("bounded local data-plane command failed") from None
 
+    def _effect_sleep(self, delay: float) -> None:
+        from ..local_commands import CURRENT
+
+        budget = CURRENT.get()
+        if budget is not None:
+            remaining = budget.deadline - self.monotonic_clock()
+            if remaining <= 0:
+                raise TimeoutError("activation observation deadline expired")
+            delay = min(delay, remaining)
+        self.sleeper(delay)
+
     def _run_before(self, deadline: float, *argv: str) -> CommandResult:
+        from ..local_commands import CURRENT
+
+        budget = CURRENT.get()
+        if budget is not None:
+            deadline = min(deadline, budget.deadline)
         remaining = deadline - self.monotonic_clock()
         if remaining <= 0:
             raise TimeoutError
         try:
-            return self.runner(argv, min(self.command_timeout, remaining))
+            result = self.runner(argv, min(self.command_timeout, remaining))
+            if self.monotonic_clock() >= deadline:
+                raise TimeoutError
+            return result
         except (OSError, subprocess.SubprocessError, TimeoutError):
             raise RuntimeError("bounded local repair command failed") from None
 
@@ -1431,7 +1521,7 @@ class SystemDataPlaneRuntime:
         return configured, observed
 
     def _expected_exports_for_mode(self, mode: DataPlaneMode) -> dict[str, frozenset[str]]:
-        if mode is DataPlaneMode.ACTIVE:
+        if mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}:
             return (
                 self.effective_export_provider()
                 if self.effective_export_provider is not None
@@ -1500,13 +1590,13 @@ class SystemDataPlaneRuntime:
             if state is BGPExportState.MATCH:
                 return
             if (
-                mode is not DataPlaneMode.ACTIVE
+                mode in {DataPlaneMode.BLOCKED, DataPlaneMode.PASSIVE}
                 and state is BGPExportState.UNKNOWN
                 and self._passive_bgp_exports_proven()
             ):
                 return
             if attempt < self.bgp_export_attempts:
-                self.sleeper(self.bgp_export_interval)
+                self._effect_sleep(self.bgp_export_interval)
         raise RuntimeError(
             f"{mode.value} BGP advertisements are {state.value}; exact evidence is required "
             f"({_bgp_export_diagnostic(expected, evidence)})"
@@ -1517,14 +1607,50 @@ class SystemDataPlaneRuntime:
         *,
         active_export_alternatives: tuple[Mapping[str, frozenset[str]], ...] = (),
     ) -> LocalDataPlaneObservation:
-        strongswan_healthy = any(
-            self._run(self.commands.systemctl, "is-active", "--quiet", service).returncode == 0
-            for service in ("strongswan-starter", "strongswan")
+        failed_services = []
+        services = True
+        self.confirmed_services = False
+        for service in ("strongswan", "frr"):
+            status = self._run(
+                self.commands.systemctl, "show", service, "--property=ActiveState", "--value"
+            )
+            if status.returncode or status.stdout.strip() not in {
+                "active",
+                "inactive",
+                "failed",
+                "activating",
+                "deactivating",
+            }:
+                raise RuntimeError("daemon state is unknown")
+            if status.stdout.strip() in {"inactive", "failed"}:
+                services = False
+                if status.stdout.strip() == "failed":
+                    failed_services.append(service)
+            elif status.stdout.strip() != "active":
+                raise RuntimeError("daemon state is transitional")
+        self.confirmed_services = services
+        configuration_missing = bool(
+            services
+            and self.mode()
+            in {DataPlaneMode.ACTIVE, DataPlaneMode.PASSIVE, DataPlaneMode.ORIGINATING}
+            and self.ipsec_configuration_provider is not None
+            and self._missing_ipsec_configuration(observation_only=True)
         )
-        services = (
-            strongswan_healthy
-            and self._run(self.commands.systemctl, "is-active", "--quiet", "frr").returncode == 0
-        )
+        if not services or configuration_missing:
+            return LocalDataPlaneObservation(
+                False,
+                self._forwarding(),
+                frozenset(),
+                frozenset(),
+                frozenset(),
+                frozenset(),
+                frozenset(),
+                "",
+                failed_services=tuple(failed_services),
+                ipsec_configuration_missing=configuration_missing,
+                protection_ready=self.destination_protection is not None
+                and self.destination_protection.ready(),
+            )
         summary = _json_object(
             self._run(self.commands.vtysh, "-c", "show bgp summary json"), "FRR session state"
         )
@@ -1566,7 +1692,7 @@ class SystemDataPlaneRuntime:
         advertised = {} if export_evidence is None else export_evidence[1]
         established_ike_sa_count = 0
         if self.tunnel_cold_passive:
-            listed_sas = self._run(self.commands.swanctl, "--list-sas", "--raw")
+            listed_sas = self._run(*ipsec_observation.command())
             if listed_sas.returncode != 0:
                 raise RuntimeError("unable to observe local IKE SA state")
             established_ike_sa_count = len(_ike_sa_ids(listed_sas.stdout))
@@ -1580,6 +1706,12 @@ class SystemDataPlaneRuntime:
                     continue
                 prefix = route.get("dst")
                 device = route.get("dev")
+                gateway = route.get("gateway")
+                bgp_path_ready = route.get("protocol") != "bgp" or (
+                    isinstance(gateway, str)
+                    and gateway in established
+                    and not route.get("nexthops")
+                )
                 if isinstance(prefix, str):
                     static_prefixes.add(prefix)
                     try:
@@ -1590,6 +1722,7 @@ class SystemDataPlaneRuntime:
                         network.version == 4
                         and isinstance(device, str)
                         and device in usable_xfrm_devices
+                        and bgp_path_ready
                     ):
                         usable_xfrm.add(str(network))
         mode = self.mode()
@@ -1628,12 +1761,15 @@ class SystemDataPlaneRuntime:
             established_ike_sa_count=established_ike_sa_count,
             bgp_export_state=export_state,
             routing_hygiene_ready=_routing_hygiene_ready(rules, all_routes, broad_apipa),
+            protection_ready=self.destination_protection is not None
+            and self.destination_protection.ready(),
+            failed_services=tuple(failed_services),
         )
 
     def _suspend_cluster_tunnels_locked(self, *, stop_if_unavailable: bool) -> None:
         active_services = tuple(
             service
-            for service in ("strongswan-starter", "strongswan")
+            for service in ("strongswan",)
             if self._run(self.commands.systemctl, "is-active", "--quiet", service).returncode == 0
         )
         if not active_services:
@@ -1662,7 +1798,7 @@ class SystemDataPlaneRuntime:
             ):
                 raise RuntimeError("cluster tunnel service remained active behind the guard")
             return
-        listed = self._run(self.commands.swanctl, "--list-sas", "--raw")
+        listed = self._run(*ipsec_observation.command())
         if listed.returncode != 0:
             raise RuntimeError("cluster tunnel state could not be observed")
         for ike_sa_id in _ike_sa_ids(listed.stdout):
@@ -1674,18 +1810,43 @@ class SystemDataPlaneRuntime:
                 "--timeout",
                 "5",
             )
-        remaining = self._run(self.commands.swanctl, "--list-sas", "--raw")
+        remaining = self._run(*ipsec_observation.command())
         if remaining.returncode != 0:
             raise RuntimeError("cluster tunnel state could not be observed")
         if _ike_sa_ids(remaining.stdout):
             raise RuntimeError("cluster tunnel initiation could not be disabled")
 
+    def _acquire_routing_writer(self, fd: int) -> None:
+        from ..local_commands import CURRENT
+
+        budget = CURRENT.get()
+        if budget is None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            return
+        try:
+            while True:
+                remaining = budget.deadline - self.monotonic_clock()
+                if remaining <= 0:
+                    raise TimeoutError("activation routing writer deadline expired")
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return
+                except BlockingIOError:
+                    self.sleeper(min(0.05, remaining))
+        except BaseException:
+            os.close(fd)
+            raise
+
     def _set_mode(self, action: ControllerAction, mode: DataPlaneMode) -> None:
         self.routing_lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_fd = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        self._acquire_routing_writer(lock_fd)
         try:
             self._set_mode_locked(action, mode)
+        except Exception:
+            if mode is DataPlaneMode.ACTIVE:
+                self._restore_blocked_authority_locked(action)
+            raise
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
@@ -1712,13 +1873,22 @@ class SystemDataPlaneRuntime:
             )
 
     def _restore_blocked_authority_locked(self, action: ControllerAction) -> None:
-        if self._forwarding():
-            result = self._run(self.commands.sysctl, "-w", "net.ipv4.ip_forward=0")
-            if result.returncode != 0 or self._forwarding():
-                raise RuntimeError("failed transition is not forwarding-fenced")
-        self._withdraw_bgp_exports_locked()
-        self._write_state(action, DataPlaneMode.BLOCKED)
-        self._write_guard(action, DataPlaneMode.BLOCKED)
+        from ..local_commands import CURRENT
+
+        # Mandatory rollback retains the routing lock and must finish even when
+        # the allowance for new activation effects expired. Each command still
+        # has its normal native timeout.
+        token = CURRENT.set(None)
+        try:
+            if self._forwarding():
+                result = self._run(self.commands.sysctl, "-w", "net.ipv4.ip_forward=0")
+                if result.returncode != 0 or self._forwarding():
+                    raise RuntimeError("failed transition is not forwarding-fenced")
+            self._withdraw_bgp_exports_locked()
+            self._write_state(action, DataPlaneMode.BLOCKED)
+            self._write_guard(action, DataPlaneMode.BLOCKED)
+        finally:
+            CURRENT.reset(token)
 
     def _set_mode_locked(self, action: ControllerAction, mode: DataPlaneMode) -> None:
         forwarding = "1" if mode is DataPlaneMode.ACTIVE else "0"
@@ -1727,6 +1897,8 @@ class SystemDataPlaneRuntime:
             # tunnel state so no concurrent writer can re-enable forwarding.
             self._write_guard(action, DataPlaneMode.BLOCKED)
         else:
+            if self.destination_protection is not None:
+                self.destination_protection.verify()
             self._write_state(action, DataPlaneMode.BLOCKED)
         result = self._run(self.commands.sysctl, "-w", f"net.ipv4.ip_forward={forwarding}")
         if result.returncode != 0 or self._forwarding() is (mode is not DataPlaneMode.ACTIVE):
@@ -1738,7 +1910,7 @@ class SystemDataPlaneRuntime:
         elif mode is DataPlaneMode.PASSIVE:
             strongswan_running = any(
                 self._run(self.commands.systemctl, "is-active", "--quiet", service).returncode == 0
-                for service in ("strongswan-starter", "strongswan")
+                for service in ("strongswan",)
             )
             if strongswan_running and self.tunnel_cold_passive:
                 self._suspend_cluster_tunnels_locked(stop_if_unavailable=False)
@@ -1788,7 +1960,7 @@ class SystemDataPlaneRuntime:
                 if materialized.returncode == 0:
                     break
                 if attempt < self.passive_materialization_attempts:
-                    self.sleeper(self.passive_materialization_interval)
+                    self._effect_sleep(self.passive_materialization_interval)
             else:
                 raise RuntimeError("passive data-plane materialization did not converge")
             self._require_bgp_exports(DataPlaneMode.PASSIVE)
@@ -1800,7 +1972,13 @@ class SystemDataPlaneRuntime:
             # mode write, durably return to BLOCKED so the checkpointed action is
             # replayed instead of being mistaken for complete on the next step.
             try:
-                self._set_failed_passive_blocked(action)
+                from ..local_commands import CURRENT
+
+                token = CURRENT.set(None)
+                try:
+                    self._set_failed_passive_blocked(action)
+                finally:
+                    CURRENT.reset(token)
             except Exception:
                 raise RuntimeError(
                     "failed passive transition could not restore blocked authority"
@@ -1810,7 +1988,7 @@ class SystemDataPlaneRuntime:
     def _set_failed_passive_blocked(self, action: ControllerAction) -> None:
         self.routing_lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_fd = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        self._acquire_routing_writer(lock_fd)
         try:
             self._restore_blocked_authority_locked(action)
         finally:
@@ -1823,7 +2001,7 @@ class SystemDataPlaneRuntime:
     def _suspend_passive_tunnels(self, action: ControllerAction) -> None:
         self.routing_lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_fd = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        self._acquire_routing_writer(lock_fd)
         try:
             if self._forwarding() or self.mode() is not DataPlaneMode.PASSIVE:
                 raise RuntimeError("cold static standby lost its passive forwarding fence")
@@ -1832,7 +2010,7 @@ class SystemDataPlaneRuntime:
             else:
                 from .tunnel_observation import scoped_ike_ids
 
-                listed = self._run(self.commands.swanctl, "--list-sas", "--raw")
+                listed = self._run(*ipsec_observation.command())
                 if listed.returncode:
                     raise RuntimeError("static standby SA state unavailable")
                 names = set(self.static_tunnel_names)
@@ -1842,9 +2020,11 @@ class SystemDataPlaneRuntime:
                     )
                     if result.returncode:
                         raise RuntimeError("static standby suspension failed")
-                listed = self._run(self.commands.swanctl, "--list-sas", "--raw")
+                listed = self._run(*ipsec_observation.command())
                 if listed.returncode or scoped_ike_ids(listed.stdout, names):
                     raise RuntimeError("static standby suspension is incomplete")
+            if self.inactive_static_reconciler is not None:
+                self.inactive_static_reconciler(action, False)
             self._write_state(action, DataPlaneMode.PASSIVE)
             self._write_guard(action, DataPlaneMode.PASSIVE)
         finally:
@@ -1856,7 +2036,7 @@ class SystemDataPlaneRuntime:
             raise RuntimeError("candidate tunnel preparation is not enabled for this runtime")
         self.routing_lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_fd = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        self._acquire_routing_writer(lock_fd)
         try:
             if self._forwarding() or self.mode() is not DataPlaneMode.PASSIVE:
                 raise RuntimeError("candidate tunnel preparation requires passive fenced mode")
@@ -1865,12 +2045,14 @@ class SystemDataPlaneRuntime:
             load = self._run(self.commands.swanctl, "--load-all", "--noprompt")
             if load.returncode != 0:
                 raise RuntimeError("candidate tunnel configuration could not be loaded")
+            if self.inactive_static_reconciler is not None:
+                self.inactive_static_reconciler(action, True)
             for attempt in range(1, self.passive_materialization_attempts + 1):
-                listed = self._run(self.commands.swanctl, "--list-sas", "--raw")
+                listed = self._run(*ipsec_observation.command())
                 if listed.returncode == 0 and _ike_sa_ids(listed.stdout):
                     break
                 if attempt < self.passive_materialization_attempts:
-                    self.sleeper(self.passive_materialization_interval)
+                    self._effect_sleep(self.passive_materialization_interval)
             else:
                 raise RuntimeError("candidate IKE SA establishment did not converge")
             if self._forwarding():
@@ -1878,6 +2060,51 @@ class SystemDataPlaneRuntime:
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
+
+    def origination_policy_ready(self) -> bool:
+        """Prove the installed policy without requiring remote convergence."""
+        return bool(self.origination_verifier is not None and self.origination_verifier())
+
+    def prepare_owner_origination(
+        self, action: ControllerAction, revalidate: Callable[[], None]
+    ) -> None:
+        """Permit the exact owner's local prefixes while forwarding remains fenced."""
+        self.routing_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        self._acquire_routing_writer(descriptor)
+        try:
+            try:
+                revalidate()
+                if self._forwarding() or self.mode() not in {
+                    DataPlaneMode.PASSIVE,
+                    DataPlaneMode.ORIGINATING,
+                }:
+                    raise RuntimeError("owner origination requires a fenced prepared data plane")
+                if self.destination_protection is None:
+                    raise RuntimeError("owner origination requires destination protection")
+                self.destination_protection.install()
+                if self.candidate_preparer is not None:
+                    self.candidate_preparer()
+                if self._run(self.commands.swanctl, "--load-all", "--noprompt").returncode:
+                    raise RuntimeError("owner origination IPsec configuration load failed")
+                if self.inactive_static_reconciler is not None:
+                    self.inactive_static_reconciler(action, True)
+                revalidate()
+                if self.active_preparer is None:
+                    raise RuntimeError("owner origination preparation is unavailable")
+                self.active_preparer()
+                if self._forwarding() or not self.origination_policy_ready():
+                    raise RuntimeError("owner origination policy or forwarding fence is unproven")
+                self.destination_protection.verify()
+                revalidate()
+                self._write_state(action, DataPlaneMode.ORIGINATING)
+                self._write_guard(action, DataPlaneMode.ORIGINATING)
+            except Exception:
+                self._restore_blocked_authority_locked(action)
+                raise
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
     def emergency_fence(self, action: ControllerAction) -> None:
         """Physically disable forwarding without waiting for the ordinary routing lock."""
@@ -1897,146 +2124,128 @@ class SystemDataPlaneRuntime:
         self._write_state(action, DataPlaneMode.BLOCKED)
         self._write_guard(action, DataPlaneMode.BLOCKED)
 
-    def _repair_failed_bgp_paths(self, action: ControllerAction, deadline: float) -> bool:
-        """Give FRR an authoritative path-loss signal without restarting healthy paths.
-
-        This is an effect of the existing persisted owner repair, not a new
-        recovery episode. Native selection and actual selected-route readiness
-        remain FRR's and the observer's responsibilities respectively.
-        """
-        from .tunnel_observation import path_health
-        from .tunnels import Health
-
-        reasons = set(action.repair_reasons)
-        if (
-            "bgp-not-ready" not in reasons
-            or reasons - {"bgp-not-ready", "xfrm-not-ready"}
-            or not self.bgp_path_policies
-        ):
-            return False
-
-        def run(*argv: str) -> str:
-            result = self._run_before(deadline, *argv)
-            if result.returncode:
-                raise RuntimeError("bounded BGP repair evidence is unavailable")
-            return result.stdout
-
-        descriptor = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            sas = run(self.commands.swanctl, "--list-sas", "--raw")
-            states = run(self.commands.ip, "-j", "xfrm", "state")
-            policies = run(self.commands.ip, "-j", "xfrm", "policy")
-            links = json.loads(run(self.commands.ip, "-d", "-j", "link", "show", "type", "xfrm"))
-            summary = json.loads(run(self.commands.vtysh, "-c", "show bgp summary json"))
-            configured = _configured_bgp_summary_sessions(summary)
-            established = frozenset(_established_bgp_sessions(summary))
-            down = _confirmed_down_bgp_sessions(summary)
-            if (
-                configured is None
-                or configured != self.configured_bgp_sessions
-                or configured - established - down
-            ):
-                raise RuntimeError("BGP repair peer evidence is unknown")
-            targets: list[str] = []
-            peers = [path.peer for policy in self.bgp_path_policies for path in policy.paths]
-            if len(peers) != len(set(peers)):
-                return False
-            for policy in self.bgp_path_policies:
-                health = {
-                    path.name: path_health(
-                        path,
-                        policy,
-                        sas=sas,
-                        states=states,
-                        policies=policies,
-                        links=links,
-                        routes=[],
-                        require_routes=False,
-                    )
-                    for path in policy.paths
-                }
-                if Health.UNKNOWN in health.values():
-                    raise RuntimeError("BGP repair encrypted-path evidence is unknown")
-                failed = [path for path in policy.paths if health[path.name] is Health.DOWN]
-                if not failed:
-                    continue
-                if not policy.eligible:
-                    return False
-                alternatives = []
-                for path in policy.paths:
-                    if health[path.name] is not Health.HEALTHY or path.peer not in established:
-                        continue
-                    rib = json.loads(
-                        run(
-                            self.commands.vtysh,
-                            "-c",
-                            f"show bgp ipv4 unicast neighbors {path.peer} routes json",
-                        )
-                    )
-                    if covers(frozenset(_learned_bgp_prefixes(rib)), policy.destinations):
-                        alternatives.append(path)
-                if not alternatives:
-                    return False
-                targets.extend(path.peer for path in failed)
-            if not targets:
-                return False
-            for peer in targets:
-                run(self.commands.vtysh, "-c", f"clear bgp ipv4 unicast {peer}")
-            return True
-        except (OSError, ValueError, TypeError) as error:
-            raise RuntimeError("bounded BGP path repair could not be proven") from error
-        finally:
-            os.close(descriptor)
-
-    def repair_local(self, action: ControllerAction) -> None:
+    def repair_local(self, action: ControllerAction) -> RepairDisposition:
         if action.repair_deadline_at is None or not action.repair_reasons:
             raise RuntimeError("local repair action has no bounded authority")
+        reload_missing = "daemon-configuration-missing:strongswan" in action.repair_reasons
+        components = tuple(
+            dict.fromkeys(
+                [
+                    reason.split(":", 1)[1]
+                    for reason in action.repair_reasons
+                    if reason.startswith("daemon-failed:")
+                ]
+                + (["strongswan"] if reload_missing else [])
+            )
+        )
+        if not components or any(c not in {"strongswan", "frr"} for c in components):
+            raise RuntimeError("local repair lacks a confirmed component defect")
+        if action.repair_mode is DataPlaneMode.PASSIVE and (
+            not reload_missing or components != ("strongswan",)
+        ):
+            raise RuntimeError("passive repair permits only missing-configuration reload")
         repair_deadline = action.repair_deadline_at - 1.0
+        descriptor = None
+        attempted = False
         try:
-            if self._repair_failed_bgp_paths(action, repair_deadline):
-                if self.monotonic_clock() >= repair_deadline:
-                    raise TimeoutError
-                return
-            reasons = set(action.repair_reasons)
-            encrypted_path_unhealthy = bool({"local-service-unhealthy", "xfrm-not-ready"} & reasons)
-            if encrypted_path_unhealthy:
-                result = self._run_before(
-                    repair_deadline,
-                    self.commands.systemctl,
-                    "restart",
-                    "strongswan-starter",
-                    "frr",
-                )
-            elif "bgp-not-ready" in reasons:
-                result = self._run_before(
-                    repair_deadline,
-                    self.commands.systemctl,
-                    "reload-or-restart",
-                    "frr",
-                )
-            else:
-                result = self._run_before(
-                    repair_deadline,
-                    self.commands.systemctl,
-                    "reload-or-restart",
-                    "nebius-vpngw-agent",
-                )
-            if result.returncode != 0:
-                raise RuntimeError("local repair command did not complete successfully")
-            if encrypted_path_unhealthy:
-                loaded = self._run_before(
-                    repair_deadline,
-                    self.commands.swanctl,
-                    "--load-all",
-                    "--noprompt",
-                )
-                if loaded.returncode != 0:
-                    raise RuntimeError("local tunnel state did not reload")
+            # Expiry retains the existing emergency fence, without waiting for a writer.
             if self.monotonic_clock() >= repair_deadline:
-                raise TimeoutError
+                raise TimeoutError("local repair deadline expired")
+            if "strongswan" in components:
+                self.routing_lock_path.parent.mkdir(parents=True, exist_ok=True)
+                descriptor = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return RepairDisposition.ATTEMPTED if attempted else RepairDisposition.DEFERRED
+            for component in components:
+                status = self._run_before(
+                    repair_deadline,
+                    self.commands.systemctl,
+                    "show",
+                    component,
+                    "--property=ActiveState",
+                    "--value",
+                )
+                missing_only = component == "strongswan" and reload_missing
+                if status.returncode or status.stdout.strip() != (
+                    "active" if missing_only else "failed"
+                ):
+                    return RepairDisposition.ATTEMPTED if attempted else RepairDisposition.DEFERRED
+                if component == "strongswan":
+                    try:
+                        if self.mode() is not action.repair_mode:
+                            return (
+                                RepairDisposition.ATTEMPTED
+                                if attempted
+                                else RepairDisposition.DEFERRED
+                            )
+                        if action.repair_mode is DataPlaneMode.PASSIVE:
+                            guard = json.loads(self.guard_path.read_text(encoding="utf-8"))
+                            if not (
+                                isinstance(guard, dict)
+                                and guard.get("guard_boot_id") == action.boot_id
+                                and guard.get("data_plane_mode") == DataPlaneMode.PASSIVE.value
+                                and not self._forwarding()
+                            ):
+                                return (
+                                    RepairDisposition.ATTEMPTED
+                                    if attempted
+                                    else RepairDisposition.DEFERRED
+                                )
+                        if missing_only:
+                            if not self._missing_ipsec_configuration(deadline=repair_deadline):
+                                return (
+                                    RepairDisposition.ATTEMPTED
+                                    if attempted
+                                    else RepairDisposition.DEFERRED
+                                )
+                        elif self.ipsec_configuration_provider is not None:
+                            if self.ipsec_configuration_provider() is None:
+                                return (
+                                    RepairDisposition.ATTEMPTED
+                                    if attempted
+                                    else RepairDisposition.DEFERRED
+                                )
+                        else:
+                            return (
+                                RepairDisposition.ATTEMPTED
+                                if attempted
+                                else RepairDisposition.DEFERRED
+                            )
+                    except (OSError, ValueError, RuntimeError):
+                        if self.monotonic_clock() >= repair_deadline:
+                            raise TimeoutError("local repair proof exceeded its deadline") from None
+                        return (
+                            RepairDisposition.ATTEMPTED if attempted else RepairDisposition.DEFERRED
+                        )
+                attempted = True
+                if not missing_only:
+                    result = self._run_before(
+                        repair_deadline, self.commands.systemctl, "restart", component
+                    )
+                    if result.returncode:
+                        raise RuntimeError("component repair did not complete")
+                if component == "strongswan":
+                    loaded = self._run_before(
+                        repair_deadline, self.commands.swanctl, "--load-all", "--noprompt"
+                    )
+                    if loaded.returncode:
+                        raise RuntimeError("component configuration did not reload")
         except (RuntimeError, TimeoutError):
+            if (
+                action.repair_mode is DataPlaneMode.PASSIVE
+                and self.mode() is DataPlaneMode.PASSIVE
+                and not self._forwarding()
+            ):
+                # Retain the consumed passive attempt. Returning to BLOCKED
+                # would re-enter initial materialization and renew the loader.
+                return RepairDisposition.ATTEMPTED
             self.emergency_fence(action)
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        return RepairDisposition.ATTEMPTED
 
     def enable_active(self, action: ControllerAction) -> None:
         # Promotion prerequisites must be installed and verified while the
@@ -2044,8 +2253,14 @@ class SystemDataPlaneRuntime:
         # cannot expose an incompletely protected gateway.
         self.routing_lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_fd = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        self._acquire_routing_writer(lock_fd)
         try:
+            try:
+                if self.destination_protection is not None:
+                    self.destination_protection.install()
+            except Exception:
+                self._restore_blocked_authority_locked(action)
+                raise
             if self._forwarding():
                 if self.mode() is not DataPlaneMode.ACTIVE:
                     raise RuntimeError("forwarding is enabled without active authority")
@@ -2062,6 +2277,8 @@ class SystemDataPlaneRuntime:
                     self.active_preparer()
                 if self._forwarding():
                     raise RuntimeError("active preparation changed forwarding state")
+                if self.inactive_static_reconciler is not None:
+                    self.inactive_static_reconciler(action, True)
                 self._require_bgp_exports(DataPlaneMode.ACTIVE)
                 if self._forwarding():
                     raise RuntimeError("active export verification changed forwarding state")
@@ -2481,6 +2698,8 @@ class BoundRouteRuntime:
         )
 
     def readiness(self, *, strict: bool = False) -> LocalReadiness:
+        protection = getattr(self.data_plane, "destination_protection", None)
+        protection_ready = protection is not None and protection.ready()
         try:
             observed = self.data_plane.observe()
         except RuntimeError:
@@ -2491,21 +2710,36 @@ class BoundRouteRuntime:
             # observations as not-ready so the controller can enter passive
             # and request that materialization.  Promotion remains blocked
             # until a later complete observation proves every readiness bit.
-            return LocalReadiness(False, False, False, False)
+            return LocalReadiness(
+                bool(getattr(self.data_plane, "confirmed_services", False)),
+                False,
+                False,
+                False,
+                sample_complete=False,
+                protection_ready=protection_ready,
+            )
         bgp = self._bgp(observed)
         static_ready = self.static_manifest.prefixes.issubset(observed.usable_xfrm_prefixes)
         if self.static_readiness_provider is not None:
             static_ready = static_ready and self.static_readiness_provider()
         required_xfrm_prefixes = self.static_manifest.prefixes | bgp.required_prefixes
+        protection = getattr(self.data_plane, "destination_protection", None)
+        if protection is not None:
+            # Withdrawal retains plaintext-drop intent without retaining a route
+            # obligation. Explicit requirements above remain unconditional.
+            required_xfrm_prefixes |= (
+                frozenset(protection._destinations(protection._ledger())) & bgp.learned_prefixes
+            )
         missing_redundant_sessions = (
             bgp.configured_sessions - bgp.established_sessions
             if bgp.promotion_ready
             else frozenset()
         )
         export_ready = observed.bgp_export_state is BGPExportState.MATCH
+        mode = self.data_plane.mode()
         passive_policy = (
             self.passive_bgp_policy_provider()
-            if self.passive_bgp_policy_provider is not None
+            if self.passive_bgp_policy_provider is not None and mode is DataPlaneMode.PASSIVE
             else True
         )
         override_ready = (
@@ -2515,11 +2749,37 @@ class BoundRouteRuntime:
             BGPExportState.DRIFT: "bgp-export-drift",
             BGPExportState.UNKNOWN: "bgp-export-unavailable",
         }.get(observed.bgp_export_state)
-        passive_mode = self.data_plane.mode() is DataPlaneMode.PASSIVE
-        routing_hygiene_ready = observed.routing_hygiene_ready if passive_mode else True
+        passive_mode = mode is DataPlaneMode.PASSIVE
+        routing_hygiene_ready = (
+            observed.routing_hygiene_ready if mode is not DataPlaneMode.ACTIVE else True
+        )
         hygiene_reason = "routing-hygiene-not-ready" if not routing_hygiene_ready else None
+        verifier = getattr(self.data_plane, "origination_policy_ready", None)
         readiness = LocalReadiness(
+            diagnostic_reasons=bgp.blocked_reasons,
+            # Missing/ambiguous installed import-policy evidence is unknown,
+            # not permission to start the owner origination phase.
+            sample_complete=passive_policy is not None,
+            origination_required=bool(self.bgp_policies),
+            origination_ready=bool(
+                mode is DataPlaneMode.ORIGINATING and callable(verifier) and verifier()
+            ),
             service_healthy=observed.service_healthy,
+            protection_ready=protection_ready,
+            local_defects=tuple("daemon-failed:" + name for name in observed.failed_services)
+            + (
+                ("daemon-configuration-missing:strongswan",)
+                if observed.ipsec_configuration_missing
+                else ()
+            ),
+            required_destinations=tuple(sorted(required_xfrm_prefixes)),
+            covered_destinations=tuple(
+                sorted(
+                    prefix
+                    for prefix in required_xfrm_prefixes
+                    if covers(observed.usable_xfrm_prefixes, frozenset({prefix}))
+                )
+            ),
             static_ready=static_ready,
             bgp_ready=bgp.promotion_ready
             and export_ready
@@ -2724,6 +2984,19 @@ class BoundRouteRuntime:
         bgp = self._bgp(observed)
         ledger = self.store.load_ledger()
         if prepare_authority:
+            protection = getattr(self.data_plane, "destination_protection", None)
+            if protection is not None:
+                existing = self._routes(ledger)
+                protection.admit(
+                    bgp.eligible_prefixes
+                    | frozenset(
+                        route.prefix
+                        for route in existing
+                        if isinstance(route, ManagedRouteSnapshot)
+                        and route.ownership.cluster_id == self.binding.cluster_id
+                        and route.ownership.kind is ManagedRouteKind.BGP
+                    )
+                )
             self._retire_stably_absent_ledger_routes(ledger)
             self._adopt_migration_routes(ledger, bgp)
             self._adopt_cloud_authority_routes(ledger)
@@ -2869,6 +3142,15 @@ class BoundRouteRuntime:
         if callable(synchronize_authority_labels):
             synchronize_authority_labels(ledger)
         self.store.save_transition(result.committed_state)
+        protection = getattr(self.data_plane, "destination_protection", None)
+        if protection is not None:
+            protection.retire(
+                frozenset(
+                    route.prefix
+                    for route in self._routes(ledger)
+                    if isinstance(route, ManagedRouteSnapshot)
+                )
+            )
 
     def _apply_mutation(
         self, mutation: RouteMutation, ledger: dict[str, ManagedRouteOwnership]
@@ -2889,6 +3171,12 @@ class BoundRouteRuntime:
                 or recorded.kind is not mutation.route_kind
             ):
                 raise RuntimeError("route mutation lacks exact durable management authority")
+        protection = getattr(self.data_plane, "destination_protection", None)
+        if protection is not None and mutation.kind is not RouteMutationKind.DELETE:
+            if mutation.route_kind is ManagedRouteKind.BGP:
+                protection.admit(frozenset({mutation.prefix}))
+            else:
+                protection.install()
         self.backend.verify_target(mutation.route_target)
         try:
             route_id = self.backend.apply_mutation(mutation)
@@ -2962,6 +3250,75 @@ class BoundRouteRuntime:
             raise RuntimeError("route mutation checkpoint changed during ledger recovery")
         self.store.clear_pending_mutation(completed)
         return True
+
+    def established_context(self) -> ControllerRouteContext | None:
+        """Verify existing published route authority without native path health.
+
+        This observation never authorizes promotion or a mutation. A retained
+        intent plan must still agree with the committed receipt and exact cloud
+        route ledger; a VICI/FRR outage alone cannot invalidate that authority.
+        """
+        try:
+            value = self.store.load_route_reconciliation_receipt()
+            if value is None or self.store.load_pending_mutation() is not None:
+                return None
+            receipt = RouteReconciliationReceipt.from_mapping(value)
+            ownership = self._current_ownership(require_takeover_fence=False)
+            if ownership is None or not receipt.context.matches(ownership):
+                return None
+            ledger = self.store.load_ledger()
+            existing = self._routes(ledger)
+            prefixes = frozenset(
+                r.prefix
+                for r in existing
+                if isinstance(r, ManagedRouteSnapshot)
+                and r.ownership.cluster_id == self.binding.cluster_id
+                and r.ownership.kind is ManagedRouteKind.BGP
+            )
+            retained = BGPRouteReadiness.normalize(
+                configured_sessions=("retained-intent",),
+                established_sessions=("retained-intent",),
+                required_prefixes=prefixes,
+                learned_prefixes=prefixes,
+                usable_xfrm_prefixes=prefixes,
+                observed_import_policy_digest=self.expected_import_policy_digest,
+                committed_import_policy_digest=self.expected_import_policy_digest,
+            )
+            transition = self.store.load_transition(now=self.clock())
+            plan = self.reconciler.plan(
+                ownership=ownership,
+                static_manifest=self.static_manifest,
+                bgp=retained,
+                existing_routes=existing,
+                state=transition,
+                now=self.clock(),
+            )
+            # This read proves retained publication, not a healthy observation.
+            # Preserve the committed withdrawal counters instead of resetting
+            # them with the synthetic retained-prefix inventory.
+            plan = replace(plan, next_state=transition)
+            if (
+                plan.mutations
+                or plan.blocked_reasons
+                or receipt.plan_digest != self._plan_digest(plan)
+            ):
+                return None
+            return ControllerRouteContext(
+                owner_node_id=receipt.context.owner_node_id,
+                allocation_id=receipt.context.allocation_id,
+                ownership_epoch=receipt.context.ownership_epoch,
+                generation_id=receipt.context.generation_id,
+                digests=DigestSet(
+                    receipt.context.configuration_digest,
+                    receipt.context.static_routes_digest,
+                    receipt.context.bgp_policy_digest,
+                ),
+                route_runtime_id=self.binding.route_runtime_id,
+                ownership_incarnation=receipt.context.ownership_incarnation,
+                operation_id=receipt.context.operation_id,
+            )
+        except (RuntimeError, ValueError, OSError):
+            return None
 
     def receipt_context(self) -> ControllerRouteContext | None:
         value = self.store.load_route_reconciliation_receipt()
@@ -3126,9 +3483,28 @@ class VMHARuntimePorts:
         local = ControllerTunnelRuntime(config_path, state_dir, None, isolated_ports, clock=clock)
         local.effects.effect_deadline = deadline
         local.effects.observe = local.effects.observe_readonly  # type: ignore[method-assign]
-        observed = data_plane.observe(
-            active_export_alternatives=local.serving_export_alternatives()
+        if data_plane.destination_protection is not None:
+            data_plane.destination_protection = copy.copy(data_plane.destination_protection)
+            data_plane.destination_protection.run = lambda argv, **_kwargs: data_plane._run(*argv)
+        protection_ready = (
+            data_plane.destination_protection is not None
+            and data_plane.destination_protection.ready()
         )
+        try:
+            observed = data_plane.observe(
+                active_export_alternatives=local.serving_export_alternatives()
+            )
+        except RuntimeError:
+            if clock() >= deadline:
+                raise TimeoutError("local health collection deadline exceeded") from None
+            return LocalReadiness(
+                bool(getattr(data_plane, "confirmed_services", False)),
+                False,
+                False,
+                False,
+                sample_complete=False,
+                protection_ready=protection_ready,
+            )
 
         def completed_observation(
             *, active_export_alternatives: tuple[Mapping[str, frozenset[str]], ...] = ()
@@ -3194,6 +3570,7 @@ class VMHARuntimePorts:
             "cloud": self.cloud.observe,
             "data_plane": self.data_plane.mode,
             "routes": self.routes.receipt_context,
+            "established_routes": self.routes.established_context,
         }
 
     def _require_action_identity(self, action: ControllerAction) -> None:
@@ -3209,21 +3586,47 @@ class VMHARuntimePorts:
         ):
             raise RuntimeError("controller action does not match the installed runtime binding")
 
-    def handlers(self) -> dict[ActionKind, Callable[[ControllerAction], None]]:
+    def handlers(self) -> dict[ActionKind, Callable[[ControllerAction], None | RepairDisposition]]:
         former_actions = {
             ActionKind.STOP_FORMER_OWNER,
             ActionKind.DETACH_FORMER_ATTACHMENT,
         }
 
-        def checked(expected_kind: ActionKind, handler: Callable[[ControllerAction], None]):
-            def apply(action: ControllerAction) -> None:
+        def checked(
+            expected_kind: ActionKind,
+            handler: Callable[[ControllerAction], None | RepairDisposition],
+        ):
+            def apply(action: ControllerAction) -> None | RepairDisposition:
                 expected_target = (
                     self.peer.node_id if expected_kind in former_actions else self.local.node_id
                 )
                 if action.kind is not expected_kind or action.target_node_id != expected_target:
                     raise RuntimeError("controller action has the wrong kind or target identity")
                 self._require_action_identity(action)
-                handler(action)
+                from ...ha_activation import command_deadline
+                from ..local_commands import CURRENT, CommandBudget
+
+                state_path = getattr(self.data_plane, "state_path", None)
+                deadline = (
+                    command_deadline(state_dir=state_path.parent)
+                    if state_path is not None
+                    and expected_kind
+                    not in {
+                        ActionKind.INSTALL_COLD_START_GUARD,
+                        ActionKind.DISABLE_ACTIVE,
+                    }
+                    else None
+                )
+                if deadline is None:
+                    return handler(action)
+                token = CURRENT.set(CommandBudget(deadline))
+                try:
+                    # SDK requests and accepted-operation polling share the same
+                    # allowance as native commands; no later call gets a fresh timeout.
+                    with vm_ha_observation_budget(seconds=deadline - time.monotonic()):
+                        return handler(action)
+                finally:
+                    CURRENT.reset(token)
 
             return apply
 
@@ -3266,11 +3669,31 @@ class VMHARuntimePorts:
             ):
                 raise RuntimeError("candidate ownership is not exact after confirmation")
 
-        def repair(action: ControllerAction) -> None:
+        def repair(action: ControllerAction) -> RepairDisposition:
             repair_local = getattr(self.data_plane, "repair_local", None)
             if not callable(repair_local):
                 raise RuntimeError("local data-plane repair is unavailable")
-            repair_local(action)
+            cloud = self.cloud.observe()
+            if action.repair_mode is DataPlaneMode.PASSIVE:
+                peer, received_at = self.peer_runtime.observe()
+                now = self.peer_runtime.clock()
+                admitted = bool(
+                    cloud.passive_attachment_exact(self.local.node_id, self.peer.node_id)
+                    and peer is not None
+                    and peer.node_id == peer.observed_owner_id == self.peer.node_id
+                    and received_at is not None
+                    and peer.authority_fresh(now)
+                    and peer.local_service_fresh(now)
+                )
+            else:
+                admitted = cloud.local_attachment_exact(self.local.node_id)
+            if not (
+                admitted
+                and cloud.ownership_epoch == action.ownership_epoch
+                and self.data_plane.mode() is action.repair_mode
+            ):
+                raise RuntimeError("local repair ownership changed")
+            return repair_local(action)
 
         def prepare_candidate(action: ControllerAction) -> None:
             observation = self.cloud.observe()
@@ -3288,6 +3711,23 @@ class VMHARuntimePorts:
             if not callable(prepare):
                 raise RuntimeError("candidate tunnel preparation is unavailable")
             prepare(action)
+
+        def prepare_origination(action: ControllerAction) -> None:
+            def revalidate() -> None:
+                self.credential_bundle.revalidate()
+                self._require_action_identity(action)
+                observation = self.cloud.observe()
+                if not (
+                    observation.local_attachment_exact(self.local.node_id)
+                    and observation.ownership_epoch == action.ownership_epoch
+                    and (
+                        not action.takeover_fence_required
+                        or observation.transfer_complete(self.local.node_id)
+                    )
+                ):
+                    raise RuntimeError("owner origination allocation or transfer fence changed")
+
+            self.data_plane.prepare_owner_origination(action, revalidate)
 
         return {
             ActionKind.INSTALL_COLD_START_GUARD: checked(
@@ -3321,6 +3761,9 @@ class VMHARuntimePorts:
             ActionKind.PREPARE_CANDIDATE_DATAPLANE: checked(
                 ActionKind.PREPARE_CANDIDATE_DATAPLANE,
                 prepare_candidate,
+            ),
+            ActionKind.PREPARE_OWNER_ORIGINATION: checked(
+                ActionKind.PREPARE_OWNER_ORIGINATION, prepare_origination
             ),
             ActionKind.RECONCILE_ROUTES: checked(
                 ActionKind.RECONCILE_ROUTES, self.routes.reconcile
@@ -3360,7 +3803,9 @@ class VMHARuntimePorts:
         mtls = self.mtls_snapshot_provider()
         auto_healing_state, auto_healing_digest = self.auto_healing_policy_provider()
         cloud = snapshot.cloud if snapshot is not None else None
-        readiness = local_readiness or LocalReadiness(False, False, False, False)
+        readiness = local_readiness or LocalReadiness(
+            False, False, False, False, sample_complete=False
+        )
         data_plane_mode = (
             snapshot.data_plane_mode if snapshot is not None else DataPlaneMode.BLOCKED
         )
@@ -3393,6 +3838,38 @@ class VMHARuntimePorts:
             certificate_fingerprint=mtls.certificate_fingerprint,
             digests=digests,
             service_healthy=readiness.service_healthy,
+            data_plane_mode=data_plane_mode.value,
+            origination_ready=bool(
+                data_plane_mode is DataPlaneMode.ORIGINATING
+                and cloud is not None
+                and cloud.local_attachment_exact(self.local.node_id)
+                and snapshot is not None
+                and not snapshot.apply_locked
+                and not snapshot.transfer_inhibited
+                and snapshot.guard_boot_id == boot_id
+                and readiness.origination_ready
+            ),
+            fault_category=readiness.fault_category.value,
+            authority_ready=bool(
+                active_ready
+                and snapshot is not None
+                and snapshot.guard_boot_id == boot_id
+                and not snapshot.apply_locked
+                and readiness.protection_ready
+                and evidence is not None
+                and evidence.cloud_status in {"complete", "in-progress"}
+                and evidence.cloud_age_seconds is not None
+                and evidence.cloud_age_seconds < 30
+            ),
+            coverage_state=(
+                "unknown"
+                if not readiness.sample_complete
+                else "healthy"
+                if readiness.promotion_ready
+                else "unhealthy"
+            ),
+            required_destinations=readiness.required_destinations,
+            covered_destinations=readiness.covered_destinations,
             route_ready=readiness.transfer_ready,
             promotion_ready=bool(
                 evidence is not None
@@ -3610,6 +4087,7 @@ def build_runtime_ports(
     identity_proof_mode: str = "online",
     systemd_invocation_id: str | None = None,
     active_preparer: Callable[[], None] | None = None,
+    origination_verifier: Callable[[], bool] | None = None,
     blocked_preparer: Callable[[], None] | None = None,
     candidate_preparer: Callable[[], None] | None = None,
 ) -> VMHARuntimePorts:
@@ -3718,6 +4196,7 @@ def build_runtime_ports(
                 state_dir / "accepted-cloud-operation.json"
             ),
             peer_binding_provider=live_peer_binding,
+            state_dir=state_dir,
         )
         effective_monotonic_clock = monotonic_clock or clock
         data_plane_kwargs: dict[str, object] = {
@@ -3734,6 +4213,8 @@ def build_runtime_ports(
         }
         if active_preparer is not None:
             data_plane_kwargs["active_preparer"] = active_preparer
+        if origination_verifier is not None:
+            data_plane_kwargs["origination_verifier"] = origination_verifier
         if blocked_preparer is not None:
             data_plane_kwargs["blocked_preparer"] = blocked_preparer
         if candidate_preparer is not None:
@@ -3745,6 +4226,91 @@ def build_runtime_ports(
                 for t in c.get("tunnels", [])
                 if t.get("ha_role") != "disable"
             )
+        full_config = {
+            "vm_ha": dict(config),
+            "gateway": config.get("gateway", {}),
+            "connections": config.get("connections", []),
+            "defaults": config.get("defaults", {}),
+        }
+
+        def reconcile_static(action: ControllerAction, candidate: bool) -> None:
+            from .tunnel_runtime import reconcile_inactive_static
+            from .tunnels import Authority
+
+            def permitted(deadline: float) -> bool:
+                with vm_ha_observation_budget(
+                    seconds=deadline - time.monotonic(), clock=time.monotonic
+                ):
+                    observation = cloud.observe()
+                try:
+                    guard = json.loads((state_dir / "guard.json").read_text())
+                    state = json.loads((state_dir / "data-plane.json").read_text())
+                except (OSError, ValueError):
+                    return False
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                forwarding = runner(
+                    (DataPlaneCommandSet().sysctl, "-n", "net.ipv4.ip_forward"), min(3.0, remaining)
+                )
+                admitted = observation.local_attachment_exact(local_node_id)
+                if not candidate:
+                    admitted = admitted or observation.passive_attachment_exact(
+                        local_node_id, peer.node_id
+                    )
+                return bool(
+                    admitted
+                    and observation.ownership_epoch == action.ownership_epoch
+                    and action.target_node_id == local_node_id
+                    and action.allocation_id == binding.shared_allocation_id
+                    and action.generation_id == binding.generation_id
+                    and isinstance(guard, dict)
+                    and guard.get("schema") == "nebius-vpngw/vm-ha-status-v1"
+                    and guard.get("guard_boot_id") == action.boot_id
+                    and guard.get("data_plane_mode") in {"passive", "blocked", "originating"}
+                    and isinstance(state, dict)
+                    and state.get("schema") == "nebius-vpngw/vm-ha-data-plane-v1"
+                    and state.get("boot_id") == action.boot_id
+                    and state.get("mode") in {"passive", "blocked", "originating"}
+                    and forwarding.returncode == 0
+                    and forwarding.stdout.strip() == "0"
+                    and time.monotonic() < deadline
+                    and (
+                        not candidate
+                        or not action.takeover_fence_required
+                        or observation.transfer_complete(local_node_id)
+                    )
+                )
+
+            reconcile_inactive_static(
+                full_config,
+                state_dir,
+                Authority(
+                    binding.cluster_id,
+                    local_node_id,
+                    binding.shared_allocation_id,
+                    action.ownership_epoch,
+                    action.ownership_incarnation,
+                    binding.generation_id,
+                ),
+                candidate=candidate,
+                permitted=permitted,
+                runner=runner,
+            )
+
+        if static_records and candidate_preparer is not None:
+            data_plane_kwargs["inactive_static_reconciler"] = reconcile_static
+
+        def protection_run(argv: list[str], **kwargs: Any) -> CommandResult:
+            return runner(tuple(argv), min(float(kwargs.get("timeout", 5)), 5.0))
+
+        data_plane_kwargs["destination_protection"] = DestinationProtection(
+            state_dir / "destination-protection.json",
+            cluster=binding.cluster_id,
+            policies=connection_policies(full_config),
+            local_prefixes=tuple(cast(dict, config.get("gateway", {})).get("local_prefixes", ())),
+            run=protection_run,
+        )
         data_plane = data_plane_factory(
             **data_plane_kwargs,
         )

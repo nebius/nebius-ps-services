@@ -74,6 +74,7 @@
     "./shell-scripting",
     "./system-design-rules",
     "./terraform",
+    "./test-software-in-container",
     "./troubleshoot",
     "./update-branch",
     "./worktree"

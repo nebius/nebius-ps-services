@@ -90,6 +90,7 @@ def result_rejection(result: object, assignment: dict[str, object]) -> str | Non
         return "assignment_identity"
     if not isinstance(result["status"], str) or result["status"] not in {
         "implemented",
+        "verified_no_change",
         "replan_required",
         "blocked",
     }:
@@ -116,7 +117,7 @@ def result_rejection(result: object, assignment: dict[str, object]) -> str | Non
     gap_rejection = _spec_gap_rejection(result["spec_gaps"])
     if gap_rejection is not None:
         return gap_rejection
-    if result["status"] == "implemented" and result["spec_gaps"]:
+    if result["status"] in {"implemented", "verified_no_change"} and result["spec_gaps"]:
         return "implemented_with_spec_gaps"
     if result["status"] == "replan_required" and not result["spec_gaps"]:
         return "replan_without_spec_gap"
@@ -228,7 +229,7 @@ def load_assignment(path: Path) -> dict[str, object]:
     handoff_digest = unsigned_handoff.pop("handoff_digest", None)
     if (
         not isinstance(handoff, dict)
-        or handoff.get("schema") != "agentic-sdlc/incoming-handoff-v2"
+        or handoff.get("schema") != "agentic-sdlc/incoming-handoff-v3"
         or handoff.get("execution_id") != value.get("execution_id")
         or handoff.get("wave_id") != value.get("wave_id")
         or handoff.get("task_id") != value.get("task_id")
@@ -321,7 +322,11 @@ def worker_prompt(
         "policy/authority stop, never permission to bypass the restriction. "
         "An unexpected executed failure still requires the blocked handoff below.",
         "Return implemented only when assigned work, validation and review are "
-        "complete, with no spec gaps. Return replan_required only for material "
+        "complete, with no spec gaps. Return verified_no_change when the exact clean "
+        "base already satisfies the task; describe the acceptance evidence without "
+        "creating cosmetic changes. The coordinator independently validates this "
+        "proposal after termination; normal liveness budgets still apply. "
+        "Return replan_required only for material "
         "specification gaps, with a nonempty typed spec_gaps list.",
         "If work or validation is incomplete because of a non-specification "
         "runtime, tool, environment or missing-evidence failure, return blocked "

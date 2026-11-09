@@ -173,7 +173,7 @@ See [private task lifecycle](references/task-lifecycle.md) for the shared protoc
 
 The canonical commit transaction owns safe target checkout and outer completion.
 See [the completion contract](../create-pr/references/checkout-completion.md) for
-review switch-back, create-only behavior, verified-result fast-forwards, resumed
+private review execution, parent create-only behavior, verified-result fast-forwards, resumed
 work and publication-preserving policy. Merge, CI/Pages, local refs and deletion
 are reported independently. No public skill flags are added.
 
@@ -192,3 +192,11 @@ not change standalone commit-push or SDLC ownership. See the
 [publication contract](../create-pr/references/pr-publication.md) for task v3
 cutover, fork aliases and recovery. Install the complete trusted skill folder;
 do not copy the entrypoint without its sibling module.
+
+## Historical transaction administration
+
+The internal [audit and retirement helper](references/transaction-retirement.md)
+inspects historical tasks without executing them. Unproven owners and remote
+effects remain retained. Eligible retirement archives evidence and leaves a
+non-executable tombstone; it never manufactures successful completion or changes
+shared receipts, claims or Git refs. This adds no public `$commit` flags.

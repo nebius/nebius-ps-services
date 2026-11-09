@@ -11,3 +11,5 @@ jira-false-triage,false,Triage our Jira backlog and close duplicates.
 jira-false-github,false,Report my GitHub PR contributions from the last 90 days.
 jira-false-single,false,Explain the root cause described in Jira EX-10.
 jira-false-rank,false,Rank the engineering team by the number of Jira tickets they closed.
+participants-positive,true,"Report the Jira tickets where person@example.com was added to Participants since 2026-01-01, with ticket number, title, involvement date and current status."
+participants-edit-negative,false,Add person@example.com to the Participants field on Jira ticket EX-42.

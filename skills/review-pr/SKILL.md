@@ -145,7 +145,8 @@ first; repair proven defects, then reconcile canonical specs before final review
 2. For ordinary work, read
    the ordinary completion reference from the installed create-pr skill and
    the commit continuation reference from that same skill.
-   Read create-pr's checkout-completion reference for the inherited policy.
+   Read create-pr's private-review reference for mandatory checkout isolation,
+   including parent-owned calls; retain the original transaction authority.
    Honor report-only restrictions and current GitHub write permissions. Pin
    trusted helpers before contributor checkout and isolate candidate execution.
 3. Delegate complete frozen base-to-head diff analysis to nested read-only
@@ -157,16 +158,20 @@ first; repair proven defects, then reconcile canonical specs before final review
    metadata and green CI never replace review. Safe repairs may include source
    changes and invalidate earlier head/base review. Review locally;
    never install or run an AI agent on GitHub Actions.
-4. Keep checkout and local refs unchanged for metadata/diff-only review.
-   Before checkout-dependent validation or editing, use the canonical owner to establish intake and select the
-   correct PR checkout. Prove its HEAD matches the remote PR head and preserve
-   unrelated work. Then classify findings and implement safe, supported repairs
+4. Keep the caller checkout, index, files and local refs untouched throughout
+   every review. Metadata/diff-only review allocates nothing. Before checkout-dependent
+   inspection, validation or editing, use the canonical owner's private review
+   workspace: standalone `begin-review`, or parent-owned `open-review`.
+   Use only the returned execution root and exact PR head/base. Never copy caller
+   dirt or local-only commits, switch the caller, or fall back to it if allocation
+   fails. Candidate tests still require restricted execution separate from trusted
+   owner state. Then classify findings and implement safe, supported repairs
    when authorized and writable. Stop for semantic ambiguity, unsafe changes, unresolved human
    objections or unavailable validation. Do not guess a product decision.
-5. Delegate all branch switching, commits, base synchronization and pushes to
-   create-pr's private preparation handoff, using the active grant and original
-   root receipt. Standalone authorized review repair opens that canonical owner
-   transaction before Git effects. It cannot call review-pr or merge-pr again.
+5. Delegate private-workspace checkout, commits, base synchronization and pushes
+   to create-pr's private preparation handoff, using the execution manifest bound
+   to the active original grant and receipt. Never create a second root receipt.
+   Safe repairs update the existing remote PR without importing them into the caller. It cannot call review-pr or merge-pr again.
    Never use raw commits, rebase, force push or GitHub update-branch here.
 6. After repair proof, invoke maintain-project-specs at the root for every
    affected project and publish any required paired update before the owner
@@ -186,13 +191,18 @@ first; repair proven defects, then reconcile canonical specs before final review
    The review coordinator never issues merge effects. The calling
    create-pr/publication/merge-pr owner continues only
    within its existing completion authorization. Standalone review closes its
-   repair transaction after publication, verification and owner switch-back.
-   At a safe resumable pause, switch back through the owner without integrating
-   default history and keep the grant open. Parent-owned review
+   repair transaction after publication and verification through its original owner.
+   No switch-back or local branch refresh belongs to review. At a resumable pause,
+   keep the original grant and registered execution workspace; report the resume
+   context. Cleanup only after terminal closure and proof that no unpublished or
+   unresolved work remains. Parent-owned review
    preserves the original receipt, grant, targets and readiness deadline; only
    the completion owner closes at the selected final boundary.
 
 ## Command Reference
+
+Read the `private-review` reference from the installed create-pr skill before
+any checkout-dependent review, including nested review and recovery.
 
 Read `references/command-reference.md` when exact GitHub CLI or Git commands
 are needed for PR metadata, checkout, local base sync, conflict detection, or
@@ -209,6 +219,11 @@ URLs, customer data, raw logs, or one-off local state.
 
 ## Guardrails
 
+- Every invocation preserves the caller checkout throughout. Parent workflows
+  retain separately authorized effects; nested review never requires them to
+  import its repair commits. Return canonical execution evidence to the parent.
+- A private Git repository is not a security sandbox for contributor programs.
+  Preserve the restricted test boundary in contribution assessment.
 - Default behavior is review-and-fix, not report-only, unless the user asks for
   audit-only output or active Agentic SDLC review mode applies.
 - In active Agentic SDLC review mode, never mutate the exact promoted PR head;
@@ -251,5 +266,7 @@ When using this skill:
 4. Fix safe issues directly on the PR branch when appropriate and writable.
 5. Resolve straightforward conflicts when safe and push permissions allow it.
 6. Run focused validation and report what actually ran.
-7. State clearly whether the PR is ready to merge and what, if anything, still
+7. Report the private execution context, final remote head, caller preservation,
+   and cleanup or retention outcome. Never imply local checkout adoption.
+8. State clearly whether the PR is ready to merge and what, if anything, still
    blocks it.

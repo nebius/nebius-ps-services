@@ -433,6 +433,32 @@ class GatewayQuotas(BaseModel):
     )
 
 
+class TunnelProbe(BaseModel):
+    """Optional encrypted-path probe; runtime also proves source assignment."""
+
+    model_config = ConfigDict(extra="forbid")
+    target_ip: str
+    source_ip: str
+    interval_seconds: float = Field(default=5.0, ge=1.0, le=30.0, allow_inf_nan=False)
+    timeout_seconds: float = Field(default=1.0, gt=0.0, le=5.0, allow_inf_nan=False)
+    failure_threshold: int = Field(default=3, ge=1, le=10, strict=True)
+    recovery_threshold: int = Field(default=2, ge=1, le=10, strict=True)
+
+    @field_validator("target_ip", "source_ip")
+    @classmethod
+    def validate_probe_ip(cls, value: str) -> str:
+        address = ipaddress.IPv4Address(value)
+        if address.is_unspecified or address.is_multicast or address.is_loopback:
+            raise ValueError("tunnel probe requires a unicast IPv4 address")
+        return str(address)
+
+    @model_validator(mode="after")
+    def validate_timing(self) -> TunnelProbe:
+        if self.timeout_seconds > self.interval_seconds:
+            raise ValueError("probe timeout must not exceed its interval")
+        return self
+
+
 class GatewayConfig(BaseModel):
     """Gateway-wide parameters (BGP ASN, local prefixes, quotas)."""
 
@@ -450,6 +476,7 @@ class GatewayConfig(BaseModel):
         description="IPsec interface mode (xfrm-interface only)",
     )
     quotas: GatewayQuotas = Field(default_factory=GatewayQuotas, description="Resource quotas")
+    tunnel_probes: dict[str, TunnelProbe] = Field(default_factory=dict)
 
     @field_validator("local_asn")
     @classmethod
@@ -845,32 +872,6 @@ class VMHAMemberConfig(BaseModel):
     role: VMHARole = Field(..., description="Initial VM ownership role")
 
 
-class VMHATunnelProbe(BaseModel):
-    """Optional encrypted-path probe; runtime also proves source assignment."""
-
-    model_config = ConfigDict(extra="forbid")
-    target_ip: str
-    source_ip: str
-    interval_seconds: float = Field(default=5.0, ge=1.0, le=30.0, allow_inf_nan=False)
-    timeout_seconds: float = Field(default=1.0, gt=0.0, le=5.0, allow_inf_nan=False)
-    failure_threshold: int = Field(default=3, ge=1, le=10, strict=True)
-    recovery_threshold: int = Field(default=2, ge=1, le=10, strict=True)
-
-    @field_validator("target_ip", "source_ip")
-    @classmethod
-    def validate_probe_ip(cls, value: str) -> str:
-        address = ipaddress.IPv4Address(value)
-        if address.is_unspecified or address.is_multicast or address.is_loopback:
-            raise ValueError("tunnel probe requires a unicast IPv4 address")
-        return str(address)
-
-    @model_validator(mode="after")
-    def validate_timing(self) -> VMHATunnelProbe:
-        if self.timeout_seconds > self.interval_seconds:
-            raise ValueError("probe timeout must not exceed its interval")
-        return self
-
-
 class VMHAConfig(BaseModel):
     """Explicit, default-disabled two-node VM-level HA configuration."""
 
@@ -888,12 +889,18 @@ class VMHAConfig(BaseModel):
         default_factory=list,
         description="Exactly two stable node records when VM HA is enabled",
     )
-    tunnel_probes: dict[str, VMHATunnelProbe] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_ha_probe_field(cls, value: t.Any) -> t.Any:
+        if isinstance(value, dict) and "tunnel_probes" in value:
+            raise ValueError("Move gateway_group.vm_ha.tunnel_probes to gateway.tunnel_probes")
+        return value
 
     @model_validator(mode="after")
     def validate_topology(self) -> VMHAConfig:
         if not self.enabled:
-            if self.cluster_id is not None or self.members or self.tunnel_probes:
+            if self.cluster_id is not None or self.members:
                 raise ValueError("vm_ha.cluster_id and vm_ha.members require vm_ha.enabled=true")
             return self
 
@@ -981,7 +988,8 @@ class VMHAMigrationRouteBinding(BaseModel):
             raise ValueError("VM-HA migration route prefix must be canonical")
         legacy_name = f"vpngw-{canonical_prefix.replace('/', '-')}"[:63]
         managed_name = re.fullmatch(r"vpngw-ha-[0-9a-f]{24}", self.name)
-        if self.name != legacy_name and managed_name is None:
+        ordinary_name = re.fullmatch(r"vpngw-[0-9a-f]{32}", self.name)
+        if self.name != legacy_name and managed_name is None and ordinary_name is None:
             raise ValueError("VM-HA migration route name is not canonical")
         if not self.resource_revision.isdecimal() or int(self.resource_revision) <= 0:
             raise ValueError("VM-HA migration route revision must be positive")
@@ -1146,23 +1154,33 @@ class GatewayGroup(BaseModel):
             "list maps to NICs)"
         ),
     )
-    initial_security_group_ids: list[str] = Field(
+    security_group_ids: list[str] = Field(
         default_factory=list,
         max_length=8,
-        description="Customer-owned Security Groups attached only when creating new gateways",
+        description="Desired customer-owned Security Groups for every gateway NIC; empty uses the network default",
     )
 
-    @field_validator("initial_security_group_ids", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def validate_initial_security_groups(cls, value: object) -> list[str]:
+    def reject_initial_security_groups(cls, value: object) -> object:
+        if isinstance(value, dict) and "initial_security_group_ids" in value:
+            raise ValueError(
+                "gateway_group.initial_security_group_ids was renamed to "
+                "gateway_group.security_group_ids; apply now reconciles existing attachments"
+            )
+        return value
+
+    @field_validator("security_group_ids", mode="before")
+    @classmethod
+    def validate_security_groups(cls, value: object) -> list[str]:
         if not isinstance(value, list) or any(
             not isinstance(item, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9-]{0,127}", item)
             for item in value
         ):
-            raise ValueError("initial_security_group_ids must be a list of resource IDs")
+            raise ValueError("security_group_ids must be a list of resource IDs")
         if len(set(value)) != len(value):
-            raise ValueError("initial_security_group_ids must not contain duplicates")
-        return value
+            raise ValueError("security_group_ids must not contain duplicates")
+        return sorted(value)
 
     network_id: str | None = Field(
         default=None,
@@ -1263,6 +1281,13 @@ class VPNGatewayConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def validate_connection_destination_ownership(self) -> VPNGatewayConfig:
+        from .ha_tunnel_policy import connection_policies
+
+        connection_policies(self.model_dump(mode="json"))
+        return self
+
+    @model_validator(mode="after")
     def validate_vm_ha_gateway_topology(self) -> VPNGatewayConfig:
         """Keep VM ownership distinct from tunnel HA while requiring both nodes."""
         vm_ha = self.gateway_group.vm_ha
@@ -1282,23 +1307,27 @@ class VPNGatewayConfig(BaseModel):
                     "per-tunnel ha_role"
                 )
 
+        return self
+
+    @model_validator(mode="after")
+    def validate_tunnel_probes(self) -> VPNGatewayConfig:
         tunnels = {
             tunnel.name: (connection, tunnel)
             for connection in self.connections
             for tunnel in connection.tunnels
         }
-        for name, probe in vm_ha.tunnel_probes.items():
+        for name, probe in self.gateway.tunnel_probes.items():
             if name not in tunnels:
-                raise ValueError("VM-HA probe names an unknown tunnel")
+                raise ValueError("Tunnel probe names an unknown tunnel")
             connection, tunnel = tunnels[name]
             if connection.routing_mode != RoutingMode.STATIC or tunnel.ha_role.value == "disable":
-                raise ValueError("VM-HA probes require an enabled Static tunnel")
+                raise ValueError("Tunnel probes require an enabled Static tunnel")
             local = [tunnel.inner_cidr, *(self.gateway.local_prefixes or [])]
             if not any(
                 ipaddress.ip_address(probe.source_ip) in ipaddress.ip_network(p, strict=False)
                 for p in local
             ):
-                raise ValueError("VM-HA probe source is outside tunnel traffic selectors")
+                raise ValueError("Tunnel probe source is outside tunnel traffic selectors")
             remote = (
                 (tunnel.static_routes.remote_prefixes if tunnel.static_routes else [])
                 or connection.remote_prefixes
@@ -1308,7 +1337,7 @@ class VPNGatewayConfig(BaseModel):
                 ipaddress.ip_address(probe.target_ip) in ipaddress.ip_network(p, strict=False)
                 for p in [tunnel.inner_cidr, *remote]
             ):
-                raise ValueError("VM-HA probe target is outside tunnel destination coverage")
+                raise ValueError("Tunnel probe target is outside tunnel destination coverage")
 
         return self
 

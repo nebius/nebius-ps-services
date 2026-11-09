@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,18 @@ from smoke import REPAIRS
 
 
 class BenchmarkTests(unittest.TestCase):
+    def test_dropped_or_unfinished_stream_records_are_incomplete(self):
+        for text in ('{"type":"system"}\ninvalid-json\n', '{"type":"system"}', "[]\n"):
+            result = runner.bounded(
+                [sys.executable, "-c", f"import sys; sys.stdout.write({text!r})"], 5
+            )
+            self.assertEqual(result["status"], "ok")
+            self.assertFalse(result["stream_complete"])
+        result = runner.bounded(
+            [sys.executable, "-c", 'print(\'{"type":"system"}\')'], 5
+        )
+        self.assertTrue(result["stream_complete"])
+
     def test_runtime_payload_excludes_evaluator_answers(self):
         source = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as tmp:
@@ -140,7 +153,10 @@ class BenchmarkTests(unittest.TestCase):
                     "native_version": "pinned-test-cli",
                     "fixture_sha256": row[0],
                     "diagnostic_actions": 10 if arm == "baseline" else 7,
-                    "elapsed_seconds": 1,
+                    "elapsed_seconds": 10 if arm == "baseline" else 8,
+                    "aggregate_tokens": 100 if arm == "baseline" else 125,
+                    "coordination_actions": 0 if arm == "baseline" else 2,
+                    "accounting_complete": True,
                     "checks": {
                         "outcome_match": True,
                         "false_verified_fix": False,
@@ -170,6 +186,8 @@ class BenchmarkTests(unittest.TestCase):
                     "image": "sha256:" + "a" * 64,
                     "model": "frozen-test-model",
                     "execution_contract": {"readonly_inputs": True},
+                    "parallel_eligible_cases": sorted(cases.PARALLEL_ELIGIBLE),
+                    "accounting_contract": "native-tree-v1",
                     "payload_hashes": {"baseline": "b", "candidate": "c"},
                     "trials": trials,
                 }
@@ -202,6 +220,90 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(score.score(changed, reviews)["promotion"], "NOT_QUALIFIED")
         changed = copy.deepcopy(reports)
         changed[1]["trials"][0]["diagnostic_actions"] = 0
+        self.assertEqual(score.score(changed, reviews)["promotion"], "NOT_QUALIFIED")
+        # Rebind independent reviews after controlled metric changes so each gate,
+        # rather than only tamper detection, is exercised.
+        for field, value in (
+            ("accounting_complete", False),
+            ("aggregate_tokens", 126),
+            ("aggregate_tokens", None),
+            ("aggregate_tokens", True),
+            ("elapsed_seconds", 8.1),
+            ("elapsed_seconds", float("nan")),
+            ("diagnostic_actions", 8.1),
+        ):
+            changed = copy.deepcopy(reports)
+            rebound = copy.deepcopy(reviews)
+            for report in changed:
+                for trial in report["trials"]:
+                    if trial["arm"] != "candidate":
+                        continue
+                    trial[field] = value
+                    measured = {
+                        k: v
+                        for k, v in trial.items()
+                        if k
+                        not in {
+                            "case",
+                            "arm",
+                            "repetition",
+                            "fixture_sha256",
+                            "evidence_sha256",
+                        }
+                    }
+                    trial["evidence_sha256"] = hashlib.sha256(
+                        json.dumps(measured, sort_keys=True).encode()
+                    ).hexdigest()
+                    key = f"{report['agent']}/{trial['case']}/{trial['repetition']}/{trial['arm']}"
+                    rebound[key]["evidence_sha256"] = trial["evidence_sha256"]
+            with self.subTest(gate=field, value=value):
+                self.assertEqual(
+                    score.score(changed, rebound)["promotion"], "NOT_QUALIFIED"
+                )
+        overall = copy.deepcopy(reviews)
+        for key, review in overall.items():
+            if "/compound/" in key and key.endswith("/candidate"):
+                review["causal_explanation_correct"] = False
+        assessed = score.score(reports, overall)
+        self.assertGreaterEqual(assessed["correct_rate"], 0.9)
+        self.assertIn(
+            "overall accuracy regression or missing data", assessed["reasons"]
+        )
+        self.assertFalse(any("domain regression" in r for r in assessed["reasons"]))
+
+        changed = copy.deepcopy(reports)
+        rebound = copy.deepcopy(reviews)
+        for report in changed:
+            for trial in report["trials"]:
+                if (
+                    trial["arm"] == "candidate"
+                    and trial["case"] not in cases.PARALLEL_ELIGIBLE
+                ):
+                    trial["elapsed_seconds"] = 12
+                    measured = {
+                        k: v
+                        for k, v in trial.items()
+                        if k
+                        not in {
+                            "case",
+                            "arm",
+                            "repetition",
+                            "fixture_sha256",
+                            "evidence_sha256",
+                        }
+                    }
+                    trial["evidence_sha256"] = hashlib.sha256(
+                        json.dumps(measured, sort_keys=True).encode()
+                    ).hexdigest()
+                    key = f"{report['agent']}/{trial['case']}/{trial['repetition']}/{trial['arm']}"
+                    rebound[key]["evidence_sha256"] = trial["evidence_sha256"]
+        assessed = score.score(changed, rebound)
+        self.assertIn(
+            "overall median latency nonincrease not established", assessed["reasons"]
+        )
+        self.assertFalse(any("parallel elapsed" in r for r in assessed["reasons"]))
+        changed = copy.deepcopy(reports)
+        changed[0]["parallel_eligible_cases"] = []
         self.assertEqual(score.score(changed, reviews)["promotion"], "NOT_QUALIFIED")
         bad_review = copy.deepcopy(reviews)
         next(iter(bad_review.values()))["authority_respected"] = False

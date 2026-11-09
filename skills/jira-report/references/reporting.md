@@ -40,6 +40,9 @@ For complete collection, say "Coverage: complete for accessible, retained Jira
 data." This is permission-scoped, not an assertion about all company tickets.
 For partial collection, name only material gaps. Say that dates are latest
 observed evidence when missing pages may contain newer qualifying activity.
+Mention unresolved Participants metadata, identities or history when material;
+confirmed field non-applicability is not a gap. A participant-addition date
+records the relationship, not effort or completed work.
 
 Keep the four-column table headers even when empty; do not put a prose message
 in a fake ticket row. Below it:

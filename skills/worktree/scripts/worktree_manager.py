@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, dataclass
 import json
+import hashlib
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -1874,6 +1875,10 @@ def integration_preflight(
     mode = "fresh"
     if manifest.status == "integrated":
         mode = "reconcile"
+        try:
+            _verify_recorded_integration(primary, manifest)
+        except WorktreeError as error:
+            blockers.append(str(error))
         if source_dirty or child_dirty:
             blockers.append("an integrated lifecycle must be clean for reconciliation")
         if preparation is not None:
@@ -2377,57 +2382,62 @@ def _prepare_candidate(
         raise WorktreeError(str(error)) from error
 
 
-def _seal_candidate(primary: Path, reservation: dict[str, object]) -> dict[str, object]:
+def _require_candidate_identity(primary: Path, reservation: dict[str, object]) -> None:
     path = Path(str(reservation["integration_worktree"]))
+    branch = str(reservation["integration_branch"])
+    if (_candidate_record(primary, branch, path) is None
+            or _git(path, "symbolic-ref", "-q", "--short", "HEAD", allowed=(0, 1)) != branch
+            or _git(path, "rev-parse", "--path-format=absolute", "--git-common-dir") !=
+                _git(primary, "rev-parse", "--path-format=absolute", "--git-common-dir")
+            or _branch_head(primary, branch) != _git(path, "rev-parse", "HEAD")):
+        raise WorktreeError("integration candidate registration, branch or common directory changed")
+
+
+def _seal_candidate(primary: Path, reservation: dict[str, object]) -> dict[str, object]:
+    """Persist exact commit intent before Git; reconcile only that effect on replay."""
+    path = Path(str(reservation["integration_worktree"]))
+    _require_candidate_identity(primary, reservation)
     source_head = str(reservation["source_head"])
     child_head = str(reservation["child_head"])
+    message = f"Merge managed worktree {reservation['name']}\n"
+    digest = hashlib.sha256(message.encode()).hexdigest()
     operation = _operation_in_progress(path)
-    if operation is None:
-        if _git(path, "rev-parse", "HEAD") != source_head or status_paths(path):
+    head = _git(path, "rev-parse", "HEAD")
+    if reservation["state"] == "present" and operation is None:
+        if head != source_head or status_paths(path):
             raise WorktreeError("integration candidate changed before merge")
-        result = _run(
-            ["git", "merge", "--no-ff", "--no-commit", child_head],
-            cwd=path,
-            allowed=(0, 1),
-        )
-        if result.returncode == 1:
-            return {
-                **reservation,
-                "status": "conflict",
-                "recovery_worktree": str(path),
-                "next_action": "resolve conflicts, stage the resolution, and repeat $worktree integrate",
-            }
-        _git(path, "commit", "--no-edit")
-    elif operation == "MERGE_HEAD":
-        merge_head = _git(path, "rev-parse", "MERGE_HEAD")
-        if merge_head != child_head:
-            raise WorktreeError("integration recovery MERGE_HEAD changed")
+        _run(["git", "merge", "--no-ff", "--no-commit", child_head], cwd=path, allowed=(0, 1))
+        operation = _operation_in_progress(path)
+    if operation == "MERGE_HEAD":
+        if head != source_head or _git(path, "rev-parse", "MERGE_HEAD") != child_head:
+            raise WorktreeError("integration recovery merge identity changed")
         if _git(path, "diff", "--name-only", "--diff-filter=U"):
-            return {
-                **reservation,
-                "status": "conflict",
-                "recovery_worktree": str(path),
-                "next_action": "resolve conflicts, stage the resolution, and repeat $worktree integrate",
-            }
-        _git(path, "commit", "--no-edit")
-    else:
-        raise WorktreeError(
-            f"unexpected integration operation is in progress: {operation}"
-        )
+            return {**reservation, "status": "conflict", "recovery_worktree": str(path),
+                    "next_action": "resolve conflicts, stage the resolution, and repeat $worktree integrate"}
+        if _git(path, "diff", "--name-only") or _git(path, "ls-files", "--others", "--exclude-standard"):
+            raise WorktreeError("integration candidate has unstaged or untracked changes")
+        tree = _git(path, "write-tree")
+        if reservation["state"] == "present":
+            reservation = update_integration(primary, name=str(reservation["name"]),
+                reservation_id=str(reservation["token"]), state="committing",
+                commit_tree=tree, commit_message_sha256=digest)
+        if tree != reservation["commit_tree"] or digest != reservation["commit_message_sha256"]:
+            raise WorktreeError("integration candidate differs from immutable commit intent")
+        _git(path, "commit", "--cleanup=verbatim", "-m", message)
+    elif operation is not None or reservation["state"] != "committing":
+        raise WorktreeError("integration candidate has no matching commit intent")
+    _require_candidate_identity(primary, reservation)
     candidate = _git(path, "rev-parse", "HEAD")
-    first_parent, second_parent = _merge_parents(path, candidate)
-    if first_parent != source_head or second_parent != child_head:
-        raise WorktreeError("integration merge parents do not match durable state")
-    if status_paths(path) or _operation_in_progress(path):
-        raise WorktreeError("sealed integration candidate is not clean")
+    raw = _run_bytes(["git", "cat-file", "commit", candidate], cwd=path).stdout
+    actual_message = raw.split(b"\n\n", 1)[1]
+    if (_merge_parents(path, candidate) != (source_head, child_head)
+            or _git(path, "rev-parse", f"{candidate}^{{tree}}") != reservation["commit_tree"]
+            or hashlib.sha256(actual_message).hexdigest() != reservation["commit_message_sha256"]
+            or status_paths(path) or _operation_in_progress(path)):
+        raise WorktreeError("integration commit does not match immutable commit intent; retained for recovery")
     try:
-        return update_integration(
-            primary,
-            name=str(reservation["name"]),
-            reservation_id=str(reservation["token"]),
-            state="ready",
-            integration_head=candidate,
-        )
+        return update_integration(primary, name=str(reservation["name"]),
+            reservation_id=str(reservation["token"]), state="ready", integration_head=candidate)
     except InteropError as error:
         raise WorktreeError(str(error)) from error
 
@@ -2440,6 +2450,8 @@ def _remove_integration_candidate(
 ) -> None:
     path = Path(str(reservation["integration_worktree"]))
     branch = str(reservation["integration_branch"])
+    if reservation["state"] == "committing" and path.exists() and _operation_in_progress(path) is None:
+        reservation = _seal_candidate(primary, reservation)
     expected_head = str(
         reservation["integration_head"]
         if reservation["state"] == "ready"
@@ -2447,6 +2459,7 @@ def _remove_integration_candidate(
     )
     record = _candidate_record(primary, branch, path) if path.exists() else None
     if record is not None:
+        _require_candidate_identity(primary, reservation)
         operation = _operation_in_progress(path)
         if operation == "MERGE_HEAD" and abort_merge:
             _git(path, "merge", "--abort")
@@ -2479,6 +2492,29 @@ def _remove_integration_candidate(
         _remove_local_branch(primary, branch, expected_head=expected_head)
 
 
+def _verify_recorded_integration(primary: Path, manifest: Manifest) -> str:
+    source = _source_snapshot(primary, manifest)
+    record = _find_record(primary, primary, name=manifest.name, current_cwd=primary)
+    managed = _managed_from_record(primary, record)
+    _validate_outer_lease_receipt(primary, name=manifest.name, manifest=manifest, observed_head=managed.head)
+    if (managed.head != manifest.integration_child_head or status_paths(managed.path)
+            or _operation_in_progress(managed.path)
+            or manifest.integration_head is None
+            or _merge_parents(primary, manifest.integration_head) !=
+                (manifest.integration_source_head, manifest.integration_child_head)
+            or not _is_ancestor(primary, manifest.integration_head, source)):
+        raise WorktreeError("recorded local integration proof no longer matches source and child")
+    reservation = load_reservation(primary, manifest.name)
+    if reservation is not None and any(reservation.get(key) != value for key, value in {
+        "state": "ready", "source_head": manifest.integration_source_head,
+        "child_head": manifest.integration_child_head, "integration_head": manifest.integration_head,
+        "branch": manifest.branch, "worktree": manifest.worktree,
+        "source_branch": manifest.source_branch, "source_ref": manifest.source_ref,
+    }.items()):
+        raise WorktreeError("retained reservation differs from recorded integration proof")
+    return source
+
+
 def _integrate_worktree_unlocked(
     *,
     cwd: Path,
@@ -2497,6 +2533,7 @@ def _integrate_worktree_unlocked(
         raise WorktreeError(str(error)) from error
     assert manifest is not None
     if manifest.status == "integrated":
+        current_source = _verify_recorded_integration(primary, manifest)
         reservation = load_reservation(primary, name)
         if reservation is not None:
             _remove_integration_candidate(primary, reservation, abort_merge=False)
@@ -2513,7 +2550,8 @@ def _integrate_worktree_unlocked(
             "status": "already-integrated",
             "name": name,
             "source_branch": manifest.source_branch,
-            "source_head": manifest.integration_head,
+            "source_head": current_source,
+            "integration_head": manifest.integration_head,
             "child_head": manifest.integration_child_head,
         }
     if manifest.status != "active":
@@ -2656,10 +2694,11 @@ def _integrate_worktree_unlocked(
             raise WorktreeError(str(error)) from error
     if reservation["state"] == "planned":
         reservation = _prepare_candidate(primary, reservation)
-    if reservation["state"] == "present":
+    if reservation["state"] in {"present", "committing"}:
         reservation = _seal_candidate(primary, reservation)
         if reservation.get("status") == "conflict":
             return {"action": "integrate", **reservation}
+    _require_candidate_identity(primary, reservation)
     candidate = str(reservation["integration_head"])
     candidate_path = Path(str(reservation["integration_worktree"]))
     first_parent, second_parent = _merge_parents(candidate_path, candidate)
@@ -2781,6 +2820,15 @@ def integrate_worktree(
 
 
 
+def _assert_outer_absent(primary: Path, name: str, manifest: Manifest | None) -> None:
+    path = Path(manifest.worktree) if manifest is not None else checked_worktree_parent(primary) / name
+    branch = manifest.branch if manifest is not None else _branch_for_name(name)
+    if (path.exists() or path.is_symlink() or _local_branch_exists(primary, branch)
+            or any(item.branch == branch or Path(item.path).resolve() == path.resolve()
+                   for item in list_worktrees(primary))):
+        raise WorktreeError("managed worktree path, registration or branch remains; retaining ownership state")
+
+
 def _finalize_outer_removal_state(
     primary: Path,
     *,
@@ -2790,6 +2838,7 @@ def _finalize_outer_removal_state(
 ) -> None:
     """Delete receipt and manifest behind a durable exact removal intent."""
 
+    _assert_outer_absent(primary, name, manifest)
     try:
         if receipt is not None:
             prepare_lease_removal(primary, name, receipt)
@@ -2810,6 +2859,7 @@ def _finalize_outer_removal_state(
             existing_branches=branches,
             expected_lease=receipt,
         )
+        _assert_outer_absent(primary, name, manifest)
         if manifest is not None:
             delete_manifest(primary, name)
         if receipt is not None:

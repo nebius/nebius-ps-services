@@ -40,8 +40,10 @@ python3 <skill>/scripts/release_session.py open --project-dir <project> \
    private preparation handoff; keep the grant open across local review-pr
    safe repairs. Revalidate and re-review until the final head passes.
 3. Bind the final pushed head: `release_session.py bind-pr --project-dir <project>
-   --tag <tag> --pr <number>`. This verifies local branch, remote PR head, same
-   repository and base. Never freeze an earlier head before local review-pr and create-pr repairs.
+   --tag <tag> --pr <number> --review-task <execution-manifest>` when private review
+   ran. This verifies the owner-bound execution head, remote PR identity and base.
+   Keep the original project path; metadata-only review can bind the unchanged
+   source branch without an execution manifest. Never freeze an earlier head before local review-pr and create-pr repairs.
    Head drift after binding blocks until explicitly reconciled through the guarded
    transition below; ordinary bind-pr never replaces the frozen head.
 
@@ -97,10 +99,12 @@ Before the next broker dispatch, use the publication owner's private transition:
 ```text
 python3 <skill>/scripts/release_session.py reconcile-pr --project-dir <project> \
   --tag <tag> --expected-head <previously-bound-sha> --head <reviewed-new-sha> \
-  --review-id <fresh-comment-review-id>
+  --review-id <fresh-comment-review-id> --review-task <execution-manifest>
 ```
 
-This requires a clean active checkout at the exact reviewed descendant, the same
+This requires a clean registered private execution at the exact reviewed descendant,
+verified by the installed commit owner against the original live grant. The caller
+may be dirty or at an earlier head. It also requires the same
 open PR/branch/repository/default, current base inclusion, no merge/tag/publication
 evidence and no remote tag. The installed merge-pr sibling verifies the actual
 COMMENT review against live `MERGE_OPERATOR_IDS` and the current head/base. Missing
@@ -110,7 +114,7 @@ wait deadlines. It provides no commit, approval or merge authorization; the brok
 independently repeats all admission gates. After an interrupted reconciliation,
 read status first and reuse the exact recorded transition if already applied.
 
-Unexpected head movement, rewritten history, dirty work, stale review or any
+Unexpected head movement, rewritten history, dirty execution work, stale review or any
 post-merge/tag change cannot use this transition. Explicit resume still only
 renews wait budgets. Never edit checkpoints manually or recreate the release to
 bypass a rejected reconciliation.

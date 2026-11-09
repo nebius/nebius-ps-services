@@ -229,6 +229,12 @@ returns the recorded primary path plus the exact
 `$worktree integrate <generated-name>` command and stops; only a fresh explicit
 user invocation from that primary checkout may start outer integration. A
 workflow continuation or recorded next skill must not invoke it automatically.
+Run completion requires that separately recorded merge identity and freshly
+validates the authoritative integration proof before publishing completion
+evidence, terminal state or bindings. It cannot record missing proof. Implement
+retains its released-lease completion behavior; unmanaged completion is unchanged.
+Lease reconciliation may update metadata, and proof describes the observation
+time rather than fencing later external Git changes.
 Ownership-manifest schema v4
 records whether a nested lease is `active` or `released` plus its exact owner
 and token, so a missing lease record cannot silently unlock the outer lifecycle.
@@ -238,6 +244,14 @@ promoted head, clean outer checkout, and absent resources still agree.
 Integration and removal rebind the receipt to the exact manifest and live outer
 identity and rescan all private resources, so receipt tampering or resurrection
 cannot cross the outer lifecycle boundary.
+
+TDD and final seals use Git whitespace cleanup explicitly and compare the full
+committed message with native Git normalization of the recorded intent. Creation,
+interrupted recovery and historical verification preserve bodies, indentation,
+Unicode and comment lines. Hooks stay enabled; substantive message rewriting
+blocks seal publication and retains the commit and intent. Recovery never amends,
+resets or creates a duplicate seal, and retains parent, cleanliness and scope
+checks. Other task-finish message handling is unchanged.
 Removal keeps an exact private removal-intent snapshot until receipt, manifest,
 and resource revalidation finish; interruption at either deletion boundary is
 therefore retryable without losing the receipt compare-and-set anchor.
@@ -298,3 +312,7 @@ Private state lives beneath the sibling worktree parent. Old state schemas are
 rejected without migration. The helper never fetches to choose a base, pushes,
 creates PRs, deletes remote refs, force-removes worktrees, rebases, or
 cherry-picks.
+
+The shared [worker wave contract](references/worker-waves.md)
+freezes worker/wave/physical-worktree limits, admits independently verified
+no-change results, and requires producer-owned combined-wave validation receipts.

@@ -3,7 +3,7 @@
 Produce a concise report of one person's Jira involvement using an existing
 authenticated MCP connection. Works across organizations without a fixed Jira
 site, project, server name or account. Coverage depends on the connector's
-search, identity, comments, history and pagination capabilities.
+search, identity, field metadata, comments, history and pagination capabilities.
 
 ## Usage
 
@@ -31,12 +31,26 @@ Jira's current exact value, including custom and reopened statuses.
 
 ## What Counts
 
-Dated creation, reporting, assignment to the user, authored field changes, any
-authored comment, and explicit credit for completed contributions in other
-people's comments can qualify. An old assignment alone does not count. A comment
-claiming a fix does not prove the ticket is Done. Mere mentions by others do not
-count. Email lookup must resolve a unique account; hidden or ambiguous identities
+Dated creation, reporting, assignment or Participants additions to the user,
+authored field changes, any authored comment, and explicit credit for completed
+contributions in other people's comments can qualify. An old assignment alone
+does not count. A comment claiming a fix does not prove the ticket is Done.
+Mere mentions by others do not count. Email lookup must resolve a unique account;
+hidden or ambiguous identities
 require clarification rather than guessing.
+
+For `--user` and default self, a recorded Participants addition within the period
+counts even when someone else added the user. Initial membership counts at
+creation only when independently proven. A later removal does not erase that
+dated evidence; unchanged/current-only membership and another actor's removal
+do not create a date. The report still uses the latest qualifying event across
+all involvement categories and keeps its four columns.
+
+Participants fields are discovered through the connector, with verified field
+and account identities. Request participants and calculated participant fields
+are not assumed aliases. Confirmed field absence is valid non-applicability;
+unavailable or ambiguous metadata/history is a coverage gap. Calculated current
+membership alone cannot prove a participation date.
 
 The [collection rules](references/collection.md) define dates, credit, edit
 authors, exact selection and coverage. The [reporting rules](references/reporting.md)

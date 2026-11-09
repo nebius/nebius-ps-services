@@ -57,13 +57,14 @@
     },
     {
       "id": "checkout-review-pause",
-      "prompt": "Offline contract simulation only. Read $publish-image and required local references; do not contact GitHub, mutate files or execute publication. A batch visited a PR branch for validation, and now pauses with no merge. The original branch remains an unfinished publication target. Describe the safe return and resume.",
-      "expected_output": "Describes the inherited checkout policy and truthful outer-owner completion with independent outcomes.",
+      "prompt": "Offline contract simulation only. Read $publish-image and required local references; do not contact GitHub, mutate files or execute publication. A nested review uses a private execution repository and now pauses without a merge while the user continues editing the caller checkout. The original branch remains an unfinished publication target. Explain pause/resume and distinguish any checkout effects independently authorized and already performed by the parent before review.",
+      "expected_output": "Preserves the caller throughout review, retains original authority and private execution for resume, and handles any pre-existing parent checkout obligation separately.",
       "files": [],
       "assertions": [
-        "Uses temporary owner switch-back without integrating default history or advancing the unfinished original target.",
-        "Retains the original grant, saved targets and policy for resume; never recaptures the current checkout as the starting context.",
-        "Nested calls return evidence and do not finalize independently; report-only and already-merged observation restrictions remain."
+        "Review never switches, resets, stashes, cleans or imports repairs into the caller checkout.",
+        "Retains the original grant, targets, deadlines and registered private execution; never recaptures the current checkout or mints another root receipt.",
+        "Only the parent completes its separately authorized prior checkout effects. User dirt may block that switch-back without discarding edits or invalidating the completed private repair.",
+        "Never integrates default history or advances an unfinished publication target merely to pause review; report-only and already-merged observation restrictions remain."
       ]
     }
   ]

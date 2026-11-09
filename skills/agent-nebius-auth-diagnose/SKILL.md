@@ -145,8 +145,13 @@ CODEX_NEBIUS_PROJECT_ID=<project-id> <command>
 
 When an authoritative project is already selected, do not rediscover it or run
 `verify` for a selector-shape denial. Reconstruct the original outer payload
-with the canonical leading selector and retry the corrected payload once. If a
-later explicit project replaced the selection, resolve that project first. If
+with the canonical leading selector and retry the corrected payload once.
+For mixed payloads, including a local heredoc that prepares a script, split
+preparation and the selected invocation into separate calls. A selector-shape
+denial rejects the whole payload before execution; the local preparation must
+still run. Generic hook advice to diagnose auth does not require rediscovery
+or verification when the task project is already authoritative. If a later
+explicit project replaced the selection, resolve that project first. If
 the corrected payload is denied again, classify and report the persistent
 failure instead of looping or invoking setup.
 

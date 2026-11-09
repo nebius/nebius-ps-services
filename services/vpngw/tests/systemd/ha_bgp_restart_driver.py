@@ -79,7 +79,14 @@ def run():
         if argv[0] == "netplan" or (argv[0] == "systemctl" and argv[-1].startswith("strongswan")):
             return subprocess.CompletedProcess(argv, 0, "", "")
         if argv[0] == "systemctl" and argv[-1] == "frr":
-            return subprocess.run(["vtysh", "-b"], capture_output=True, text=True, timeout=10)
+            # Match the distro service reload owner: additive vtysh -b leaves
+            # removed route-map clauses behind and cannot model exact policy.
+            return subprocess.run(
+                ["/usr/lib/frr/frr-reload.py", "--reload", str(frr_renderer.FRR_CONF)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
         return original_run(argv, **kwargs)
 
     frr_renderer.run = strongswan_renderer.run = renderer_run
@@ -89,8 +96,10 @@ def run():
     def runner(argv, timeout):
         command = Path(argv[0]).name
         if command == "systemctl":
-            if argv[1] == "is-active":
-                daemon = "charon" if argv[-1].startswith("strongswan") else "bgpd"
+            query = argv[1] == "show" and argv[3:] == ("--property=ActiveState", "--value")
+            if query or argv[1] == "is-active":
+                service = argv[2] if query else argv[-1]
+                daemon = "charon" if service == "strongswan" else "bgpd"
                 healthy = (
                     Path("/run/charon.vici").exists()
                     if daemon == "charon"
@@ -100,12 +109,15 @@ def run():
                         for path in Path("/run").glob("**/bgpd.pid")
                     )
                 )
-                return CommandResult(0 if healthy else 1)
+                return (
+                    CommandResult(0, "active\n" if healthy else "failed\n")
+                    if query
+                    else CommandResult(0 if healthy else 1)
+                )
             assert argv[1:] == ("reload-or-restart", "nebius-vpngw-agent"), argv
             main.Agent().reload()
             return CommandResult(0)
-        if command.startswith("python"):
-            assert argv[-1] == "--vm-ha-materialized"
+        if command.startswith("python") and argv[-1] == "--vm-ha-materialized":
             main.require_vm_ha_current_boot_materialization()
             return CommandResult(0)
         result = _run_command(argv, timeout)
@@ -136,6 +148,7 @@ def run():
         route_backend_factory=lambda sdk: Backend(),
         runner=runner,
         active_preparer=lambda: main._prepare_vm_ha_active_data_plane(config_path),
+        origination_verifier=lambda: main._vm_ha_origination_policy_ready(config_path),
         blocked_preparer=lambda: main._prepare_vm_ha_blocked_bgp(config_path),
         data_plane_factory=lambda **kw: SystemDataPlaneRuntime(
             **kw, bgp_export_attempts=10, bgp_export_interval=0.2
@@ -152,6 +165,7 @@ def run():
     boot = main._boot_id()
     snapshots = SimpleNamespace(
         last_snapshot=None,
+        providers=SimpleNamespace(apply_lock_operation_id=lambda: None),
         last_apply_operation_id=None,
         last_transfer_inhibition_operation_id=None,
         config=vm,
@@ -204,6 +218,21 @@ def run():
     authority = Authority("cluster-a", "node-a", "allocation-a", "42", 0, "a" * 64)
     # Declare a healthy active fixture checkpoint, then submit real selector
     # intent. The trial starts at the persisted crash boundary below.
+    # This driver narrows the shared fixture to BGP above. Materialize that exact
+    # policy before claiming a healthy checkpoint; the original swanctl file
+    # still includes the unrelated Static connection from the outer fixture.
+    files = {}
+    strongswan_renderer.StrongSwanRenderer().render_and_apply(cfg, rendered_files=files)
+    strongswan_renderer._write_secret_file(
+        strongswan_renderer.SWANCTL_CONF, files[strongswan_renderer.SWANCTL_CONF]
+    )
+    subprocess.run(
+        ["swanctl", "--load-all", "--noprompt"], check=True, capture_output=True, timeout=5
+    )
+    # Establish the same durable destination protection as a real active owner
+    # before restart withdraws its learned BGP routes. Use actual kernel route
+    # provenance; a synthetic cloud route alone cannot authorize forwarding.
+    ports.data_plane.destination_protection.admit(frozenset({"10.200.2.1/32"}))
     action = ControllerAction(
         ActionKind.ENABLE_ACTIVE,
         "fixture-active",
@@ -219,6 +248,7 @@ def run():
     subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], check=True, capture_output=True)
     selector = TunnelController(cfg, root / "tunnel-selection.json", tunnels.effects)
     selector.bind(authority)
+    assert ports.routes.readiness().promotion_ready, "fixture baseline is not healthy"
     selector.request("failover", "backup", authority, time.time())
     selector.tick(authority, time.time())
     selector.state["operation"]["phase"] = "verify" if scenario == "verify" else "activate"
@@ -231,6 +261,19 @@ def run():
     # Product restart workflow: install guard, passive Agent materialization,
     # controller route reconciliation/activation, then selector verification.
     ports.data_plane.install_guard(replace(action, kind=ActionKind.INSTALL_COLD_START_GUARD))
+    if scenario == "missing-protection":
+        # Declared fixture fault: model an upgrade that has never installed the
+        # new destination guard. The product is already forwarding-fenced and
+        # must recreate protection through its own origination action.
+        assert not ports.data_plane._forwarding()
+        subprocess.run(
+            ["nft", "delete", "table", "inet", "nebius_vpngw_forward"],
+            check=True,
+            capture_output=True,
+            timeout=5,
+        )
+        ports.data_plane.destination_protection.path.unlink()
+        assert not ports.data_plane.destination_protection.ready()
     if scenario == "failed-selected":
         # A peer failure during downtime survives passive materialization. The
         # product must release the persisted override; the fixture never edits it.
@@ -240,16 +283,32 @@ def run():
             check=True,
             capture_output=True,
         )
-    limit = time.monotonic() + 35
+    started = time.monotonic()
+    limit = started + 35
+    steps = []
     while time.monotonic() < limit:
-        runtime.step()
+        status = runtime.step()
         state = read_state(selector.path)
+        # Retain existing observations for a failed trial without adding native
+        # polls or changing its deadline, state or recovery inputs.
+        steps.append(
+            {
+                "state": status["state"],
+                "elapsed_seconds": time.monotonic() - started,
+                "reasons": status["reasons"],
+                "pending": status["pending_operation_id"],
+                "tunnel_phase": state["operation"]["phase"],
+                "tunnel_result": state["operation"].get("result"),
+            }
+        )
+        print(json.dumps({"restart_step": steps[-1]}), file=sys.stderr, flush=True)
         assert state["operation"]["id"] == operation_id
         assert state["operation"]["deadline"] == original_deadline
         if ports.data_plane.mode() is not DataPlaneMode.ACTIVE:
             assert state["operation"]["phase"] not in {"succeeded", "failed"}
         elif state["operation"]["phase"] in {"succeeded", "failed"}:
             assert ports.routes.readiness().promotion_ready
+            ports.data_plane.destination_protection.verify()
             expected = {} if scenario in {"release", "failed-selected"} else {"site": "backup"}
             assert state["selected"] == expected, state["selected"]
             assert (
@@ -277,6 +336,7 @@ def run():
         "native fenced BGP restart did not converge: "
         + repr(
             {
+                "steps": steps,
                 "mode": ports.data_plane.mode(),
                 "readiness": ports.routes.readiness(),
                 "selector": read_state(selector.path),

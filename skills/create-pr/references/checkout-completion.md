@@ -23,9 +23,9 @@ current checkout as a new starting context.
 Review metadata and the complete diff without checking out or creating a local
 PR branch when no checkout-dependent work is needed. Begin a canonical grant
 before an eligible merge even when the PR is remote-only and needs no repair.
-A zero-effect remote target may stay absent locally through closure. For local
-validation or repair, call private `checkout-target --branch <selected-branch>`
-with the existing task key. It materializes only the captured selected target
+A zero-effect remote target may stay absent locally through closure. For review validation or repair, use [private review execution](private-review.md)
+under the original task; the caller checkout stays untouched. `checkout-target`
+is only for separately authorized parent preparation in its own checkout. It materializes only the captured selected target
 and switches safely. A new feature at the receipt HEAD may carry the existing
 dirty work; all other switches require clean state. Never use raw branch
 creation, gh checkout, reset, stash, rebase or file-restoration commands here.
@@ -35,7 +35,12 @@ creation, gh checkout, reset, stash, rebase or file-restoration commands here.
 All calls below use the original `--repo-root`, `--session-id`,
 `--requested-action create-pr` and `--intent-sha256` task key.
 
-- `complete-checkout --mode pause`: switch back to the original branch without
+Standalone review uses source-preserving completion: no source Git effects and
+no claimed final checkout. Nested review returns subordinate execution evidence;
+ordinary parents retain their own completion obligations. See private review
+execution for original closure, concurrent edits and guarded cleanup.
+
+- `complete-checkout --mode pause`: for parent-owned checkout effects, switch back to the original branch without
   integrating history; publication policy keeps its declared prepared checkout.
   Keep the grant open. On resume, `begin` with omitted scope reuses saved targets
   and `checkout-target` returns to the required unfinished target.
@@ -49,7 +54,8 @@ All calls below use the original `--repo-root`, `--session-id`,
   local state, fetch the frozen destination, independently verify result
   containment, fast-forward eligible existing original/default refs and switch
   back. Creation from default without a merge leaves its new feature checked
-  out; review or visits to existing targets switch back without integrating.
+  out; parent visits to existing targets switch back without integrating. Review itself
+  uses private execution and never switches the caller.
   Publication policy preserves its declared prepared checkout and local refs.
 - `finish --outcome completed`: close only after local completion and the
   selected workflow boundary has a terminal outcome. A conclusive CI/Pages

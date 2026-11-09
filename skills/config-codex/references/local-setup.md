@@ -659,3 +659,32 @@ private credential modes and authentication timeouts without starting processes
 or reading credentials. For Claude, also supply `--mcp-config PATH`; generic
 `--require-mcp` remains presence/shape-only. Ordinary setup still permits Tavily
 to be absent. See [bridge setup and recovery](tavily-bridge.md).
+
+## Selected Host Memory Policy
+
+A memory-only request selects the Host Memory Safety section of the native
+instruction template. Preserve every other section and native configuration.
+Inspect the effective instruction path first; report an overriding file or
+managed policy rather than editing an inactive fallback. Back up only a file
+whose bytes will change; recheck its identity and bytes immediately before an
+exact-match edit. Preserve modes and unrelated text. Add the section once inside
+the existing managed block; an absent file may contain just that block and
+section. Conflicting active memory guidance requires reconciliation within the
+requested scope, not duplicate instructions.
+
+Run the shared helper from the reviewed source or installed catalog:
+
+```bash
+python3 -B global-context-management/scripts/host_memory.py check-policy \
+  --instructions /absolute/native/instruction-file
+```
+
+Use the selected native AGENTS.md or CLAUDE.md, respectively. This read-only
+check validates only memory policy, including a partially configured home.
+Full-home checkers retain their broader contracts and may report unrelated
+missing setup. Repeat the check and reconciliation: unchanged bytes must leave
+mtimes and backup inventory unchanged. Install the shared skill payload if
+missing through the documented catalog route; do not bootstrap hooks/settings
+for this focused task. Observe a fresh session's loaded instructions separately.
+The [shared guide](../../global-context-management/references/host-memory.md)
+owns sampling, warning/stop behavior, foreground supervision and cleanup limits.

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import subprocess
 from unittest.mock import patch
 
 import pytest
-from tests.unit.test_ipsec_observation import sas
+from tests.unit.test_ipsec_observation import event, sas
 
 from nebius_vpngw.agent.tunnel_health_monitor import TunnelHealthMonitor, TunnelStats
+from nebius_vpngw.ipsec_observation import Inventory
 
 
 @pytest.mark.parametrize(
@@ -18,12 +18,15 @@ from nebius_vpngw.agent.tunnel_health_monitor import TunnelHealthMonitor, Tunnel
         (sas(name="edge-backup"), "DOWN"),
         (sas(state="INSTALLING"), "DOWN"),
         (sas(ifid="00000065"), "DOWN"),
-        (sas().replace("state=ESTABLISHED", "state=CONNECTING"), "DOWN"),
+        (sas().replace('"state":"ESTABLISHED"', '"state":"CONNECTING"'), "DOWN"),
         (
-            sas().replace(" list-sas reply {}", "") + sas().replace("uniqueid=1", "uniqueid=2"),
+            Inventory.from_events([event(), event(uid="2")]).json(),
             "ESTABLISHED",
         ),
-        ("list-sa event {edge {uniqueid=1 state=ESTABLISHED}} list-sas reply {}", "DOWN"),
+        (
+            Inventory.from_events([{"edge": {"uniqueid": "1", "state": "ESTABLISHED"}}]).json(),
+            "DOWN",
+        ),
         ("edge: #21, ESTABLISHED, IKEv2", "UNKNOWN"),
         ("", "UNKNOWN"),
     ],
@@ -37,15 +40,15 @@ def test_ike_health_uses_exact_connection_and_all_overlapping_sas(
             return_value="/usr/sbin/swanctl",
         ),
         patch(
-            "nebius_vpngw.agent.tunnel_health_monitor.subprocess.run",
-            return_value=subprocess.CompletedProcess([], 0, output, ""),
+            "nebius_vpngw.agent.tunnel_health_monitor.snapshot",
+            side_effect=lambda *_: Inventory.from_json(output),
         ),
     ):
         assert TunnelHealthMonitor().get_ipsec_tunnel_status("edge", 100) == expected
 
 
 def test_neighbor_connection_failure_cannot_restart_healthy_tunnel() -> None:
-    monitor = TunnelHealthMonitor(max_failures_before_restart=2)
+    monitor = TunnelHealthMonitor(max_failures_before_restart=2, observer_only=True)
     output = sas()
     with (
         patch.object(monitor, "get_configured_tunnels", return_value=[("edge", "xfrm0", None)]),
@@ -59,8 +62,8 @@ def test_neighbor_connection_failure_cannot_restart_healthy_tunnel() -> None:
             return_value="/usr/sbin/swanctl",
         ),
         patch(
-            "nebius_vpngw.agent.tunnel_health_monitor.subprocess.run",
-            return_value=subprocess.CompletedProcess([], 0, output, ""),
+            "nebius_vpngw.agent.tunnel_health_monitor.snapshot",
+            side_effect=lambda *_: Inventory.from_json(output),
         ),
         patch("nebius_vpngw.agent.tunnel_health_monitor.time.sleep"),
         patch.object(monitor, "restart_tunnel", return_value=True) as restart,

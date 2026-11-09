@@ -4,9 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
+try:
+    from _vpngw_ha_tunnel_policy import (  # type: ignore[import-not-found]
+        connection_policies,
+        selections,
+    )
+except ModuleNotFoundError:
+    from .ha_tunnel_policy import connection_policies, selections
+
 
 def collect_tunnel_state(
-    cfg: dict[str, Any], *, log=print
+    cfg: dict[str, Any], *, log=print, include_unselected_routes: bool = False
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     tunnels: list[dict[str, Any]] = []
     secrets: list[dict[str, Any]] = []
@@ -24,17 +32,12 @@ def collect_tunnel_state(
     base_if_id = 100
 
     idx = 0
-    selected: dict[str, str] = {}
-    selected_destinations: dict[str, list[str]] = {}
-    if cfg.get("vm_ha"):
-        from .ha_tunnel_policy import connection_policies, selections
-
-        selected = selections(cfg)
-        selected_destinations = {
-            p.name: sorted(p.destinations)
-            for p in connection_policies(cfg)
-            if p.eligible and p.mode == "static"
-        }
+    selected = {} if include_unselected_routes else selections(cfg)
+    selected_destinations = {
+        p.name: sorted(p.destinations)
+        for p in (() if include_unselected_routes else connection_policies(cfg))
+        if p.eligible and p.mode == "static"
+    }
     interface_endpoints: list[dict] = []
     for conn in cfg.get("connections", []):
         routing_mode = conn.get("routing_mode") or cfg.get("defaults", {}).get("routing", {}).get(
@@ -47,12 +50,13 @@ def collect_tunnel_state(
             tun_mode = tun.get("routing_mode") or routing_mode
             cold = bool(
                 conn.get("name") in cfg.get("_ha_suspended_connections", [])
+                or tun.get("name") in cfg.get("_ha_suspended_tunnels", [])
                 or (tun_mode == "static" and cfg.get("_ha_static_passive") is True)
-                or (
-                    tun_mode == "static"
-                    and conn.get("name") in selected
-                    and selected[conn["name"]] != tun.get("name")
-                )
+            )
+            responder = bool(
+                tun_mode == "static"
+                and conn.get("name") in selected
+                and selected[conn["name"]] != tun.get("name")
             )
 
             name = tun.get("name") or f"tunnel{idx}"
@@ -133,6 +137,7 @@ def collect_tunnel_state(
                     "esp_life": esp_life,
                     "dpd": dpd,
                     **({"ha_cold": True} if cold else {}),
+                    **({"responder_only": True} if responder else {}),
                     **({"replay_window": tun["replay_window"]} if "replay_window" in tun else {}),
                 }
             )
@@ -146,7 +151,11 @@ def collect_tunnel_state(
                 "cidr": inner_cidr,
                 "local_public_ip": local_public_ip,
                 "remote_public_ip": remote_public_ip,
-                "remote_prefixes": [] if cold else tunnel_remote_prefixes,
+                "remote_prefixes": (
+                    []
+                    if cold or responder and not include_unselected_routes
+                    else tunnel_remote_prefixes
+                ),
                 "if_id": base_if_id + idx,
             }
 

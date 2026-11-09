@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import release_reconcile as rr
 from test_release_session import HEAD, SCOPE, state
@@ -54,6 +54,10 @@ class ReconcileTests(unittest.TestCase):
         self.github.tag.return_value = (None, None)
         self.github.api.side_effect = self.api
         self.git = Mock(side_effect=self.local)
+        self.private_root = "/private/review/repo"
+        proof = patch.object(rr, "execution_proof", return_value={"repo_root": self.private_root, "head": NEW})
+        self.proof = proof.start()
+        self.addCleanup(proof.stop)
 
     def local(self, root, *args):
         return {
@@ -77,8 +81,21 @@ class ReconcileTests(unittest.TestCase):
             self.value,
             self.github,
             self.git,
-            **{"expected_head": HEAD, "head": NEW, "review_id": 42, **overrides},
+            **{"expected_head": HEAD, "head": NEW, "review_id": 42, "review_task": "/private/review/task.json", **overrides},
         )
+
+    def test_repaired_head_never_requires_source_checkout(self):
+        result = self.reconcile()
+        self.assertEqual(result["scope"], self.value["scope"])
+        self.git.assert_not_called()
+        self.assertEqual(self.proof.call_args.kwargs["ancestor"], HEAD)
+        self.assertGreaterEqual(self.proof.call_count, 2)
+
+    def test_invalid_execution_proof_blocks_reconciliation(self):
+        self.proof.side_effect = rr.ReleaseError("stale execution")
+        with self.assertRaises(rr.ReleaseError):
+            self.reconcile()
+        self.git.assert_not_called()
 
     def test_reviewed_descendant_preserves_identity_deadlines_and_history(self):
         before = copy.deepcopy(self.value)
@@ -106,22 +123,15 @@ class ReconcileTests(unittest.TestCase):
             with self.subTest(args=args), self.assertRaises(rr.ReleaseError):
                 self.reconcile(**args)
 
-    def test_dirty_wrong_checkout_or_rewritten_history_rejected(self):
-        for command, result in (
-            (("status", "--porcelain"), "?? unrelated.txt"),
-            (("branch", "--show-current"), "other"),
-            (("rev-parse", "HEAD"), HEAD),
-        ):
-            self.git.side_effect = (
-                lambda root, *args: result
-                if args == command
-                else self.local(root, *args)
-            )
-            with self.subTest(command=command), self.assertRaises(rr.ReleaseError):
-                self.reconcile()
-        self.git.side_effect = rr.ReleaseError("Old head is not an ancestor")
+    def test_post_proof_drift_is_rechecked_by_owner_without_private_git(self):
+        self.proof.side_effect = [
+            {"repo_root": self.private_root, "head": NEW},
+            {"repo_root": self.private_root, "head": NEW},
+            rr.ReleaseError("LFS content is not supported by private reviews yet"),
+        ]
         with self.assertRaises(rr.ReleaseError):
             self.reconcile()
+        self.git.assert_not_called()
 
     def test_recorded_or_remote_publication_blocks_reconciliation(self):
         for key in ("merge", "tag_object", "run", "complete"):

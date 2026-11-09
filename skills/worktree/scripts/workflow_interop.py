@@ -604,12 +604,10 @@ def inspect_anchor(selected_project_root: Path) -> dict[str, object]:
     return _call(selected_project_root, ["anchor-inspect"])
 
 
-def complete_source_integration(
-    run_dir: Path, selected_project_root: Path
+def _source_integration_proof(
+    selected_project_root: Path, state: dict[str, object]
 ) -> dict[str, object]:
-    state = load(run_dir)
-    if state is None or state.get("mode") != "managed":
-        return {"status": "not-required"}
+    """Observe exact source proof without publishing an integration transition."""
     if state.get("released") is not True:
         raise ExecutionInteropError("outer lease must be released before integration")
     inspected = _call(
@@ -628,10 +626,33 @@ def complete_source_integration(
         and state.get("source_integration_head") != inspected["integration_head"]
     ):
         raise ExecutionInteropError("recorded outer source integration proof changed")
-    state["outer_integration_status"] = "integrated"
-    state["source_integration_head"] = inspected["integration_head"]
-    _write(_path(run_dir), state)
     return {
         "status": "integrated",
-        "source_integration_head": state["source_integration_head"],
+        "source_integration_head": inspected["integration_head"],
     }
+
+
+def require_completed_source_integration(
+    run_dir: Path, selected_project_root: Path
+) -> dict[str, object]:
+    """Completion consumes already-recorded proof; it never records missing proof."""
+    state = load(run_dir)
+    if state is None or state.get("mode") != "managed":
+        raise ExecutionInteropError("managed outer source integration proof is missing")
+    if (state.get("outer_integration_status") != "integrated"
+            or SHA_RE.fullmatch(str(state.get("source_integration_head") or "")) is None):
+        raise ExecutionInteropError("record managed outer source integration before completion")
+    return _source_integration_proof(selected_project_root, state)
+
+
+def complete_source_integration(
+    run_dir: Path, selected_project_root: Path
+) -> dict[str, object]:
+    state = load(run_dir)
+    if state is None or state.get("mode") != "managed":
+        return {"status": "not-required"}
+    proof = _source_integration_proof(selected_project_root, state)
+    state["outer_integration_status"] = "integrated"
+    state["source_integration_head"] = proof["source_integration_head"]
+    _write(_path(run_dir), state)
+    return proof

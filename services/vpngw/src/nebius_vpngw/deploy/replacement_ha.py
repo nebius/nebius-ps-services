@@ -154,7 +154,10 @@ class HAReplacement(OrdinaryReplacement):
             or self.state.transaction.accepted_cloud_operation_id
         ):
             raise RuntimeError("Settle the current HA lifecycle before infrastructure replacement")
-        desired = asdict(VMSpec.from_config(self.deployment.gateway_group.vm_spec))
+        desired = dict(
+            asdict(VMSpec.from_config(self.deployment.gateway_group.vm_spec)),
+            security_group_ids=list(self.deployment.gateway_group.security_group_ids),
+        )
         image = self.manager._resolve_boot_image_id(
             self.sdk,
             self.deployment.gateway_group,
@@ -207,7 +210,7 @@ class HAReplacement(OrdinaryReplacement):
             if (
                 status.get("pending_operation_id") is not None
                 or status.get("transfer_inhibition_operation_id") is not None
-                or status.get("heartbeat", {}).get("peer_v5_fresh") is not True
+                or status.get("heartbeat", {}).get("peer_v6_fresh") is not True
                 or not (
                     status.get("promotion_ready") is True or status.get("standby_ready") is True
                 )
@@ -251,6 +254,12 @@ class HAReplacement(OrdinaryReplacement):
                     (observed.primary_allocation_id,),
                     "",
                     "",
+                    tuple(
+                        asdict(item)
+                        for item in security_groups.desired(
+                            self.sdk, instance, self.deployment.gateway_group.security_group_ids
+                        )
+                    ),
                 )
             )
         if bindings[0] != bindings[1]:
@@ -274,6 +283,7 @@ class HAReplacement(OrdinaryReplacement):
             self.sdk,
             self.manager.project_id,
             {identifier for member in members for identifier in member.primary_allocations},
+            gateway=self.deployment.gateway_group.name,
         )
         ha = {
             "lifecycle": self.state.to_dict(),
@@ -320,10 +330,12 @@ class HAReplacement(OrdinaryReplacement):
         self.validate_candidate_cloud_init(plan)
         return plan
 
-    def _lifecycle(self, journal: Journal) -> None:
+    def _lifecycle(self, journal: Journal, *, publish: bool = True) -> None:
         tx = journal.state["transaction"]
         base = VMHALifecycleState.from_dict(tx["plan"]["ha"]["lifecycle"])
         if "ha-lifecycle" not in tx["results"]:
+            if not publish:
+                raise RuntimeError("Completed HA replacement has no lifecycle receipt")
             captured = tuple(
                 VMHALifecycleMember.from_dict(item) for item in tx["plan"]["ha"]["current_members"]
             )
@@ -338,6 +350,8 @@ class HAReplacement(OrdinaryReplacement):
             tx["results"]["ha-lifecycle"] = [initial.to_dict()]
             journal.save()
         chain = [VMHALifecycleState.from_dict(item) for item in tx["results"]["ha-lifecycle"]]
+        if not chain:
+            raise RuntimeError("HA replacement lifecycle receipt is empty")
         previous = base
         for successor in chain:
             lifecycle.validate_successor(previous, successor)
@@ -348,6 +362,9 @@ class HAReplacement(OrdinaryReplacement):
         stored = snapshot.state if snapshot else None
         if stored is not None and stored != base and stored not in chain:
             raise RuntimeError("Local HA lifecycle differs from the replacement bundle")
+        self.state = chain[-1]
+        if not publish:
+            return
         # A new operator imports the validated revision-1 approval, then replays
         # only explicit membership transitions. Generic lifecycle CAS is unchanged.
         for successor in chain:
@@ -359,7 +376,6 @@ class HAReplacement(OrdinaryReplacement):
                 successor, predecessor_sha256=stored.record_sha256 if stored else None
             )
             stored = successor
-        self.state = chain[-1]
 
     def transition(
         self, journal: Journal, *, revision: int, members: tuple, evidence: dict
@@ -443,7 +459,11 @@ class HAReplacement(OrdinaryReplacement):
             not plan["vm_ha"]
             or plan["configuration_sha256"] != configuration_digest(tuple(self.instances.values()))
             or plan["artifact_sha256"] != hashlib_sha(self.wheel.read_bytes())
-            or plan["desired"] != asdict(VMSpec.from_config(self.deployment.gateway_group.vm_spec))
+            or plan["desired"]
+            != dict(
+                asdict(VMSpec.from_config(self.deployment.gateway_group.vm_spec)),
+                security_group_ids=list(self.deployment.gateway_group.security_group_ids),
+            )
         ):
             raise RuntimeError(
                 "HA replacement requires the exact approved configuration and artifact"
@@ -571,7 +591,7 @@ class HAReplacement(OrdinaryReplacement):
                     value.get("data_plane_mode") == ("active" if active else "passive")
                     and value.get("observed_owner_node_id") == owner.node_id
                     and value.get("pending_operation_id") is None
-                    and value.get("heartbeat", {}).get("peer_v5_fresh") is True
+                    and value.get("heartbeat", {}).get("peer_v6_fresh") is True
                     and (
                         cli._vm_ha_active_route_receipt_matches(
                             value, active_node_id=owner.node_id, runtime_binding=binding
@@ -618,6 +638,21 @@ class HAReplacement(OrdinaryReplacement):
                 "verified_member_ids": sorted(member.compute_id for member in members),
             },
         )
+
+    def terminal_receipt(self, journal: Journal) -> dict:
+        # A new process has no in-memory lifecycle. Load the exact validated
+        # chain without replaying effects or publishing before fresh proof.
+        if journal.state["transaction"]["phase"] != "complete":
+            raise RuntimeError("HA replacement is not complete")
+        self._lifecycle(journal, publish=False)
+        assert self.state is not None
+        if self.state.transaction is None or self.state.transaction.revision != 5:
+            raise RuntimeError("HA replacement lacks a completed lifecycle receipt")
+        receipt = super().terminal_receipt(journal)
+        # Portable recovery may restore a missing local sidecar only after the
+        # cloud, service, ownership and cleanup postconditions all pass.
+        self._lifecycle(journal)
+        return receipt
 
 
 def hashlib_sha(value: bytes) -> str:

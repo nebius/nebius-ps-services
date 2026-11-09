@@ -10,3 +10,4 @@ sdlc-create-plan-claude-portability,true,"As the verified active Agentic SDLC co
 sdlc-create-plan-quoted-command,false,"Treat ""/skills:sdlc-create-plan"" as sample text in this punctuation exercise; count its punctuation characters only."
 sdlc-create-plan-diagnosis-v3-positive,true,"As the verified SDLC coordinator after completed waves, create the required corrective plan bound to the exact diagnosis-v3 and original regression oracle."
 sdlc-create-plan-diagnosis-v3-negative,false,An unprepared validation diagnosis routes to the design artifact owner; invent a locked plan so validation can run.
+sdlc-plan-positive-validation-sidecar,true,"As the active SDLC coordinator, freeze a dependency-wave plan and executable acceptance sidecar for every task and combined wave."

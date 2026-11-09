@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import time
 from types import SimpleNamespace
 
@@ -10,6 +11,8 @@ from nebius_vpngw import ordinary_operations as ops
 from nebius_vpngw.deploy import ordinary_remote
 from nebius_vpngw.deploy.ordinary_handoff import Handoff
 from nebius_vpngw.deploy.vm_ha_package import VMHAAgentPackageError
+
+pytestmark = pytest.mark.usefixtures("runtime_migration_guest")
 
 
 @pytest.mark.parametrize(
@@ -38,7 +41,12 @@ def test_handoff_package_rejections_preserve_safe_reason(tmp_path, fault, reason
         },
     )
     sent = io.StringIO()
-    handoff = Handoff(sent, io.StringIO('{"artifact_sha256":"TOP_SECRET"}\n'), ha={}, package=plan)
+    job = SimpleNamespace(
+        submit=lambda request: (sent.write(json.dumps(request)), {"artifact_sha256": "TOP_SECRET"})[
+            1
+        ]
+    )
+    handoff = Handoff(job, ha={}, package=plan)
     if fault == "plan":
         handoff.package = SimpleNamespace(digest="b" * 64)
     elif fault == "wheel":

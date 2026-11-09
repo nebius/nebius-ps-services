@@ -34,6 +34,40 @@ _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}")
 REPLACEMENT_CYCLE_PATTERN = r"(?:[2-9]|[1-9][0-9]+)"
 _HEARTBEAT_ARTIFACT_KEYS = ("heartbeat-upgrade-artifact", "heartbeat-initial-artifact")
 
+
+def _runtime_command_keys(bindings: Mapping[str, str]) -> set[str]:
+    return {
+        key
+        for key in bindings
+        if key
+        in {
+            "runtime-command-approval",
+            "runtime-command-execution",
+            "runtime-package-manifests",
+            "runtime-peer-preparation",
+            "runtime-peer-continuation",
+            "runtime-peer-continuation-command",
+        }
+        or key.startswith("runtime-created-package-manifests:")
+    }
+
+
+def _validate_command_bindings(bindings: Mapping[str, str]) -> None:
+    from ..apply_approval import validate
+
+    if set(bindings) != {
+        "runtime-command-approval",
+        "runtime-command-execution",
+        "runtime-package-manifests",
+    }:
+        raise ValueError("VM-HA replacement command authority is incomplete")
+    validate(json.loads(bindings["runtime-command-approval"]))
+    if re.fullmatch(
+        r"[0-9a-f]{32}", bindings["runtime-command-execution"]
+    ) is None or not isinstance(json.loads(bindings["runtime-package-manifests"]), dict):
+        raise ValueError("VM-HA replacement command authority is invalid")
+
+
 _PASSIVE_REPLACEMENT_AUDIT_PREFIXES = (
     "passive-replacement-approval:",
     "passive-replacement-",
@@ -47,6 +81,19 @@ _PASSIVE_REPLACEMENT_AUDIT_PREFIXES = (
 )
 
 _MAX_NEBIUS_RESOURCE_NAME_LENGTH = 63
+
+
+def provisioning_operation_id(approval_digest: str, predecessor: str | None) -> str:
+    """One identity for both reviewed package intent and lifecycle publication."""
+    from ..apply_approval import digest
+
+    identity = {
+        "approval_digest": approval_digest,
+        "domain": "nebius-vpngw/vm-ha-operation-v1",
+    }
+    if predecessor is not None:
+        identity["predecessor_sha256"] = predecessor
+    return digest(identity)
 
 
 def vm_ha_passive_replacement_binding_key(
@@ -244,6 +291,19 @@ def vm_ha_effective_resource_bindings(
     """Return live bindings while retaining replacement history in the record."""
 
     artifact_keys = set(_HEARTBEAT_ARTIFACT_KEYS)
+    if "runtime-peer-continuation-command" in bindings:
+        from .ha_preparation import continuation_command
+
+        continuation_command(bindings)
+    if "runtime-command-approval" in bindings:
+        from ..apply_approval import validate
+
+        validate(json.loads(bindings["runtime-command-approval"]))
+    if "runtime-command-execution" in bindings and (
+        "runtime-command-approval" not in bindings
+        or re.fullmatch(r"[0-9a-f]{32}", bindings["runtime-command-execution"]) is None
+    ):
+        raise ValueError("VM-HA runtime command execution identity is invalid")
     if artifact_keys.issubset(bindings):
         raise ValueError("VM-HA heartbeat lifecycle artifact intent is ambiguous")
     for key in artifact_keys:
@@ -253,11 +313,28 @@ def vm_ha_effective_resource_bindings(
         key: value
         for key, value in bindings.items()
         if not key.startswith(
-            (*_PASSIVE_REPLACEMENT_AUDIT_PREFIXES, "prehost-superseded-", "staged-replacement-")
+            (
+                *_PASSIVE_REPLACEMENT_AUDIT_PREFIXES,
+                "prehost-superseded-",
+                "staged-replacement-",
+                "runtime-created-package-manifests:",
+            )
         )
         and key not in artifact_keys
         and key
-        not in {"upgrade-artifact-recovery-authority", "upgrade-artifact-recovery-packages-ready"}
+        not in {
+            "upgrade-artifact-recovery-authority",
+            "upgrade-artifact-recovery-packages-ready",
+            "runtime-command-approval",
+            "runtime-command-execution",
+            "runtime-peer-preparation",
+            "runtime-peer-continuation",
+            "runtime-peer-continuation-command",
+            "runtime-package-manifests",
+            "corrective-release-authority",
+            "corrective-release-reserved",
+            "apply-lock-cycle",
+        }
     }
     member_cycles: dict[str, set[int]] = {}
     for key in bindings:
@@ -546,8 +623,11 @@ def vm_ha_activation_effect_is_host_only(effect: str | None) -> bool:
     return effect in {
         "prepare-heartbeat-upgrade",
         "prepare-heartbeat-initial",
+        "select-created-package-manifests",
         "verify-active-forwarding-and-routes",
         "verify-passive-unlocked-non-forwarding",
+        "verify-peer-rotation-prepared",
+        "authorize-peer-rotation-continuation",
     } or effect.startswith(
         (
             "stop-upgrade-writers-",
@@ -1901,6 +1981,7 @@ class VMHALifecycleState:
         current_observation: object,
         artifact_sha256: str | None = None,
         ssh_identity_rotation: Mapping[str, str] | None = None,
+        command_bindings: Mapping[str, str] | None = None,
     ) -> VMHALifecycleState:
         """Start one creation-only replacement for the proven current non-owner.
 
@@ -2017,7 +2098,7 @@ class VMHALifecycleState:
         }
         # Completed artifact intent belongs to the predecessor transaction. Keep
         # its exact identity as audit history, never as this replacement's intent.
-        for key in _HEARTBEAT_ARTIFACT_KEYS:
+        for key in (*_HEARTBEAT_ARTIFACT_KEYS, *_runtime_command_keys(bindings)):
             if key in bindings:
                 additions[
                     f"standby-replacement-{replacement_cycle}-prior-{key}:{target_instance_name}"
@@ -2026,6 +2107,9 @@ class VMHALifecycleState:
             if not _DIGEST.fullmatch(artifact_sha256):
                 raise ValueError("VM-HA replacement heartbeat artifact identity is invalid")
             additions["heartbeat-initial-artifact"] = artifact_sha256
+        if command_bindings is not None:
+            _validate_command_bindings(command_bindings)
+            additions.update(command_bindings)
         if ssh_identity_rotation is not None:
             expected_rotation_fields = {
                 "action",
@@ -2198,6 +2282,19 @@ def _validate_successor(
 
     if validate_prepared_replacement(previous, successor):
         return
+    if (
+        previous.transaction is not None
+        and successor.transaction.operation_id != previous.transaction.operation_id
+        and successor.transaction.approval_kind == "destruction"
+    ):
+        # Destruction retains predecessor bindings as history. A retained
+        # corrective authority record does not make this a corrective release.
+        _validate_destruction_successor(previous, successor)
+        return
+    from .vm_ha_corrective import validate_successor as validate_corrective
+
+    if validate_corrective(previous, successor):
+        return
     if previous.transaction is None:
         if successor.transaction.revision != 1:
             raise ValueError("VM-HA lifecycle revision is not monotonic")
@@ -2207,12 +2304,6 @@ def _validate_successor(
             or not previous.has_same_identity(successor)
         ):
             raise ValueError("VM-HA lifecycle v2 successor is not approved")
-        return
-    if (
-        successor.transaction.operation_id != previous.transaction.operation_id
-        and successor.transaction.approval_kind == "destruction"
-    ):
-        _validate_destruction_successor(previous, successor)
         return
     if (
         previous.status is VMHALifecycleStatus.DESTROYED
@@ -2384,7 +2475,7 @@ def _validate_destroyed_reprovision_successor(
     if before is None or after is None:
         raise ValueError("VM-HA destroyed reprovision transaction is incomplete")
     allowed_fresh_binding = re.compile(
-        r"^(?:public-allocation:.+:.+|route-targets-digest|heartbeat-initial-artifact|credential-(?:service-account|authorized-key|sha256):.+)$"
+        r"^(?:public-allocation:.+:.+|route-targets-digest|heartbeat-initial-artifact|runtime-command-(?:approval|execution)|runtime-package-manifests|credential-(?:service-account|authorized-key|sha256):.+)$"
     )
     expected_public_bindings = vm_ha_destroyed_retained_public_bindings(previous)
     actual_public_bindings = {
@@ -2479,7 +2570,9 @@ def _validate_missing_standby_replacement_successor(
     if "heartbeat-upgrade-artifact" in after_bindings:
         raise ValueError("VM-HA replacement cannot inherit heartbeat upgrade intent")
     prior_bindings = {
-        key: value for key, value in before_bindings.items() if key not in _HEARTBEAT_ARTIFACT_KEYS
+        key: value
+        for key, value in before_bindings.items()
+        if key not in _HEARTBEAT_ARTIFACT_KEYS and key not in _runtime_command_keys(before_bindings)
     }
     if any(after_bindings.get(key) != value for key, value in prior_bindings.items()):
         raise ValueError("VM-HA missing standby replacement changed prior audit history")
@@ -2563,7 +2656,7 @@ def _validate_missing_standby_replacement_successor(
             0
         ].network_interface_name,
     }
-    for key in _HEARTBEAT_ARTIFACT_KEYS:
+    for key in (*_HEARTBEAT_ARTIFACT_KEYS, *_runtime_command_keys(before_bindings)):
         if key in before_bindings:
             expected_additions[
                 f"standby-replacement-{cycle}-prior-{key}:{target_before.instance_name}"
@@ -2572,6 +2665,10 @@ def _validate_missing_standby_replacement_successor(
         expected_additions["heartbeat-initial-artifact"] = after_bindings[
             "heartbeat-initial-artifact"
         ]
+    command_bindings = {key: after_bindings[key] for key in _runtime_command_keys(after_bindings)}
+    if command_bindings:
+        _validate_command_bindings(command_bindings)
+        expected_additions.update(command_bindings)
     rotation_kinds = (
         "old-fingerprint",
         "trust-scope",
@@ -3146,6 +3243,14 @@ class VMHALifecycleStore:
                 if predecessor_sha256 != previous.record_sha256:
                     raise ValueError("VM-HA lifecycle predecessor compare-and-swap failed")
                 _validate_successor(previous, state)
+                if (
+                    previous.transaction is not None
+                    and previous.transaction.operation_id != state.transaction.operation_id
+                    and "corrective-release-authority" in dict(state.transaction.resource_bindings)
+                ):
+                    from .vm_ha_corrective import archive
+
+                    archive(previous, self.path)
             payload = _canonical_json(state.to_dict()) + b"\n"
             descriptor, temporary_name = tempfile.mkstemp(
                 prefix=f".{self.path.name}.",

@@ -110,11 +110,28 @@ no public skill flags change. Immutable ordinary/preserve policy and original/
 default ref identities remain separate from publication targets. Per-target
 materialization and merged-result state prevent false local-branch requirements
 and repairs after merge. Completion-only fast-forwards retain their own journal
-and never replace reviewed publication checkpoints. Finish requires the declared
-checkout and every completed or intentionally skipped ref update.
+and never replace reviewed publication checkpoints. Parent completion requires its declared checkout and completed or skipped ref
+updates. Private review instead verifies subordinate execution and preserves the
+caller without asserting that its remembered branch is still checked out.
 
 [Bound PR publication](../../create-pr/references/pr-publication.md) adds
 immutable PR identities and a journaled non-force push to this same owner.
 
-Task/checkpoint/closure v3 is strict: old transactions must complete with their
+Task/checkpoint/closure v4 is strict: old transactions must complete with their
 existing owner before installation. Do not migrate authority or reopen closures.
+
+## Subordinate PR review execution
+
+Use [private review execution](../../create-pr/references/private-review.md) for
+all checkout-dependent reviews. The original immutable root grant remains the
+only authority. A private execution manifest carries the original receipt and
+session digests plus a two-way owner binding; no root receipt is copied. Original
+closure revokes further execution. Task, checkpoint and closure schemas are v4;
+resolve active older operations with their existing installed owner before
+upgrading. Do not convert old grants or reopen terminal authority.
+
+Unused LFS settings do not block private review: every private Git command disables
+LFS executables, keeps the driver required and checks effective attributes. Actual
+LFS content remains unsupported. Historical authority is inspected only through
+[administrative audit and retirement](transaction-retirement.md); unknown owners
+or effects are retained, never implicitly completed or converted.

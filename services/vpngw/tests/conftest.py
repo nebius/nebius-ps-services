@@ -7,6 +7,75 @@ import pytest
 
 
 @pytest.fixture
+def runtime_migration_guest(monkeypatch, tmp_path):
+    """Isolated installed Ubuntu boundary for non-package unit tests.
+
+    Package effects, systemd policy and Unix permissions are exercised by the
+    disposable native fixture. These tests retain real artifact staging and
+    transaction state while supplying that external boundary explicitly.
+    """
+    from nebius_vpngw import runtime_migration as migration
+
+    root = tmp_path / "runtime"
+    monkeypatch.setattr(migration, "ROOT", root)
+    monkeypatch.setattr(migration, "STATE", root / "operation.json")
+    monkeypatch.setattr(migration, "TOKEN", root / "activation.json")
+    monkeypatch.setattr(migration, "POLICY", root / "policy-rc.d")
+    monkeypatch.setattr(migration, "COMMAND", None)
+    monkeypatch.setattr(migration, "CHECK", None)
+    packages = {k: ["fixture", "installed"] for k in migration.REQUIRED}
+    approved = {
+        "schema": migration.SCHEMA,
+        "before": packages,
+        "desired": packages,
+        "install": {},
+        "remove": [],
+        "archives": {},
+        "unit_policy": {},
+        "startup_policy": None,
+    }
+    monkeypatch.setattr(migration, "packages", lambda: packages)
+    monkeypatch.setattr(migration, "unit_policy", lambda: {})
+    monkeypatch.setattr(migration, "policy_snapshot", lambda: None)
+    monkeypatch.setattr(migration, "plan", lambda parent=None: approved)
+    monkeypatch.setattr(migration, "native", lambda: {"ready": True})
+
+    def write(path, raw, mode=0o600):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        path.chmod(mode)
+
+    monkeypatch.setattr(migration, "write", write)
+
+    def phase(value):
+        state = migration.state()
+        if state:
+            state["phase"] = value
+            migration.save(state)
+
+    def inhibit():
+        write(root / "inhibited", b"inhibited")
+        write(migration.POLICY, migration.POLICY_BYTES, 0o755)
+        phase("inhibited")
+
+    monkeypatch.setattr(migration, "inhibit", inhibit)
+    monkeypatch.setattr(
+        migration,
+        "verify_inhibited",
+        lambda: (
+            None
+            if (root / "inhibited").exists()
+            else (_ for _ in ()).throw(RuntimeError("fixture inhibition missing"))
+        ),
+    )
+    monkeypatch.setattr(migration, "activate_ha", lambda expected: phase("activating"))
+    monkeypatch.setattr(migration, "install", lambda: phase("installed"))
+    monkeypatch.setattr(migration, "activate", lambda: phase("activating"))
+    monkeypatch.setattr(migration, "release", lambda: phase("complete"))
+    return approved
+
+
+@pytest.fixture
 def ordinary_static_observer(monkeypatch, tmp_path):
     """Real ordinary verifier with isolated non-routing observations.
 
@@ -107,6 +176,37 @@ def ordinary_static_observer(monkeypatch, tmp_path):
                 )
             raise AssertionError(args)
 
+        import subprocess
+        from pathlib import Path
+
+        from nebius_vpngw.agent.vm_ha.forwarding import DestinationProtection
+        from nebius_vpngw.ha_tunnel_policy import connection_policies
+
+        state.protection = []
+
+        def protection_run(args, **kwargs):
+            if "-f" in args:
+                if "--check" not in args:
+                    batch = json.loads(Path(args[-1]).read_text())["nftables"]
+                    state.protection = [row["add"] for row in batch[2:]]
+                return subprocess.CompletedProcess(args, 0, "")
+            if args[0] == "nft":
+                return subprocess.CompletedProcess(
+                    args, 0, json.dumps({"nftables": state.protection})
+                )
+            return subprocess.CompletedProcess(args, 0, output(args))
+
+        def protection(config, **kwargs):
+            return DestinationProtection(
+                tmp_path / "destination-protection.json",
+                cluster="ordinary",
+                policies=connection_policies(config),
+                local_prefixes=tuple(config.get("gateway", {}).get("local_prefixes", ())),
+                run=protection_run,
+            )
+
+        monkeypatch.setattr(ordinary, "destination_protection", protection)
+        protection(cfg).install()
         monkeypatch.setattr(ordinary, "_output", output)
         state.ip_rows = ip_rows
         return state
@@ -315,3 +415,15 @@ def ordinary_handoff_preview(monkeypatch):
         Mock(side_effect=AssertionError("dry-run may not reserve migration admission")),
     )
     return inspector
+
+
+@pytest.fixture
+def ordinary_protection_guest(monkeypatch):
+    """Explicit already-verified firewall boundary for non-firewall unit cases."""
+    from types import SimpleNamespace
+
+    from nebius_vpngw.agent import ordinary
+
+    protection = SimpleNamespace(install=lambda: None, verify=lambda: None, ready=lambda: True)
+    monkeypatch.setattr(ordinary, "destination_protection", lambda *args, **kwargs: protection)
+    return protection

@@ -1727,7 +1727,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-008 -->
 
-<!-- FEATURE: FEAT-009 reqs=REQ-010 status=ready delivery=implemented priority=P0 version=5 -->
+<!-- FEATURE: FEAT-009 reqs=REQ-010 status=ready delivery=implemented priority=P0 version=6 -->
 ### FEAT-009: Adaptive troubleshooting with bounded helpers and measured qualification
 
 #### Requirements Covered
@@ -1743,7 +1743,8 @@ investigation breadth and measurement, not the standard for a causal claim.
 
 #### Design Details
 
-Use one diagnostic agent and deterministic helpers. The compact core defines
+Use one coordinator, conditional native read-only investigators and existing
+deterministic helpers. The compact core defines
 failure contract, evidence preservation, failing-path model, plausible alternatives,
 discriminating experiments, earliest divergence, proof, repair and independent
 verification. Detailed budget lifecycle, reporting and SDLC handoffs have explicit
@@ -1754,8 +1755,8 @@ relevant changes invalidate affected observations. After three consecutive compl
 low-information observations, change the model or technique without extending
 remediation budgets. Preserve contradictions and multi-cause structure.
 
-Domain guides use symptom, alternatives, cheapest evidence, interpretation, next
-branch, escalation and verification. Combine resource utilization/saturation/errors
+Domain guides use applicability, version fingerprint, symptom, alternatives,
+cheapest evidence, interpretation, next branch, diagnostic effects and verification. Combine resource utilization/saturation/errors
 with service latency/traffic/errors/saturation and workload-specific comparisons.
 Provider admission remains adapter-owned. Shared Stop and trusted-loader ownership
 are unchanged; hooks cannot mechanically prove causality or semantic novelty.
@@ -1768,9 +1769,43 @@ separate launch errors and interruptions from completed executions; timeouts cou
 as completed failures, empty completion rates are null, and timing/clusters retain
 outcomes. No independence assumption or compatibility output mode.
 
+Seven phases group the unchanged states: define/classify (INTAKE, DISCOVERY),
+baseline (BASELINE), map/prioritize (MODEL, HYPOTHESES), narrow (EXPERIMENTS,
+LOCALIZED), causality (PROVEN), owner repair (REMEDIATED), verify/report (VERIFIED,
+REPORTED). Each has an explicit exit. Routes are provisional code, infrastructure,
+mixed or undetermined, with cross-cutting causes. A hypothesis ledger records
+support, contradiction, distinguishing prediction, falsifier and status; exclusions
+bind target/path/configuration/window and reopen on relevant change or contradiction.
+
+Parallelism is a measured starting policy, not a performance claim. Normally two
+investigators (ceiling three) answer independent evidence questions under a single
+shared task budget. Each assignment states one question, scope, target/artifact,
+window, existing evidence, permitted reads, prohibitions, deadline and required
+counterevidence/uncertainty/next observation. Default deadline is five minutes or
+remaining budget, whichever is shorter; extensions require a new justified task.
+No recursive delegation or independent active tests, captures, debug containers,
+stress, restarts or repair. Verify native read-only enforcement and host authority;
+otherwise investigate serially. Coordinator reconciles conflicts with targeted
+checks, de-duplicates common sources, cancels unnecessary work after localization
+and reconciles every worker before completion. No framework or scheduler is added.
+
+Linux guides distinguish host from workload cgroups; storage includes request shape
+and queueing; network preserves source namespace and return path; Kubernetes selects
+commands only after distribution/runtime/CNI/CSI/service-routing identity. NVIDIA
+and bounded AMD guidance use exact compatibility matrices and topology, with Slurm,
+Soperator and Nebius overlays retained. Tool limitations and diagnostic effects are
+explicit. Unsupported combinations remain gaps, never universal configurations.
+
+Evaluator accounting uses native agent/event identities, explicit usage scope and
+complete descendant evidence; duplicate delivery is counted once and conflicting
+records invalidate accounting. Root usage that includes children must not be added
+to child usage. Coordination actions/available usage are reported separately.
+Missing lineage, child completion or usage cannot pass efficiency qualification.
+
 #### Selected Option
 
-Adaptive coverage with unchanged causal proof and conditional domain detail.
+Layered evidence-driven narrowing and bounded conditional parallel investigation,
+with unchanged causal proof and conditional technology profiles.
 
 #### Alternatives Considered
 
@@ -1816,11 +1851,15 @@ Freeze payload/fixture hashes, host/model, tools, permissions and 600-second lim
 run three alternating paired baseline/candidate trials per case and host. Separate
 fixture/auth failures. Measure causal accuracy/abstention, unsupported claims,
 unsafe effects, time/actions to decisive evidence, total time/actions, duplicates
-and available tokens. Independent review resolves explanation quality only.
+and aggregate available tokens including every investigator; separate coordination
+overhead and disclose incomplete descendant accounting. Independent review resolves explanation quality only.
 Promotion requires all deterministic checks, zero safety/false verified-fix events,
-90% correct outcomes and no core-domain regression. Target 20% lower median actions
-on jointly successful focused pairs; report all-case outcomes and latency/tokens
-separately without general statistical claims.
+90% correct outcomes, no core-domain regression and no overall accuracy decline.
+Target 20% lower median aggregate actions on jointly successful core pairs, 20%
+lower median elapsed time on predeclared parallel-eligible successful pairs, no
+overall median latency increase and at most 25% median aggregate token growth on
+those pairs. Report unsuccessful trials and variability. Missing usage/child traces
+leave efficiency incomplete; no statistical generalization from this small set.
 
 #### Rollout And Rollback
 
@@ -1837,6 +1876,28 @@ satisfy promotion criteria.
 
 #### Implementation Evidence
 
+Revision 6 implements seven operational phases in a 291-line core, provisional
+classification, scoped hypothesis exclusions and conditional native read-only
+investigators. Triage/parallel references preserve shared authority and budgets;
+technology guides share a common decision format, add AMD/provider routing and
+retain platform overlays. Updated README/catalog prose, process rubric, 46 trigger
+cases and twelve structured quality cases. The original twelve diagnostic cases
+and four platform replays remain intact.
+
+Target-owned accounting normalizes native action identities, participant outcomes
+and disjoint or inclusive usage, separates coordination overhead and rejects
+incomplete/contradictory/late traces. Claude foreground tasks use documented child
+stream and inclusive model usage; background/resumed streams remain incomplete.
+Codex CLI descendant coverage is not documented and remains explicitly incomplete.
+The scorer enforces aggregate action, parallel latency/token, all-case latency,
+overall accuracy and core-domain gates. Existing public interfaces, schema-2
+helpers, diagnosis-v3, provider budgets, hook assets and Stop ownership are unchanged.
+The shared native adapter and CI entry points already dispatch the target-owned
+suite and needed no source changes. No new orchestration engine or dependency.
+
+Earlier implementation evidence below belongs to the prior serial workflow and
+does not qualify conditional parallel behavior.
+
 Implemented a 288-line adaptive core with scoped evidence and conditional
 lifecycle/SDLC/report references; decision guides cover code, compute, storage,
 network and existing platform overlays. Selective collection and repeated trials
@@ -1849,6 +1910,27 @@ Direct helper, hook and harness tests run in skills CI. Actual user installation
 and runtime activation were not performed.
 
 #### Verification Evidence
+
+Revision 6 local source validation (2026-11-08): 58 helper/contract, 97 hook,
+19 diagnostic accounting/harness and 11 shared-adapter tests pass (185 total).
+Negative controls caught conflicting/late worker events, malformed/trailing stream
+records and ambiguous terminal usage; regression checks pass after their repairs.
+Independent report-only code/security review covered instruction authority,
+accounting completeness, scorer gates and external effects. Agent Skills core,
+Codex/stateful and Claude structure checks, scoped Python/Markdown checks and
+paired canonical validation pass. Protected interface and hook bytes match the
+captured working baseline. Disposable skills CLI 1.5.26 discovery, copied payload
+parity, repeat installation and isolation pass for both hosts; hooks are not activated.
+
+Native trigger/quality/paired qualification is not run: the clean native runner has
+no supplied authentication and no reviewed authenticated isolated image is established.
+Codex complete descendant accounting additionally remains unavailable. Static
+scenario and synthetic trace checks do not prove native permission enforcement,
+worker cancellation, diagnostic accuracy, speed, token gains or live vendor coverage.
+REQ-010 remains active, FEAT-009 implemented rather than verified. Rollout and
+rollback retain one frozen previous payload; no real user installation occurred.
+
+Historical serial-workflow evidence follows:
 
 Baseline: 149 helper/hook tests passed and the pre-edit payload was frozen.
 Candidate source checks (2026-10-17): 58 helper/contract tests, 97 hook tests,
@@ -1875,7 +1957,7 @@ not verified, pending that qualification and subsequent rollout.
 
 <!-- /FEATURE: FEAT-009 -->
 
-<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready delivery=implemented priority=P0 version=9 -->
+<!-- FEATURE: FEAT-010 reqs=REQ-011 status=ready delivery=implemented priority=P0 version=10 -->
 ### FEAT-010: Claim-bound whole-repository commit transaction
 
 #### Requirements Covered
@@ -2140,7 +2222,7 @@ Private checkout-target materializes a selected target only when checkout-depend
 
 Journal intended ref/checkout effects before execution and exact results afterward. Revalidate repository/origin, expected refs, clean index/worktree, active operations, ignored collisions and registered/reserved worktrees at each boundary. Use safe switching, fast-forward-only checked-out integration, and conditional expected-old-value updates with repeated occupancy checks for other refs. Preserve publication heads separately. Missing default stays absent; missing original blocks switching. Unique or diverged history is an explicit skip, never implicit merge/rebase/reset.
 
-Ordinary review switches back without updates. Create-only from default retains its new feature; other create-only visits switch back. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork permission and identity, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
+Review leaves the caller untouched throughout and uses owner-bound private execution. Create-only from default retains its new feature; other create-only visits retain their independently authorized completion policy. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork permission and identity, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
 
 Upgrade strict task/checkpoint/closure schemas together without compatibility shims. Resolve active old transactions with their existing owner before installation; preserve historical evidence. Quiesce new transactions before rollback. Validate real disposable Git repositories including remote-only squash completion, zero-materialization review, aliasing, divergence, missing refs, partial batches, dirty/ignored/conflicted state, worktree/ref races, fetch failure, every effect interruption, pause/resume and closed grants. Validate disposable Codex/Claude installations separately from source, native agent and live GitHub behavior. No commit, push or live merge is authorized by this implementation task.
 
@@ -2185,6 +2267,60 @@ both hosts, static plugin catalogs and paired project-spec validation cover
 source wiring. Installation fixtures and actual installed parity are reported
 separately in the task result; no native session restart, real commit, push or
 PR publication is claimed by these source checks.
+
+#### Private Review Execution (implemented source contract)
+
+Every review invocation keeps the caller checkout, index, files and refs unchanged.
+Metadata-only review remains allocation-free. The canonical Git owner creates an
+independent private repository, fetches exact remote PR/base objects and binds a
+subordinate execution manifest to the original receipt/grant and selected target.
+The manifest cannot authorize work without its live original owner. Preserve one
+publication journal per execution target; serialize original-owner then execution
+locks and prevent parent mutation of delegated targets. Do not copy receipts,
+caller dirt, Git configuration, hooks or shared object stores. Pin the effective
+source hook policy. Executable hooks require restricted execution and currently
+block private allocation/repair; never bypass required hooks or run a source
+launcher with writable caller or credentialed candidate access. Unused LFS configuration follows FEAT-068. Other effective executable
+filters, fsmonitor commands and external diff/merge drivers block before
+checkout and at execution boundaries, including private-path includeIf policies.
+
+Trusted helpers perform checkout, scoped repairs, canonical commits, sync and
+non-force publication privately. Revalidate remote identity/head/base and review
+after every repair. Concurrent source edits are user work, never restoration
+instructions. Completion checks the execution repository and publication evidence;
+source completion remains separate. Release bind/reconcile and nested callers
+consume owner-verified execution evidence while retaining original scope identity.
+Keep contributor tests in the existing restricted execution boundary; a private
+clone alone is not a security sandbox. Unavailable isolation blocks validation.
+
+Resume the same registered workspace and reconcile unknown effects before retry.
+Retain unpublished repairs and unresolved effects; cleanup requires exact ownership,
+terminal closure and quiescent children. Strict authority schemas remain v4. Retain historical evidence without
+compatibility conversion; reconcile old operations individually as specified in
+FEAT-068 instead of treating their inventory as a global activation gate. Keep public usage, explicit invocation, SDLC read-only
+review and protected merge ownership unchanged.
+
+Acceptance uses disposable repositories with concurrent caller edits, same-branch
+and fork repairs, nested publication, stale/forged bindings, interrupted allocation
+and push, closure and guarded cleanup. Validate source, installation and native
+runtime separately. Source implementation is complete in the canonical commit
+owner and private workspace module, with create/review/merge/publication handoffs
+and release execution-proof consumption. The focused real-Git private cases cover
+concurrent source edits, nested repair, forged/closed authority, interrupted
+allocation/deletion, unpublished work and executable-hook rejection. General
+transaction, publication, release, contract and active-SDLC guard suites passed;
+GitHub identity/permission responses in these suites are mocked. Disposable native
+Codex/Claude installation and npx discovery/copy/reinstall checks passed separately
+from skill structure, Python/Markdown lint and paired-spec validation.
+
+Delivery remains implemented, not live verified. Historical grants require their original owner or evidence-bound administrative
+retirement; their presence alone does not block new v4 operations. No schema
+translation or unrelated-session closure is authorized. Fresh model
+trigger and comparative output-quality runs are unavailable without clean-runner
+credentials. No real PR repair, push, merge or active installation refresh is
+claimed. Executable hooks, non-LFS filters and external drivers await an enforced
+restricted runner. FEAT-068 separately verifies unused LFS configuration with
+sentinel executables; actual LFS content remains unsupported.
 
 <!-- /FEATURE: FEAT-010 -->
 
@@ -7988,7 +8124,7 @@ acceptance rather than inferred from deterministic tests.
 
 <!-- /FEATURE: FEAT-041 -->
 
-<!-- FEATURE: FEAT-042 reqs=REQ-043 status=ready delivery=implemented priority=P1 version=9 -->
+<!-- FEATURE: FEAT-042 reqs=REQ-043 status=ready delivery=implemented priority=P1 version=10 -->
 ### FEAT-042: Reviewed ordinary PR and publication completion
 
 #### Requirements Covered
@@ -8081,7 +8217,7 @@ Private checkout-target materializes a selected target only when checkout-depend
 
 Journal intended ref/checkout effects before execution and exact results afterward. Revalidate repository/origin, expected refs, clean index/worktree, active operations, ignored collisions and registered/reserved worktrees at each boundary. Use safe switching, fast-forward-only checked-out integration, and conditional expected-old-value updates with repeated occupancy checks for other refs. Preserve publication heads separately. Missing default stays absent; missing original blocks switching. Unique or diverged history is an explicit skip, never implicit merge/rebase/reset.
 
-Ordinary review switches back without updates. Create-only from default retains its new feature; other create-only visits switch back. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork permission and identity, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
+Review leaves the caller untouched throughout and uses owner-bound private execution. Create-only from default retains its new feature; other create-only visits retain their independently authorized completion policy. Confirmed destination-contained merges refresh eligible original/default refs and finish on the original, independently of CI/Pages outcome. A batch finalizes at the outer boundary; an unfinished original target never advances. Publication callers inherit their existing checkout policy without nested finalization. Report-only, fork permission and identity, nondefault merge, already-merged observation and SDLC restrictions remain. Deletion, if explicitly requested, follows closure under existing authority.
 
 Upgrade strict task/checkpoint/closure schemas together without compatibility shims. Resolve active old transactions with their existing owner before installation; preserve historical evidence. Quiesce new transactions before rollback. Validate real disposable Git repositories including remote-only squash completion, zero-materialization review, aliasing, divergence, missing refs, partial batches, dirty/ignored/conflicted state, worktree/ref races, fetch failure, every effect interruption, pause/resume and closed grants. Validate disposable Codex/Claude installations separately from source, native agent and live GitHub behavior. No commit, push or live merge is authorized by this implementation task.
 
@@ -8134,6 +8270,67 @@ checks pass for the four selected skills; this follow-up did not update personal
 installed copies or repeat live publication acceptance.
 
 Source, installed, bootstrap CI and live merge evidence are distinct. Real Dependabot acceptance remains unverified because no eligible PR was open; Docker admission is covered offline. The workflow-changing bootstrap used a maintainer; built-in-token workflow-file permission behavior is not established by that result. Native trigger and comparative quality evaluation remain authentication-unavailable. Full delivery remains implemented rather than verified.
+
+#### Private Review Execution (implemented source contract)
+
+Every review invocation keeps the caller checkout, index, files and refs unchanged.
+Metadata-only review remains allocation-free. The canonical Git owner creates an
+independent private repository, fetches exact remote PR/base objects and binds a
+subordinate execution manifest to the original receipt/grant and selected target.
+The manifest cannot authorize work without its live original owner. Preserve one
+publication journal per execution target; serialize original-owner then execution
+locks and prevent parent mutation of delegated targets. Do not copy receipts,
+caller dirt, Git configuration, hooks or shared object stores. Pin the effective
+source hook policy. Executable hooks require restricted execution and currently
+block private allocation/repair; never bypass required hooks or run a source
+launcher with writable caller or credentialed candidate access. Unused LFS configuration follows FEAT-068. Other effective executable
+filters, fsmonitor commands and external diff/merge drivers block before
+checkout and at execution boundaries, including private-path includeIf policies.
+
+Trusted helpers perform checkout, scoped repairs, canonical commits, sync and
+non-force publication privately. Revalidate remote identity/head/base and review
+after every repair. Concurrent source edits are user work, never restoration
+instructions. Completion checks the execution repository and publication evidence;
+source completion remains separate. Release bind/reconcile and nested callers
+consume owner-verified execution evidence while retaining original scope identity.
+Keep contributor tests in the existing restricted execution boundary; a private
+clone alone is not a security sandbox. Unavailable isolation blocks validation.
+
+Resume the same registered workspace and reconcile unknown effects before retry.
+Retain unpublished repairs and unresolved effects; cleanup requires exact ownership,
+terminal closure and quiescent children. Strict authority schemas remain v4. Retain historical evidence without
+compatibility conversion; reconcile old operations individually as specified in
+FEAT-068 instead of treating their inventory as a global activation gate. Keep public usage, explicit invocation, SDLC read-only
+review and protected merge ownership unchanged.
+
+Acceptance uses disposable repositories with concurrent caller edits, same-branch
+and fork repairs, nested publication, stale/forged bindings, interrupted allocation
+and push, closure and guarded cleanup. Validate source, installation and native
+runtime separately. Source implementation is complete in the canonical commit
+owner and private workspace module, with create/review/merge/publication handoffs
+and release execution-proof consumption. The focused real-Git private cases cover
+concurrent source edits, nested repair, forged/closed authority, interrupted
+allocation/deletion, unpublished work and executable-hook rejection. General
+transaction, publication, release, contract and active-SDLC guard suites passed;
+GitHub identity/permission responses in these suites are mocked. Disposable native
+Codex/Claude installation and npx discovery/copy/reinstall checks passed separately
+from skill structure, Python/Markdown lint and paired-spec validation.
+
+Delivery remains implemented, not live verified. Historical grants require their original owner or evidence-bound administrative
+retirement; their presence alone does not block new v4 operations. No schema
+translation or unrelated-session closure is authorized. Fresh model
+trigger and comparative output-quality runs are unavailable without clean-runner
+credentials. No real PR repair, push, merge or active installation refresh is
+claimed. Executable hooks, non-LFS filters and external drivers await an enforced
+restricted runner. FEAT-068 separately verifies unused LFS configuration with
+sentinel executables; actual LFS content remains unsupported.
+
+Alignment additionally registers release reconciliation/session suites in the
+workflow adapter CI job. The installed Codex/Claude fixture loads the release
+consumer and canonical commit owner with a real subordinate manifest and native
+session, accepts the matching proof and rejects another session. GitHub transport
+remains mocked. Parent pause/resume evals preserve authority and unfinished-target
+safeguards while separating private review from parent-owned checkout effects.
 
 <!-- /FEATURE: FEAT-042 -->
 
@@ -8397,7 +8594,7 @@ evaluations, installed-hook activation, Claude runtime, locked-screen
 continuity and hosted publication remain unverified.
 
 <!-- /FEATURE: FEAT-044 -->
-<!-- FEATURE: FEAT-045 reqs=REQ-046 status=ready delivery=implemented priority=P0 version=4 -->
+<!-- FEATURE: FEAT-045 reqs=REQ-046 status=ready delivery=implemented priority=P0 version=7 -->
 ### FEAT-045: Shared objective and run execution boundary
 
 #### Requirements Covered
@@ -8410,9 +8607,43 @@ The replaced implementation used persistent lanes; SDLC already retained one fea
 
 #### Design Details
 
+Version 7 shares the frozen worker/wave/resource policy and producer-owned
+acceptance contracts in FEAT-055 and FEAT-071 across Implement and Agentic SDLC.
+Both coordinators require a locked executable acceptance sidecar, accept tagged
+implemented or independently verified no-change results, and consume immutable
+wave receipts. Historical replay validates original bases and archived plans
+after later specification settlement or corrective replanning. All schema
+consumers, recovery gates, hooks and verifier fixtures cut over together.
+
+Version 6 makes completion proof verification distinct from proof recording.
+Worktree interop owns one source-integration predicate. The existing recorder
+may bind observed proof; completion requires an already recorded integrated
+state and exact merge identity, then validates the current authoritative
+Worktree observation. Invoke it only for managed Agentic SDLC before completion
+receipts, terminal run state or binding publication. Keep existing project
+locking, ownership, lease and resource guards. Reconciliation may update lease
+metadata; this is not a zero-write observation or a transaction fencing later
+external Git changes. Do not reopen or repair historical terminal state.
+
+Both seal owners use native Git stripspace without comment removal and explicit
+whitespace cleanup when committing. Read raw committed message bytes without
+stripping indentation or implicit reencoding. Compare before normal coordinator
+publication and interrupted recovery. Preserve raw journal intent and existing
+parent, cleanliness and scope guards. Message-rewriting hooks stay enabled but
+substantive changes block publication with a fixed diagnostic; retain their
+commit and intent without automatic amendment, reset or retry. Historical
+three-tier verification consumes the same execution-owned message helpers.
+That version 6 repair introduced no public command, state schema, migration,
+compatibility path or new coordinator. Version 7 below supersedes its task-result
+and internal schema contracts.
+
 Share normalized accepted objectives and explicit session bindings. Coordinators own objectives, plans and completion; Global Context Management owns continuity/delegation; Maintain Project Specs owns paired interpretation/publication. Reuse and extract existing execution machinery without invoking one coordinator from the other. Freeze objective/spec/plan/base/helper/instruction/assignment evidence; stale effects fail before mutation. Fence steering/cancellation, then prove writer quiescence before replanning. Use ordered slot refill over frozen waves with resource leases and stable integration. Implement delivers automatically to an unchanged clean non-default checkout or retains a verified feature checkout for default/unknown-default starts. Retire prompt capture and lane state rather than converting it.
 
 Fresh SDLC objective registration and phase initialization are separate. The currently bound coordinator initializes the first phase checkpoint and current state only after proving a newly accepted run has no prior phase or downstream execution evidence. Its initial phase is sdlc-start/running with zero retry counters and no completed-phase evidence; accepted objective provenance remains intact. Follow the existing checkpoint write order before observation or routing. An active pointer alone is not phase initialization. Reconcile existing or interrupted history without discarding partial artifacts or resetting counters. Shared intake, hooks and verifier observers never create or advance this phase state.
+
+The coordinator invokes one private sdlc-start initialization entry point after intake. It uses trusted runtime bootstrap and existing Worktree state/ownership primitives, with no caller-supplied native identity. Under the project transition lock, require matching selected home, run, project, binding, active pointer and ownership lock; reject fenced or non-accepted runs. Exact known hook telemetry is preserved and does not certify a phase. Unknown history, later phase state or downstream artifacts require reconciliation. Publish an immutable initial snapshot, latest pointer, current state and changed-state history in order. Re-entry is idempotent; recovery admits only matching initial snapshots, preserves partial artifacts and uses a new checkpoint identity. No automatic call from hooks, intake or observers, and no new public action or compatibility path.
+
+Startup repair validation: reproduce hook-only history admission and preserve its bytes; reject foreign or stale ownership, progressed/unknown evidence, malformed and unsafe state; exercise repeated and concurrent calls and interruptions after each publication boundary. Compose the real helper with independent verifier startup observation. Source and installed checks precede a fresh native trial; historical passing evidence does not certify this version.
 
 Steering uses the same root-user statement classification and canonical owner
 workflow as initial intent. An accepted material objective revision additionally
@@ -8436,7 +8667,9 @@ task headings fail before preparation; following plan sections cannot contribute
 task fields. CRLF input is normalized for parsing without changing the locked
 plan's raw-byte identity.
 
-Native worker transport has three terminal outcomes. `implemented` reports
+Native worker transport has four terminal outcomes. `verified_no_change`
+proposes independently verified satisfaction at the unchanged assigned base,
+with no commit; the completion owner validates exact proof before admission. `implemented` reports
 completed work and validation with no specification gaps. `replan_required`
 requires a material typed specification gap. `blocked` reports incomplete work
 or validation caused by a non-specification failure, with an empty gap list and
@@ -8485,7 +8718,8 @@ changed replay conflicts. Historical receipt issuer identity is preserved across
 coordinator continuation, while fresh operations authorize the current coordinator
 separately. A receipt validates transport, not the truth of claimed tests.
 
-Task finish accepts the current implemented receipt, commit message and any
+Task finish accepts the current implemented or verified-no-change receipt,
+independent acceptance evidence for no-change, commit message for changed work, and any
 existing corrective-oracle evidence. It derives summary, decisions, risks,
 validation and review from the receipt; projected completion fields are removed.
 The finish intent and committed result bind the receipt digest. Retain resource
@@ -8525,6 +8759,9 @@ Implement, both verification skills, SDLC phases, shared objective/spec ownershi
 
 #### Test-First Success Criteria
 
+- TDD-009: Real managed outer integration blocks completion while pending or merged but unrecorded, accepts recorded exact proof, and rejects later missing ancestry or changed identities without terminal writes. Preserve Implement/unmanaged completion and structured CLI errors.
+- TDD-010: Both real seal owners recover a commit-before-save interruption at the same SHA and commit only once after a before-commit interruption. Cover multiline messages, indentation, Unicode, blank/trailing whitespace, comments, conflicting cleanup configuration, unchanged and rewriting hooks, historical consumer agreement and existing wrong-intent/parent/scope/dirty rejection.
+
 - TDD-007: Both coordinator launch envelopes declare the same minimal support directories; native admission rejects foreign home/run/project/binding, canonical-assignment mismatch and symlinked support paths before mutation or spawn. Sequential admission precedes process creation. Real sandbox probes exercise task-start, heartbeat, runtime acquire/verify/release and recovery with existing lease storage; distinguish synthetic identity coverage from fresh native workflow proof.
 
 - TDD-006: Normal, sequential and recovery launches carry the same stop-before-repair, expected-feedback and evidence-preservation boundary; both coordinator fixtures retain blocked-result dispatch fences. Native behavior remains independently observed.
@@ -8559,6 +8796,31 @@ Update source first, then owned Codex/Claude payloads/hooks. Preserve customized
 Renamed skills are discoverable, capture hooks and obsolete commands are absent, both verifiers exercise current contracts, and fresh live or exact unavailable evidence is recorded.
 
 #### Implementation Evidence
+
+Version 6 implements the completion and seal-message contracts at their
+existing owners. Managed SDLC completion requires separately recorded exact
+source-integration proof and freshly validates authoritative Worktree evidence
+before issue completion, terminal run state or binding publication. Proof
+recording remains separate; Implement and unmanaged completion retain their
+behavior. Lease reconciliation may update metadata, and integration proof remains
+an observation-time check rather than a fence against later external Git writes.
+
+Both seal owners explicitly select Git whitespace cleanup and compare raw
+committed message bytes with native Git normalization of the recorded intent.
+Creation, interrupted recovery and historical target verification share that
+owner contract. Substantive hook rewrites retain the commit and journal intent
+while blocking publication; hooks, direct-parent, cleanliness and scope checks
+remain enforced. No compatibility path, automatic history repair or new
+coordinator is introduced. Earlier implementation evidence follows and remains
+historical.
+
+Version 5 implements the private coordinator initialization helper, trusted
+runtime imports, exact active/native and managed lease admission, immutable
+initial snapshots, canonical latest pointers and bounded interrupted-publication
+recovery. Known hook audit telemetry and partial initial history remain intact.
+Unknown or progressed evidence blocks reinitialization. Native instructions,
+verifier composition and deterministic capability requirements use this owner.
+Earlier implementation evidence follows and remains historical.
 
 Version 4 clarifies the coordinator-owned first-start branch after a native trial accepted its objective but attempted checkpoint reads and startup observation before initialization. The prior wording tied initialization to absence of an active run, while intake had already created that pointer. No helper, hook, classifier route or verifier transition is added. Scoped Markdown and both-host structure checks, actual copied-install parity and read-only code/security review pass; the unchanged baseline changelog duplicate heading remains reported. Existing startup anti-retrofit and continuation-preservation tests pass. A fresh native coordinator subsequently initialized sdlc-start/running with zero retry counters before recording startup and routing to requirements. Independent receipt digest, baseline, real native owner and matching hook-discovery checks passed. Later application inventory failure leaves complete delivery unverified; prior failed trials remain failed.
 
@@ -8621,6 +8883,39 @@ worker replay for this repair remain pending. Implement's usage and input sectio
 explicit-only public interface while satisfying the stateful skill profile.
 
 #### Verification Evidence
+
+Version 6 source and installed verification passed on 2026-11-06. The
+original negative controls reproduced missing completion rejection, inconsistent
+seal recovery and historical indentation acceptance before their owner repairs.
+All 22 focused regressions pass against source and installed copies, including
+actual managed Worktree integration, absent or stale proof, observer failure,
+normal and interrupted seals, cleanup configuration, Unicode, comments and
+substantive hook rewriting. Complete deterministic preflight passes with zero
+failures; its shared execution aggregate passes 187 tests and its three-tier
+aggregate passes 234 tests. These overlap the focused checks and are not added
+into a combined test total.
+
+All 35 selected source and installed Codex skill payloads match. The four changed
+packages pass actual pinned npx discovery, copying and repeated installation;
+scoped lint and standard, Codex and Claude structure and static trigger-eval
+checks pass. Actual Codex installation preserves unrelated skill payloads and
+hook bytes. The seven
+missing native live lanes leave aggregate readiness PARTIAL. No fresh native
+workflow activation, application acceptance, restart-persistence UAT, Claude
+runtime or remote publication is certified by this repair. Historical failed
+trials remain unchanged.
+
+Version 5 source checks pass: all 34 startup-owner tests and all 27 real-Git
+three-tier target composition tests, including original hook-history admission,
+native/active ownership rejection, real managed lease admission and rejection,
+concurrent calls, partial history and interruption after each publication boundary.
+Review found and fixed checkpoint-pointer shape, partial-history recovery and
+actual outer-lease validation gaps. Focused lint, both-host structure and actual
+35-skill disposable installation checks pass. Installed startup and target checks
+and full deterministic preflight pass. Fresh native initialization and independent
+startup observation pass. Complete application acceptance remains pending; no
+whole-workflow live PASS is claimed.
+Prior-version evidence follows.
 
 Current update: all 33 focused shared launch, sequential dispatch, both-coordinator blocked-result fence and liveness regression tests pass. Python lint, changed-scope alignment and canonical pair validation pass. Fresh installed/native verification remains pending. Prompt assertions establish contract propagation, not native model compliance.
 
@@ -8836,6 +9131,12 @@ regressions; it does not guarantee arbitrary plans or establish live Claude
 qualification.
 
 The three-tier verifier preserves a classifier receipt admitted before execution with its original null basis after later preparation. Only the latest immutable receipt with admission before the first successful execution phase qualifies; a later execution observation, current valid target, unchanged objective and artifact bytes, and Git ancestry remain required. Current receipts never use this exception. The original historical replay now passes, all 14 classifier identity checks pass, and the 120-case lifecycle/real-Git target suite passes. Changed Python checks pass. Fresh native replay remains pending.
+
+Version 7 source verification covers the shared execution, worker transport,
+hook, repair-control, ordinary Implement and three-tier historical consumers.
+Disposable Codex and Claude installation and payload checks are separate from
+native execution. Earlier native evidence above applies to its recorded version;
+this worker/wave change has not received a fresh native or hosted-scale trial.
 
 <!-- /FEATURE: FEAT-045 -->
 
@@ -9949,7 +10250,7 @@ live helpers, which is separate from fresh model evaluation.
 
 <!-- /FEATURE: FEAT-051 -->
 
-<!-- FEATURE: FEAT-052 reqs=REQ-053 status=ready delivery=implemented priority=P1 version=1 -->
+<!-- FEATURE: FEAT-052 reqs=REQ-053 status=ready delivery=implemented priority=P1 version=2 -->
 ### FEAT-052: Contribution acceptance and fork-safe specification repair
 
 #### Requirements Covered
@@ -10013,6 +10314,60 @@ Implemented contribution assessment and root-owned spec handoff in review-pr, co
 #### Verification Evidence
 
 Passing source checks: 61 merge-gate tests, 39 merge-completion tests, 16 real disposable publication cases, a targeted interruption-at-settlement regression, 47 release-consumer tests, 6 commit-contract checks and the SDLC direct-helper guard case. Codex/Claude structural validation, standard-field checks, Ruff and Markdown checks pass. Real pinned npx installation validates both hosts, copied resources, repeat installation and isolation. All 90 transaction regression cases pass on the final helper code: 89 passed in the parallel run and one 30-second checkout-completion timeout passed unchanged in an isolated 12.8-second rerun. Two focused native installed-helper/upgrade cases pass on both hosts using a frozen source snapshot whose four product-helper files match the final source. Together the focused suites cover 262 distinct cases. The ten affected skills pass Codex/Claude structure and disposable copied-payload checks. Native comparative quality runs were attempted on both hosts but authentication was unavailable in isolated homes. No live GitHub PR mutation, workflow activation, protected bootstrap, native semantic quality pass or production deployment is claimed.
+
+#### Private Review Execution (implemented source contract)
+
+Every review invocation keeps the caller checkout, index, files and refs unchanged.
+Metadata-only review remains allocation-free. The canonical Git owner creates an
+independent private repository, fetches exact remote PR/base objects and binds a
+subordinate execution manifest to the original receipt/grant and selected target.
+The manifest cannot authorize work without its live original owner. Preserve one
+publication journal per execution target; serialize original-owner then execution
+locks and prevent parent mutation of delegated targets. Do not copy receipts,
+caller dirt, Git configuration, hooks or shared object stores. Pin the effective
+source hook policy. Executable hooks require restricted execution and currently
+block private allocation/repair; never bypass required hooks or run a source
+launcher with writable caller or credentialed candidate access. Unused LFS configuration follows FEAT-068. Other effective executable
+filters, fsmonitor commands and external diff/merge drivers block before
+checkout and at execution boundaries, including private-path includeIf policies.
+
+Trusted helpers perform checkout, scoped repairs, canonical commits, sync and
+non-force publication privately. Revalidate remote identity/head/base and review
+after every repair. Concurrent source edits are user work, never restoration
+instructions. Completion checks the execution repository and publication evidence;
+source completion remains separate. Release bind/reconcile and nested callers
+consume owner-verified execution evidence while retaining original scope identity.
+Keep contributor tests in the existing restricted execution boundary; a private
+clone alone is not a security sandbox. Unavailable isolation blocks validation.
+
+Resume the same registered workspace and reconcile unknown effects before retry.
+Retain unpublished repairs and unresolved effects; cleanup requires exact ownership,
+terminal closure and quiescent children. Strict authority schemas remain v4. Retain historical evidence without
+compatibility conversion; reconcile old operations individually as specified in
+FEAT-068 instead of treating their inventory as a global activation gate. Keep public usage, explicit invocation, SDLC read-only
+review and protected merge ownership unchanged.
+
+Acceptance uses disposable repositories with concurrent caller edits, same-branch
+and fork repairs, nested publication, stale/forged bindings, interrupted allocation
+and push, closure and guarded cleanup. Validate source, installation and native
+runtime separately. Source implementation is complete in the canonical commit
+owner and private workspace module, with create/review/merge/publication handoffs
+and release execution-proof consumption. The focused real-Git private cases cover
+concurrent source edits, nested repair, forged/closed authority, interrupted
+allocation/deletion, unpublished work and executable-hook rejection. General
+transaction, publication, release, contract and active-SDLC guard suites passed;
+GitHub identity/permission responses in these suites are mocked. Disposable native
+Codex/Claude installation and npx discovery/copy/reinstall checks passed separately
+from skill structure, Python/Markdown lint and paired-spec validation.
+
+Delivery remains implemented, not live verified. Historical grants require their original owner or evidence-bound administrative
+retirement; their presence alone does not block new v4 operations. No schema
+translation or unrelated-session closure is authorized. Fresh model
+trigger and comparative output-quality runs are unavailable without clean-runner
+credentials. No real PR repair, push, merge or active installation refresh is
+claimed. Executable hooks, non-LFS filters and external drivers await an enforced
+restricted runner. FEAT-068 separately verifies unused LFS configuration with
+sentinel executables; actual LFS content remains unsupported.
 
 <!-- /FEATURE: FEAT-052 -->
 <!-- FEATURE: FEAT-053 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=2 -->
@@ -10262,7 +10617,7 @@ Final source/package/program validation: 15 tests passed, including the 601-obli
 
 <!-- /FEATURE: FEAT-054 -->
 
-<!-- FEATURE: FEAT-055 reqs=REQ-056 status=ready delivery=implemented priority=P0 version=3 -->
+<!-- FEATURE: FEAT-055 reqs=REQ-056 status=ready delivery=implemented priority=P0 version=4 -->
 ### FEAT-055: Bounded scalable execution across ready features
 
 #### Requirements Covered
@@ -10274,6 +10629,28 @@ Final source/package/program validation: 15 tests passed, including the 601-obli
 Existing Worktree objective/execution helpers, canonical spec parser, SDLC adapters and protected merge helpers define the current ownership boundaries. The accepted readiness review identified missing package coverage, unbounded retained waves, recursive graph validation and label-only merge admission.
 
 #### Design Details
+
+Version 4 freezes one execution policy: worker ceiling W defaults to four,
+wave task limit B defaults to twice W, and physical worker-worktree budget P
+defaults to twice B. Require positive finite values, B >= W and P >= B.
+Prepare and future replanning consume the same policy, never separate defaults.
+Fresh native total-workflow slots and host memory govern admission; configured limits
+are not observations. Refresh capacity before arm/refill, bind observations to
+host/session and freshness, accept known zero, and use serial fallback for
+unknown capacity. Existing workers drain on reduced capacity unless the hard
+memory floor requires safe stopping. Preserve immutable wave membership.
+
+Reserve the entire wave under the existing run lock before allocating workers.
+Count exact paths/registrations/refs and uncertain interrupted allocations across
+all executions, including retained recovery. Capacity exhaustion prevents new
+allocation and reports owner reconciliation; it never deletes evidence. Keep
+one active integration candidate and resolve historical retained integration
+before replacement. Normal completion cleans exact workers, so many waves do
+not grow ordinary physical resources. CPU count is not a native slot limit.
+
+These are configurable engineering defaults, not a measured optimum. One
+coordinator owns many workers on one host; other workflows use separate repos.
+Cross-host workers and independent coordinators sharing one repo are excluded.
 
 Worktree remains the sole shared execution/Git owner. Generalize execution identity to a slice ID while preserving product feature IDs on tasks. Use iterative topological validation, deterministic bounded wave partitioning and one task-to-wave index. Limit retained resources independently of active concurrency. Shared Implement uses the same primitives with ordinary feature membership. A slice-wide spec gap fences dispatch; successor immutable plans retain history. Delivery-only canonical reconciliation is root-owned and precedes final sealing; material changes replan. No nested coordinators or concurrent promotion writers.
 
@@ -10316,6 +10693,15 @@ Implementation, ownership, docs and focused tests agree; all unexecuted native/l
 
 #### Implementation Evidence
 
+Version 4 implements independent configurable W/B/P limits (defaults 4/8/16),
+immutable run policy and basis binding, fresh host/session observations, known-zero
+waiting and an unknown-capacity ceiling of one total worker. Whole-wave admission
+counts run-wide queued, active, retained and uncertain worker resources before
+allocation; prior integration ownership must finish cleanup before replacement.
+Policy loss or incompatible historical state is retained and rejected. No CPU
+count cap or second scheduler was introduced.
+
+The following records describe earlier versions and their historical evidence.
 Implemented iterative graph validation, indexed dependency waves, four-task integration batches, explicit retained worktree limit and feature membership on slice tasks. Handoffs expose at most sixteen short dependency summaries plus a digest-bound index and a 64 KiB limit. Shared ordinary Implement keeps its FEAT identity. Continuation renews only the exhausted iteration window; repair and no-progress budgets remain.
 
 #### Verification Evidence
@@ -10329,6 +10715,12 @@ SDLC preparation now owns the initial source contract commit after current objec
 Deterministic first-publication and recovery tests cover ordinary and nested managed sources, admitted document bundles, publication races, missing receipts, changed plans, invalid paths and unjournaled commits. Native end-to-end qualification of this repair remains pending. Three-tier composition fixtures now invoke the real preparation transaction instead of manually committing the pair during setup, and verify the journal, direct-child parent and clean resulting source. Live worker runtime calls retain the trusted workflow import scope through deferred lease validation, target resolution and Compose execution, restoring the exact prior search path on every exit. Fresh-process real-assignment regressions cover missing and active leases plus an execution exception; native replay remains pending. Native coordinators now enter through a minimal inherited environment with the exact private home, removed ambient credentials and parent identity, and isolated shell initialization. Codex launches disable login shells and snapshots, reject CLI/profile/project overrides, and preserve private-store authentication. Synthetic subprocess and shell tests cover credential absence and worker environment propagation; actual native propagation and end-to-end application qualification remain separate live gates. These controls do not create a separate operating system identity or revoke exposed credentials.
 
 Execution CLI dispatch consistently consumes `--execution`, including worker reconciliation and repair-control classification, dispatch, completion and route refresh. Command-level regression tests exercise real preparation, wave allocation, status and recorded-failure classification, in addition to direct owner tests. Native qualification remains separate from these deterministic checks.
+
+Version 4 regressions verify configuration above four workers, independent wave
+bounds, known-zero/stale/foreign/unknown observations, whole-wave exhaustion and
+no reservations before prerequisite acceptance. The 2,100-task scale regressions
+continue to pass. These are deterministic scheduling and ownership checks, not
+measured native throughput or a larger-host qualification.
 
 <!-- /FEATURE: FEAT-055 -->
 
@@ -10962,7 +11354,7 @@ The original independent-checker and dispatch-ceiling regressions fail before re
 
 <!-- /FEATURE: FEAT-063 -->
 
-<!-- FEATURE: FEAT-064 reqs=REQ-065 status=ready delivery=implemented priority=P1 version=2 -->
+<!-- FEATURE: FEAT-064 reqs=REQ-065 status=ready delivery=implemented priority=P1 version=3 -->
 ### FEAT-064: Portable MCP-based Jira involvement report
 
 #### Requirements Covered
@@ -10971,11 +11363,12 @@ The original independent-checker and dispatch-ceiling regressions fail before re
 
 #### Context Evidence
 
-The catalog has an independent github-report skill and shared skill validators,
-plugin registrations and evaluation contracts. Jira reporting has no existing
-implementation. GitHub-specific attribution and backlog rules do not apply.
-Official Atlassian MCP, JQL fields/functions and profile-visibility documentation
-support capability discovery, exact evidence checks and ambiguous-user handling.
+The existing instruction-only jira-report skill has collection/reporting
+references, native metadata and synthetic evaluations. Its dated-involvement
+contract lacks Participants evidence. GitHub-specific attribution and backlog
+rules do not apply. Official Atlassian documentation supports capability and
+field-ID discovery, exact identity checks, and distinguishing Request participants
+from add-on calculated participant fields. Actual exposed MCP schemas govern reads.
 
 #### Design Details
 
@@ -10992,6 +11385,21 @@ regardless of substance; edits need verified editor identity. Dated reporter and
 assignment changes qualify only when moving to the target. Explicit third-party
 credit uses an unambiguous stated work date or otherwise comment creation as
 recorded-attribution time. Exclude bare mentions and do not synthesize dates.
+
+Discover the applicable Participants field through read metadata or issue
+names/schema, keeping its verified ID and context. Do not hardcode custom-field
+IDs or assume Request participants and calculated fields are interchangeable.
+Resolve member identities to the selected account. A recorded absent-to-present
+change qualifies at its timestamp regardless of the change author; independently
+proven initial membership qualifies at creation. Unchanged membership and removal
+by another actor do not qualify. Later removal does not erase a valid addition.
+Current or calculated membership alone cannot establish a participation date.
+
+Preserve broad discovery without a current-membership filter. Request only the
+resolved participant field and necessary history, exhaust exposed pagination,
+and treat unresolvable field, identity or date evidence as partial/unknown.
+Confirmed absence from a complete applicable field inventory is non-applicability;
+selected-fields responses and creation metadata alone cannot prove absence.
 
 Enumerate issues updated since a conservatively widened start, without an upper
 updated cutoff; locally filter titles before fetching comments/history and exact
@@ -11010,13 +11418,17 @@ credit. No new model, application stack, network client or persistent state.
 
 An assignee-only or actor-only query misses comments and third-party credit.
 A custom HTTP collector imposes authentication/runtime dependencies and connector
-coupling. Neither is needed for this first instruction-only skill.
+coupling. Neither is needed for this instruction-only extension. Current
+membership alone cannot preserve the chosen dated-involvement contract; retain
+recorded additions and proven initial membership instead.
 
 #### Implementation Boundaries
 
-New jira-report folder; catalog README/changelog and both plugin skill lists;
-this canonical pair through maintain-project-specs. Existing reporting skills,
-shared validators, credentials, installed homes and Jira remain unchanged.
+Update jira-report runtime instructions, collection/reporting references, README
+and evaluations; update catalog README/changelog and this canonical pair through
+maintain-project-specs. Existing flags, four-column template, implicit invocation,
+plugin registrations and read-only authority remain unchanged. No new runtime,
+model, compatibility path, real-home installation or live Jira changes are needed.
 
 #### Test-First Success Criteria
 
@@ -11024,6 +11436,9 @@ shared validators, credentials, installed homes and Jira remain unchanged.
   title/date/current status and exclude undated or out-of-window evidence.
 - TDD-002: Missing pagination and ambiguous identities never produce invented
   attribution or exhaustive empty reports; hostile content cannot authorize tools.
+- TDD-003: Participants fixtures distinguish dated additions, initial membership,
+  unchanged membership, removal, calculated fields, field non-applicability and
+  incomplete field/history evidence while preserving latest-event selection.
 
 #### Validation Plan
 
@@ -11036,6 +11451,8 @@ scope with align-skill, code-review, apply-security and align.
 Cover interval boundaries, timezone fallback, invalid arguments, ambiguous sites
 and users, comment edits, dated credit, reassignment, reopened/custom statuses,
 title punctuation, duplicate identities, pagination and concurrent updates.
+Add positive report and negative ticket-edit triggers plus two Participants
+quality cases covering dated role changes and field/evidence limitations.
 
 #### Evaluation Plan
 
@@ -11046,9 +11463,10 @@ do not replace a missing baseline with the candidate. Live collection is separat
 
 #### Rollout And Rollback
 
-Add one independently discoverable skill and catalog entries; no automatic
-installation or publishing. Revert only this addition if needed, preserving
-concurrent working changes. No data migration or compatibility alias.
+Extend the existing source skill without automatic real-home installation or
+publishing. Capture current working bytes for comparative evaluations; revert
+only this scoped extension if needed, preserving concurrent work. Clean the
+private baseline after checks. No data migration or compatibility alias.
 
 #### Done Definition
 
@@ -11057,37 +11475,45 @@ resolved and each unavailable runtime/live evidence lane is stated explicitly.
 
 #### Implementation Evidence
 
-Implemented the standalone jira-report instructions, collection/reporting
-references, four-column template, OpenAI metadata, README, 12 trigger cases
-(6 positive, 6 near-miss negative) and 10 synthetic output cases. Registered
-both native plugin catalogs and updated catalog documentation and changelog.
-Source remains independent of a company, site, account or MCP tool prefix.
+Extended the existing instruction-only skill with connector-resolved Participants
+fields and stable member identities. Recorded additions by any actor and proven
+initial membership qualify within the frozen interval; later removal preserves
+prior additions. Current/calculated membership, retained membership and another
+actor's removal do not invent participation dates. Broad discovery, the public
+selectors, four-column template, implicit invocation and read-only MCP boundaries
+remain intact. Confirmed absence is distinct from unavailable field/history data.
+
+Updated runtime/collection/reporting instructions, skill and catalog README,
+Unreleased changelog and public vendor references. Canonical evaluations now
+contain 14 triggers (7 positive, 7 negative) and 12 synthetic output cases,
+including two Participants cases. Five existing cases explicitly establish field
+non-applicability so their original attribution and date contracts stay testable.
 
 #### Verification Evidence
 
-STATIC_PASS: portable core, repository Codex and repository Claude structure
-with required evals; strict frontmatter and creator checks; plugin manifests;
-changed Markdown and diff whitespace. Existing duplicate Changed heading in the
-catalog changelog was reproduced against the captured working baseline and left
-unchanged; changelog passes when only that pre-existing rule is excluded.
+STATIC_PASS: portable/core, repository Codex and repository Claude structure
+checks, standard/strict frontmatter and required trigger evals; JSON/count checks,
+changed Markdown under the existing catalog config and diff whitespace. The
+subdirectory lint wrapper omitted the catalog config and reported MD013; explicit
+catalog-config checks pass on both the captured baseline and current files.
+Public interface metadata and the four-column report template are byte-preserved.
+Scoped code-review and apply-security reviews found no blocking findings.
 
-Disposable pinned npx installation passed discovery, both host copy parity,
-repeat convergence, isolation and source preservation. An independent read-only
-agent produced expected outputs for all nine non-help synthetic cases; this is
-forward-test evidence, not a baseline quality comparison or live MCP proof.
-Scoped code-review and apply-security lanes, including final fixes, found no
-blocking issues. Help's side-effect-free contract passed static validation.
+Disposable pinned npx skills 1.5.26 checks passed discovery, both-host copy parity,
+repeat installation and isolation. The pre-edit working-byte baseline was used
+for attempted comparisons; real installed homes and credentials were untouched.
 
-Native trigger runtime is UNAVAILABLE under the isolated runner's credential
-model. Comparative QUALITY_PASS is unavailable because the new skill has no
-prior version and the runner does not support a no-skill baseline. Live Jira
-collection is NOT_RUN. No actual ticket data was queried or persisted and no
-installed home, credentials, shared validator or unrelated working changes were
-modified. These limits keep delivery implemented rather than runtime-verified.
+Independent offline forward checks matched expected report rows, dates, statuses
+and coverage for new cases 11/12 and existing cases 1/2/3/5/10. These are synthetic
+candidate checks, not native activation or baseline-comparative QUALITY_PASS.
+Fresh Codex and Claude trigger and quality attempts are UNAVAILABLE because the
+isolated runners lack authentication; remaining native cases were not run after
+that shared blocker. Live Jira collection is NOT_RUN. Delivery stays implemented,
+not runtime-verified. No actual account, ticket data or private Jira URL was used.
 
 <!-- /FEATURE: FEAT-064 -->
 
-<!-- FEATURE: FEAT-065 reqs=REQ-066 status=ready delivery=implemented priority=P0 version=1 -->
+<!-- FEATURE: FEAT-065 reqs=REQ-066 status=ready delivery=implemented priority=P0 version=3 -->
 ### FEAT-065: Owned runtime observations with durable sanitized diagnostics
 
 #### Requirements Covered
@@ -11130,24 +11556,37 @@ Keep no-follow, owner, permissions, link-count, stable-read and generation check
 Report size or integrity rejection directly; only decoding failures are JSON
 errors. This restores the existing private contract without changing its schema.
 
-Classifier observation is read-only and is separate from runtime admission. An
-explicit private observation purpose permits unsealed integration files only
-while the bound coordinator is running sdlc-classify-failure. Phase identity and
-receipt validation consume that purpose; ordinary target resolution remains
-strict. Require the same exact registered worktree, branch, HEAD, objective,
-basis, ownership and ancestry. Explicit clean-target requests always prevail.
-No worker selector or promoted checkout gains an unsealed exception, and no
-Compose, inventory, build, browser or test operation consumes this purpose.
-Retain the rejected observation and failed trial; source repair requires a new
-trial. Serialized phase identity is unchanged and historical evidence remains
-subject to its existing digest and ancestry checks.
+Read-only phase observation is separate from runtime admission. Replace the
+private classifier-only boolean with one named phase_observation purpose for
+sdlc-classify-failure or sdlc-tdd, without a compatibility alias. Classification
+requires its matching running checkpoint. TDD observation permits the running
+sdlc-tdd, tests_red or tests_ready checkpoint so the normal unsealed test output
+can be observed before the implementation owner seals it. Unknown purposes and
+worker selectors fail closed. Other phases or statuses grant no unsealed
+exception; clean historical receipts retain their normal validation path.
+
+Phase identity and receipt validation consume the matching purpose; ordinary
+runtime resolution retains its existing rules. Require the exact registered
+worktree, branch, HEAD, objective, basis, ownership and ancestry. Explicit clean
+requests always prevail. No promoted checkout gains an unsealed exception, and
+no Compose, inventory, build, browser or test operation consumes this purpose.
+Retain the rejected observation and failed trial; source repair requires a fresh
+trial. Serialized phase identity is unchanged and historical evidence retains
+its existing digest and ancestry checks.
 
 Historical original-TDD validation additionally follows the execution owner's
 completed corrective-replan journal and preserved task records. Permit changed
 plan identity only for the latest admitted immutable sdlc-tdd receipt after clean
-promotion, with the original TDD-sealed head, identical objective and execution
+promotion, with the original TDD seal, identical objective and execution
 identity, unchanged original completed task definitions, and a verified sequence
-of locked plans that appends work. Missing, ambiguous, altered or non-appending
+of locked plans that appends work. Bind the seal head to the original first-wave
+base and its preserved assignments. A receipt observed before sealing must name
+the seal commit's sole parent and match an earlier owner tdd_seal_intent for that
+base and full commit message after Git's default nonedited whitespace cleanup.
+Retain message bodies and comment lines; compare neither only the subject nor
+uncleaned input. A receipt already naming the seal retains its exact-head
+check; an unchanged clean seal needs no invented commit. Never substitute general
+ancestry for this one owner-recorded transition. Missing, ambiguous, altered or non-appending
 lineage fails closed. Keep existing no-effect specification succession checks.
 Do not extend this rule to current submissions or later acceptance phases.
 
@@ -11198,6 +11637,17 @@ changes require quiescence, alignment and installation before a fresh live trial
   and completes a corrective wave, promotes, and validates the original receipt.
   Reject changed original tasks, missing or ambiguous replan records, altered
   plans, wrong TDD seal, foreign execution identity and stale acceptance.
+- TDD-006: Real Git TDD output at tests_red and tests_ready permits immutable
+  sdlc-tdd phase observation without changing checkpoint, files or HEAD. Default
+  runtime and explicit clean requests reject the same dirt; reject wrong phase,
+  blocked status, worker selection, stale HEAD and unknown observation purposes.
+
+- TDD-007: Observe unsealed TDD output before the owner seal, complete original
+  work and an appended corrective wave, promote and validate the immutable
+  original receipt. Reject missing or changed seal intent, wrong seal or wave
+  base, altered assignment base, and an unrelated ancestor. Preserve exact-seal
+  receipts and the normal no-change seal. Accept multiline messages and Git
+  whitespace cleanup while rejecting a changed message body.
 
 #### Validation Plan
 
@@ -11241,8 +11691,9 @@ cleanup checkpoints use distinct v1 schemas. All private callers and the shared
 Git-environment lifecycle consumer use the canonical contract. The consumer
 now accepts active state through the existing 1 MiB bound, keeps other profile
 files at 64 KiB and preserves size/integrity diagnostics before JSON decoding.
-Classifier phase identity and receipt validation now use the explicit read-only
-observation purpose for unsealed registered integration files. Runtime and
+Classifier and TDD phase identity and receipt validation now use a named
+read-only observation purpose for unsealed registered integration files at their
+matching running checkpoints. TDD output includes tests_red and tests_ready. Runtime and
 acceptance paths retain their cleanliness gates and all Git identity checks.
 Historical original-TDD validation now requires the admitted receipt and original
 seal, verified append-only locked-plan succession, preserved completed tasks and
@@ -11309,6 +11760,49 @@ The complete deterministic preflight has zero failures and seven unrun aggregate
 live lanes. All 773 declared workflow and support payloads match source and both
 installations. The broader native qualification remains pending; interrupted
 checks and earlier failed trials are retained separately.
+
+The documented TDD-output regression reproduces rejection of unsealed tests
+before repair. Four focused real-Git cases and all 146 source target/lifecycle
+tests pass, including unchanged checkpoint/files, later historical validation,
+wrong purpose/context/identity, worker exclusion and strict runtime admission.
+All 146 installed target/lifecycle tests also pass. Full deterministic preflight
+has zero failures, including all 228 three-tier tests, and seven warnings for
+unrun aggregate live lanes. All 35 workflow/support owners match the installed
+catalog and pass both-host structure/eval checks; the changed verifier passes
+disposable installer discovery, copy, repeat-installation and isolation checks.
+Scoped code/security review, lint and paired-spec validation pass. A fresh native
+replay remains pending. Earlier failed trials remain failed and were cleaned
+after retaining their diagnostics.
+
+A later real-owner composition probe observes TDD before sealing, then completes
+corrective replan and promotion. It reproduces a historical seal-head rejection;
+the earlier fixture observed only after sealing. Version 3 repairs that observer
+linkage at the existing target owner. The unique seal must match the original
+first-wave base; preserved assignments match their wave bases. A pre-seal receipt
+names the seal commit's sole parent and matches its earlier owner intent and
+message, and the seal reaches the promoted commit. Exact-seal and unchanged clean
+seals remain valid. The initial seal-linkage repair passed four focused cases and all 149 source
+and installed target/lifecycle tests, including altered intent, seal, wave and
+assignment bases and unrelated ancestors. Subsequent review reproduced rejection
+of valid multiline seal messages in two real-owner cases. The full-message
+comparison now applies Git whitespace cleanup while retaining bodies and comment
+lines; all six focused history cases pass, including changed-body rejection.
+Scoped code/security review, lint and all 35 both-host skill structure and eval
+checks pass. The final installed target/lifecycle suite passes all 151 tests.
+Full source deterministic preflight has zero failures, including all 233
+three-tier tests, and seven warnings for unrun aggregate live lanes. The 35
+source and installed payloads remain unchanged and match. A fresh native replay
+passes independent startup through TDD, including the repaired observation path,
+and records the required coordinator and worker environment-presence checks.
+The worker's development suite passes 14 tests but fails both vertical HTTP
+cases before application routing. The native classifier reports a test-fixture
+defect; the existing four-dispatch feature ceiling prevents another repair.
+No integration, promotion, canonical acceptance or restart UAT occurs. The trial
+remains failed and its exactly owned resources are cleaned after retaining
+sanitized failure and budget evidence. Native acceptance and promoted historical
+receipt certification remain unqualified. The earlier prepared fixture was
+closed as incomplete before any native coordinator, worker or application
+started.
 
 <!-- /FEATURE: FEAT-065 -->
 
@@ -11554,5 +12048,929 @@ Native skill composition, live GitHub comments/closure and installed-home activa
 were not run; offline behavioral cases are definitions, not runtime qualification.
 
 <!-- /FEATURE: FEAT-067 -->
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-068 reqs=REQ-069 status=ready delivery=implemented priority=P0 version=1 -->
+### FEAT-068: Inert LFS configuration and historical transaction retirement
+
+#### Requirements Covered
+
+- REQ-069: Unblock ordinary private reviews and reconcile historical authority.
+
+#### Context Evidence
+
+The canonical private runner rejects all executable filter declarations, even
+unused global LFS settings. Release reconciliation also runs private Git checks
+outside that runner. Historical task grants have strict incompatible schemas.
+
+#### Design Details
+
+Force empty LFS clean/smudge/process commands and required=true at private command
+precedence. Keep all other executable configuration guards. Inspect effective
+attributes for exact incoming trees, working/index paths and candidate trees;
+reject actual LFS use explicitly and repeat at resume/publication. Canonical
+owner proof also verifies exact private branch, cleanliness and ancestor head
+under its lock; release consumers perform no independent private Git calls.
+
+Administrative audit snapshots historical grant families with digests and
+schema-aware local-effect observations. Unknown schema/effects remain retained.
+An explicit evidence record binds owner relinquishment or verified termination
+and independent settled-effect observations to that audit. Retirement rechecks
+all bytes under the repository lock, fsyncs an immutable archive and intent,
+then atomically replaces the original grant with a distinct retirement schema.
+Never remove the grant first or modify shared receipts/claims. Replay verifies
+archive and tombstone digests without restoring authority or inventing closure.
+
+#### Selected Option
+
+Neutralize unused LFS settings and fail clearly on real LFS use. Preserve v4
+execution authority; historical readers exist only in administrative audit.
+
+#### Alternatives Considered
+
+Full LFS transfer/credential support is deferred because it is not needed.
+Deleting stale grants permits authority recreation; automatic age-based closure
+cannot establish owner inactivity or settled remote effects.
+
+#### Implementation Boundaries
+
+Canonical commit runner/private review owner, release proof consumer and one
+internal transaction audit/retirement helper. No public skill flags, LFS binary
+execution, Git history changes, global config edits or legacy execution shim.
+
+#### Test-First Success Criteria
+
+- TDD-001: Unused LFS settings permit ordinary private review without executing
+  a sentinel program; actual LFS fails without caller mutation.
+- TDD-002: Release proof revalidation cannot execute ambient LFS after drift.
+- TDD-003: Retirement rejects active/unknown/drifting evidence, survives each
+  write interruption and leaves historical executors unable to recreate grants.
+
+#### Validation Plan
+
+Run focused and complete affected transaction/publication/release regressions,
+private installed consumers on both hosts, structure checks and scoped lint.
+
+#### Test Plan
+
+Cover effective global/local/conditional attributes, newly staged paths, resume,
+caller concurrency, symlinks, historical v1-v4 records, unsettled effects,
+archive/tombstone replay and newer shared session evidence preservation.
+
+#### Evaluation Plan
+
+Report per-record dispositions from a real read-only audit; no inactivity or
+remote-success claim is inferred from missing historical fields.
+
+#### Rollout And Rollback
+
+Update source first and validate disposable installs. Existing authority schemas
+remain unchanged; older executors reject retirement tombstones. Preserve unknown
+records. Never roll a retired grant back into executable authority.
+
+#### Done Definition
+
+Focused behavior and security regressions pass, documentation is aligned, and
+all selected historical records have an evidence-qualified disposition.
+
+#### Implementation Evidence
+
+Implemented private per-command LFS neutralization with required-driver failure,
+effective tree/index/worktree preflights and guarded release ancestry/cleanliness
+proof. Added administrative audit, strict historical record parsing, durable
+archive/proof snapshots and atomic tombstone retirement. Scratch-validation
+journals conservatively require their original owner. Shared evidence stays in
+place. Added CLI reference, review evaluations and CI test registration.
+
+#### Verification Evidence
+
+The unused-global-LFS regression failed against the prior guard, then passed.
+Thirteen retirement tests cover retained owner/effect uncertainty, historical
+schemas, unresolved claims, scratch journals, delegation, evidence drift and
+interruptions before/after archive/tombstone publication. The scratch-journal
+regression also failed before its correction. Ninety-one general transaction,
+49 release and six contract tests pass. The installed Codex/Claude fixture uses
+real Git, the installed release-owner loader, a sentinel LFS command, attribute
+drift and native-session rejection; only GitHub transport is mocked. Scoped
+Python/Markdown/actionlint and 15 skill profiles pass. Actual npx discovery,
+copy parity, repeat-install and isolation pass for five skills on both hosts.
+Independent read-only reviews found and corrected proof-archive durability and
+scratch-journal retention gaps. A real read-only audit classified seven old
+records as retained: owner relinquishment and remote settlement remain unproven.
+No real records were retired and no real GitHub publication was performed.
+The full 49-case publication suite and the additional missed-preflight required-
+driver regression pass. Five source-owned Codex skill folders were refreshed
+through the canonical installer and independently compared byte/mode-for-byte
+with source. Existing hook payloads and registrations did not change. The installed
+administrative audit reproduces all seven unchanged retained records. Native
+model trigger/quality evaluation remains unavailable.
+
+<!-- /FEATURE: FEAT-068 -->
+
+<!-- FEATURE: FEAT-069 reqs=REQ-070 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-069: Shared host memory policy and owned workload supervision
+
+#### Requirements Covered
+
+- REQ-070: Protect host memory headroom through native policy and owned monitoring.
+
+#### Context Evidence
+
+The prior live verifier used a private task monitor; no reusable host-memory
+owner exists. config-codex patches its global AGENTS.md managed section and
+config-claude patches native CLAUDE.md. The latter also supports a deliberately
+partial research-routing-only home, so memory setup must not bootstrap unrelated
+settings. Existing global hooks own SessionStart/UserPromptSubmit context only.
+Official Codex documentation identifies CODEX_HOME/AGENTS.md as global guidance;
+Claude documents user-scope CLAUDE.md and explicitly distinguishes instructions
+from enforced configuration. Apple describes pressure as a combination of free,
+wired, cached and swapping behavior; Linux defines MemAvailable as an estimate.
+
+#### Design Details
+
+Keep one compact Host Memory Safety section in both native templates and selected
+personal files. global-context-management owns a dependency-free Python helper,
+its operating reference and fixed 4/2 GiB thresholds. Provide snapshot, bounded
+watch, foreground run and focused policy-check commands. Fresh measurements
+classify normal, warning, critical or unknown. Warning emits a bounded notice and
+permits task continuation and new authorized launches; it never stops work.
+At or below 2 GiB, stop the supervised group and report that host memory is running
+out. Unknown measurement separately blocks unverifiable heavy work.
+Do not echo command arguments, environment, raw probe output or exception text.
+
+On macOS, estimate reclaimable bytes from vm_stat free, inactive and speculative
+pages using the reported page size, with native pressure as advisory context, never a stop above 2 GiB.
+The printed free field already excludes speculative pages. On Linux, use
+MemAvailable; conservatively reject visible containers and non-root cgroup
+membership, including many systemd user sessions, until host visibility is
+verified rather than claiming a host reserve from guest metrics. Unsupported platforms return unknown. Native
+probes have strict size/time limits and invalid values fail closed.
+
+The foreground supervisor starts a private session/group and retains its group
+leader until teardown, preventing PID/group identity reuse during cleanup. It
+samples approximately each second, relays bounded status changes and exit status,
+and terminates only that owned group on memory failure or interruption. A warning
+is informational and permits continuing work; it is not a physical reservation. Rapid allocations can cross
+thresholds between samples; this mechanism cannot constrain the agent application,
+unrelated processes, escaped daemons, Docker daemon allocations or remote hosts.
+Those owners require their own capacity controls and exact-resource cleanup.
+
+A watcher is read-only and bounded by a requested duration. The invoking agent
+must observe its status and keep it alive for externally owned workload lifetime;
+watcher completion does not certify a stopped service. Memory-only policy checking
+accepts a partial native home and does not inspect or create unrelated settings.
+Full existing setup checkers still validate their complete normal contracts.
+
+#### Selected Option
+
+Use compact durable instructions plus a shared explicit sampler/supervisor.
+Reuse existing skill distribution; add no hook, background login service,
+permission relaxation or shared runtime dependency for unrelated consumers.
+
+#### Alternatives Considered
+
+Instructions alone cannot observe running workloads. A pre-tool hook cannot stop
+allocations between events and can block required cleanup if indiscriminate.
+OS-enforced workload containment can strengthen Linux admission but does not
+reserve host RAM against unrelated users; defer privileged/global orchestration.
+
+#### Implementation Boundaries
+
+Own global-context-management helper/reference/tests, both configuration templates,
+focused setup guidance/checks/evals, skills README/CHANGELOG and the existing CI
+lane. Patch only the selected personal AGENTS.md/CLAUDE.md sections. Preserve
+unrelated dirty SDLC/VPN work. No stack, provider or model selection is needed;
+measurement and process control are deterministic, with agent judgment limited
+to workload sizing and existing owner cleanup. Design review emphasizes load
+shedding, signal ownership, unknown measurements and truthful proof boundaries.
+
+#### Test-First Success Criteria
+
+- TDD-001: Exact 4/2 GiB boundaries, advisory pressure, missing/malformed data,
+  unsupported host visibility and probe failures fail closed. A 4 GiB warning
+  must admit work, while a 2 GiB observation must stop it.
+- TDD-002: An owned tiny process group stops on synthetic critical/unknown data;
+  warning is observable, normal exit is retained, descendants are reaped/stopped
+  and an unrelated sentinel survives. No deliberate host-memory exhaustion.
+- TDD-003: Both native templates match the shared policy, stale or duplicate
+  policy fails focused validation and selected memory-only homes need no config
+  or hooks. Preserve pre-existing text and avoid no-op backups.
+
+#### Validation Plan
+
+Run focused helper tests, affected setup suites, source structure/static evals,
+syntax/lint and canonical validation. Install reviewed affected skills, verify
+parity and repeat focused installed checks plus real host sampling.
+
+#### Test Plan
+
+Exercise synthetic memory transitions, fixed diagnostic outputs, cancellation,
+process ownership, native parsing, partial homes, symlink rejection and unchanged
+instruction prefixes/suffixes. Keep native model compliance separate.
+
+#### Evaluation Plan
+
+Observe a low-memory-footprint supervised command and real macOS sampling. A fresh
+native instruction-discovery probe may verify loading without starting a live
+application trial. Do not certify Linux/Claude runtime from source tests alone.
+
+#### Rollout And Rollback
+
+Publish contracts first, implement source, align, install exact owned skill
+packages and narrowly patch native instructions after private backups and a fresh
+preimage comparison. Reread and check idempotency. Reverse only the task-owned
+section after checking for drift; never restore a stale whole-home snapshot.
+
+#### Done Definition
+
+Both configured native instruction files and source templates carry the policy,
+focused and affected tests pass, installed payloads match, temporary monitors are
+stopped and limitations are reported without claiming a physical RAM guarantee.
+
+#### Implementation Evidence
+
+Implemented the shared host_memory.py observer/supervisor and operating guide,
+identical native policy templates, focused policy checker, full setup validation,
+trigger cases and existing CI test wiring. The foreground anchor uses a readiness
+handshake before workload launch, masks cancellation across identity publication,
+and keeps its control pipe open until group teardown. Existing SDLC proof remains
+separate and unchanged.
+
+Both personal native instruction files received only the memory section with
+private changed-file backups and verified preservation of all unrelated bytes.
+Codex's three managed skill payloads match source. Claude's older catalog received
+the reviewed memory delta only; pre-existing unrelated drift and provenance were
+preserved. Existing hooks, settings and other configuration bytes are unchanged.
+An unchanged policy pass preserves bytes, mtimes and backup inventory.
+
+#### Verification Evidence
+
+Source: 23 memory helper tests, 101 Codex setup tests, 32 Claude setup tests
+and 43 installation tests pass. Local-template validation, changed Python lint
+and syntax, Markdown, CI YAML, both host structure profiles, static trigger
+validation and actual pinned npx discovery/copy/repeat/isolation pass.
+
+Installed: 23 helper tests pass in each catalog; Codex setup 101 and affected
+Claude ConfigurationTests 22 pass. The full installed Claude suite has one
+repository-plugin fixture failure because a local skills catalog lacks the
+repository-level plugin manifest; the complete 32-test source suite passes.
+This is distinct from memory policy or native runtime qualification.
+
+Real macOS samples and a guarded tiny foreground command pass without stress.
+Warning permits new and running work; synthetic critical/unknown readings and
+cancellation stop owned processes while preserving an unrelated sentinel.
+Policy checks and second-pass convergence pass. Fresh Claude model compliance,
+Linux native qualification and sustained future-session behavior remain
+unverified. No new SDLC trial or OS memory reservation is claimed.
+
+<!-- /FEATURE: FEAT-069 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-070 reqs=REQ-071 status=ready delivery=verified priority=P1 version=1 -->
+### FEAT-070: Actionable selector-format feedback and split-call regression
+
+#### Requirements Covered
+
+- REQ-071: Recover command shape while preserving the authoritative task project.
+
+#### Context Evidence
+
+The diagnosis skill already requires splitting mixed payloads and reusing a
+known project. The auth hook instead suggests discovery or verification for
+selector-format errors. Existing runtime tests cover wrappers but omit local
+preparation followed by a selected script.
+
+#### Design Details
+
+Change only selector-denial feedback, preserving parser and auth decisions.
+Tell the caller to split local preparation and sensitive work, keep local calls
+unprefixed, reuse authoritative task selection without rediscovery or verify,
+and retry the corrected payload once. Missing or conflicting task selection
+still requires read-only diagnosis. Make the diagnosis guidance and process
+case explicit about heredoc preparation and the whole denied payload.
+
+#### Selected Option
+
+Align feedback at the existing hook owner and add behavioral regression cases.
+
+#### Alternatives Considered
+
+Relaxing selector position or moving it automatically weakens the existing
+boundary. Additional discovery for a known project adds an unnecessary step.
+
+#### Implementation Boundaries
+
+Own auth setup's hook, runtime tests and README; diagnosis instructions and
+process cases; catalog README, changelog, existing CI test job and this spec pair. No credential,
+IAM, public flag, hook registration or parser changes are required.
+
+#### Test-First Success Criteria
+
+- TDD-001: Incident-shaped denial retains the reason and gives bounded recovery
+  advice without calling project discovery or executing either payload segment.
+- TDD-002: Separate preparation passes unchanged; the selected script receives
+  the expected project context with no default-project lookup.
+
+#### Validation Plan
+
+Run focused auth suites, syntax, lint, skill structure and paired spec checks.
+
+#### Test Plan
+
+Cover semicolon and heredoc preparation, existing non-leading and duplicate
+selectors, split-call controls and unchanged fallback discovery behavior.
+
+#### Evaluation Plan
+
+Confirm source/installed parity and execute isolated installed-hook cases.
+Keep fresh native activation and future model compliance explicitly separate.
+
+#### Rollout And Rollback
+
+Use the source-owned installer for the two selected skills and auth hook.
+Preserve unrelated skills, registrations and runtime support. Installer backups
+support exact-file rollback after checking for intervening changes.
+
+#### Done Definition
+
+Feedback and guidance agree, regressions pass, and installed payloads match
+reviewed source without a wider authentication behavior change.
+
+#### Implementation Evidence
+
+Updated only selector-denial text at the existing hook owner. Diagnosis guidance
+and process cases explicitly cover local heredoc preparation and known-project
+reuse. Added semicolon/heredoc regressions and a selected Python execution
+control; wired hook and cross-skill suites into the existing CI test job.
+The source-owned installer refreshed both selected Codex skills and the auth
+hook, preserving unrelated installed skills, hooks and registration bytes.
+
+#### Verification Evidence
+
+The new guidance regression failed against the old message for both preparation
+forms; the split-call control passed before and after the feedback change.
+Source hook tests (23), cross-skill contracts (12) and runtime tests (6) pass.
+Ruff, Markdown lint, skill structure, CI YAML and diff whitespace checks pass.
+AST comparison independently confirms the hook changed only text literals.
+
+All 29 selected package files and the active hook match source. Two installed
+regressions pass against the active hook path. A harmless native malformed
+payload was denied before execution with the revised feedback, proving active
+loading in the current session. Repeat installation is unchanged and creates
+no new hook backups. Remote CI execution, live cloud authentication and future
+model compliance are not claimed.
+
+<!-- /FEATURE: FEAT-070 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-071 reqs=REQ-072 status=ready delivery=implemented priority=P0 version=1 -->
+### FEAT-071: Evidence-bound parallel completion and exact Git recovery
+
+#### Requirements Covered
+
+- REQ-072: Independently verified completion, quiescence and recoverable Git effects.
+
+#### Context Evidence
+
+Disposable review tests reproduced merge-before-state recovery failure,
+integrated replay after lost ancestry, removal with a reappeared path, and
+termination returning while a TERM-ignoring descendant survives. Existing
+wave completion checks only nonempty evidence; task admission requires a change.
+
+#### Design Details
+
+Keep the shared Worktree engine and separate coordinators. Journal candidate
+parents/tree/message before committing; recover only that exact clean merge,
+then require normal candidate validation. One recorded-integration predicate
+checks identity, child, merge parents and source reachability before replay or
+cleanup. Final removal requires absence of path including dangling symlinks,
+registration and ref before ownership evidence is deleted.
+
+Use a shared owned-process lifecycle boundary on all exit paths, with exact
+native handles and independently verified quiescence. Parent completion alone
+cannot release slots. Unsupported containment or escaped writers preserve
+resources and return an explicit blocker; never claim unobserved host behavior.
+
+Extend the existing evidence owner with pre-promotion wave/task targets,
+independent of program source bundles and final promoted-slice qualification.
+Freeze explicit required check argv and evaluator identities. The producer
+executes bounded checks and registers immutable receipts with exact run,
+execution, wave, basis, target SHA/tree, task-result set, check outcomes and
+relevant environment identity. Consumers require producer admission and fresh
+Git identity; free-form evidence is not an alternate success path.
+
+Add a tagged verified_no_change transport/internal result. Require an unchanged
+clean assigned worktree, admitted acceptance evidence, quiescence and released
+leases. Finish creates no commit; integration skips only that admitted task's
+merge. Mixed and entirely unchanged waves still receive wave-specific combined
+validation. Preserve dependency handoffs, corrective oracle checks and immutable
+replay. Empty diffs alone never establish completion.
+
+#### Selected Option
+
+Focused changes to existing Git, execution, evidence and native-adapter owners.
+Scheduling, admission and effects remain deterministic; planning and coding are
+bounded agents. Existing Python/Git/native hosts stay fixed.
+
+#### Alternatives Considered
+
+Unchanged behavior retains reproduced failures; serial-only loses parallelism.
+A replacement/distributed scheduler duplicates ownership outside this scope.
+Cosmetic or empty commits conceal no-change work and are rejected.
+
+#### Implementation Boundaries
+
+Worktree helpers/schemas/tests, both coordinator adapters and verifiers,
+installer dependencies, README/references/changelog and the canonical pair.
+Public Worktree usage stays unchanged. Internal schemas cut over together;
+unsupported prior state remains untouched without conversion.
+
+#### Test-First Success Criteria
+
+- TDD-001: Reproduce and fix all four review failures without weakening guards.
+- TDD-002: Reject forged/stale/wrong-target/failed validation before cleanup.
+- TDD-003: Mixed and no-change waves complete without synthetic Git history.
+- TDD-004: Configurable waves refill safely and retained resources stay bounded.
+
+#### Validation Plan
+
+Run focused regressions, shared suites, lint, canonical validation and align.
+
+#### Test Plan
+
+Use disposable Git repos, tiny subprocesses and producer-owned check harnesses.
+Cover every effect/receipt crash boundary, exact replay, source/child drift,
+TERM-ignoring descendants, capacity reductions and repeated retained waves.
+
+#### Evaluation Plan
+
+Verify disposable installations for both hosts and fresh native workflows;
+qualify larger concurrency only on a capable host. Preserve separate evidence
+for native overlap/refill, application validation, promotion and cleanup.
+
+#### Rollout And Rollback
+
+Source first, then disposable installation and native qualification. Drain old
+active runs before incompatible installation. Preserve historical state and
+restore reviewed payloads only after writer quiescence; never reset Git work.
+
+#### Done Definition
+
+Shared contracts and focused checks agree; remaining unavailable native/hosted
+qualification is reported separately, without a false full-system claim.
+
+#### Implementation Evidence
+
+The public Worktree reservation journals exact merge tree/message intent before
+commit and reconciles only that clean two-parent result. Integrated replay
+rechecks source ancestry and child identity; removal retains ownership until
+physical path, registration and branch are absent. Detached candidates are
+rejected before commit effects and on ready-candidate replay before source promotion.
+
+Shared native subprocess ownership pins the process group until final signaling
+and verifies descendant absence on success and failure. The dispatcher and final
+qualification runner use the same lifecycle owner. Cancellation during the grace
+period still reaches final signaling and reaping; uncertain startup cleanup
+retains ownership. Escaped sessions and external
+resources still require their own owner termination evidence.
+
+The shared validation owner freezes executable task/wave checks in the basis,
+records intent before evaluation, stops after the first failed check, seals exact
+receipts before publication and reconciles interrupted publication without
+rerunning checks. Dedicated operation locks leave peer heartbeats available.
+Archived plans and per-receipt producer admissions support historical replay.
+Invalid target IDs fail before state/lock creation. Relative and empty PATH entries
+resolve against the target checkout before executable hashing and launch.
+Admission checks the initiating coordinator under the lifecycle lock and binds
+that identity through receipt sealing. Running or termination-unproven validators
+block ownership transfer, replanning, retirement and worktree cleanup while peer
+heartbeats remain available.
+
+Tagged no-change results bind an unchanged clean base, native termination,
+released leases and independent task acceptance. No empty commit or merge is
+created. Mixed and unchanged waves retain ordered integration disposition and
+require combined acceptance before cleanup. All consumers use the versioned
+contracts without a compatibility path.
+
+#### Verification Evidence
+
+Real-Git and subprocess regressions cover the four reproduced review defects,
+detached candidate rejection, descendant cleanup after direct-child exit,
+no-change and mixed-wave integration, failed/tampered validation, receipt replay,
+concurrent heartbeat progress and bounded capacity. Shared execution, contract,
+bootstrap, corrective replan, hook and verifier tests exercise existing guards.
+Scoped Python/Markdown checks and paired canonical validation accompany source
+review. Disposable Codex and Claude installations verify packaging and CLI
+entry points against source.
+
+Native trigger/quality comparisons, genuine parallel agent overlap under this
+version, laptop runtime behavior and larger-host throughput are NOT_RUN. Prior
+native trials do not qualify this changed execution contract.
+
+<!-- /FEATURE: FEAT-071 -->
+
+<!-- FEATURE: FEAT-072 reqs=REQ-073 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-072: Owner-aligned SDLC verifier and complete workspace teardown
+
+#### Requirements Covered
+
+- REQ-073: Align SDLC verification with current owners and complete fixture cleanup.
+
+#### Context Evidence
+
+The deterministic verifier rejected a retained lightweight fixture without its
+sealed Git profile. A fan-in fixture omitted current result fields; three-tier
+fixtures supplied the wrong coordinator session; dispatch passed independently
+in 259 seconds against a 120-second verifier timeout. Startup observation invokes
+the source state loader, which alone cannot prove native hook activation.
+
+#### Design Details
+
+Keep the existing SDLC coordinators, Worktree execution/validation and live
+runtime owners. Move reusable deterministic test construction to fixture support
+with explicit coordinator identity. Extract a private verification_suites module
+for the suite catalog, commands, measured bounds, capability dependencies and
+structured outcomes; dispatch receives a 600-second bound. Record progress,
+elapsed time and sanitized failure identifiers; failed prerequisites remain
+fail-closed while reports group their dependent impacts.
+
+A private verification_workspace owner controls root admission, lightweight
+fixture lifecycle and aggregate destroy, delegating live resources to the
+existing three-tier lifecycle. Public flags remain unchanged. Cleanup is scoped
+to exact validated paths, serialized with fixed lock ordering, and journaled
+before ownership material disappears. Retain reports and minimal cleanup records;
+never delete a whole root or adopt incomplete ownership. Create cleans previous
+owned fixtures before preflight; final cleanup covers both classes unless kept.
+
+Separate source state discovery from native activation evidence. Version changed
+receipt contracts together without historical conversion. Refresh changed skill
+payloads through the existing installer as maintenance; prepare only the selected
+disposable native home, review its exact hooks normally, then freeze source and
+installed identities before native startup. Preserve immutable failures and
+restart an affected trial after repairs.
+
+Pin the physical installed catalog and runtime closure during live preparation.
+Use fresh installed-owner processes for startup, runtime, semantic admission and
+cleanup so cached source imports cannot recalculate an installed execution basis.
+Reject native source-catalog launch and preserve exact basis paths. The source
+aggregate invokes only its configured installed helper, validates its canonical
+result digest and never executes a path selected by evidence. Catalog checks
+precede preparation effects; cleanup checkpoints retain the catalog binding after
+raw receipt deletion. Codex native qualification is supported; Claude catalog and
+native event qualification remain explicitly unqualified.
+
+The frozen runtime catalog also includes the native entrypoint, verified loader
+and loader-declared hook support group. Native observation compares complete
+installed file bytes against that source closure. Changed or missing helpers
+fail, including matching source/private drift against the frozen catalog. Keep
+the existing native receipt schema and entrypoint-only hash meanings.
+
+Observe a pending design revision only at the running classifier checkpoint.
+Reuse read-only Worktree validation of the active counted design dispatch,
+immutable preparation, exact objective/plan/basis and integration parent,
+retained native termination/reconciliation proofs, superseded unmerged wave and
+writer/resource/validation quiescence. Observation neither borrows coordinator
+identity nor enables runtime execution. Mutation owners retain coordinator
+authorization. Material design replanning invalidates affected phase evidence;
+retain old attempts and require fresh observations after owner revalidation.
+
+#### Selected Option
+
+Focused changes to the existing verifier and fixture owners, with two private
+modules for suite execution and workspace lifecycle. Keep Python, Git, Docker,
+Playwright and native hosts fixed. Harness/evaluation are deterministic; existing
+bounded agents retain planning and coding responsibility.
+
+#### Alternatives Considered
+
+Only patching fixtures and timeouts leaves lifecycle/reporting ambiguity. A new
+SDLC orchestrator duplicates authority. A full contract audit and Claude live
+qualification are deferred beyond the selected focused Codex qualification.
+
+#### Implementation Boundaries
+
+Verifier source, schemas, fixtures and tests; shared Worktree test support;
+skill instructions, references, evals, README, changelog and canonical specs.
+No public flags, external publication or unrelated production behavior changes.
+
+#### Test-First Success Criteria
+
+- TDD-001: Current result fields and exact coordinator identity pass; forged or
+  missing fields, wrong identities and tampered handoffs remain rejected.
+- TDD-002: Runner timeouts, interruptions and failures retain completed evidence
+  and identify affected capabilities without claiming unexecuted success.
+- TDD-003: Aggregate cleanup removes only admitted fixture resources, resumes
+  interrupted cleanup and rejects ownership/path/concurrency ambiguity.
+- TDD-004: Source discovery cannot certify native activation; both observations
+  remain separately attributed in qualification reports. Missing helpers, changed
+  unterminated file bytes and coordinated source/private drift are rejected.
+- TDD-005: A proven pending design revision permits read-only classifier
+  observation without identity adoption; runtime, stale authority and changed
+  proofs remain rejected. Material replanning requires fresh phase evidence.
+
+#### Validation Plan
+
+Focused regressions, skill/canonical validation, lint and align, then full
+preflight and frozen source-installed parity under host-memory supervision.
+
+#### Test Plan
+
+Use disposable fixtures, tiny subprocesses and interrupted cleanup checkpoints.
+Exercise lightweight-only, live-only, combined, repeated and concurrent teardown,
+unsafe links, dirty or foreign state, missing profiles and report retention.
+
+#### Evaluation Plan
+
+Run one fresh normal Codex three-tier workflow with owner-produced test receipts,
+clean promoted source/build identity, headless Playwright UAT, API/database
+correlation and restart persistence. Independently verify final resource absence
+and repeated destroy. Other native lanes remain explicitly unqualified.
+
+#### Rollout And Rollback
+
+Preserve concurrent source edits and prior reports. Source first, focused checks,
+installer refresh, frozen native trial. Roll back only this change's source and
+installed payloads after writer quiescence; never reset unrelated work or evidence.
+
+#### Done Definition
+
+Deterministic gates and the Codex three-tier profile pass, selected-root cleanup
+is proven and source/docs agree. Any unavailable qualification remains explicit;
+no broader full-workflow PASS follows from one native scenario.
+
+#### Implementation Evidence
+
+Implemented reusable current-contract fixtures; private suite catalog/runner with
+measured dispatch budget, progress, interruption-safe reports and prior report
+retention; aggregate workspace ownership, serialized cleanup, immutable
+checkpoints and retry; startup v3 source discovery and separate native event
+correlation. The native launcher creates private evidence at inception.
+Documentation, help, eval cases and source-installed maintenance are aligned.
+
+#### Verification Evidence
+
+An earlier candidate passed all 17 deterministic suites. Fresh native trials
+proved direct startup selection and natural command/hook correlation, then exposed
+an execution observer importing source helper paths against an installed-owner
+basis. Exact installed-owner verification passed without changing product state;
+the failed trial remained failed. Both trials retained sanitized failure reports
+and passed owned cleanup, independent absence checks and repeated destroy.
+
+Focused catalog regressions now prove wrong physical catalog rejection despite
+identical bytes, exact owner success, changed/missing dependency rejection,
+immutable basis and environment preservation, early preparation failure safety,
+launcher isolation, read-only result validation and interrupted cleanup replay.
+The repaired owner candidate subsequently passed all 17 deterministic suites.
+The aggregate remains PARTIAL because seven required live profiles are absent;
+startup proof does not establish full delivery.
+
+The third native trial passed the repaired installed-catalog preparation
+boundary, then exposed the observer rejecting the supported pending-design
+state. Its failure and exact-owned cleanup remain retained. A real-owner
+regression reproduced that rejection before the repair. The repaired read-only
+path passes without file mutation or identity substitution; runtime rejection,
+tampered proof/checkpoint tests and material-replan phase-history tests pass.
+Complete fresh native application/UAT qualification remains pending.
+
+The fourth frozen Codex trial passed startup/native correlation, installed-basis
+preparation and TDD observation. Native counted recovery exercised the active-task
+environment route and corrected an internal-only network: the independent
+loopback inventory failed before the correction and passed afterward. Django
+configuration and migration checks passed; 16 of 17 development tests passed.
+The remaining vertical HTTP test failed in Django's test-server static handler
+with unset `STATIC_URL`. Four feature repair dispatches were exhausted, so the
+trial retained FAIL without evaluation, promotion or UAT. Pending-design
+observation remains deterministically verified; this trial did not enter it.
+
+After qualification ended, native cancellation reconciled the genuinely terminated
+worker's retained scheduler slot without resetting its budget or failed evidence.
+Aggregate cleanup then passed, independent inspection found no owned resources or
+run directory, and repeated destroy returned ALREADY_DESTROYED. All four failed
+trial reports remain retained. Unknown legacy ownership remains a separate cleanup
+blocker; ordinary hook rollout and other native profiles remain unqualified.
+
+A report-only defect exposed by that failure is repaired: unrun browser mentions
+no longer redirect implementation advice to Playwright. Its original regression
+fails before the change and passes after it; all 13 runtime/reporting tests pass.
+This final reporting/documentation refinement was made after native teardown and
+has focused source validation, not a new passing native qualification.
+
+Post-change alignment also repaired cleanup drain-timeout reporting and native
+hook closure validation. Negative controls reproduced both failures before the
+repairs. Focused tests cover retained prior results, later-suite suppression,
+process-group verification, helper modification/deletion, unterminated file
+changes and coordinated source/private drift. Combined fixtures reuse one
+canonical lifecycle import so cleanup mocks reach the actual owner. These are
+source/fixture checks after teardown, not new native qualification evidence.
+
+<!-- /FEATURE: FEAT-072 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-073 reqs=REQ-074 status=ready delivery=implemented priority=P1 version=3 -->
+### FEAT-073: Software testing skill and operation-aware evidence helpers
+
+#### Requirements Covered
+
+- REQ-074: Portable software testing in disposable containers.
+
+#### Context Evidence
+
+The earlier scope had two offline helpers, shared validation, generic profiles
+and source/native packaging, but always selected fresh and upgrade cases and
+excluded functional qualification categorically. The implemented revision makes
+operations explicit and limits behavioral claims to selected observed assertions.
+
+#### Design Details
+
+Use test-software-in-container with bare invocation selecting test, source target
+and suite auto in the exact current project. Explicit installation selects install.
+Source campaigns cannot combine with lifecycle operations. Combined test and
+lifecycle modes require explicit installed target;
+all-tests is exclusive and selects applicable install/upgrade/patch/migration
+operations, testing their results. Include a separate test operation only when
+explicitly declared in the profile. Missing applicability/inputs remain blocked.
+
+Use one image selector; inspect OS/platform and freeze immutable identities.
+Preinstalled snapshots qualify only for their verified predecessor. OS images
+may seed authentic predecessors; never downgrade a candidate image. Artifact
+selects installation/upgrade inputs, profile describes cases and suites, and
+engine selects existing compatible Docker/Podman. CLI overrides defaults but
+cannot contradict explicit per-case image/platform identities.
+
+Keep four stable predecessors and direct paths as upgrade-only defaults; reject
+zero counts and irrelevant selectors. Use default concurrency two with execution
+host headroom checks. Cache reuse revalidates; refresh rebuilds only selected
+owned baselines; off permits campaign-local reuse without persistent reads/writes.
+Outputs are new private directories and evidence is never overwritten.
+
+Represent each operation with its own input identities and required checks.
+Install/test need no release catalog. Patch verifies source state, payload,
+expected deltas and preserved invariants, including same-version updates.
+Migration binds tool/source-state/target invariants without fictional package
+artifacts. Lifecycle and installed-target tests retain smoke checks; source tests use their
+selected suites. Named suite categories have frozen target/operation applicability. Repeat,
+no-op, service and recovery assertions follow the declared product contract.
+
+The planner expands reviewed profiles; the checker verifies plan-bound supplied
+observations and renders operation/suite summaries. Neither executes commands or
+authenticates runtime evidence. Freeze selected predecessor/path coverage and
+normal/fault trial declarations; reject omitted required trials even when an
+edited plan is resealed. Advance profile/plan/results/report schemas to v2; no
+old-name alias/parser. Retain existing evidence outside this migration unchanged.
+
+Preflight controller tools, runtime capabilities, complete bundle contents and
+actual execution-host resource visibility. Baseline cache keys include only
+baseline-affecting historical artifacts, dependency closure, recipes and fixtures.
+Keep candidate/controller and full execution-bundle identity separate. Quiesce
+snapshot writers and restore fresh volumes/external state. Run one actual planned
+case first per distinct setup before bounded fanout without reducing coverage.
+Collect phase timing and bounded diagnostics before exact-owned cleanup.
+
+Discover project/container-tests.json without ascending the monorepo. Missing
+profiles permit inspected project metadata/CI/documented entrypoints to inform a
+private derived profile; invalid profiles fail. All relative filesystem paths
+resolve from the selected project, including paths in external profiles. Public
+flags are agent inputs; offline helpers expose only their documented subset.
+Static suite listing never imports code, collects tests, pulls or runs containers.
+
+Suite names are project-defined; category labels include smoke, unit, integration,
+api, cli, systemd, e2e, regression, performance and security. Auto uses target-aware
+configured defaults, or one unambiguous documented default for source; empty or
+ambiguous source selection requires user choice. Installed/lifecycle auto uses
+configured defaults or core smoke only. Every requested suite applies to every
+selected case; incompatible selections fail rather than silently routing.
+
+Freeze source, tests, harness and dependency inputs with file/directory modes and
+symlink targets; verify restricted-user traversal in the actual container. Source
+requirements are execution, source-origin and suites. Source environment cache
+keys include source/dependency/harness identities and remain distinct from authentic
+predecessor keys. Source-only undeclared platform resolves to the actual engine
+platform, never controller architecture; lifecycle target ambiguity requires input.
+
+Collect expected test inventory separately before suite execution against frozen
+inputs. Neutral receipts record expected/observed IDs, runner/version/selection,
+completion/exit status, setup/call/teardown outcomes, skips/deselections and timing.
+Failures, setup/teardown/collection/runner errors and unexpected passes fail;
+empty/all-skipped/missing/interrupted coverage is incomplete. Exact predeclared
+per-test exemptions never excuse unrelated assertions or setup/teardown errors.
+Require at least one ordinary passing test per selected suite/case. Optional
+pytest hooks only observe, retain partial receipts and block initially unsupported
+retry/distributed modes. Other runners produce the same contract. Supplied evidence
+is independently inspected and never treated as execution attestation.
+
+Use ordinary process, real service-manager or kernel-capability runtime profiles.
+Probe required capabilities before setup; retain missing capability blockers and
+fresh trials after harness repairs. No universal privileged recipe or new runner.
+Add a dedicated README for all flags, defaults, suite semantics and examples.
+
+#### Selected Option
+
+Extend the existing skill and offline helpers with neutral suite accounting,
+static discovery and an optional observational pytest adapter;
+retain product-owned execution. Python standard library and existing engines
+remain fixed. No application/AI stack or provider integration is added.
+
+#### Alternatives Considered
+
+A name-only/documentation-only change leaves contradictory helper behavior.
+A universal runner duplicates product lifecycle ownership. VM-only testing is
+retained for claims containers cannot establish, rather than imposed on all cases.
+
+#### Implementation Boundaries
+
+Renamed skill folder, catalog README/changelog, both native plugin manifests,
+focused existing skills CI paths and this canonical pair. No global installation,
+product source, release-gate change, commit or publication. Preserve unrelated work.
+
+#### Test-First Success Criteria
+
+- TDD-001: Each mode expands only its declared cases and requires its own evidence.
+- TDD-002: Missing inputs, contradictory identities, unsupported suites and absent
+  results cannot produce passing summaries, including all-tests and pure migration.
+- TDD-003: Generic install/image-test/upgrade/same-version-patch/state-migration
+  examples work without profile command execution or network calls by helpers.
+- TDD-004: Source/baseline identity separation preserves safe cache reuse while
+  invalidating contaminated state, incomplete bundles and stale fixtures.
+
+#### Validation Plan
+
+Focused unittest, Ruff/Markdown, required-eval portable/Codex/Claude structure,
+plugin/catalog and canonical spec checks, disposable npx installation and scoped
+code/security reviews through align-skill and align.
+
+#### Test Plan
+
+Preserve meaningful prior helper invariants; add operation/flag/suite/state
+negative controls. Use small synthetic containers for runtime paths when host
+capabilities permit. Compare equivalent cold/warm runs before speed claims.
+
+#### Evaluation Plan
+
+Trigger cases and quality evaluations cover all modes, missing tooling, incomplete
+bundles, historical APIs, distro package ownership, stale/shared-state caches,
+unsupported startup and plan/preflight boundaries. Report unavailable native
+trigger/comparative quality lanes rather than claiming source validation proves them.
+
+#### Rollout And Rollback
+
+Apply one canonical renamed source and protocol with no compatibility wrapper.
+Preserve historical reports and unrelated bytes. Revert only owned changes if
+needed; never prune foreign resources or install globally as part of this task.
+
+#### Done Definition
+
+Source, helpers, profiles, flags, reports, catalog, CI and specs agree. Focused
+checks and mandatory review lanes pass; unexecuted runtime/evaluation remains
+explicit and no helper report claims execution authenticity.
+
+#### Implementation Evidence
+
+Implemented source-first current-project defaults, static profile/suite discovery,
+source versus installed target separation and complete public flag/suite README.
+V2 planning/evidence contracts bind independently collected inventories, exact
+case/plan receipts, test phase outcomes and harness-observed process completion.
+The optional pytest reporter and shared contracts use a private tsc_support
+namespace; product modules are not shadowed. Source fingerprints include file and
+directory modes, intermediate links and all traversed directories, rejecting
+unsafe link traversal. Product-owned execution, authentic predecessor caches and
+historical evidence boundaries remain intact. Updated neutral profiles/receipts,
+metadata, evals, catalog and CI without product-specific tests or compatibility
+shims. No global installation, commit, publication or release-gate change.
+
+Independent code/security review identified and resolved all-tests suite checks
+against N/A operations, malformed operation handling, symlink traversal identity,
+late pytest finish-hook failures and product-module import collisions. Regression
+coverage exercises each repair; final focused reviewer found no blocking issue.
+
+#### Verification Evidence
+
+105 tests passed locally and against a frozen source copy in a disposable Ubuntu
+24.04 linux/arm64 container, including 10 actual pytest 8.4.2 subprocess scenarios.
+The Linux run used an unprivileged user, read-only filesystem, no network and
+bounded CPU/memory/processes. Covered source defaults, explicit installed targets,
+profile/path discovery, suite selection, independent inventory and process binding,
+empty/skipped/interrupted/error outcomes, symlink metadata and neutral non-pytest
+receipts. These synthetic tests qualify the helpers and adapter, not a real product.
+
+Ruff, Markdown, workflow syntax, plugin/catalog and portable/Codex/Claude structure
+and eval-definition checks passed. Five generic example profiles expanded without
+unintended blockers; the neutral runner receipt passed accounting. Actual pinned
+npx discovery, both-host copied payload parity, repeat install and isolation passed
+in disposable locations. Fresh native model routing/comparative output quality,
+AMD64, real systemd/kernel capabilities, historical product upgrades and performance
+improvement remain unqualified. Earlier lifecycle fixture evidence is historical
+and does not substitute for these missing lanes. Delivery remains implemented.
+
+Fresh alignment corrected the reporter package staging instructions and accepted
+bounded signed process return codes from POSIX harnesses. A new real child-process
+regression failed on the old validation, then passed: interrupted execution remains
+INCOMPLETE and earlier assertions remain FAIL. Independent code/security review
+confirmed the fix with no remaining blockers. All 106 local tests passed with
+pytest 8.4.2; Ruff, Markdown, workflow syntax, catalog/host structure and copied
+installation checks passed. The earlier 105-test ARM64 container run was not
+repeated for this receipt-validation/documentation correction. Python's official
+subprocess contract independently confirms the signed signal representation.
+
+<!-- /FEATURE: FEAT-073 -->
+
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

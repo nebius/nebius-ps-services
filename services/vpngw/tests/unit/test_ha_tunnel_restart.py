@@ -15,7 +15,7 @@ from nebius_vpngw.agent.vm_ha.tunnels import Authority, Health, TunnelController
 from nebius_vpngw.agent.vm_ha_controller import DataPlaneMode
 
 
-def restart_runtime(tmp_path):
+def restart_runtime(tmp_path, mode=DataPlaneMode.PASSIVE):
     cfg = config("bgp")
     cfg["vm_ha"].update(
         node={"node_id": "node-b"},
@@ -28,11 +28,15 @@ def restart_runtime(tmp_path):
     authority = Authority("cluster", "node-b", "allocation", "42", 0, "a" * 64)
     snapshot = _snapshot(
         cloud=_owned_cloud(),
-        data_plane_mode=DataPlaneMode.PASSIVE,
+        data_plane_mode=mode,
         peer_heartbeat=replace(_peer(), tunnel_capability=True),
         peer_received_at=100.0,
     )
-    snapshots = SimpleNamespace(observe=lambda: snapshot, last_snapshot=snapshot)
+    snapshots = SimpleNamespace(
+        observe=lambda: snapshot,
+        last_snapshot=snapshot,
+        providers=SimpleNamespace(apply_lock_operation_id=lambda: None),
+    )
     runtime = ControllerTunnelRuntime(
         path,
         tmp_path,
@@ -52,8 +56,9 @@ def restart_runtime(tmp_path):
 
 
 @pytest.mark.parametrize("phase", ["activate", "verify"])
-def test_pending_bgp_cannot_advance_while_passive(tmp_path, phase):
-    runtime, selector, effects, _ = restart_runtime(tmp_path)
+@pytest.mark.parametrize("mode", [DataPlaneMode.PASSIVE, DataPlaneMode.ORIGINATING])
+def test_pending_bgp_cannot_advance_while_fenced(tmp_path, phase, mode):
+    runtime, selector, effects, _ = restart_runtime(tmp_path, mode)
     selector.state["selected"] = {"site": "backup"}
     selector.state["operation"].update(phase=phase, successes=1)
     selector._save()
@@ -64,6 +69,50 @@ def test_pending_bgp_cannot_advance_while_passive(tmp_path, phase):
     assert state["operation"]["phase"] == phase
     assert state["operation"]["successes"] == 0
     assert state["operation"]["deadline"] == deadline
+
+
+@pytest.mark.parametrize("health", [Health.DOWN, Health.UNKNOWN, Health.HEALTHY])
+def test_origination_reconsiders_failed_selection_without_native_effects(tmp_path, health):
+    runtime, selector, effects, _ = restart_runtime(tmp_path, DataPlaneMode.ORIGINATING)
+    selector.state["selected"] = {"site": "backup"}
+    selector._save()
+    before = deepcopy(selector.state["operation"])
+    effects.health["backup"] = health
+    runtime.step()
+    state = read_state(selector.path)
+    assert state["selected"] == ({} if health is Health.DOWN else {"site": "backup"})
+    assert state["operation"]["verb"] == ("release" if health is Health.DOWN else "failover")
+    assert all(
+        state["operation"][key] == before[key] for key in ("id", "deadline", "attempt_deadline")
+    )
+    assert effects.calls == []
+    assert runtime.authority() is None
+
+
+@pytest.mark.parametrize(
+    "condition",
+    ["apply-lock", "inhibited", "attachment", "unknown-cloud", "stale-peer", "generation", "boot"],
+)
+def test_origination_intent_recovery_requires_current_authority(tmp_path, condition):
+    runtime, selector, effects, _ = restart_runtime(tmp_path, DataPlaneMode.ORIGINATING)
+    selector.state["selected"] = {"site": "backup"}
+    selector._save()
+    effects.health["backup"] = Health.DOWN
+    snapshot = runtime.controller.snapshots.last_snapshot
+    changes = {
+        "apply-lock": {"apply_locked": True},
+        "inhibited": {"transfer_inhibited": True},
+        "attachment": {"cloud": replace(snapshot.cloud, candidate_attachment_exact=False)},
+        "unknown-cloud": {"cloud": replace(snapshot.cloud, authoritative=False)},
+        "stale-peer": {"peer_received_at": 1.0},
+        "generation": {"local_generation_id": "b" * 64},
+        "boot": {"guard_boot_id": "old-boot"},
+    }
+    runtime.controller.snapshots.observe = lambda: replace(snapshot, **changes[condition])
+    before = selector.path.read_bytes()
+    runtime.step()
+    assert selector.path.read_bytes() == before
+    assert effects.calls == []
 
 
 @pytest.mark.parametrize("phase", ["activate", "verify", "succeeded"])
@@ -211,3 +260,55 @@ def test_forwarding_revocation_during_verification_cannot_complete_operation(tmp
     selector.tick(AUTH, 101)
     assert selector.state["operation"]["phase"] == "verify"
     assert selector.state["operation"]["successes"] == 0
+
+
+@pytest.mark.parametrize("condition", ["failed", "missing", "unknown", "healthy", "path-down"])
+def test_path_selection_defers_component_defect_to_recovery_owner(tmp_path, condition):
+    runtime, _, _, _ = restart_runtime(tmp_path)
+    snapshot = runtime.controller.snapshots.last_snapshot
+    health = replace(
+        snapshot.readiness,
+        service_healthy=condition not in {"failed", "missing"},
+        sample_complete=condition != "unknown",
+        local_defects=("daemon-configuration-missing:strongswan",)
+        if condition == "missing"
+        else (),
+        static_ready=condition != "path-down",
+    )
+    runtime.controller.snapshots.observe = lambda: replace(
+        snapshot, data_plane_mode=DataPlaneMode.ACTIVE, readiness=health
+    )
+    assert (runtime.authority() is not None) is (condition in {"healthy", "path-down"})
+
+
+@pytest.mark.parametrize("credential_failure", [False, True])
+def test_native_policy_change_loads_credentials_before_initiation(
+    tmp_path, monkeypatch, credential_failure
+):
+    from nebius_vpngw.agent.vm_ha import tunnel_runtime
+
+    path = tmp_path / "swanctl.conf"
+    monkeypatch.setattr(tunnel_runtime, "SWANCTL_CONF", path)
+
+    def render(self, cfg, *, rendered_files):
+        rendered_files[path] = "fixture"
+
+    monkeypatch.setattr(tunnel_runtime.StrongSwanRenderer, "render_and_apply", render)
+    effects = tunnel_runtime.NativeTunnelEffects(
+        config("static"), tmp_path, lambda authority: True, active_revalidate=lambda authority: True
+    )
+    calls = []
+
+    def run(argv):
+        calls.append(tuple(argv))
+        if credential_failure and "--load-all" in argv:
+            raise RuntimeError("credential load incomplete")
+        return ""
+
+    effects.run = run
+    if credential_failure:
+        with pytest.raises(RuntimeError, match="incomplete"):
+            effects._swan_config(effects.cfg)
+    else:
+        effects._swan_config(effects.cfg)
+    assert calls == [("swanctl", "--load-all", "--noprompt")]

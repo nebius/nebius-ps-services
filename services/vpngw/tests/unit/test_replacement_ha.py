@@ -70,7 +70,112 @@ def state_journal(base):
 def ports(path):
     obj = ha.HAReplacement.__new__(ha.HAReplacement)
     obj.store = VMHALifecycleStore(path)
+    obj.state = None
     return obj
+
+
+def completed_journal():
+    base = active_state()
+    journal = state_journal(base)
+    state = ha.lifecycle.start(
+        base,
+        journal.state["transaction"]["plan"],
+        current_members=base.members,
+        desired_digest=journal.state["transaction"]["plan"]["configuration_sha256"],
+    )
+    chain = [state.to_dict()]
+    owner, old = state.members
+    candidate = replacement_member(old)
+    state = ha.lifecycle.advance(
+        state, members=(owner, candidate), evidence=membership_evidence(old, candidate, owner)
+    )
+    chain.append(state.to_dict())
+    former = replace(owner, alias_allocation_ids=(), compute_revision="15")
+    candidate = replace(candidate, alias_allocation_ids=("shared",), compute_revision="16")
+    state = ha.lifecycle.advance(
+        state,
+        members=(former, candidate),
+        evidence={
+            "kind": "promotion",
+            "owner_compute_id": candidate.compute_id,
+            "canonical_promotion_sha256": "8" * 64,
+        },
+    )
+    chain.append(state.to_dict())
+    replacement = replacement_member(former)
+    state = ha.lifecycle.advance(
+        state,
+        members=(replacement, candidate),
+        evidence=membership_evidence(former, replacement, candidate),
+    )
+    chain.append(state.to_dict())
+    state = ha.lifecycle.advance(
+        state,
+        members=state.members,
+        evidence={
+            "kind": "complete",
+            "verified_member_ids": sorted(member.compute_id for member in state.members),
+        },
+    )
+    chain.append(state.to_dict())
+    journal.state["transaction"].update(phase="complete", results={"ha-lifecycle": chain})
+    return journal, state
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_completed_ha_resume_loads_state_before_proof_and_only_then_restores_sidecar(
+    tmp_path, monkeypatch, existing
+):
+    journal, expected = completed_journal()
+    target = ports(tmp_path / "gateway.yaml")
+    if existing:
+        target._lifecycle(journal)
+        target.state = None  # A subsequent CLI process starts without in-memory state.
+    write = Mock(wraps=target.store.write_verified)
+    monkeypatch.setattr(target.store, "write_verified", write)
+
+    def verify(obj, checkpoint):
+        assert obj.state == expected
+        write.assert_not_called()
+        return {"verified": True}
+
+    monkeypatch.setattr(ha.OrdinaryReplacement, "terminal_receipt", verify)
+    assert target.terminal_receipt(journal) == {"verified": True}
+    assert write.call_count == (0 if existing else 5)
+    journal.save.assert_not_called()
+    write.reset_mock()
+    assert target.terminal_receipt(journal) == {"verified": True}
+    write.assert_not_called()
+
+
+def test_completed_ha_failed_terminal_proof_never_publishes_lifecycle(tmp_path, monkeypatch):
+    journal, _ = completed_journal()
+    target = ports(tmp_path / "gateway.yaml")
+    write = Mock(wraps=target.store.write_verified)
+    monkeypatch.setattr(target.store, "write_verified", write)
+    monkeypatch.setattr(
+        ha.OrdinaryReplacement,
+        "terminal_receipt",
+        Mock(side_effect=RuntimeError("service unknown")),
+    )
+    with pytest.raises(RuntimeError, match="service unknown"):
+        target.terminal_receipt(journal)
+    write.assert_not_called()
+    journal.save.assert_not_called()
+
+
+def test_terminal_runtime_observation_does_not_add_a_post_completion_member_record(monkeypatch):
+    from copy import deepcopy
+
+    from nebius_vpngw.deploy import replacement_ha_runtime
+
+    journal, _ = completed_journal()
+    journal.state["transaction"].update(member=2, approval="a" * 64)
+    before = deepcopy(journal.state)
+    monkeypatch.setattr(replacement_ha_runtime.VMHAAgentArtifact, "from_wheel", Mock())
+    Runtime(SimpleNamespace(wheel=object()), journal)
+    assert journal.state == before
+    journal.save.assert_not_called()
 
 
 def test_ha_lifecycle_write_ahead_recovers_after_store_failure_and_on_new_operator(

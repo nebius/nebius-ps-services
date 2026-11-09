@@ -16,7 +16,7 @@ import time
 import typing as t
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 
@@ -30,13 +30,18 @@ _OBSERVATION_DEADLINE: ContextVar[t.Callable[[], float] | None] = ContextVar(
 )
 
 
+def vm_ha_observation_remaining(*, default: float = VM_HA_REQUEST_TIMEOUT_SECONDS) -> float:
+    provider = _OBSERVATION_DEADLINE.get()
+    return default if provider is None else provider()
+
+
 @contextmanager
 def vm_ha_observation_budget(
     *,
     seconds: float = VM_HA_REQUEST_TIMEOUT_SECONDS,
     clock: t.Callable[[], float] = time.monotonic,
 ) -> t.Iterator[None]:
-    """One thread-local cumulative read budget, including nested route reads."""
+    """One thread-local cumulative request budget, including nested route reads."""
     parent = _OBSERVATION_DEADLINE.get()
     deadline = clock() + seconds
 
@@ -86,8 +91,7 @@ def vm_ha_idempotency_key(operation_id: str) -> str:
 
 
 def vm_ha_request_kwargs(operation_id: str | None = None) -> dict[str, t.Any]:
-    provider = _OBSERVATION_DEADLINE.get()
-    remaining = VM_HA_REQUEST_TIMEOUT_SECONDS if provider is None else provider()
+    remaining = vm_ha_observation_remaining()
     value: dict[str, t.Any] = {
         "timeout": min(VM_HA_REQUEST_TIMEOUT_SECONDS, remaining),
         "auth_timeout": min(VM_HA_REQUEST_TIMEOUT_SECONDS, remaining),
@@ -102,13 +106,15 @@ def vm_ha_request_kwargs(operation_id: str | None = None) -> dict[str, t.Any]:
 def wait_vm_ha_operation(operation: t.Any) -> None:
     if not callable(getattr(operation, "sync_wait", None)):
         raise RuntimeError("VM-HA mutation returned no bounded operation waiter")
+    provider = _OBSERVATION_DEADLINE.get()
+    remaining = VM_HA_OPERATION_TIMEOUT_SECONDS if provider is None else provider()
     operation.sync_wait(
-        interval=VM_HA_OPERATION_POLL_INTERVAL_SECONDS,
-        timeout=VM_HA_OPERATION_TIMEOUT_SECONDS,
-        poll_iteration_timeout=VM_HA_REQUEST_TIMEOUT_SECONDS,
-        poll_per_retry_timeout=VM_HA_PER_RETRY_TIMEOUT_SECONDS,
+        interval=min(VM_HA_OPERATION_POLL_INTERVAL_SECONDS, remaining),
+        timeout=min(VM_HA_OPERATION_TIMEOUT_SECONDS, remaining),
+        poll_iteration_timeout=min(VM_HA_REQUEST_TIMEOUT_SECONDS, remaining),
+        poll_per_retry_timeout=min(VM_HA_PER_RETRY_TIMEOUT_SECONDS, remaining),
         poll_retries=VM_HA_REQUEST_RETRIES,
-        auth_timeout=VM_HA_REQUEST_TIMEOUT_SECONDS,
+        auth_timeout=min(VM_HA_REQUEST_TIMEOUT_SECONDS, remaining),
     )
 
 
@@ -282,6 +288,12 @@ class ComputeObservation:
     resource_version: str
     nic_allocations: tuple[tuple[str, str], ...]
     nic_alias_allocations: tuple[tuple[str, tuple[str, ...]], ...]
+    retained_ownership_epoch: str | None = None
+
+    @property
+    def ownership_epoch(self) -> str:
+        """Attachment authority; raw resource_version remains the CAS revision."""
+        return self.retained_ownership_epoch or self.resource_version
 
     def allocation_on(self, network_interface_name: str) -> str | None:
         matches = [
@@ -798,6 +810,7 @@ class VMHACloudAdapter:
         attempts: int = 10,
         poll_interval: float = 1.0,
         sleeper: t.Callable[[float], None] = time.sleep,
+        instance_epoch_provider: t.Callable[[t.Any], str] | None = None,
     ) -> None:
         if attempts < 1:
             raise ValueError("attempts must be at least 1")
@@ -810,6 +823,7 @@ class VMHACloudAdapter:
         self._attempts = attempts
         self._poll_interval = poll_interval
         self._sleep = sleeper
+        self._instance_epoch_provider = instance_epoch_provider
 
     @staticmethod
     def _call(description: str, operation: t.Callable[[], t.Any]) -> t.Any:
@@ -849,7 +863,11 @@ class VMHACloudAdapter:
         )
         if instance is None:
             raise AmbiguousHACloudError(f"Compute instance {instance_id} was not returned")
-        return compute_observation(instance_id, instance)
+        observation = compute_observation(instance_id, instance)
+        if self._instance_epoch_provider is not None:
+            epoch = self._instance_epoch_provider(instance)
+            observation = replace(observation, retained_ownership_epoch=epoch)
+        return observation
 
     def _read_allocation(self, allocation_id: str) -> AllocationObservation:
         allocation = self._call(

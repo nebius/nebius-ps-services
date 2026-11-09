@@ -19,6 +19,7 @@ been selected and preserves only workflow-state expectations.
 | Selected project A, then non-explicit task evidence conflicts between A and B | Discard the carried selection and ask; do not choose from profiles, filenames, cwd, or memory. |
 | `nebius --help`, `nebius --version`, or a Nebius executable path probe | Treat it as Nebius-sensitive and put the selector at byte zero of the outer Bash payload. |
 | Proposed compound payload mixes a local-only probe and a Nebius command | Split it into separate Bash calls; leave the local probe unprefixed and put one selector at byte zero of the Nebius call. |
+| Local heredoc prepares a script before a selected cloud invocation; the hook rejects selector position | Neither segment ran. Run local preparation separately, then invoke the script with the known task selector at byte zero once; do not rediscover, verify, or invoke setup. |
 | Compound payload contains only Nebius-sensitive segments | Put one selector before the entire outer payload, not before each segment. |
 | Nebius command is under `env`, `timeout`, `bash -c`, a guard, pipeline, substitution, or nested shell | Put one selector before the outer wrapper or construct; do not place it inside the nested command. |
 | Selector is non-leading, nested, invalid, or duplicated | Reconstruct the payload with exactly one valid selector as the first raw shell token and retry once. |

@@ -93,10 +93,15 @@ def recovery_authority(state: VMHALifecycleState) -> dict[str, str] | None:
     for package in packages.values():
         if not (
             isinstance(package, dict)
-            and set(package) == {"closure", "wheels"}
+            and set(package) in ({"closure", "wheels"}, {"closure", "wheels", "runtime"})
             and isinstance(package["closure"], str)
             and re.fullmatch(r"[0-9a-f]{64}", package["closure"])
             and isinstance(package["wheels"], dict)
+            and (
+                "runtime" not in package
+                or isinstance(package["runtime"], str)
+                and re.fullmatch(r"[0-9a-f]{64}", package["runtime"])
+            )
             and all(
                 isinstance(name, str)
                 and re.fullmatch(r"[A-Za-z0-9_.+-]+\.whl", name)
@@ -110,7 +115,7 @@ def recovery_authority(state: VMHALifecycleState) -> dict[str, str] | None:
 
 
 def package_authority(artifact: Any) -> str:
-    """Pin desired dependency closure and exact downloads, without predecessor state."""
+    """Pin Python and native package closures before the first guest write."""
     packages = {}
     for name, plan in artifact.dependency_plans:
         closure = {
@@ -121,8 +126,22 @@ def package_authority(artifact: Any) -> str:
                 json.dumps(closure, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest(),
             "wheels": plan.manifest["dependency_wheels"],
+            "runtime": _native_plan_digest(plan.manifest["runtime_plan"]),
         }
     return json.dumps(packages, sort_keys=True, separators=(",", ":"))
+
+
+def _native_plan_digest(plan: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def pending_authority(state: VMHALifecycleState | None) -> dict[str, str] | None:
+    """Completed recovery is audit history, not authority for a later apply."""
+    if state is None or state.status is not VMHALifecycleStatus.ACTIVATING:
+        return None
+    return recovery_authority(state)
 
 
 def validate_packages(state: VMHALifecycleState, artifact: Any) -> None:
@@ -130,12 +149,67 @@ def validate_packages(state: VMHALifecycleState, artifact: Any) -> None:
     if record is None:
         return
     expected, current = json.loads(record["packages"]), json.loads(package_authority(artifact))
+    # Deployment-only admission of receipts written before native closure was
+    # included: require the exact originally approved native manifests. Current
+    # APT metadata or a newly inferred plan can never supply missing authority.
+    if any("runtime" not in item for item in expected.values()):
+        assert state.transaction is not None
+        raw = dict(state.transaction.resource_bindings).get("runtime-package-manifests")
+        original = json.loads(raw) if raw is not None else {}
+        for name, item in expected.items():
+            if "runtime" not in item:
+                manifest = original.get(name)
+                if not isinstance(manifest, dict) or not isinstance(
+                    manifest.get("runtime_plan"), dict
+                ):
+                    raise ValueError("upgrade recovery has no approved native package closure")
+                item["runtime"] = _native_plan_digest(manifest["runtime_plan"])
     if set(current) != set(expected) or any(
         item["closure"] != expected[name]["closure"]
+        or item["runtime"] != expected[name]["runtime"]
         or any(expected[name]["wheels"].get(wheel) != sha for wheel, sha in item["wheels"].items())
         for name, item in current.items()
     ):
         raise ValueError("upgrade recovery approved dependency closure or wheel changed")
+
+
+def resume_command_approval(
+    state: VMHALifecycleState,
+    artifact: Any,
+    *,
+    desired_state_digest: str,
+    ssh_trust: str | None,
+    cloud_identity_matches: bool,
+    changes_requested: bool,
+    supplied: str | None = None,
+) -> str:
+    """Reviewed recovery supersedes original package/approval audit records."""
+    record = recovery_authority(state)
+    tx = state.transaction
+    if (
+        record is None
+        or tx is None
+        or state.status is not VMHALifecycleStatus.ACTIVATING
+        or artifact.sha256 != record["artifact"]
+        or ssh_trust != record["ssh_trust"]
+        or desired_state_digest != tx.desired_state_digest
+        or not cloud_identity_matches
+        or changes_requested
+    ):
+        raise ValueError("upgrade recovery command authority changed")
+    bindings = dict(tx.resource_bindings)
+    ready = bindings.get(READY)
+    if (
+        ready is not None
+        and ready != record["artifact"]
+        or bindings.get(ARTIFACT)
+        != (record["artifact"] if ready is not None else record["prior_artifact"])
+    ):
+        raise ValueError("upgrade recovery artifact binding changed")
+    validate_packages(state, artifact)
+    if supplied is not None and supplied != record["approval"]:
+        raise ValueError("Disruption approval does not match the interrupted operation")
+    return record["approval"]
 
 
 def install_effect(node_id: str) -> str:
@@ -246,9 +320,24 @@ def validate_evidence(
     *,
     require_stopped: bool = False,
 ) -> None:
+    validate_checkpoint(state)
+    validate_host_evidence(state, evidence, generations, require_stopped=require_stopped)
+    authority = recovery_authority(state)
+    if authority is not None and authority["hosts"] != host_digest(evidence):
+        raise ValueError("upgrade recovery approved host authority changed")
+
+
+def validate_host_evidence(
+    state: VMHALifecycleState,
+    evidence: dict[str, Any],
+    generations: dict[str, Any],
+    *,
+    require_stopped: bool = False,
+    lock_operations: dict[str, str] | None = None,
+) -> None:
+    """Shared identity proof; the caller separately owns lifecycle admission."""
     from ..agent.vm_ha.auto_healing import AutoHealingPolicyPhase, AutoHealingPolicyRecord
 
-    validate_checkpoint(state)
     assert state.transaction is not None
     nodes = {
         m.node_id: {"compute_id": m.compute_id, "nic": m.network_interface_name}
@@ -307,7 +396,12 @@ def validate_evidence(
             and released["schema"] == "nebius-vpngw/vm-ha-standby-replacement-release-v1"
             and released["cluster_id"] == state.cluster_id
             and released["node_id"] == member.node_id
-            and released["generation_id"] == generation
+            # A completed replacement receipt is historical audit evidence. A
+            # later configuration generation does not reopen that operation.
+            # Current authority comes from the exact lock and current-boot
+            # fence below; bind the retained receipt into the recovery digest.
+            and isinstance(released["generation_id"], str)
+            and re.fullmatch(r"[0-9a-f]{64}", released["generation_id"])
             and isinstance(released["operation_id"], str)
             and re.fullmatch(r"[0-9a-f]{64}", released["operation_id"])
             and released["operation_id"]
@@ -320,7 +414,11 @@ def validate_evidence(
             "cluster_id": state.cluster_id,
             "node_id": member.node_id,
             "generation_id": generation,
-            "operation_id": item["staged"]["apply_operation_id"],
+            "operation_id": (
+                item["staged"]["apply_operation_id"]
+                if lock_operations is None
+                else lock_operations[member.node_id]
+            ),
         }:
             raise ValueError("upgrade recovery exact apply lock is absent")
         mtls = item["mtls"]
@@ -393,9 +491,6 @@ def validate_evidence(
             raise ValueError("upgrade recovery mTLS peers are not cross-pinned")
     if len(operations) != 1 or len({(p.decision_digest, p.desired) for p in policies}) != 1:
         raise ValueError("upgrade recovery peer authority disagrees")
-    authority = recovery_authority(state)
-    if authority is not None and authority["hosts"] != host_digest(evidence):
-        raise ValueError("upgrade recovery approved host authority changed")
 
 
 def authorize(

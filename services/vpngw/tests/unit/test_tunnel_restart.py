@@ -7,10 +7,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from tests.unit.test_ipsec_observation import sas
+from tests.unit.test_ipsec_observation import event, sas
 
 from nebius_vpngw import ordinary_operations as ops
 from nebius_vpngw import tunnel_restart as restart
+from nebius_vpngw.ipsec_observation import Inventory
 
 
 class Clock:
@@ -44,11 +45,27 @@ def guest(tmp_path, monkeypatch, ordinary_operation_guest):
     return config
 
 
+@pytest.fixture(autouse=True)
+def native_observations(monkeypatch):
+    monkeypatch.setattr(
+        restart.observation, "snapshot", lambda timeout: Runner.current.snapshot(timeout)
+    )
+    monkeypatch.setattr(
+        restart.observation,
+        "unload_connection",
+        lambda name, timeout: Runner.current.unload(name, timeout),
+    )
+
+
 class Runner:
+    current = None
+
     def __init__(
         self, clock, *, ready_at=0, fail_termination=False, detach=False, fail_shutdown=False
     ):
         self.clock = clock
+        Runner.current = self
+        self.unloaded = []
         self.ready_at = ready_at
         self.fail_termination = fail_termination
         self.detach = detach
@@ -60,29 +77,36 @@ class Runner:
         assert timeout > 0
         self.commands.append((self.clock.now(), args, timeout))
         if "--terminate" in args:
+            assert "--ike-id" in args and "--ike" not in args
             if not self.fail_termination:
-                self.states[args[args.index("--ike") + 1]] = "down"
-        if "--initiate" in args:
-            self.states[args[args.index("--child") + 1]] = "starting"
+                self.states[{"1": "edge", "2": "backup"}[args[args.index("--ike-id") + 1]]] = "down"
+        if "--load-conns" in args:
+            for name in self.unloaded:
+                self.states[name] = "starting"
+            self.unloaded.clear()
             if self.detach:
                 self.clock.sleep(timeout)
                 raise subprocess.TimeoutExpired(args, timeout)
-        if "--list-sas" in args:
-            names = [args[args.index("--ike") + 1]] if "--ike" in args else list(self.states)
-            raw = ""
-            for unique, name in enumerate(names, 1):
-                state = self.states[name]
-                if state == "down" or state == "starting" and self.clock.now() < self.ready_at:
-                    continue
-                raw += (
-                    sas(name=name, ifid="00000064" if name == "edge" else "00000065")
-                    .replace("uniqueid=1", f"uniqueid={unique}")
-                    .replace(" list-sas reply {}", "")
-                )
-            return SimpleNamespace(returncode=0, stdout=raw + " list-sas reply {}")
         if args[-1].startswith("neighbor ") and self.fail_shutdown:
             raise InterruptedError("simulated cancellation during shutdown")
         return SimpleNamespace(returncode=0, stdout="")
+
+    def unload(self, name, timeout):
+        assert timeout > 0
+        self.unloaded.append(name)
+
+    def snapshot(self, timeout):
+        assert timeout > 0
+        self.commands.append((self.clock.now(), ["inventory"], timeout))
+        rows = []
+        for uid, name in enumerate(self.states, 1):
+            state = self.states[name]
+            if state == "down" or state == "starting" and self.clock.now() < self.ready_at:
+                continue
+            rows.append(
+                event(name=name, ifid="00000064" if name == "edge" else "00000065", uid=str(uid))
+            )
+        return Inventory.from_events(rows)
 
 
 def run(guest, runner, clock, selector="edge"):
@@ -97,7 +121,7 @@ def test_32_second_recovery_after_detach_submits_once(guest):
     result = run(guest, runner, clock)
     assert result["status"] == "complete"
     assert clock.now() >= 32
-    assert sum("--initiate" in args for _, args, _ in runner.commands) == 1
+    assert sum("--load-conns" in args for _, args, _ in runner.commands) == 1
     assert result["reset_peers"] == ["192.0.2.2"]
 
 
@@ -105,19 +129,19 @@ def test_unconfirmed_termination_never_initiates(guest):
     clock = Clock()
     runner = Runner(clock, fail_termination=True)
     assert run(guest, runner, clock)["status"] == "incomplete"
-    assert not any("--initiate" in args for _, args, _ in runner.commands)
+    assert not any("--load-conns" in args for _, args, _ in runner.commands)
 
 
 def test_bounded_observation_never_retries_or_probes_after_deadline(guest):
     clock = Clock()
     runner = Runner(clock, ready_at=10000, detach=True)
     assert run(guest, runner, clock)["status"] == "incomplete"
-    assert sum("--initiate" in args for _, args, _ in runner.commands) == 1
-    assert clock.now() <= 87  # settle 2 + detached initiate 25 + observation 60
+    assert sum("--load-conns" in args for _, args, _ in runner.commands) == 1
+    assert clock.now() <= 75  # bounded load 15 + observation 60
     assert all(
-        at < 87 and at + timeout <= 87
+        at < 75 and at + timeout <= 75
         for at, args, timeout in runner.commands
-        if "--list-sas" in args and at > 25
+        if "inventory" in args and at > 15
     )
 
 
@@ -169,7 +193,8 @@ def test_streamed_package_uses_same_request_and_observation(guest):
     streamed = namespace["_module"]
     assert streamed.request(guest, "all") == restart.request(guest, "all")
     assert streamed.observation.child_ready(sas(), "edge", 100)
-    assert not streamed.observation.child_ready("list-sas reply {}", "edge", 100)
+    with pytest.raises(ValueError):
+        streamed.observation.child_ready("list-sas reply {}", "edge", 100)
 
 
 def test_no_shutdown_without_restore_reservation():
@@ -180,7 +205,7 @@ def test_no_shutdown_without_restore_reservation():
     assert runner.commands == []
 
 
-def test_signal_during_readiness_stops_subsequent_effects(guest):
+def test_signal_during_readiness_stops_subsequent_effects(guest, monkeypatch):
     clock = Clock()
     runner = Runner(clock)
     operation = restart.Restart(500, clock=clock.now, sleep=clock.sleep)
@@ -188,18 +213,26 @@ def test_signal_during_readiness_stops_subsequent_effects(guest):
 
     def cancel_probe(args, **kwargs):
         nonlocal initiated
-        if "--initiate" in args:
+        if "--load-conns" in args:
             initiated = True
-        if "--list-sas" in args and initiated:
+        if "inventory" in args and initiated:
             operation.cancelled_signal(15, None)
         return runner(args, **kwargs)
 
     operation.runner = cancel_probe
+    snapshot = runner.snapshot
+
+    def cancel_snapshot(timeout):
+        if initiated:
+            operation.cancelled_signal(15, None)
+        return snapshot(timeout)
+
+    monkeypatch.setattr(restart.observation, "snapshot", cancel_snapshot)
     assert (
         restart.execute(restart.request(guest, "all"), operation=operation)["status"]
         == "incomplete"
     )
-    assert sum("--initiate" in args for _, args, _ in runner.commands) == 1
+    assert sum("--load-conns" in args for _, args, _ in runner.commands) == 1
     assert not any(args[0] == "vtysh" for _, args, _ in runner.commands)
 
 

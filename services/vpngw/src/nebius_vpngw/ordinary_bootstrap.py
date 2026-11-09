@@ -6,7 +6,7 @@ import base64
 import shlex
 from pathlib import Path
 
-from . import ingress_policy, ordinary_operations, ordinary_routes
+from . import ingress_policy, ordinary_operations, ordinary_routes, runtime_migration
 
 SOURCE_LIMIT = 4 * 1024 * 1024
 LOADER = (
@@ -24,10 +24,22 @@ def source_frame() -> bytes:
     source = base64.b64encode(
         (Path(__file__).parent / "deploy" / "ordinary_remote.py").read_bytes()
     ).decode()
+    recovery_sources = "import types\n"
+    for name, relative in (
+        ("_vpngw_package_worker", "package_worker.py"),
+        ("_vpngw_python_package_recovery", "python_package_recovery.py"),
+    ):
+        encoded = base64.b64encode((Path(__file__).parent / relative).read_bytes()).decode()
+        recovery_sources += (
+            f"_m=types.ModuleType({name!r});sys.modules[{name!r}]=_m;"
+            f"exec(compile(base64.b64decode({encoded!r}),{relative!r},'exec'),_m.__dict__)\n"
+        )
     code = (
         ingress_policy.streamed_bootstrap()
         + ordinary_operations.streamed_bootstrap()
         + ordinary_routes.streamed_bootstrap()
+        + runtime_migration.streamed_bootstrap()
+        + recovery_sources
         + f"exec(compile(base64.b64decode({source!r}),'<ordinary-transaction>','exec'))"
     )
     frame = base64.b64encode(code.encode()) + b"\n"

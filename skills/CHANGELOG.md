@@ -4,6 +4,128 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Refactored `troubleshoot` into seven evidence-driven phases with provisional
+  routing, explicit scoped exclusions and conditional bounded read-only native
+  investigators. Preserved public budgets, helper schema 2, `diagnosis-v3`, report
+  classes, provider gates and Stop ownership.
+- Standardized technology decision guides, added AMD/provider routing, and expanded
+  process/quality cases. Diagnostic accounting now separates aggregate actions,
+  inclusive/disjoint usage and coordination overhead, with fail-closed completeness
+  and accuracy/action/latency/token qualification gates. Native speed and quality
+  improvements remain unqualified until isolated paired trials pass.
+
+- Add public, product-neutral `test-software-in-container`, broadening and renaming
+  the initial software-upgrade-test draft. Bare invocation tests the current
+  project source with automatic compatible suite selection; installation and
+  installed-image tests are explicit. Support independent upgrades, patches and
+  state migrations with verified baselines and scoped evidence. Add static suite
+  discovery, a full flag/default README, v2 inventory/result contracts, source
+  fingerprints covering directory modes and symlinks, and an optional observational
+  pytest reporter. Require per-suite test accounting and harness-observed process
+  completion; preserve skipped, missing, interrupted and failed evidence. Keep
+  source campaigns separate from lifecycle tests, reject old aliases/schemas and
+  retain historical reports. Extend neutral examples, evals and focused CI checks.
+  Preserve observed POSIX signal return codes when classifying interrupted suites,
+  retain earlier assertion failures, and clarify namespaced reporter staging.
+
+- Align SDLC verifier fixtures with current worker results and explicit coordinator
+  identity. Extract bounded suite execution and capability reporting, including a
+  measured dispatch timeout, progress and interruption evidence. Add aggregate
+  ownership-checked lightweight/live cleanup with resumable checkpoints and report
+  retention and Git observations that preserve the sealed index. Separate source startup discovery from native hook correlation and
+  require both for three-tier qualification; preserve unsupported prior evidence.
+  Select the native coordinator explicitly for outer startup observation, match
+  actual command-execution events, and admit incomplete-startup cleanup only
+  through independently validated product ownership and quiescence.
+  Pin the v8 live lifecycle to its physical installed catalog and runtime closure;
+  reject source-catalog native launch and delegate aggregate semantic validation
+  to a fresh installed-owner process without weakening exact execution bases.
+  Admit read-only classifier observation of supported pending design revisions
+  through Worktree validation of active authority, immutable preparation and
+  retained quiescent writers. Preserve coordinator-only mutation and runtime
+  rejection; require fresh phase evidence after material design replanning.
+  Attribute browser recovery advice to the recorded owner instead of mentions of
+  unrun acceptance. Document native cancellation and exact worker reconciliation
+  before teardown of failed runs with retained scheduler slots.
+  Normalize cleanup drain timeouts to structured unproven results and still
+  verify process-group absence. Freeze the loader-defined native hook closure,
+  reject changed or missing helpers and count unterminated file bytes while
+  preserving native receipt fields. Align installed-owner examples and aggregate
+  terminal cleanup instructions.
+  Reuse the lifecycle test module's canonical import so combined fixture suites
+  keep the same owner instance for cleanup assertions.
+
+- Recheck ready Worktree candidate registration and attached branch before source
+  promotion. Complete final process-group signaling when cancellation interrupts
+  the grace period. Bind acceptance executable lookup to the target checkout and
+  retain validator ownership through coordinator handoff and lifecycle cleanup.
+  Add regressions for these boundaries and align lifecycle/schema references.
+
+- Separate worker concurrency, wave size and retained worktree budgets (defaults
+  4/8/16), with frozen run policy, fresh host/session capacity and whole-wave
+  reservations. Admit independently verified no-change results without cosmetic
+  commits and require producer-owned exact-target receipts for combined waves.
+  Preserve historical evidence and peer heartbeats during acceptance checks.
+- Persist public Worktree merge intent before Git effects, revalidate integrated
+  replay proof, and retain ownership when removed paths reappear. Pin native
+  process groups through descendant cleanup on successful and failed launches.
+  Coordinate shared execution schemas and both coordinator/verifier consumers;
+  old state is retained and rejected without compatibility shims.
+
+- Align selector-format denial feedback with known-project reuse, separate local
+  preparation and one corrected retry. Add semicolon/heredoc regression cases
+  and a separate-call auth-scope control while retaining strict selector parsing.
+
+- Add a shared host-memory observer and foreground supervisor. Warn and continue
+  at <=4 GiB while above 2 GiB; stop owned work safely at <=2 GiB and notify the
+  user. Align Codex/Claude personal policy templates, focused partial-home checks,
+  full setup validators and cleanup tests. Preserve unrelated applications and
+  native configuration; no new hook or persistent monitor is installed.
+
+- Require separately recorded, freshly validated source-integration proof before
+  managed SDLC run completion; keep proof recording and completion distinct.
+  Use one execution-owned native Git message contract for seal creation,
+  interrupted recovery and historical verification. Preserve full bodies,
+  indentation, Unicode and comments under explicit whitespace cleanup. Retain
+  commits and intent when hooks rewrite content instead of publishing a seal.
+  Add real-worktree completion and commit-boundary interruption regressions.
+
+- Observe documented TDD output checkpoints before their tests are sealed.
+  Replace the private classifier-only flag with a named read-only phase purpose;
+  retain clean deployment gates, exact target identity and historical receipts.
+  Add real-Git regressions for output observation and rejected runtime access.
+  Bind pre-seal receipts through the owner's exact seal transition and original
+  wave base when validating later corrective-plan history.
+  Compare full seal messages with Git whitespace cleanup, preserving their bodies.
+
+- Permit unused global LFS configuration in private PR reviews without running
+  LFS or changing caller configuration. Reject actual LFS-managed paths at
+  checkout, repair and publication boundaries. Route release cleanliness and
+  ancestry checks through the same guarded owner. Add read-only historical-task
+  audit and evidence-bound, archived tombstone retirement; retain uncertain
+  owners/effects and preserve shared session evidence. Keep v4 authority and
+  defer full LFS support.
+
+- Isolate standalone and nested PR reviews in canonical owner-bound private Git
+  repositories. Preserve concurrent caller edits and local refs while publishing
+  safe repairs to the existing PR. Add subordinate authority, ordered locks,
+  resumable allocation/deletion and release execution-proof handoffs. Upgrade
+  transaction schemas to v4; drain active older operations before installation.
+  Fail closed on executable hooks/filters/drivers until restricted execution exists.
+  Align parent pause/resume evaluations and schema-cutover guidance, register
+  release consumer regressions in CI, and verify installed cross-owner handoffs.
+
+- Make first SDLC phase initialization a tested coordinator-owned operation.
+  Preserve hook audit telemetry, validate native and managed lease ownership,
+  and recover interrupted initial publication without overwriting evidence or
+  resetting later phases. Keep hooks, intake and verifier observers read-only
+  at this transition.
+
+- Include dated Participants additions and proven initial membership in
+  `jira-report` for `--user` and default self. Discover field/account identities,
+  preserve earlier additions after removal, and distinguish confirmed field
+  absence from missing metadata/history without changing report columns.
+
 - Align commit contract checks with Implement's documented dirty-source boundary,
   native termination, typed result ingestion and coordinator-owned commit receipt.
   Include the shared Git environment module in hook installation expectations.

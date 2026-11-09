@@ -8,6 +8,7 @@ import errno
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shlex
@@ -16,10 +17,12 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zipfile
+from _thread import LockType
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from email.parser import BytesParser
 from enum import Enum
@@ -31,7 +34,7 @@ from urllib.request import url2pathname, urlopen
 
 import yaml
 
-from .. import ingress_policy
+from .. import apply_lock, ingress_policy
 from ..agent.vm_ha.inhibition import (
     LIVE_PEER_REPLACEMENT_CAPABILITY,
     STANDBY_REPLACEMENT_INHIBITION_CAPABILITY,
@@ -59,7 +62,7 @@ from . import ingress_ssh
 from .ssh_client_auth import SSHClientAuth, operator_identity, resolve_ssh_client_auth
 from .ssh_policy import SSHTrustPolicy, configure_paramiko_host_verification
 from .vm_ha_identity import LegacyVMHAIdentity, parse_legacy_vm_ha_identity
-from .vm_ha_package import VMHAAgentPackageError, VMHAPackagePlan
+from .vm_ha_package import VMHAAgentPackageError, VMHAPackagePlan, package_step
 
 _VM_HA_APPLY_QUIESCENCE_SCRIPT = r"""
 import json
@@ -341,6 +344,11 @@ _VM_HA_SERVICE_ASSET_DESTINATIONS = (
     ),
     ("nebius-vpngw-ingress.service", "/etc/systemd/system/nebius-vpngw-ingress.service", 0o644),
     (
+        "nebius-vpngw-strongswan.conf",
+        "/etc/systemd/system/strongswan.service.d/override.conf",
+        0o644,
+    ),
+    (
         "nebius-vpngw-ufw-ordering.conf",
         "/etc/systemd/system/ufw.service.d/override.conf",
         0o644,
@@ -358,6 +366,11 @@ _VM_HA_SERVICE_ASSET_DESTINATIONS = (
         0o755,
     ),
     (
+        "nebius-vpngw-esp4-preflight.service",
+        "/etc/systemd/system/nebius-vpngw-esp4-preflight.service",
+        0o644,
+    ),
+    (
         "nebius-vpngw-vm-ha-guard.service",
         "/etc/systemd/system/nebius-vpngw-vm-ha-guard.service",
         0o644,
@@ -370,11 +383,6 @@ _VM_HA_SERVICE_ASSET_DESTINATIONS = (
     (
         "nebius-vpngw-vm-ha-rearm.service",
         "/etc/systemd/system/nebius-vpngw-vm-ha-rearm.service",
-        0o644,
-    ),
-    (
-        "nebius-vpngw-vm-ha-ordering.conf",
-        "/etc/systemd/system/strongswan-starter.service.d/30-vm-ha.conf",
         0o644,
     ),
     (
@@ -561,7 +569,7 @@ class VMHAAgentArtifact:
                 and schema.value == "nebius-vpngw.agent-capabilities.v1"
                 and isinstance(features, (ast.List, ast.Tuple))
                 and any(
-                    isinstance(item, ast.Constant) and item.value == "independent-heartbeat-v5"
+                    isinstance(item, ast.Constant) and item.value == "independent-heartbeat-v6"
                     for item in features.elts
                 )
                 and any(
@@ -720,7 +728,8 @@ class VMHAAgentArtifact:
                     f"{dist_info}/METADATA": cls._read_wheel_member(
                         wheel,
                         f"{dist_info}/METADATA",
-                        limit=256 * 1024,
+                        # Core metadata includes the full README description.
+                        limit=1024 * 1024,
                     ),
                     f"{dist_info}/WHEEL": cls._read_wheel_member(
                         wheel,
@@ -728,7 +737,16 @@ class VMHAAgentArtifact:
                         limit=64 * 1024,
                     ),
                 }
-                for source_name in ("boot_policy.py", "vm_ha_diagnostics.py"):
+                for source_name in (
+                    "boot_policy.py",
+                    "vm_ha_diagnostics.py",
+                    "ha_activation.py",
+                    "agent/local_commands.py",
+                    "agent/routing_guard.py",
+                    "agent/strongswan_renderer.py",
+                    "agent/vm_ha/runtime.py",
+                    "agent/vm_ha/models.py",
+                ):
                     member_name = "nebius_vpngw/" + source_name
                     required[member_name] = cls._read_wheel_member(
                         wheel, member_name, limit=256 * 1024
@@ -786,6 +804,24 @@ class VMHAAgentArtifact:
                     raise VMHAAgentArtifactError(
                         VMHAAgentArtifactProblem.INCOMPATIBLE, str(error)
                     ) from error
+                for source_name in (
+                    "ha_activation.py",
+                    "agent/main.py",
+                    "agent/local_commands.py",
+                    "agent/routing_guard.py",
+                    "agent/strongswan_renderer.py",
+                    "agent/vm_ha/runtime.py",
+                    "agent/vm_ha/models.py",
+                ):
+                    member_name = "nebius_vpngw/" + source_name
+                    if (
+                        required[member_name]
+                        != (Path(__file__).parent.parent / source_name).read_bytes()
+                    ):
+                        raise VMHAAgentArtifactError(
+                            VMHAAgentArtifactProblem.INCOMPATIBLE,
+                            "VM-HA activation recovery capability must match this CLI; select its built wheel",
+                        )
                 replay_supported = wheel_supports_replay_window(wheel)
                 if replay_supported:
                     for source_name in REPLAY_WINDOW_SOURCES:
@@ -824,7 +860,7 @@ class VMHAAgentArtifact:
             sha256=after_sha256,
             source=source,
             capabilities=(
-                "independent-heartbeat-v5",
+                "independent-heartbeat-v6",
                 ingress_policy.CAPABILITY,
                 LIVE_PEER_REPLACEMENT_CAPABILITY,
                 STANDBY_RESTORATION_CAPABILITY,
@@ -859,7 +895,7 @@ class VMHAAgentArtifact:
                     "approved VM-HA agent artifact changed after planning",
                 )
             if not {
-                "independent-heartbeat-v5",
+                "independent-heartbeat-v6",
                 ingress_policy.CAPABILITY,
                 LIVE_PEER_REPLACEMENT_CAPABILITY,
                 STANDBY_RESTORATION_CAPABILITY,
@@ -917,7 +953,12 @@ class SSHPush:
       - ssh_private_key_path (if omitted, relies on SSH agent/known defaults)
     """
 
-    def __init__(self, ssh_policy: SSHTrustPolicy | None = None) -> None:
+    def __init__(
+        self,
+        ssh_policy: SSHTrustPolicy | None = None,
+        *,
+        authentication_lock: LockType | None = None,
+    ) -> None:
         # Lazy import to avoid hard dependency when running dry-run
         self._paramiko = None
         self._wheel_path: Path | None = None
@@ -926,6 +967,51 @@ class SSHPush:
         self._ssh_policy = ssh_policy
         self._ssh_client_auth: SSHClientAuth | None = None
         self._ssh_client_auth_input: tuple[str, str | None] | None = None
+        self._ssh_client_auth_operator: SSHClientAuth | None = None
+        self._prepared_client_auth = False
+        self._prepared_operator_identity: SSHClientAuth | None = None
+        self._authentication_lock = authentication_lock
+
+    def prepare_client_authentication(self, vm_spec: dict[str, Any]) -> None:
+        """Resolve exact authentication on the owner before concurrent cloud reads.
+
+        Key validation can invoke ssh-keygen. Forking from a package worker while
+        another thread drives gRPC can strand the process inside native at-fork
+        handlers, beyond Python request deadlines. Prepared workers only consume
+        this identity; changed inputs never trigger lazy discovery in a worker.
+        """
+        if self._client_authentication(vm_spec) is None:
+            raise ValueError("Coordinated package SSH requires an exact selected identity")
+        self._prepared_operator_identity = operator_identity()
+        self._prepared_client_auth = True
+
+    def _client_authentication(self, vm_spec: dict[str, Any]) -> SSHClientAuth | None:
+        public_key = str(vm_spec.get("ssh_public_key") or "").strip()
+        raw_private = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
+        auth_input = (public_key, str(raw_private) if raw_private else None)
+        selected = operator_identity()
+        if self._prepared_client_auth:
+            if (
+                auth_input != self._ssh_client_auth_input
+                or selected is not self._prepared_operator_identity
+                or self._ssh_client_auth is None
+            ):
+                raise ValueError("Prepared SSH client identity changed before connection")
+            return self._ssh_client_auth
+        if not public_key and selected is None:
+            return None
+        if (
+            self._ssh_client_auth is None
+            or self._ssh_client_auth_input != auth_input
+            or self._ssh_client_auth_operator is not selected
+        ):
+            self._ssh_client_auth = resolve_ssh_client_auth(
+                public_key,
+                explicit_private_key=Path(str(raw_private)).expanduser() if raw_private else None,
+            )
+            self._ssh_client_auth_input = auth_input
+            self._ssh_client_auth_operator = selected
+        return self._ssh_client_auth
 
     def _connect_client(
         self,
@@ -934,27 +1020,63 @@ class SSHPush:
         hostname: str,
         username: str,
         vm_spec: dict[str, Any],
-        timeout: int = 15,
+        timeout: float = 15.0,
     ) -> None:
-        public_key = str(vm_spec.get("ssh_public_key") or "").strip()
+        from .ssh_commands import DEADLINE, connection_deadline
+
+        deadline = DEADLINE.get()
+        if deadline is not None:
+            acquired = False
+            with connection_deadline(client, deadline):
+                try:
+                    if self._authentication_lock is not None:
+                        acquired = self._authentication_lock.acquire(
+                            timeout=max(0, deadline - time.monotonic())
+                        )
+                        if not acquired:
+                            raise TimeoutError("activation SSH authentication lock expired")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("activation SSH authentication deadline expired")
+                    self._connect_client_unlocked(
+                        client,
+                        hostname=hostname,
+                        username=username,
+                        vm_spec=vm_spec,
+                        timeout=min(timeout, remaining),
+                    )
+                finally:
+                    if acquired:
+                        assert self._authentication_lock is not None
+                        self._authentication_lock.release()
+            return
+        # Parallel member transports can reference the same selected ssh-agent
+        # key. Its signing socket is shared, so only authentication is serialized;
+        # each authenticated client/channel remains independently owned.
+        with self._authentication_lock or nullcontext():
+            self._connect_client_unlocked(
+                client, hostname=hostname, username=username, vm_spec=vm_spec, timeout=timeout
+            )
+
+    def _connect_client_unlocked(
+        self,
+        client: Any,
+        *,
+        hostname: str,
+        username: str,
+        vm_spec: dict[str, Any],
+        timeout: float = 15.0,
+    ) -> None:
+        auth = self._client_authentication(vm_spec)
         raw_private = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
-        if public_key or operator_identity() is not None:
-            auth_input = (public_key, str(raw_private) if raw_private else None)
-            if self._ssh_client_auth is None or self._ssh_client_auth_input != auth_input:
-                self._ssh_client_auth = resolve_ssh_client_auth(
-                    public_key,
-                    explicit_private_key=(
-                        Path(str(raw_private)).expanduser() if raw_private else None
-                    ),
-                )
-                self._ssh_client_auth_input = auth_input
+        if auth is not None:
             client.connect(
                 hostname=hostname,
                 username=username,
                 timeout=timeout,
                 auth_timeout=timeout,
                 banner_timeout=timeout,
-                **self._ssh_client_auth.paramiko_connect_kwargs(),
+                **auth.paramiko_connect_kwargs(),
             )
             return
         client.connect(
@@ -1069,8 +1191,11 @@ class SSHPush:
                 if replacement_policy_request is not None
                 else ()
             ),
-            "sudo systemctl enable nebius-vpngw-vm-ha-guard.service "
-            "nebius-vpngw-vm-ha.service nebius-vpngw-vm-ha-rearm.service",
+            "sudo /usr/bin/python3 -c "
+            + shlex.quote(
+                "from nebius_vpngw.runtime_migration import enable_units; "
+                "enable_units(['nebius-vpngw-vm-ha-guard.service', 'nebius-vpngw-vm-ha.service', 'nebius-vpngw-vm-ha-rearm.service'])"
+            ),
             "sudo systemctl restart nebius-vpngw-vm-ha-guard.service",
             "sudo /usr/bin/python3 -m nebius_vpngw.boot_policy",
             "sudo systemctl restart nebius-vpngw-vm-ha.service",
@@ -1080,7 +1205,7 @@ class SSHPush:
             "sudo systemctl is-active --quiet nebius-vpngw-vm-ha-rearm.service",
         )
 
-    def require_vm_ha_heartbeat_v5(
+    def require_vm_ha_heartbeat_v6(
         self, ssh_target: str, inst_cfg: InstanceResolvedConfig, local_cfg: dict
     ) -> None:
         """Reject a one-member wire change before replacing installed code."""
@@ -1114,7 +1239,7 @@ class SSHPush:
                 isinstance(value, dict)
                 and value.get("schema") == "nebius-vpngw.agent-capabilities.v1"
                 and isinstance(value.get("features"), list)
-                and "independent-heartbeat-v5" in value["features"]
+                and "independent-heartbeat-v6" in value["features"]
             ):
                 raise RuntimeError("heartbeat wire upgrade requires coordinated two-member apply")
         finally:
@@ -1169,11 +1294,12 @@ class SSHPush:
     def _install_vm_ha_assets_from_artifact_command(remote_wheel: str) -> str:
         """Install service assets directly from the already verified wheel bytes."""
 
-        from .ordinary_apply import PREVIOUS_UFW_ORDERING
+        from .ordinary_apply import PREVIOUS_AGENT_ORDERINGS, PREVIOUS_UFW_ORDERING
 
         script = (
             f"assets = {_VM_HA_SERVICE_ASSET_DESTINATIONS!r}\n"
             f"previous_ufw_ordering = {PREVIOUS_UFW_ORDERING!r}\n"
+            f"previous_agent_orderings = {PREVIOUS_AGENT_ORDERINGS!r}\n"
             + """\
 import os
 import pathlib
@@ -1195,7 +1321,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         destination = pathlib.Path(destination_text)
         if name == "nebius-vpngw-agent-ordering.conf" and destination.exists():
             ordinary = archive.read("nebius_vpngw/systemd/nebius-vpngw-ordinary-agent-ordering.conf")
-            if destination.read_bytes() not in (payload, ordinary):
+            if destination.read_bytes() not in (payload, ordinary, *previous_agent_orderings):
                 raise RuntimeError("product agent override has unknown contents")
         destination.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary = tempfile.mkstemp(
@@ -1291,22 +1417,31 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         commands: Iterable[str],
         *,
         required_remote: bool,
+        deadline: float | None = None,
+        serialize_activation: bool = False,
     ) -> bool:
         """Run activation commands and preserve one bounded, sanitized failure."""
 
         had_failures = False
+        deadline = deadline if deadline is not None else time.monotonic() + 120.0
         for command in commands:
             command_class = cls._remote_command_class(command)
-            try:
-                _stdin, stdout, stderr = client.exec_command(
-                    command,
-                    get_pty=True,
-                    # Admission: quiesce35 + locks5 + observe15 + guard30 + transport10.
-                    timeout=95 if command_class == "admit HA checkpoint activation" else 20,
+            if serialize_activation:
+                command = (
+                    "sudo -n install -d -o root -g root -m 0755 /run/nebius-vpngw && "
+                    "sudo -n flock -x -n /run/nebius-vpngw/activation-writer.lock sh -c "
+                    + shlex.quote(command)
                 )
-                safe_stdout = cls._read_bounded_remote_output(stdout)
-                safe_stderr = cls._read_bounded_remote_output(stderr)
-                return_code = stdout.channel.recv_exit_status()
+            try:
+                if required_remote:
+                    from .ssh_commands import run
+
+                    return_code, safe_stdout, safe_stderr = run(client, command, deadline=deadline)
+                else:
+                    _stdin, stdout, stderr = client.exec_command(command, get_pty=True, timeout=20)
+                    safe_stdout = cls._read_bounded_remote_output(stdout)
+                    safe_stderr = cls._read_bounded_remote_output(stderr)
+                    return_code = stdout.channel.recv_exit_status()
             except Exception as error:
                 if required_remote:
                     raise VMHARemoteActivationError(
@@ -1338,24 +1473,42 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     def _wait_for_vm_ha_materialization(
         client: Any,
         *,
-        attempts: int = 12,
-        interval_seconds: float = 5.0,
+        timeout_seconds: float = 60.0,
+        interval_seconds: float = 1.0,
+        clock: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         """Wait for the controller-owned passive materialization predicate."""
 
-        if attempts < 1:
-            raise ValueError("VM-HA materialization attempts must be positive")
+        if not all(
+            math.isfinite(value) and value > 0 for value in (timeout_seconds, interval_seconds)
+        ):
+            raise ValueError("VM-HA materialization timeout and interval must be positive")
+        deadline = clock() + timeout_seconds
         command = "sudo /usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-materialized"
-        for attempt in range(1, attempts + 1):
-            stdin, stdout, stderr = client.exec_command(command, get_pty=True, timeout=20)
-            rc = stdout.channel.recv_exit_status()
-            stdout.read()
-            stderr.read()
+        while (remaining := deadline - clock()) > 0:
+            from .ssh_commands import run
+
+            observation_deadline = min(deadline, clock() + 20.0)
+            try:
+                rc, _, _ = run(
+                    client,
+                    command,
+                    deadline=observation_deadline,
+                    limit=0,
+                    clock=clock,
+                    sleeper=sleeper,
+                )
+            except Exception as error:
+                raise RuntimeError(
+                    "VM-HA passive materialization observation failed within the bounded wait"
+                ) from error
+            remaining = deadline - clock()
+            if remaining <= 0:
+                break
             if rc == 0:
                 return
-            if attempt < attempts:
-                sleeper(interval_seconds)
+            sleeper(min(interval_seconds, remaining))
         raise RuntimeError("VM-HA passive materialization did not converge within the bounded wait")
 
     def _ensure_paramiko(self):
@@ -1565,9 +1718,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
             "operation_id": operation_id,
             "schema": "nebius-vpngw/vm-ha-apply-lock-v2",
         }
-        encoded = (
-            json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n"
-        ).encode("utf-8")
+        encoded = apply_lock.encode(payload)
         return encoded, VMHAApplyLockReceipt(
             cluster_id=cluster_id,
             node_id=node_id,
@@ -1689,9 +1840,10 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
                 f"sudo test \"$(sudo stat -c '%U:%G:%a' {pending})\" = root:root:600 && "
                 f"echo '{receipt.record_sha256}  {pending}' | "
                 "sudo sha256sum --check --status && "
-                f"if sudo test -e {destination}; then "
-                f"echo '{receipt.record_sha256}  {destination}' | "
-                "sudo sha256sum --check --status; fi && "
+                f"if sudo test -e {destination} || sudo test -L {destination}; then "
+                "sudo /usr/bin/python3 -B -c "
+                f"{shlex.quote(apply_lock.verification_script())} "
+                f"{destination} {receipt.record_sha256}; fi && "
                 f"sudo mv {pending} {destination} && sudo cat {destination}"
             )
             command = self._vm_ha_rearm_locked_command(action, create_parent=True)
@@ -1721,6 +1873,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         *,
         runtime_binding: VMHARuntimeBinding,
         lock_receipt: VMHAApplyLockReceipt,
+        predecessor_operation_id: str | None = None,
     ) -> VMHAOwnerAdoptionReceipt:
         """Declare the exact cloud-selected owner inside its fenced apply."""
 
@@ -1752,6 +1905,27 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         lock_path = "/var/lib/nebius-vpngw/vm-ha/apply.lock"
         destination = "/var/lib/nebius-vpngw/vm-ha/apply-owner-adoption.json"
         pending = f"{destination}.new"
+        predecessor_check = (
+            f"echo '{receipt.record_sha256}  {destination}' | sudo sha256sum --check --status"
+        )
+        if predecessor_operation_id is not None:
+            from .. import ha_repair
+
+            if (
+                re.fullmatch(r"[a-f0-9]{64}", predecessor_operation_id) is None
+                or predecessor_operation_id == lock_receipt.operation_id
+            ):
+                raise ValueError("VM-HA owner adoption predecessor is invalid")
+            previous = json.loads(encoded)
+            previous["operation_id"] = predecessor_operation_id
+            previous_digest = hashlib.sha256(apply_lock.encode(previous)).hexdigest()
+            script = Path(ha_repair.__file__).read_text() + (
+                "\nimport sys\narchive_apply_owner_adoption(*sys.argv[1:])\n"
+            )
+            predecessor_check = (
+                f"sudo /usr/bin/python3 -B -c {shlex.quote(script)} "
+                f"{receipt.record_sha256} {previous_digest} {lock_receipt.record_sha256}"
+            )
         paramiko = self._ensure_paramiko()
         client = paramiko.SSHClient()
         try:
@@ -1777,9 +1951,8 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
                 f"sudo install -o root -g root -m 0600 {temporary} {pending} && "
                 f"echo '{receipt.record_sha256}  {pending}' | "
                 "sudo sha256sum --check --status && "
-                f"if sudo test -e {destination}; then "
-                f"echo '{receipt.record_sha256}  {destination}' | "
-                "sudo sha256sum --check --status; fi && "
+                f"if sudo test -e {destination} || sudo test -L {destination}; then "
+                f"{predecessor_check}; fi && "
                 f"sudo mv {pending} {destination} && sudo cat {destination}"
             )
             command = self._vm_ha_rearm_locked_command(action, create_parent=False)
@@ -1866,9 +2039,16 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
                 "else exit 42; fi"
             )
             command = self._vm_ha_rearm_locked_command(action, create_parent=False)
-            stdin, stdout, stderr = client.exec_command(command, timeout=60)
-            return_code = stdout.channel.recv_exit_status()
-            result = stdout.read().decode("utf-8").strip()
+            from .ssh_commands import DEADLINE, run
+
+            deadline = DEADLINE.get()
+            if deadline is not None:
+                return_code, output, _ = run(client, command, deadline=deadline)
+                result = output.decode("utf-8").strip()
+            else:
+                stdin, stdout, stderr = client.exec_command(command, timeout=60)
+                return_code = stdout.channel.recv_exit_status()
+                result = stdout.read().decode("utf-8").strip()
             if return_code != 0 or result != "CLEARED":
                 raise RuntimeError(f"VM-HA apply-lock clear failed for {node.node_id}")
         except Exception as error:
@@ -2295,9 +2475,16 @@ printf "VM_HA_DEACTIVATED=1\\n"
             yaml.safe_load(inst_cfg.config_yaml), artifact.capabilities
         )
         dependency_plan = dict(artifact.dependency_plans).get(inst_cfg.hostname)
-        with ExitStack() as resources:
+        with package_step("package-admission"), ExitStack() as resources:
             if dependency_plan is None and handoff is None:
+                from .package_reservation import SCOPE
+                from .package_reservation import read as read_reservation
                 from .vm_ha_package import inspect_plan
+
+                scope = SCOPE.get()
+                reservation = (
+                    read_reservation(*scope, inst_cfg.hostname) if scope is not None else None
+                )
 
                 # Fresh/recovery hosts use the same selected dependency installer.
                 # Ignoring pip-owned predecessors leaves conflicting dist-info.
@@ -2308,8 +2495,51 @@ printf "VM_HA_DEACTIVATED=1\\n"
                     local_cfg,
                     target_identity=inst_cfg.hostname,
                     wheel=artifact.path,
+                    reservation=reservation,
+                    resume_parent=reservation["request"]["package"]["desired"].get("ha_parent")
+                    if reservation is not None
+                    else None,
+                    resume_manifest=reservation["request"]["package"]["desired"]
+                    if reservation is not None
+                    else None,
                 )
                 resources.callback(dependency_plan.close)
+            from .activation_recovery import Recovery
+            from .package_recovery import COORDINATED
+            from .package_recovery import prepare as recover_packages
+            from .package_reservation import SCOPE
+
+            scope = SCOPE.get()
+            if scope is not None and not COORDINATED.get():
+                root, execution, authority = scope
+                recovery = Recovery(root, execution=execution, authority=authority)
+                result = {}
+
+                def effect():
+                    result.update(
+                        self._ensure_vm_ha_planned_package(
+                            ssh_target,
+                            inst_cfg,
+                            local_cfg,
+                            artifact=artifact,
+                            dependency_plan=dependency_plan,
+                            handoff=handoff,
+                            checkpoint_conversion=checkpoint_conversion,
+                        )
+                    )
+
+                recover_packages(
+                    recovery,
+                    effect=effect,
+                    members=lambda: [(self, dependency_plan, local_cfg, checkpoint_conversion)],
+                    stage="packages-" + inst_cfg.hostname,
+                    handoffs={inst_cfg.hostname: handoff} if handoff is not None else None,
+                )
+                if not result:
+                    # Read back the same completed receipt after recovery; the
+                    # guest owner does not rerun a completed package effect.
+                    effect()
+                return result
             return self._ensure_vm_ha_planned_package(
                 ssh_target,
                 inst_cfg,
@@ -2333,253 +2563,88 @@ printf "VM_HA_DEACTIVATED=1\\n"
     ) -> dict[str, object]:
         """Install an exact product wheel with a verified dependency plan."""
 
-        wheel_path = artifact.path
         wheel_sha256 = artifact.sha256
         if handoff is not None:
             if dependency_plan is None:
                 raise VMHAAgentPackageError("HA handoff requires its approved package plan")
-            receipt = (
-                handoff.verify_prepared()
-                if handoff.package_receipt is not None
-                else handoff.prepare_package(dependency_plan)
-            )
+            with package_step("handoff-package"):
+                receipt = (
+                    handoff.verify_prepared()
+                    if handoff.package_receipt is not None
+                    else handoff.prepare_package(dependency_plan)
+                )
             if not set(artifact.capabilities).issubset(receipt.get("capabilities", [])):
                 raise VMHAAgentPackageError("HA handoff package capabilities changed")
             return receipt
         if dependency_plan is None:
             raise VMHAAgentPackageError("VM-HA package requires a selected dependency plan")
         from .ordinary_apply import digest, remote
+        from .ordinary_handoff import observe_guarded
         from .vm_ha_package import package_predecessor
 
-        current = remote(
-            self,
-            ssh_target,
-            inst_cfg,
-            local_cfg,
-            {"action": "inspect-package", "manifest": dependency_plan.manifest},
-        )["observation"]
-        if digest(package_predecessor(current)) != digest(dependency_plan.observation):
-            raise VMHAAgentPackageError("VM-HA package predecessor changed after approval")
+        previous_job = observe_guarded(self, dependency_plan, local_cfg, checkpoint_conversion)
+        resuming_package = previous_job["state"] != "NOT_SUBMITTED"
+
+        if not resuming_package:
+            with package_step("inspect-predecessor"):
+                current = remote(
+                    self,
+                    ssh_target,
+                    inst_cfg,
+                    local_cfg,
+                    {"action": "inspect-package", "manifest": dependency_plan.manifest},
+                )["observation"]
+                if digest(package_predecessor(current)) != digest(dependency_plan.observation):
+                    raise VMHAAgentPackageError("VM-HA package predecessor changed after approval")
         from .checkpoint_conversion import guard_package
 
-        guard_package(
-            self,
-            ssh_target,
-            inst_cfg,
-            local_cfg,
-            artifact=wheel_sha256,
-            boot_id=dependency_plan.observation["boot_id"],
-            expected=checkpoint_conversion,
-            publish=False,
-        )
-        remote_directory: str | None = None
-        remote_wheel: str | None = None
-        paramiko = self._ensure_paramiko()
-        vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
-        username: str = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
-        client = paramiko.SSHClient()
-        try:
-            configure_paramiko_host_verification(
-                client,
-                paramiko,
-                policy=self._ssh_policy,
-                hostname=inst_cfg.hostname,
-                transport_host=ssh_target,
-            )
-            self._connect_client(
-                client,
-                hostname=ssh_target,
-                username=username,
-                vm_spec=vm_spec,
-            )
-            ingress_ssh.preflight(client, inst_cfg.config_yaml)
-            _stdin, stdout, _stderr = client.exec_command(
-                "umask 077 && mktemp -d /tmp/nebius-vpngw-agent.XXXXXXXXXX",
-                timeout=10,
-            )
-            if stdout.channel.recv_exit_status() != 0:
-                raise VMHAAgentPackageError("VM-HA agent package staging directory creation failed")
-            remote_directory = stdout.read().decode("ascii").strip()
-            if re.fullmatch(r"/tmp/nebius-vpngw-agent\.[A-Za-z0-9]{10}", remote_directory) is None:
-                raise VMHAAgentPackageError("VM-HA agent package staging directory was invalid")
-            remote_wheel = f"{remote_directory}/{wheel_path.name}"
-            with artifact.open_verified() as wheel_stream, client.open_sftp() as sftp:
-                sftp.putfo(
-                    wheel_stream,
-                    remote_wheel,
-                    file_size=os.fstat(wheel_stream.fileno()).st_size,
-                    confirm=True,
+        if not resuming_package:
+            with package_step("checkpoint-admission"):
+                guard_package(
+                    self,
+                    ssh_target,
+                    inst_cfg,
+                    local_cfg,
+                    artifact=wheel_sha256,
+                    boot_id=dependency_plan.observation["boot_id"],
+                    expected=checkpoint_conversion,
+                    publish=False,
                 )
-                for path in dependency_plan.dependency_paths:
-                    expected = dependency_plan.manifest["dependency_wheels"][path.name]
-                    if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-                        raise VMHAAgentPackageError(
-                            "VM-HA dependency artifact changed after approval"
-                        )
-                    sftp.put(str(path), f"{remote_directory}/{path.name}")
-            verify_wheel_command = (
-                f"echo {shlex.quote(f'{wheel_sha256}  {remote_wheel}')} "
-                "| sha256sum --check --status"
-            )
-            _stdin, stdout, _stderr = client.exec_command(verify_wheel_command, timeout=30)
-            if stdout.channel.recv_exit_status() != 0:
-                raise VMHAAgentPackageError(
-                    "VM-HA agent package bytes did not match the approved artifact"
-                )
-            from .ordinary_remote import DEPENDENCY_INSTALL_SCRIPT
+        from .ordinary_handoff import prepare_guarded
+        from .vm_ha_package import stage
 
-            dependency_targets = []
-            for path in dependency_plan.dependency_paths:
-                target = f"{remote_directory}/{path.name}"
-                expected = dependency_plan.manifest["dependency_wheels"][path.name]
-                _stdin, stdout, _stderr = client.exec_command(
-                    f"echo {shlex.quote(f'{expected}  {target}')} | sha256sum --check --status",
-                    timeout=30,
+        with package_step("stage-payload"):
+            if not resuming_package:
+                stage(self, dependency_plan, local_cfg, artifact=artifact)
+        with package_step("guarded-install"):
+            receipt = prepare_guarded(self, dependency_plan, local_cfg, checkpoint_conversion)
+        if resuming_package:
+            from .vm_ha_package import verify_prepared
+
+            with package_step("guarded-install"):
+                verify_prepared(
+                    self,
+                    dependency_plan,
+                    local_cfg,
+                    checkpoint_conversion=checkpoint_conversion,
+                    convert=True,
+                    allow_new_boot=True,
                 )
-                if stdout.channel.recv_exit_status() != 0:
-                    raise VMHAAgentPackageError("VM-HA dependency upload integrity failed")
-                dependency_targets.append(shlex.quote(target))
-            install_command = (
-                "sudo /usr/bin/python3 -m pip install --no-index --no-deps "
-                "--break-system-packages " + shlex.quote(remote_wheel)
-            )
-            if dependency_targets:
-                install_command = (
-                    "sudo /usr/bin/python3 -B -c "
-                    + shlex.quote(DEPENDENCY_INSTALL_SCRIPT)
-                    + " "
-                    + " ".join(dependency_targets)
-                    + " && "
-                    + install_command
+        if not resuming_package:
+            with package_step("checkpoint-publication"):
+                guard_package(
+                    self,
+                    ssh_target,
+                    inst_cfg,
+                    local_cfg,
+                    artifact=wheel_sha256,
+                    boot_id=dependency_plan.observation["boot_id"],
+                    expected=checkpoint_conversion,
+                    publish=True,
                 )
-            install_command = "sudo -n apt-get install -y nftables && " + install_command
-            _stdin, stdout, stderr = client.exec_command(install_command, get_pty=True, timeout=180)
-            safe_stdout = self._read_bounded_remote_output(stdout)
-            safe_stderr = self._read_bounded_remote_output(stderr)
-            if stdout.channel.recv_exit_status() != 0:
-                failure_class = self._remote_failure_class(safe_stdout, safe_stderr)
-                raise VMHAAgentPackageError(
-                    f"VM-HA agent package installation failed ({failure_class})"
-                )
-            # pip preserves compatible dependencies. Reinstall only the exact
-            # approved product wheel to handle equal-version source rebuilds.
-            _stdin, stdout, _stderr = client.exec_command(
-                "sudo /usr/bin/python3 -m pip install --no-deps --force-reinstall "
-                f"--break-system-packages {shlex.quote(remote_wheel)}",
-                timeout=120,
-            )
-            if stdout.channel.recv_exit_status() != 0:
-                raise VMHAAgentPackageError("VM-HA exact agent package installation failed")
-            verification = (
-                "import cffi,cryptography,importlib.metadata as m,json,nebius_vpngw;"
-                "from cryptography.hazmat.primitives.asymmetric import ec;"
-                "print(json.dumps({'schema':'nebius-vpngw/vm-ha-package-v1',"
-                "'package_version':m.version('nebius-vpngw'),"
-                "'cryptography_version':cryptography.__version__,"
-                "'cffi_version':cffi.__version__},sort_keys=True,separators=(',',':')))"
-            )
-            verify_command = f"/usr/bin/python3 -c {shlex.quote(verification)}"
-            _stdin, stdout, _stderr = client.exec_command(verify_command, timeout=30)
-            if stdout.channel.recv_exit_status() != 0:
-                raise VMHAAgentPackageError("VM-HA agent package verification failed")
-            try:
-                receipt = json.loads(stdout.read().decode("ascii"))
-            except (UnicodeError, json.JSONDecodeError):
-                raise VMHAAgentPackageError(
-                    "VM-HA agent package verification was malformed"
-                ) from None
-            if not (
-                isinstance(receipt, dict)
-                and set(receipt)
-                == {
-                    "schema",
-                    "package_version",
-                    "cryptography_version",
-                    "cffi_version",
-                }
-                and receipt.get("schema") == "nebius-vpngw/vm-ha-package-v1"
-                and all(
-                    isinstance(receipt.get(name), str) and bool(receipt[name])
-                    for name in (
-                        "package_version",
-                        "cryptography_version",
-                        "cffi_version",
-                    )
-                )
-            ):
-                raise VMHAAgentPackageError("VM-HA agent package verification was invalid")
-            capability_command = (
-                "sudo /usr/bin/python3 -m nebius_vpngw.agent.main --agent-capabilities"
-            )
-            _stdin, stdout, _stderr = client.exec_command(capability_command, timeout=30)
-            if stdout.channel.recv_exit_status() != 0:
-                raise VMHAAgentPackageError("VM-HA agent capability verification failed")
-            try:
-                capability = json.loads(stdout.read().decode("ascii"))
-            except (UnicodeError, json.JSONDecodeError):
-                raise VMHAAgentPackageError(
-                    "VM-HA agent capability verification was malformed"
-                ) from None
-            features = capability.get("features") if isinstance(capability, dict) else None
-            if not (
-                isinstance(capability, dict)
-                and capability.get("schema") == "nebius-vpngw.agent-capabilities.v1"
-                and isinstance(features, list)
-                and all(isinstance(feature, str) for feature in features)
-                and STANDBY_RESTORATION_CAPABILITY in features
-            ):
-                raise VMHAAgentPackageError("VM-HA agent capability verification was invalid")
-            if not set(artifact.capabilities).issubset(features):
-                raise VMHAAgentPackageError(
-                    "VM-HA agent capability verification did not match the approved artifact"
-                )
-            asset_command = self._install_vm_ha_assets_from_artifact_command(remote_wheel)
-            _stdin, stdout, stderr = client.exec_command(
-                asset_command,
-                get_pty=True,
-                timeout=60,
-            )
-            safe_stdout = self._read_bounded_remote_output(stdout)
-            safe_stderr = self._read_bounded_remote_output(stderr)
-            if stdout.channel.recv_exit_status() != 0:
-                failure_class = self._remote_failure_class(safe_stdout, safe_stderr)
-                raise VMHAAgentPackageError(
-                    f"VM-HA service asset installation failed ({failure_class})"
-                )
-            guard_package(
-                self,
-                ssh_target,
-                inst_cfg,
-                local_cfg,
-                artifact=wheel_sha256,
-                boot_id=dependency_plan.observation["boot_id"],
-                expected=checkpoint_conversion,
-                publish=True,
-            )
-            receipt["artifact_sha256"] = wheel_sha256
-            receipt["capabilities"] = features
-            return receipt
-        except Exception as error:
-            identity_failure = _host_identity_failure(error, paramiko, ssh_target)
-            if identity_failure is not None:
-                raise identity_failure from error
-            raise
-        finally:
-            if remote_wheel is not None and remote_directory is not None:
-                try:
-                    staged = [remote_wheel]
-                    staged.extend(
-                        f"{remote_directory}/{path.name}"
-                        for path in dependency_plan.dependency_paths
-                    )
-                    cleanup = (
-                        "rm -f -- " + " ".join(shlex.quote(path) for path in staged) + " && "
-                        f"rmdir {shlex.quote(remote_directory)}"
-                    )
-                    client.exec_command(cleanup, timeout=10)
-                except Exception:
-                    pass
-            client.close()
+        if not set(artifact.capabilities).issubset(receipt.get("capabilities", [])):
+            raise VMHAAgentPackageError("HA guarded package capabilities differ")
+        return receipt
 
     @staticmethod
     def _validate_vm_ha_mtls_action_result(action: str, result: object) -> None:
@@ -2930,6 +2995,17 @@ printf "VM_HA_DEACTIVATED=1\\n"
         vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
         username: str = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
         client = paramiko.SSHClient()
+        watchdog: threading.Timer | None = None
+        expired = threading.Event()
+        deadline: float | None = None
+        failure: Exception | None = None
+
+        def expire() -> None:
+            expired.set()
+            # Transport closure wakes Paramiko's otherwise unbounded exec
+            # acknowledgement wait as well as its output/status waiters.
+            client.close()
+
         command = """sudo /bin/bash -lc '
 set -eu
 units=(nebius-vpngw-vm-ha-rearm.service nebius-vpngw-vm-ha.service)
@@ -2985,18 +3061,67 @@ printf "VM_HA_MUTATION_SERVICES_STOPPED=1\\n"
                 username=username,
                 vm_spec=vm_spec,
             )
-            stdin, stdout, stderr = client.exec_command(command, timeout=90)
-            return_code = stdout.channel.recv_exit_status()
-            output = stdout.read().decode("utf-8").splitlines()
+            deadline = time.monotonic() + 90.0
+            watchdog = threading.Timer(90.0, expire)
+            watchdog.daemon = True
+            watchdog.start()
+            _stdin, stdout, _stderr = client.exec_command(command, timeout=90)
+            channel = stdout.channel
+            output_bytes = bytearray()
+            try:
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise RuntimeError(
+                            "VM-HA stop verification exceeded its deadline; remote result is unverified"
+                        )
+                    # Channel I/O timeouts do not bound recv_exit_status(). Drain
+                    # both streams while polling; noisy output cannot defer the
+                    # deadline or fill the SSH receive window indefinitely.
+                    if channel.recv_ready():
+                        output_bytes.extend(channel.recv(65536))
+                        if len(output_bytes) > 1048576:
+                            raise RuntimeError("VM-HA stop verification output exceeded its limit")
+                    if channel.recv_stderr_ready():
+                        channel.recv_stderr(65536)
+                    if (
+                        channel.exit_status_ready()
+                        and not channel.recv_ready()
+                        and not channel.recv_stderr_ready()
+                    ):
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError(
+                                "VM-HA stop verification exceeded its deadline; remote result is unverified"
+                            )
+                        return_code = channel.recv_exit_status()
+                        break
+                    time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
+            finally:
+                channel.close()
+            output = output_bytes.decode("utf-8").splitlines()
             if return_code != 0 or "VM_HA_MUTATION_SERVICES_STOPPED=1" not in output:
                 raise RuntimeError("VM-HA mutation services or dependent jobs did not stop")
         except Exception as error:
-            identity_failure = _host_identity_failure(error, paramiko, ssh_target)
-            if identity_failure is not None:
-                raise identity_failure from error
-            raise
+            failure = error
         finally:
+            if watchdog is not None:
+                watchdog.cancel()
+                # start() can raise before starting a thread, or be interrupted
+                # after starting it. Cancel either way; join only a started one.
+                if watchdog.ident is not None:
+                    watchdog.join()
             client.close()
+        # Settle the watchdog before accepting success, including a completion
+        # racing its expiry. Unknown remote outcomes never authorize activation.
+        if expired.is_set() or (deadline is not None and time.monotonic() >= deadline):
+            raise RuntimeError(
+                "VM-HA stop verification exceeded its deadline; remote result is unverified"
+            ) from failure
+        if failure is not None:
+            identity_failure = _host_identity_failure(failure, paramiko, ssh_target)
+            if identity_failure is not None:
+                raise identity_failure from failure
+            raise failure
 
     def inspect_vm_ha_prehost(self, ssh_target: str, instance_name: str, local_cfg: dict) -> dict:
         """Read bounded installed identity and operation evidence through exact SSH pins."""
@@ -3053,6 +3178,10 @@ printf "VM_HA_MUTATION_SERVICES_STOPPED=1\\n"
 
         if not ssh_target or self._ssh_policy is None:
             raise ValueError("VM-HA pre-host inspection requires an exact-pinned SSH target")
+        from .apply_diagnostics import ObservationUnavailable
+        from .ssh_commands import budget, connection_deadline
+        from .vm_ha_cloud import vm_ha_observation_remaining
+
         paramiko = self._ensure_paramiko()
         vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
         username = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
@@ -3060,42 +3189,62 @@ printf "VM_HA_MUTATION_SERVICES_STOPPED=1\\n"
         if len(source) > 4 * 1024 * 1024:
             raise ValueError("VM-HA source transport exceeds limit")
         client = paramiko.SSHClient()
+        deadline = time.monotonic() + 30
         try:
-            configure_paramiko_host_verification(
-                client,
-                paramiko,
-                policy=self._ssh_policy,
-                hostname=instance_name,
-                transport_host=ssh_target,
-            )
-            self._connect_client(client, hostname=ssh_target, username=username, vm_spec=vm_spec)
-            stdin, stdout, _stderr = client.exec_command(
-                "sudo -n PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B", timeout=30
-            )
-            deadline = time.monotonic() + 30
-            sent = 0
-            while sent < len(source):
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise RuntimeError("VM-HA source upload timed out; result unverified")
-                stdin.channel.settimeout(remaining)
-                count = stdin.channel.send(source[sent : sent + 65536])
-                if not count:
-                    raise RuntimeError("VM-HA source transport closed; result unverified")
-                sent += count
-            stdin.channel.shutdown_write()
-            stdout.channel.settimeout(max(0.001, deadline - time.monotonic()))
-            output = stdout.read(1048577)
-            if len(output) > 1048576 or stdout.channel.recv_exit_status() != 0:
-                raise RuntimeError("VM-HA pre-host observation failed closed")
-            payload = json.loads(output)
-            if not isinstance(payload, dict):
-                raise ValueError("VM-HA pre-host observation is malformed")
-            return payload
+            with budget(deadline) as deadline, connection_deadline(client, deadline):
+                configure_paramiko_host_verification(
+                    client,
+                    paramiko,
+                    policy=self._ssh_policy,
+                    hostname=instance_name,
+                    transport_host=ssh_target,
+                )
+                self._connect_client(
+                    client, hostname=ssh_target, username=username, vm_spec=vm_spec
+                )
+                stdin, stdout, _stderr = client.exec_command(
+                    "sudo -n PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B",
+                    timeout=vm_ha_observation_remaining(),
+                )
+                sent = 0
+                while sent < len(source):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("VM-HA source upload timed out; result unverified")
+                    stdin.channel.settimeout(remaining)
+                    count = stdin.channel.send(source[sent : sent + 65536])
+                    if not count:
+                        raise EOFError("VM-HA source transport closed; result unverified")
+                    sent += count
+                stdin.channel.shutdown_write()
+                stdout.channel.settimeout(max(0.001, deadline - time.monotonic()))
+                output = stdout.read(1048577)
+                if len(output) > 1048576 or stdout.channel.recv_exit_status() != 0:
+                    raise ObservationUnavailable(
+                        "inspect-predecessor", "guest-observation-rejected", retryable=False
+                    )
+                payload = json.loads(output)
+                if not isinstance(payload, dict):
+                    raise ValueError("VM-HA pre-host observation is malformed")
+                return payload
         except Exception as error:
             identity_failure = _host_identity_failure(error, paramiko, ssh_target)
             if identity_failure is not None:
-                raise identity_failure from error
+                raise ObservationUnavailable(
+                    "verify-ssh-authority", "ssh-identity-conflict", retryable=False
+                ) from error
+            if isinstance(error, (PermissionError, paramiko.AuthenticationException)):
+                raise ObservationUnavailable(
+                    "inspect-predecessor", "ssh-access-denied", retryable=False
+                ) from error
+            if isinstance(error, (OSError, EOFError, paramiko.SSHException)):
+                raise ObservationUnavailable(
+                    "inspect-predecessor", "ssh-observation-unavailable"
+                ) from error
+            if isinstance(error, ValueError):
+                raise ObservationUnavailable(
+                    "inspect-predecessor", "guest-response-malformed", retryable=False
+                ) from error
             raise
         finally:
             client.close()
@@ -3423,6 +3572,73 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
             print("[SSHPush] dist/ directory not found; wheel not built")
         return None
 
+    def activation_control(
+        self,
+        target: str,
+        instance: InstanceResolvedConfig,
+        local: dict,
+        request: dict,
+        *,
+        deadline: float,
+    ) -> dict:
+        """Exact-pinned, bounded observation/submission; never replay a lost reply."""
+        from .apply_diagnostics import DiagnosticFailure, Failure, ObservationUnavailable
+        from .ssh_commands import budget, run
+
+        def unavailable_reply(reason: str) -> DiagnosticFailure:
+            if request.get("action") in ("inspect", "inspect-unlock"):
+                return ObservationUnavailable("activation-observation", reason)
+            error = DiagnosticFailure("activation command reply unavailable; outcome unverified")
+            error.first = Failure("activation-command", "reply-unavailable", (reason,))
+            return error
+
+        paramiko = self._ensure_paramiko()
+        client = paramiko.SSHClient()
+        try:
+            with budget(deadline) as deadline:
+                configure_paramiko_host_verification(
+                    client,
+                    paramiko,
+                    policy=self._ssh_policy,
+                    hostname=instance.hostname,
+                    transport_host=target,
+                )
+                spec = (local.get("gateway_group") or {}).get("vm_spec") or {}
+                self._connect_client(
+                    client,
+                    hostname=target,
+                    username=spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu"),
+                    vm_spec=spec,
+                )
+                payload = base64.b64encode(json.dumps(request).encode()).decode()
+                try:
+                    rc, output, _ = run(
+                        client,
+                        "sudo -n /usr/bin/python3 -m nebius_vpngw.ha_activation " + payload,
+                        deadline=deadline,
+                        limit=32768,
+                    )
+                except EOFError as error:
+                    raise unavailable_reply("ssh-response-eof") from error
+                if rc == -1:
+                    raise unavailable_reply("ssh-exit-status-missing")
+                if rc:
+                    raise RuntimeError("activation recovery authority or observation unavailable")
+                try:
+                    value = json.loads(output)
+                except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                    reason = (
+                        "guest-response-malformed" if output.strip() else "guest-response-missing"
+                    )
+                    raise unavailable_reply(reason) from error
+                if not isinstance(value, dict):
+                    raise unavailable_reply("guest-response-not-object")
+                if "error" in value:
+                    raise RuntimeError("activation recovery authority or observation unavailable")
+                return value
+        finally:
+            client.close()
+
     def push_config_and_reload(
         self,
         ssh_target: str,
@@ -3439,7 +3655,29 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
         handoff: Any = None,
         apply_operation_id: str | None = None,
         initialize_checkpoint: bool = False,
+        activation_recovery: Any = None,
+        deadline: float | None = None,
+        serialize_activation: bool = False,
     ) -> None:
+        if activation_recovery is not None:
+            from .activation_driver import activate
+
+            activate(
+                self,
+                ssh_target,
+                inst_cfg,
+                local_cfg,
+                recovery=activation_recovery,
+                staged_receipt=staged_receipt,
+                runtime_binding=runtime_binding,
+                agent_artifact=agent_artifact,
+                replacement_policy_request=replacement_policy_request,
+                fail_closed=fail_closed,
+                handoff=handoff,
+                apply_operation_id=apply_operation_id,
+                initialize_checkpoint=initialize_checkpoint,
+            )
+            return
         if staged_receipt is None:
             from .ordinary_apply import execute_plan
 
@@ -3583,7 +3821,11 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
                 "if [ -f /usr/local/bin/nebius-vpngw-esp4-preflight.sh ]; then sudo chmod 0755 /usr/local/bin/nebius-vpngw-esp4-preflight.sh; fi",
                 "sudo chmod 0644 /etc/systemd/system/nebius-vpngw-agent.service",
                 "sudo systemctl daemon-reload",
-                "sudo systemctl enable nebius-vpngw-ingress.service",
+                "sudo /usr/bin/python3 -c "
+                + shlex.quote(
+                    "from nebius_vpngw.runtime_migration import enable_units; "
+                    "enable_units(['nebius-vpngw-ingress.service'])"
+                ),
                 *self._vm_ha_reset_failed_commands(vm_ha=staged_receipt is not None),
                 *checkpoint_commands,
                 *(
@@ -3592,6 +3834,11 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
                     ]
                     if staged_receipt is not None and handoff is None
                     else []
+                ),
+                "sudo /usr/bin/python3 -c "
+                + shlex.quote(
+                    "from nebius_vpngw import runtime_migration as m; import json,pathlib; "
+                    "m.activate_ha(json.loads(pathlib.Path('/var/lib/nebius-vpngw/vm-ha/apply.lock').read_text()))"
                 ),
                 *(
                     self._vm_ha_control_service_commands(
@@ -3602,9 +3849,19 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
                     else ()
                 ),
                 # Enable and start route fix timer (only if service file exists)
-                "if [ -f /etc/systemd/system/nebius-vpngw-fix-routes.timer ]; then sudo systemctl enable --now nebius-vpngw-fix-routes.timer; fi",
+                "sudo /usr/bin/python3 -c "
+                + shlex.quote(
+                    "from nebius_vpngw.runtime_migration import enable_units; "
+                    "enable_units(['nebius-vpngw-fix-routes.timer'])"
+                ),
+                "sudo systemctl start nebius-vpngw-fix-routes.timer",
                 # Enable and start health monitoring service (only if service file exists)
-                "if [ -f /etc/systemd/system/nebius-vpngw-health-monitor.service ]; then sudo systemctl enable --now nebius-vpngw-health-monitor.service; fi",
+                "sudo /usr/bin/python3 -c "
+                + shlex.quote(
+                    "from nebius_vpngw.runtime_migration import enable_units; "
+                    "enable_units(['nebius-vpngw-health-monitor.service'])"
+                ),
+                "sudo systemctl start nebius-vpngw-health-monitor.service",
                 *(
                     [
                         # Ordinary non-HA setup retains the established eager
@@ -3627,11 +3884,18 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
                 client,
                 cmds,
                 required_remote=required_remote,
+                deadline=deadline,
+                serialize_activation=serialize_activation,
             )
 
             if staged_receipt is not None:
                 try:
-                    self._wait_for_vm_ha_materialization(client)
+                    self._wait_for_vm_ha_materialization(
+                        client,
+                        timeout_seconds=min(60.0, deadline - time.monotonic())
+                        if deadline is not None
+                        else 60.0,
+                    )
                 except Exception:
                     client.close()
                     raise
@@ -3651,244 +3915,8 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
             if not had_failures:
                 print("[SSHPush] HA configuration materialized and verified")
 
-            # Verify routing table health after route fix ran
-            try:
-
-                def _check_routing_health() -> tuple[str, str]:
-                    stdin, stdout, stderr = client.exec_command(
-                        "ip rule list | grep -q 'lookup 220' && echo 'EXISTS' || echo 'OK'",
-                        timeout=10,
-                    )
-                    table220 = stdout.read().decode().strip()
-
-                    stdin, stdout, stderr = client.exec_command(
-                        "ip route show 169.254.0.0/16 2>/dev/null | grep -q eth0 && echo 'EXISTS' || echo 'OK'",
-                        timeout=10,
-                    )
-                    apipa = stdout.read().decode().strip()
-                    return table220, apipa
-
-                table220_status, apipa_status = _check_routing_health()
-                if table220_status != "OK" or apipa_status != "OK":
-                    import time
-
-                    time.sleep(5)
-                    table220_status, apipa_status = _check_routing_health()
-
-                if table220_status == "OK" and apipa_status == "OK":
-                    print("[SSHPush] ✓ Routing table clean (Table 220 and broad APIPA removed)")
-                else:
-                    if table220_status == "EXISTS":
-                        print(
-                            "[SSHPush] ⚠ Table 220 policy route still exists (may impact VPN routing)"
-                        )
-                    if apipa_status == "EXISTS":
-                        print(
-                            "[SSHPush] ⚠ Broad APIPA route (169.254.0.0/16) still exists (should be removed for XFRM tunnels)"
-                        )
-            except Exception:
-                # Non-critical check, don't fail deployment
-                pass
-
-            # Verify service is actually running
-            try:
-                print("[SSHPush] Verifying service status...")
-                stdin, stdout, stderr = client.exec_command(
-                    "sudo systemctl is-active nebius-vpngw-agent", timeout=10
-                )
-                rc = stdout.channel.recv_exit_status()
-                status = stdout.read().decode().strip()
-
-                if rc == 0 and status == "active":
-                    print("[SSHPush] ✓ nebius-vpngw-agent is running")
-                else:
-                    print(f"[SSHPush] ✗ nebius-vpngw-agent is NOT running (status: {status})")
-                    # Get detailed status for troubleshooting
-                    stdin, stdout, stderr = client.exec_command(
-                        "sudo systemctl status nebius-vpngw-agent --no-pager -l", timeout=10
-                    )
-                    detailed_status = stdout.read().decode()
-                    print(f"[SSHPush] Service status:\n{detailed_status}")
-
-                # Verify strongSwan (account for different service names) and FRR
-                strongswan_checks = [
-                    ("strongswan-starter", "sudo systemctl is-active strongswan-starter"),
-                    ("strongswan-swanctl", "sudo systemctl is-active strongswan-swanctl"),
-                    (
-                        "charon",
-                        "pgrep -x charon >/dev/null && echo active || echo inactive",
-                    ),
-                ]
-                strongswan_statuses = []
-                strongswan_ok = False
-                for name, cmd in strongswan_checks:
-                    stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
-                    rc = stdout.channel.recv_exit_status()
-                    svc_status = stdout.read().decode().strip()
-                    strongswan_statuses.append(f"{name}={svc_status or rc}")
-                    if rc == 0 and svc_status == "active":
-                        print(f"[SSHPush] ✓ strongSwan is running ({name})")
-                        strongswan_ok = True
-                        break
-                if not strongswan_ok:
-                    joined = ", ".join(strongswan_statuses)
-                    print(f"[SSHPush] ✗ strongSwan appears inactive (checked: {joined})")
-
-                # FRR check - wait up to 15 seconds for FRR to start
-                frr_active = False
-                svc_status = "unknown"
-                for attempt in range(3):  # 3 attempts, 5 seconds apart
-                    stdin, stdout, stderr = client.exec_command(
-                        "sudo systemctl is-active frr", timeout=10
-                    )
-                    rc = stdout.channel.recv_exit_status()
-                    svc_status = stdout.read().decode().strip()
-                    if rc == 0 and svc_status == "active":
-                        print("[SSHPush] ✓ frr is running")
-                        frr_active = True
-                        break
-                    elif attempt < 2:  # Don't sleep on last attempt
-                        import time
-
-                        time.sleep(5)
-
-                if not frr_active:
-                    print(f"[SSHPush] ✗ frr is NOT running (status: {svc_status})")
-
-                # Check BGP session status via FRR instead of TCP port probing
-                # (TCP probes fail when BGP sessions are already established)
-                try:
-                    defaults_mode = (
-                        (local_cfg.get("defaults", {}) or {}).get("routing", {}) or {}
-                    ).get("mode", "bgp")
-
-                    # Collect BGP peers for this instance (active and passive tunnels)
-                    bgp_peers = []
-                    for conn in local_cfg.get("connections") or []:
-                        routing_mode = conn.get("routing_mode") or defaults_mode
-                        if routing_mode != "bgp":
-                            continue
-                        for tun in conn.get("tunnels") or []:
-                            if int(tun.get("gateway_instance_index", 0)) != inst_cfg.instance_index:
-                                continue
-                            ha_role = tun.get("ha_role", "active")
-                            if ha_role == "disable":
-                                continue  # Skip only explicitly disabled tunnels
-                            r_ip = tun.get("inner_remote_ip")
-                            if r_ip:
-                                bgp_peers.append(r_ip)
-
-                    if bgp_peers:
-                        # Wait for IPsec tunnels to establish before testing connectivity
-                        import json
-                        import time
-
-                        print("[SSHPush] Waiting for IPsec tunnels to establish...")
-                        time.sleep(10)
-
-                        print(
-                            f"[SSHPush] Verifying tunnel connectivity to {len(bgp_peers)} peer(s)..."
-                        )
-
-                        # Step 1: Test ping connectivity to BGP peers
-                        all_peers_reachable = True
-                        for peer_ip in bgp_peers:
-                            cmd = (
-                                f"ping -c 2 -W 2 {peer_ip} >/dev/null 2>&1 && echo OK || echo FAIL"
-                            )
-                            stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
-                            result = stdout.read().decode().strip()
-                            if result == "OK":
-                                print(f"[SSHPush] ✓ Tunnel connectivity OK: {peer_ip} is reachable")
-                            else:
-                                print(
-                                    f"[SSHPush] ✗ Tunnel connectivity FAILED: {peer_ip} is NOT reachable"
-                                )
-                                all_peers_reachable = False
-
-                        if not all_peers_reachable:
-                            print(
-                                "[SSHPush] WARNING: Some peers are not reachable. BGP may not establish."
-                            )
-
-                        # Step 2: Wait for BGP sessions to establish (up to 60 seconds)
-                        print("[SSHPush] Waiting for BGP sessions to establish...")
-                        max_wait_time = 60
-                        start_time = time.time()
-                        all_established = False
-                        last_states: dict[str, str] = {}
-
-                        while (time.time() - start_time) < max_wait_time:
-                            cmd = "sudo vtysh -c 'show bgp summary json' 2>/dev/null || echo '{}'"
-                            stdin, stdout, stderr = client.exec_command(cmd, timeout=10)
-                            output = stdout.read().decode().strip()
-
-                            try:
-                                bgp_summary = json.loads(output) if output != "{}" else {}
-                                ipv4_peers = bgp_summary.get("ipv4Unicast", {}).get("peers", {})
-
-                                established_count = 0
-                                current_states: dict[str, str] = {}
-
-                                for peer_ip in bgp_peers:
-                                    peer_info = ipv4_peers.get(peer_ip, {})
-                                    state = peer_info.get("state", "Unknown")
-                                    current_states[peer_ip] = state
-
-                                    if state == "Established":
-                                        established_count += 1
-
-                                # Print state changes
-                                for peer_ip, state in current_states.items():
-                                    if peer_ip not in last_states or last_states[peer_ip] != state:
-                                        elapsed = int(time.time() - start_time)
-                                        if state == "Established":
-                                            print(
-                                                f"[SSHPush] ✓ BGP session with {peer_ip} is Established (after {elapsed}s)"
-                                            )
-                                        elif state != "Unknown":
-                                            print(
-                                                f"[SSHPush]   BGP session with {peer_ip}: {state} (waiting...)"
-                                            )
-
-                                last_states = current_states
-
-                                if established_count == len(bgp_peers):
-                                    all_established = True
-                                    break
-
-                                # Wait 3 seconds before checking again
-                                time.sleep(3)
-
-                            except (json.JSONDecodeError, Exception):
-                                # FRR might not be fully started yet
-                                time.sleep(3)
-                                continue
-
-                        # Final status report
-                        if all_established:
-                            elapsed = int(time.time() - start_time)
-                            print(
-                                f"[SSHPush] ✓ All BGP sessions established successfully (took {elapsed}s)"
-                            )
-                        else:
-                            elapsed = int(time.time() - start_time)
-                            print(f"[SSHPush] ⚠ BGP sessions not yet established after {elapsed}s")
-                            print(
-                                f"[SSHPush]   Current states: {', '.join([f'{ip}={state}' for ip, state in last_states.items()])}"
-                            )
-                            print(
-                                "[SSHPush]   BGP sessions may take additional time to establish. Check with: nebius-vpngw status"
-                            )
-                except Exception:
-                    # BGP check is informational only, don't fail deployment
-                    pass
-            except Exception as e:
-                print(f"[SSHPush] Failed to verify service status: {e}")
-
-            try:
-                client.close()
-            except Exception:
-                pass  # Ignore Paramiko cleanup warnings
+            # The caller owns exact fenced/native/heartbeat verification and
+            # owner release. Advisory service, ping and BGP polling here would
+            # delay both members while forwarding is deliberately fenced.
         finally:
             client.close()

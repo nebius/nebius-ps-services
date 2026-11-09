@@ -307,6 +307,8 @@ def accept(project: Path, home: Path, owner: str, session: str, value: dict, *, 
 
 
 def _writers_quiescent(run_dir):
+    from workflow_validation import require_quiescent
+    require_quiescent(run_dir)
     # A worker result is insufficient: it can be written before the native
     # process terminates. Slot release is recorded only by the coordinator.
     for path in sorted((run_dir / "execution").glob("*/waves/*.json")):
@@ -327,6 +329,8 @@ def continue_run(project: Path, home: Path, owner: str, session: str, *, takeove
         if run["project_root"] != str(project.absolute()):
             raise WorkflowError("OWNERSHIP_INVALID", "project selection disagrees with active run")
         if run["coordinator_session_sha256"] != session_hash(session):
+            from workflow_validation import require_quiescent
+            require_quiescent(run_dir)
             if takeover is None:
                 _writers_quiescent(run_dir)
             else:
@@ -403,6 +407,12 @@ def complete_run(run_dir: Path, session: str):
             observed = _reconcile(run_dir, Path(run["project_root"]), outer)
             if observed.get("state") != "released":
                 raise WorkflowError("COMPLETION_BLOCKED", "release the managed outer lease after final evidence before completion")
+            if run["owner"] == "agentic-sdlc":
+                from workflow_interop import require_completed_source_integration, ExecutionInteropError
+                try:
+                    require_completed_source_integration(run_dir, Path(run["project_root"]))
+                except ExecutionInteropError as error:
+                    raise WorkflowError("COMPLETION_BLOCKED", str(error)) from error
         from workflow_issue_resolution import write_completion
         write_completion(run_dir, records)
         run.update(status="done", updated_at=now())

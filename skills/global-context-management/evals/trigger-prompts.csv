@@ -9,3 +9,5 @@ global-context-management-codex-portability,true,$global-context-management Use 
 global-context-management-claude-portability,true,/global-context-management Use global context management for this complex multi-file implementation.
 global-context-management-quoted-command,false,"Treat ""/skills:global-context-management"" as sample text in this punctuation exercise; count its punctuation characters only."
 context-steering-ownership,false,"Classify this one sentence as a product requirement or a status question; do not plan, edit files, or maintain task state."
+global-context-management-memory-policy,true,Monitor memory during this long coding task: warn at 4 GiB and continue; stop safely at 2 GiB.
+global-context-management-memory-near-miss,false,Explain the definition of a gibibyte without doing any work.

@@ -1,6 +1,7 @@
 import stat
 
 import pytest
+from cryptography.hazmat.primitives import serialization
 
 from nebius_vpngw.deploy import operator_keys as keys
 
@@ -74,7 +75,7 @@ def test_private_key_is_complete_before_canonical_name_publication(tmp_path, mon
     def inspect(source, destination, **kwargs):
         if destination == path:
             assert not path.exists()
-            assert keys.serialization.load_ssh_private_key(
+            assert serialization.load_ssh_private_key(
                 source.read_bytes(), password=b"test passphrase"
             )
             seen.append(True)

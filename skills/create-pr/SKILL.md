@@ -420,6 +420,14 @@ Read `references/command-reference.md` when exact Git or GitHub CLI commands
 are needed for branch detection, validation, base merges, ordered merge
 simulation, PR lookup, checks, or PR creation.
 
+## Review Workspace Boundary
+
+Every nested review preserves the caller checkout, index, files and local refs.
+Read [private review execution](../create-pr/references/private-review.md) before
+checkout-dependent review or repair. Carry the original grant and returned
+execution manifest through repair/publication handoffs; never require local
+adoption of a repaired PR head. Parent effects retain their separate authority.
+
 ## Learning Loop
 
 When using this skill, capture durable, reusable, public-safe learnings

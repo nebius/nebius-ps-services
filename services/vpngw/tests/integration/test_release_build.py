@@ -101,7 +101,12 @@ def test_wheel_staging_excludes_operator_configuration(monkeypatch, tmp_path) ->
 
 
 def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
+    from nebius_vpngw.deploy.ssh_push import VMHAAgentArtifact
+
     wheel_path = _build_wheel(tmp_path)
+    artifact = VMHAAgentArtifact.from_wheel(wheel_path, source="release-build-test")
+    assert artifact.path == wheel_path.resolve()
+    artifact.verify_current()
 
     with ZipFile(wheel_path) as wheel_zip:
         names = set(wheel_zip.namelist())
@@ -253,6 +258,7 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
     assert "nebius_vpngw/ordinary_operations.py" in archive.stdout
     for source in (
         "checkpoint_upgrade.py",
+        "deploy/stopped_upgrade.py",
         "ipsec_observation.py",
         "tunnel_restart.py",
         "agent/tunnel_iterator.py",
@@ -270,6 +276,7 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
         *ingress_policy.INGRESS_SOURCES,
         "packet_health.py",
         "checkpoint_upgrade.py",
+        "deploy/stopped_upgrade.py",
         "ipsec_observation.py",
         "tunnel_restart.py",
         "agent/tunnel_iterator.py",
@@ -296,7 +303,11 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
         "ordinary_bootstrap.py",
         "ingress_policy.py",
         "ordinary_operations.py",
+        "runtime_migration.py",
+        "package_worker.py",
+        "python_package_recovery.py",
         "ordinary_routes.py",
+        "ha_tunnel_policy.py",
         "tunnel_state.py",
         "deploy/ordinary_remote.py",
     ):
@@ -320,6 +331,36 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
         cwd=tmp_path,
         capture_output=True,
         text=True,
+        timeout=30,
+    )
+    assert probe.returncode == 0, probe.stderr
+
+    # The actual frozen upstream sources can bootstrap a dependency-free guest.
+    for name in reader.toc:
+        if (
+            name.startswith("vici/")
+            or name.startswith("vici-6.0.3.dist-info/")
+            or name in {"nebius_vpngw/observation_bundle.py", "nebius_vpngw/ipsec_observation.py"}
+        ):
+            path = extracted / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(reader.extract(name))
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            "import sys,subprocess,json;sys.path.insert(0,sys.argv[1]);"
+            "from nebius_vpngw.observation_bundle import streamed_bootstrap;"
+            "source=streamed_bootstrap()+\"\\nprint(sys.modules['_vpngw_ipsec_observation'].snapshot(.01).json())\";"
+            "r=subprocess.run([sys.executable,'-I','-S','-c',source],capture_output=True);"
+            "assert r.returncode==0,r.stderr; assert json.loads(r.stdout)['complete'] is False",
+            str(extracted),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
         timeout=30,
     )
     assert probe.returncode == 0, probe.stderr

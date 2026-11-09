@@ -1,9 +1,16 @@
 # Nebius Troubleshooting Playbook
 
+## Applicability
+
 Use this playbook as the Nebius product and control-plane overlay for Compute,
 Managed Kubernetes, Soperator, VPC, storage, quota or capacity, IAM, AI
 services, and observability. Continue with the relevant generic playbooks for
 guest OS, Kubernetes, Slurm, network, storage, GPU, and application evidence.
+
+## Version Fingerprint
+
+Pin service/API and CLI versions, region/resource generation, image, guest stack,
+GPU model and allocated fabric topology where implicated; use current official docs.
 
 ## Adaptive Decision Guide
 
@@ -17,8 +24,10 @@ Use only rows implicated by the failing path; record material unexamined boundar
 
 <!-- markdownlint-enable MD013 -->
 
-### Escalation Conditions
+### Diagnostic Effects
 
+Passive bounded inspection comes first. Active diagnostics remain coordinator-owned;
+workers may not launch tests, captures, debug containers, stress or repairs.
 Escalate only if the next observation can separate remaining explanations. Bound
 time, output, target and effects; preserve evidence and original settings. Treat
 production or unconfirmed targets as read-only without exact action authority.
@@ -53,6 +62,10 @@ Verify instance and GPU-cluster status, platform and preset, image, network
 interfaces, security groups, boot and secondary volume attachment, maintenance
 or interruption history, serial or diagnostic evidence when authorized, guest
 agent and OS state, GPU inventory, and InfiniBand topology when present.
+
+For distributed GPU work, compare actual scheduler placement with the allocated
+fabric, POD and scalable-unit topology. A cluster status cannot establish collective
+performance; use rank/node/fabric evidence from the same workload and window.
 
 ### Managed Kubernetes
 
@@ -132,6 +145,8 @@ main skill's environment and action-specific approval gates. Preserve operation
 IDs and pre-change state, use bounded changes, and verify rollback.
 
 ## Official Sources
+
+- [GPU cluster topology](https://docs.nebius.com/compute/clusters/gpu/topology/index)
 
 - [Nebius AI Cloud documentation](https://docs.nebius.com/)
 - [Nebius documentation index for agents](https://docs.nebius.com/llms.txt)

@@ -1,5 +1,5 @@
+import importlib.util
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -12,7 +12,7 @@ def build_binary() -> None:
       - PyInstaller installed in the current environment (dev dependency)
       - __main__.py present to serve as entry point
     """
-    if shutil.which("pyinstaller") is None:
+    if importlib.util.find_spec("PyInstaller") is None:
         print("[build-binary] PyInstaller not found. Install with: pip install pyinstaller")
         sys.exit(1)
 
@@ -42,6 +42,7 @@ def build_binary() -> None:
             f"{remote_runner}{os.pathsep}nebius_vpngw/deploy",
         ]
     )
+    from .handoff_bootstrap import SOURCES as HANDOFF_SOURCES
     from .ingress_policy import INGRESS_SOURCES
     from .ordinary_routes import OWNERSHIP_SOURCES
     from .replay_window import REPLAY_WINDOW_SOURCES
@@ -51,6 +52,7 @@ def build_binary() -> None:
             *OWNERSHIP_SOURCES,
             *REPLAY_WINDOW_SOURCES,
             *INGRESS_SOURCES,
+            *(relative for _name, relative in HANDOFF_SOURCES),
             "ordinary_bootstrap.py",
             "boot_policy.py",
             "packet_health.py",
@@ -66,12 +68,23 @@ def build_binary() -> None:
 
     for relative in (
         "ha_repair.py",
+        "ha_activation.py",
+        "agent/main.py",
+        "agent/local_commands.py",
+        "agent/routing_guard.py",
+        "agent/strongswan_renderer.py",
+        "agent/vm_ha/runtime.py",
+        "runtime_migration.py",
+        "apply_lock.py",
+        "faults.py",
         "checkpoint_upgrade.py",
         "ipsec_observation.py",
+        "observation_bundle.py",
         "tunnel_restart.py",
         "agent/tunnel_iterator.py",
         "deploy/handoff_remote.py",
         "deploy/operator_guest.py",
+        "deploy/stopped_upgrade.py",
         "agent/vm_ha_checkpoint.py",
         "agent/vm_ha_controller.py",
         "agent/vm_ha/models.py",
@@ -85,8 +98,16 @@ def build_binary() -> None:
         destination = "nebius_vpngw" + ("/" + str(Path(relative).parent) if "/" in relative else "")
         add_data_args.extend(["--add-data", f"{source}{os.pathsep}{destination}"])
 
+    import vici
+
+    for source in Path(vici.__file__).parent.glob("*.py"):
+        add_data_args.extend(["--add-data", f"{source}{os.pathsep}vici"])
     cmd = [
-        "pyinstaller",
+        sys.executable,
+        "-m",
+        "PyInstaller",
+        "--copy-metadata",
+        "vici",
         "--onefile",
         "--name",
         "nebius-vpngw",

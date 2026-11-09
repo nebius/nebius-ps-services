@@ -61,10 +61,13 @@ may dispatch another independent task while peers continue. All assignments
 retain the same wave base. Integration waits for the full wave, merges in stable
 task order, runs combined validation and removes exact clean worker resources.
 
-Record observed native capacity in host-capacity.json, schema
-workflow/host-capacity-v1, with native_slots and bounded evidence. The effective
-limit is at most four and at most configured/host capacity; no observation means
-serial execution. Record actual native intervals to substantiate overlap.
+Use the shared [wave policy and acceptance contract](../../worktree/references/worker-waves.md).
+Freeze W/B/P independently (defaults 4/8/16) before allocation, and lock the
+executable validation sidecar with the plan. Refresh total native workflow capacity
+through `observe-capacity` before arm/refill. Zero waits; unknown permits one total
+worker. Record actual native intervals to substantiate overlap.
+No-change proposals require `validate-target --task`; every combined wave requires
+`validate-target` followed by `wave-complete --receipt`, including all-no-change waves.
 
 Coordinator-owned termination receipts bind assignment_digest,
 worker_session_hash, observer_session_hash, native_handle, status=terminated

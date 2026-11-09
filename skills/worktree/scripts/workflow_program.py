@@ -262,7 +262,7 @@ def slice_basis(run_dir: Path, project: Path, execution_id: str, tasks=None):
             covered_requirements.update(task.requirements)
         if covered != features or covered_requirements != requirements:
             reject("slice tasks omit selected requirement or feature mappings")
-    return {"inputs": inputs["inputs"], "slice": selected, "predecessor_evidence": proofs, "retained_worker_limit": 4}
+    return {"inputs": inputs["inputs"], "slice": selected, "predecessor_evidence": proofs}
 
 
 def require_complete(run_dir):

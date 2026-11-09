@@ -359,7 +359,7 @@ class HookTestCase(unittest.TestCase):
             write_json(
                 run_dir / "execution" / "FEAT-001" / "coordinator.json",
                 {
-                    "schema": "workflow/execution-coordinator-v2",
+                    "schema": "workflow/execution-coordinator-v3",
                 "owner": "agentic-sdlc",
                     "status": "done",
                     "base_branch": "main",
@@ -455,7 +455,7 @@ class HookTestCase(unittest.TestCase):
         write_json(
             run_dir / "execution" / "FEAT-001" / "coordinator.json",
             {
-                "schema": "workflow/execution-coordinator-v2",
+                "schema": "workflow/execution-coordinator-v3",
                 "owner": "agentic-sdlc",
                 "execution_id": "FEAT-001",
                 "project_root": str(self.project),
@@ -1057,7 +1057,8 @@ class HookTestCase(unittest.TestCase):
         self.switch_feature()
         self.active_run()
         for action in ("begin", "prepare", "execute", "review", "sync", "validate-order", "finish",
-                       "checkout-target", "complete-checkout", "publish-target"):
+                       "checkout-target", "complete-checkout", "publish-target",
+                       "begin-review", "open-review", "review-context", "cleanup-review"):
             command = (
                 "python3 /Users/example/.agents/skills/commit/scripts/"
                 f"commit_transaction.py {action} --private canonical"

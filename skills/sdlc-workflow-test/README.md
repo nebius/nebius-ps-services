@@ -34,8 +34,11 @@ oversized or unsafe files fail without discarding earlier diagnostics.
 Historical original TDD evidence may survive appended corrective waves after
 clean promotion. The verifier checks exact locked plans, completed owner replan
 records, preserved completed tasks, the original TDD seal and unchanged execution
-identity. Missing, altered or ambiguous lineage fails; later acceptance and new
-phase submissions still require the current basis.
+identity. A pre-seal receipt must name the seal commit's sole parent and match
+its earlier owner intent and commit message; the first wave and preserved
+assignments must bind that seal. Exact-seal observations and unchanged clean
+seals remain valid. Missing, altered or ambiguous lineage fails; later acceptance
+and new phase submissions still require the current basis.
 
 Completion acceptance clicks the initially unchecked control once, then waits
 within the existing assertion deadline for its saved checked state. This supports
@@ -64,8 +67,8 @@ $sdlc-workflow-test --destroy
 - No flags run only the existing lightweight deterministic verifier and its
   disposable fixture. It does not create, inspect, or change a real Docker
   application or browser session.
-- `--create-live-test` runs deterministic preflight, safely destroys the previous active
-  exactly owned test environment, creates a fresh local task-board GUI,
+- `--create-live-test` safely destroys both previous exactly owned fixture types,
+  then runs fresh deterministic preflight, creates a fresh local task-board GUI,
   Django/Gunicorn server, and PostgreSQL database through the normal Agentic
   SDLC workflow, performs headless Playwright Test GUI UAT, writes a complete report, and
   destroys every exact owned live resource even after a test failure. Each
@@ -74,10 +77,16 @@ $sdlc-workflow-test --destroy
 - `--create-live-test --keep` retains the owned project, private evidence/state,
   running application, database volume and built image; browsers still close.
 - `--resume` revalidates and continues one retained failed or partial run.
-- `--destroy` removes the one retained owned application and raw evidence while
-  preserving sanitized reports and lifecycle history. It closes only the exact
+- `--destroy` removes the owned live application and lightweight fixture,
+  including their local origins, profiles, auxiliary homes and context-bound raw
+  evidence, while preserving sanitized reports and lifecycle history. It closes only the exact
   recorded verifier-owned Chrome process group; existing Chrome instances are
-  never targets. Repeating it returns `ALREADY_DESTROYED`.
+  never targets. Repeating it returns `ALREADY_DESTROYED` only when both fixture types are absent.
+
+Owned Git validation disables optional locks so a cleanliness observation cannot
+refresh the index sealed in a cleanup checkpoint. Interrupted cleanup still
+requires exact file identity and content. Git documents this behavior under
+[background refresh](https://git-scm.com/docs/git-status#_background_refresh).
 
 `--keep` alone, mixed create/destroy, and unknown lifecycle flags are rejected
 before mutation. A repeated create never starts a second live stack: it uses
@@ -148,12 +157,14 @@ acceptance failure requires a fresh trial, even if it was recorded by mistake.
 - Runs `scripts/verify_agentic_sdlc.py` for static discovery, SDLC contract,
   capability regressions, a nested disposable project, and hook fixture checks.
   The worktree, execution, three-tier and task-wave aggregates use explicit
-  900-second budgets; verifier and hook suites use 600 seconds, and other
+  900-second budgets; verifier, hook and dispatch suites use 600 seconds, and other
   capability suites keep the 120-second default.
   Rejected fixtures are preserved, dependent hook checks are skipped with
   explicit prerequisite failures, and the verifier still writes its report.
   Failed suites report their exit code and bounded failing-test identifiers
   without copying raw diagnostic output.
+  A cleanup drain timeout still verifies process-group absence and records
+  `EXECUTION_UNPROVEN`, retaining earlier results and stopping later suites.
   Stop fixtures require the coordinator-selected slice route and reject UAT
   inference from aggregate feature completion, including partially delivered
   features and future pending work.
@@ -163,7 +174,7 @@ acceptance failure requires a fresh trial, even if it was recorded by mistake.
   overrides locally; production environment-rejection guards remain enabled.
   Dedicated capability rows require full document coverage, exact source
   admission, phase/slice barriers, current completion evidence, 2,100-task
-  graphs, indexed handoffs and the real-Git four-worktree retention limit.
+  graphs, indexed handoffs and real-Git configurable worktree retention and independent acceptance receipts.
   Source admission also requires actual first canonical publication from a
   committed baseline, exact contract-commit recovery, managed lease ordering,
   publication-race rejection and rejection of unjournaled commits. Three-tier
@@ -177,6 +188,9 @@ acceptance failure requires a fresh trial, even if it was recorded by mistake.
   for both Codex and Claude.
   Both files must be regular and produce successful matching SHA-256 digests;
   missing or unreadable files never satisfy parity, even on both sides.
+  Native activation also checks the loader-defined hook dependency closure
+  against the frozen runtime catalog. Full file bytes count, including an
+  unterminated final line; matching source and installed drift cannot pass.
 - Statically verifies the exact-SHA Agentic SDLC PR publication/review/merge
   modes and includes bounded observability, exact publication authorization,
   executed qualification, protected merge admission and recovery regressions.
@@ -229,7 +243,7 @@ acceptance failure requires a fresh trial, even if it was recorded by mistake.
   at `sdlc-start` on the fixture baseline. This requires the coordinator's first
   phase checkpoint after intake;
   accepted registration alone is insufficient. The verifier never creates it.
-  Exact JSON ownership and real hook discovery must agree before any other phase
+  Exact JSON ownership and source state-loader discovery must agree before any other phase
   passes. Runtime targeting rejects
   empty or mismatched ownership; final semantic ingestion requires the receipt.
   Late recovery cannot certify an earlier trial: start a fresh trial.
@@ -382,13 +396,13 @@ Shipping and UAT always require a clean promoted checkout. After completed promo
 Compose uses the exact promoted primary checkout and requires integration
 resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
 
-Read-only classifier observations have a separate explicit target purpose. While
-the bound root coordinator is running `sdlc-classify-failure`, it may observe
-unsealed integration files without committing them or changing phase. Exact
-worktree, objective, basis, branch, HEAD, ownership and ancestry checks remain.
-This purpose is never used by Compose, runtime inventory, build certification,
-browser acceptance or test execution; explicit clean-target requests still win.
-Worker selectors and dirty promoted checkouts remain rejected.
+Read-only phase observations use a named private purpose. Classification permits
+unsealed integration files during `sdlc-classify-failure`; TDD additionally permits
+its documented `tests_red` and `tests_ready` output checkpoints before sealing.
+Exact worktree, objective, basis, branch, HEAD, ownership and ancestry checks remain.
+These purposes never reach Compose, inventory, build, browser or test execution;
+explicit clean requests still win. Worker selectors and dirty promoted checkouts
+remain rejected. Read the runtime-inventory reference before phase collection.
 
 Pre-commit runtime testing may select a worker only through the private helper's
 `run-compose --worker-task TASK-NNN --assignment-digest DIGEST -- <action>`.
@@ -399,3 +413,55 @@ live scope guard. Uncommitted changes must stay inside its write claims. This
 selection never changes phase evidence or UAT targeting; after integration, rerun
 the original oracle using the normal integration target. The shared runtime must
 not serve concurrent worker tests.
+
+## Verification And Cleanup Owners
+
+The private suite catalog/runner records command outcomes, elapsed time and
+bounded progress, with a measured 600-second dispatch budget. Reports group
+failed suites/prerequisites separately from affected capabilities. Required
+failures still block native qualification; interruption preserves completed
+results and remains incomplete. Prior report bytes are archived before reruns.
+Browser-specific recovery advice follows the recorded phase or command owner;
+a summary mentioning unrun browser acceptance does not attribute its failure to
+Playwright.
+
+Aggregate cleanup uses `scripts/verification_workspace.py --verification-root
+<root> destroy`. The existing three-tier helper remains the live-resource owner.
+The workspace owner admits exact lightweight generation receipts, serializes
+writers, and checkpoints file identities/content before resumable deletion.
+Reports cannot overlap raw state. Unsealed old fixtures remain untouched and
+reported; a new dedicated root is the supported qualification path.
+An accepted but incomplete startup can be cleaned only after the existing product
+owner independently validates its project, run, binding and lock, native exit,
+worker/validator quiescence and released leases. Cleanup creates no PASS receipt.
+For failed runs whose terminated workers still occupy scheduler slots, the native
+coordinator completes its existing cancellation and reconciliation path before
+exit. The harness preserves failure evidence and budgets and never clears slots
+or performs product transitions on the coordinator's behalf.
+
+Startup v3 records source state-loader discovery. Initial `record-phase sdlc-start`
+requires `--coordinator-session` with the actual native session identity. This is
+an explicit observation selector, never an ambient identity override; later
+observations use the immutable receipt and reject unused selectors. Startup also
+requires a clean unchanged baseline. A separate native activation
+receipt correlates naturally emitted Codex turn/execution-item IDs with installed hook
+events and the exact startup session. The bounded adapter currently supports
+Codex CLI 0.166.0; other event formats remain unqualified. Raw prompts and tool
+arguments are never copied into receipts. Source discovery alone cannot qualify
+three-tier PASS. Complete normal hook review in the disposable native home before
+the frozen trial, then use the generation-fenced `record-native-activation`
+helper before final acceptance. Installation maintenance precedes verification.
+The v8 lifecycle pins the physical installed catalog and its runtime closure.
+Run lifecycle, launcher and workspace actions from that catalog in fresh Python
+processes; the native launcher rejects source-catalog execution. Equal file bytes
+do not make source and installed execution-basis paths interchangeable. Aggregate
+verification keeps source checks separate and delegates `validate-results` to the
+configured installed owner. Missing, moved or changed catalog bindings fail closed.
+This preserves runtime lease and cleanup locks across the complete owner action.
+Catalog setup is checked before replacement cleanup or new run creation; the
+cleanup checkpoint retains its binding after raw receipt deletion. Native Codex
+qualification is supported. Claude disposable-home catalog binding and native
+event qualification remain PARTIAL, and its native launch is rejected explicitly.
+The CLI adapter uses completed `CommandExecution` events, independently bound to
+their thread and turn; enclosing model tool calls cannot substitute for them.
+See the official [command execution event contract](https://learn.chatgpt.com/docs/app-server#command-execution-approvals).

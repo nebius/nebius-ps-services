@@ -25,11 +25,70 @@ LOGICAL_LABEL = "nebius-vpngw-member"
 ROLE_LABEL = "nebius-vpngw-resource-role"
 
 
+def effect_key(approval: str, index: int, label: str, scope: str | None = None) -> str:
+    """A new execution may reuse approved intent, but never its request key."""
+    return digest([approval, index, label] if scope is None else [approval, scope, index, label])
+
+
+class CloudOperationRejected(RuntimeError):
+    """A terminal failure needs a reviewed successor, never blind replay."""
+
+
+def rejection_code(error: BaseException) -> str | None:
+    # Transport/cancellation/deadline errors remain uncertain. A typed server
+    # rejection is terminal, but does not itself prove the resource unchanged.
+    for code in (
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "ALREADY_EXISTS",
+        "PERMISSION_DENIED",
+        "FAILED_PRECONDITION",
+        "ABORTED",
+        "OUT_OF_RANGE",
+        "UNIMPLEMENTED",
+        "UNAUTHENTICATED",
+    ):
+        if nebius_request_error_code_is(error, code):
+            return code
+    return None
+
+
 def message_digest(message: Any) -> str:
     protobuf = getattr(message, "__pb2_message__", None)
     if protobuf is None:
         raise TypeError("Replacement requires generated Nebius protobuf messages")
     return hashlib.sha256(protobuf.SerializeToString(deterministic=True)).hexdigest()
+
+
+def restore_compute_update(record: dict, current: Any) -> Any:
+    """Reconstruct the exact approved request without journaling private bytes.
+
+    JSON omits protobuf fields newer than the pinned SDK. Recover opaque
+    metadata and specification from the same Compute identity, then restore
+    their original known fields. The original binary hash must still match every byte;
+    a changed or unavailable field never permits a different request.
+    """
+    from google.protobuf.json_format import ParseDict  # type: ignore[import-untyped]
+    from nebius.api.nebius.compute.v1 import UpdateInstanceRequest
+
+    request = UpdateInstanceRequest()
+    ParseDict(record["request_metadata"], request.__pb2_message__)
+    identifier = request.metadata.id
+    if not identifier or resource_id(current) != identifier:
+        raise RuntimeError("Compute request reconstruction requires the same resource identity")
+    for name in ("metadata", "spec"):
+        restored = clone_nebius_sdk_message(getattr(current, name))
+        for field, _ in restored.__pb2_message__.ListFields():
+            restored.__pb2_message__.ClearField(field.name)
+        restored.__pb2_message__.MergeFrom(getattr(request, name).__pb2_message__)
+        setattr(request, name, restored)
+    if record.get("user_data_source"):
+        if record["user_data_source"] != identifier:
+            raise RuntimeError("Compute request reconstruction has a different private-data source")
+        request.spec.cloud_init_user_data = current.spec.cloud_init_user_data
+    if message_digest(request) != record["request_sha256"]:
+        raise RuntimeError("Compute request reconstruction changed; retain the checkpoint")
+    return request
 
 
 def resource_id(resource: Any) -> str:
@@ -64,8 +123,20 @@ def single_nic_status(instance: Any) -> Any:
 
 
 class Cloud:
-    def __init__(self, sdk: Any, journal: Journal, *, member_index: int | None = None) -> None:
+    def __init__(
+        self,
+        sdk: Any,
+        journal: Journal,
+        *,
+        member_index: int | None = None,
+        operation_scope: str | None = None,
+        restore_request: Callable[[dict], Any] | None = None,
+        admit_request: Callable[[Any], None] | None = None,
+    ) -> None:
         self.sdk, self.journal = sdk, journal
+        self.operation_scope = operation_scope
+        self.restore_request = restore_request
+        self.admit_request = admit_request
         self.member_index = (
             journal.state["transaction"]["member"] if member_index is None else member_index
         )
@@ -80,6 +151,17 @@ class Cloud:
         wait_vm_ha_operation(operation)
         successful = getattr(operation, "successful", None)
         if not callable(successful) or not successful():
+            done = getattr(operation, "done", None)
+            status = getattr(operation, "status", None)
+            code = getattr(
+                getattr(status() if callable(status) else None, "code", None), "name", None
+            )
+            if callable(done) and done() and isinstance(code, str) and code != "OK":
+                record.update(status="failed", failure={"kind": "operation", "code": code})
+                self.journal.save()
+                raise CloudOperationRejected(
+                    "Cloud operation failed; independently verify effects and review a successor"
+                )
             raise RuntimeError("Replacement cloud operation is not confirmed successful")
         identifier = resource_id(
             getattr(getattr(operation, "result", None), "resource", None)
@@ -89,8 +171,37 @@ class Cloud:
         self.journal.save()
         return identifier
 
-    def settle(self) -> None:
+    def _submit(self, record: dict, key: str, request: Any, submit: Callable[..., Any]) -> Any:
+        if self.admit_request is not None:
+            self.admit_request(request)
+        # Persist submission provenance before transport. A later rejection of
+        # an uncertain replay cannot prove the original request had no effects.
+        record["submission_count"] = record.get("submission_count", 1) + 1
+        record["single_attempt"] = record.get("single_attempt") is True
+        self.journal.save()
+        request_options = vm_ha_request_kwargs(key)
+        request_options["retries"] = 0
+        try:
+            operation = submit(request, **request_options).wait()
+        except Exception as error:
+            code = rejection_code(error)
+            if code is not None:
+                record.update(status="rejected", failure={"kind": "request", "code": code})
+                self.journal.save()
+                raise CloudOperationRejected(
+                    "Cloud request was rejected; independently verify effects and review a successor"
+                ) from None
+            raise
+        identifier = str(getattr(operation, "id", "") or "")
+        if not identifier:
+            raise RuntimeError("Replacement mutation returned no operation receipt")
+        record.update(status="accepted", cloud_operation_id=identifier)
+        self.journal.save()
+        return operation
+
+    def settle(self, *, require_success: bool = True) -> None:
         import nebius.api.nebius.compute.v1 as compute
+        import nebius.api.nebius.iam.v1 as iam
         import nebius.api.nebius.vpc.v1 as vpc
         from google.protobuf.json_format import ParseDict  # type: ignore[import-untyped]
         from nebius.api.nebius.common.v1 import GetOperationRequest, OperationServiceClient
@@ -124,29 +235,68 @@ class Cloud:
                 "delete",
             ),
             "UpdateRouteRequest": (vpc.UpdateRouteRequest, vpc.RouteServiceClient, "update"),
+            "CreateRouteRequest": (vpc.CreateRouteRequest, vpc.RouteServiceClient, "create"),
+            "DeleteRouteRequest": (vpc.DeleteRouteRequest, vpc.RouteServiceClient, "delete"),
+            "CreateRouteTableRequest": (
+                vpc.CreateRouteTableRequest,
+                vpc.RouteTableServiceClient,
+                "create",
+            ),
+            "UpdateSubnetRequest": (vpc.UpdateSubnetRequest, vpc.SubnetServiceClient, "update"),
+            "CreateSubnetRequest": (vpc.CreateSubnetRequest, vpc.SubnetServiceClient, "create"),
+            "UpdatePoolRequest": (vpc.UpdatePoolRequest, vpc.PoolServiceClient, "update"),
+            "CreateServiceAccountRequest": (
+                iam.CreateServiceAccountRequest,
+                iam.ServiceAccountServiceClient,
+                "create",
+            ),
+            "CreateGroupRequest": (iam.CreateGroupRequest, iam.GroupServiceClient, "create"),
+            "CreateGroupMembershipRequest": (
+                iam.CreateGroupMembershipRequest,
+                iam.GroupMembershipServiceClient,
+                "create",
+            ),
+            "CreateAccessPermitRequest": (
+                iam.CreateAccessPermitRequest,
+                iam.AccessPermitServiceClient,
+                "create",
+            ),
+            "CreateAuthPublicKeyRequest": (
+                iam.CreateAuthPublicKeyRequest,
+                iam.AuthPublicKeyServiceClient,
+                "create",
+            ),
         }
+        if self.restore_request is not None:
+            # Only an owner that reconstructs and revalidates the approved
+            # bootstrap can replay Compute creation. Never persist user-data.
+            replayable["CreateInstanceRequest"] = (
+                compute.CreateInstanceRequest,
+                compute.InstanceServiceClient,
+                "create",
+            )
         for key, record in self.records.items():
-            if record["status"] == "intent" and record.get("request_type") in replayable:
-                request_type, service_type, method = replayable[record["request_type"]]
-                request = request_type()
-                ParseDict(record["request_metadata"], request.__pb2_message__)
-                if record.get("user_data_source"):
-                    # Recover only from the exact authenticated Compute ID; the
-                    # original request digest still binds every private byte.
-                    original = self.get_instance(record["user_data_source"])
-                    request.spec.cloud_init_user_data = original.spec.cloud_init_user_data
+            if record["status"] == "intent" and (
+                self.restore_request is not None or record.get("request_type") in replayable
+            ):
+                if self.restore_request is not None:
+                    request = self.restore_request(record)
+                    _, service_type, method = replayable[type(request).__name__]
+                else:
+                    request_type, service_type, method = replayable[record["request_type"]]
+                    request = request_type()
+                    ParseDict(record["request_metadata"], request.__pb2_message__)
+                    if record["request_type"] == "UpdateInstanceRequest":
+                        request = restore_compute_update(
+                            record, self.get_instance(request.metadata.id)
+                        )
                 if message_digest(request) != record["request_sha256"]:
                     raise RuntimeError(
                         "Replacement request reconstruction changed; retain the checkpoint"
                     )
-                operation = getattr(service_type(self.sdk), method)(
-                    request, **vm_ha_request_kwargs(key)
-                ).wait()
-                identifier = str(getattr(operation, "id", "") or "")
-                if not identifier:
-                    raise RuntimeError("Replacement replay returned no operation receipt")
-                record.update(status="accepted", cloud_operation_id=identifier)
-                self.journal.save()
+                operation = self._submit(
+                    record, key, request, getattr(service_type(self.sdk), method)
+                )
                 self._finish(record, operation)
             elif record["status"] == "accepted":
                 operation = (
@@ -158,10 +308,16 @@ class Cloud:
                     .wait()
                 )
                 self._finish(record, operation)
+        if require_success and any(
+            record["status"] in {"rejected", "failed"} for record in self.records.values()
+        ):
+            raise CloudOperationRejected(
+                "Cloud effect failed; retain its receipt and review a successor operation"
+            )
 
     def mutate(self, label: str, request: Any, submit: Callable[..., Any]) -> str:
         transaction = self.journal.state["transaction"]
-        key = digest([transaction["approval"], self.member_index, label])
+        key = effect_key(transaction["approval"], self.member_index, label, self.operation_scope)
         signature = message_digest(request)
         self.settle()
         record = self.records.get(key)
@@ -183,6 +339,8 @@ class Cloud:
                 "status": "intent",
                 "cloud_operation_id": None,
                 "resource_id": None,
+                "submission_count": 0,
+                "single_attempt": True,
             }
             # Creation user-data contains the pinned host private key. It is
             # reconstructed by the guarded prepare path, never stored here.
@@ -193,25 +351,22 @@ class Cloud:
 
                 metadata = MessageToDict(request.__pb2_message__, preserving_proto_field_name=True)
                 specification = metadata.get("spec", {})
+                if type(request).__name__ == "CreateAuthPublicKeyRequest":
+                    public_key = specification.pop("data")
+                    record["public_key_sha256"] = hashlib.sha256(public_key.encode()).hexdigest()
                 user_data = specification.pop("cloud_init_user_data", None)
                 if user_data:
                     record["user_data_source"] = request.metadata.id
                 record.update(request_type=type(request).__name__, request_metadata=metadata)
             self.records[key] = record
             self.journal.save()
-        operation = submit(request, **vm_ha_request_kwargs(key)).wait()
-        identifier = str(getattr(operation, "id", "") or "")
-        if not identifier:
-            raise RuntimeError("Replacement mutation returned no operation receipt")
-        record["cloud_operation_id"] = identifier
-        record["status"] = "accepted"
-        self.journal.save()
+        operation = self._submit(record, key, request, submit)
         return self._finish(record, operation)
 
     def completed(self, label: str) -> str | None:
         self.settle()
         transaction = self.journal.state["transaction"]
-        key = digest([transaction["approval"], self.member_index, label])
+        key = effect_key(transaction["approval"], self.member_index, label, self.operation_scope)
         record = self.records.get(key)
         return record["resource_id"] if record and record["status"] == "settled" else None
 
@@ -488,7 +643,7 @@ class Cloud:
                             allocation_id=public_allocation, static=True
                         ),
                         security_groups=[
-                            SecurityGroup(id=identifier) for identifier in source["effective_ids"]
+                            SecurityGroup(id=identifier) for identifier in source["explicit_ids"]
                         ],
                     )
                 ],

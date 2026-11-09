@@ -1,0 +1,79 @@
+{
+  "schema": "test-software-in-container.profile.v2",
+  "bundle_sha256": "39779da2667c3068ba5d2204d024d50eaf4c2c3e9b6fb06d40059ced67d5f45a",
+  "environments": [
+    {
+      "id": "image-test",
+      "image": "example/software:1.0.0",
+      "image_digest": "sha256:36922f22377e08821d9983e1b958bf89b9adc9542b127f58321e1918ff61f17b",
+      "platform": "linux/amd64",
+      "profile_sha256": "28bd463f8e7195458d0ec6980bd6cd3673f804f9e3047474bdfb02791cdc7a6d",
+      "fixture_sha256": "610fe08cbb8f7a1e383c13122d1568d297ce74e6a87271606db5f3658a4c2afd",
+      "setup_sha256": "19d78f620eea741942f40d013b77b68ab63d9e4f9000fdb17cd6a4663fecbd29",
+      "operations": {
+        "test": {
+          "checks": {
+            "startup": "services"
+          },
+          "exclusions": {
+            "no_op": "Not applicable to this illustrative workflow.",
+            "packages": "Not applicable to this illustrative workflow.",
+            "recovery": "Not applicable to this illustrative workflow.",
+            "repeat": "Not applicable to this illustrative workflow."
+          },
+          "inputs": {
+            "software_sha256": "4f2749cafb934595551866dcdff5b719182052e7f1f3a13ab23ba52fd8bd4340"
+          },
+          "entrypoint": [
+            "installed-software",
+            "self-test"
+          ],
+          "target": "installed"
+        }
+      }
+    }
+  ],
+  "runtime_policy": {
+    "engine": "auto",
+    "parallel": 2,
+    "case_timeout_seconds": 900,
+    "startup_timeout_seconds": 60,
+    "stability_seconds": 10,
+    "cache": "reuse",
+    "retain_failed": false
+  },
+  "suites": {
+    "api": {
+      "kind": "integration",
+      "operations": [
+        "test"
+      ],
+      "sha256": "86af3ab99e574a909fc0ea3e011d74df5b528e5bb1657f6a8c2664a09323ea7a",
+      "entrypoint": [
+        "project-test",
+        "api"
+      ],
+      "purpose": "Illustrative api assertions.",
+      "origin": "project suite api",
+      "test_targets": [
+        "installed"
+      ],
+      "inventory": {
+        "schema": "test-software-in-container.inventory.v2",
+        "suite_sha256": "86af3ab99e574a909fc0ea3e011d74df5b528e5bb1657f6a8c2664a09323ea7a",
+        "input_sha256": "39779da2667c3068ba5d2204d024d50eaf4c2c3e9b6fb06d40059ced67d5f45a",
+        "selection_sha256": "69a641e9f97ee422dc24d935c9f43e8f8f0c7ea923f1f04b78af58aa4ab340e7",
+        "runner": {
+          "name": "example-runner",
+          "version": "1"
+        },
+        "selected": [
+          "api::check"
+        ],
+        "deselected": [],
+        "complete": true,
+        "sha256": "f25a490838fcd674b9daf80855e9d7af6713dd8eb13857765593fb6f69e7a1bc"
+      }
+    }
+  }
+}

@@ -42,9 +42,10 @@ external mutations serialize.
 ## Scheduling
 
 Use deterministic earliest-fit dependency waves and a ready queue within each
-wave. Default capacity is at most four, capped by observed native capacity,
-configured limits and independent ready tasks. Unobserved capacity means one
-isolated worker. Refill a slot after native termination and validated admission;
+wave. Freeze independent W/B/P limits (defaults 4/8/16) using the shared
+[wave contract](../../worktree/references/worker-waves.md). Fresh observed total
+native capacity constrains launches; zero waits and unknown permits one total
+worker. Reserve whole waves across the run before allocating worktrees. Refill a slot after native termination and validated admission;
 all tasks in the wave use the same frozen base. Integrate only after the full wave
 is admitted, in stable task order, then run combined validation. Path overlap,
 lockfiles, generated outputs, ports, test databases and shared live targets are
@@ -53,9 +54,9 @@ domain and an exclusive assignment-bound lease.
 
 ## State And Resources
 
-Shared schemas are `workflow/execution-coordinator-v2`, `workflow/execution-wave-v2`,
-`workflow/execution-task-v2`, `workflow/worker-assignment-v2`, and
-`workflow/worker-result-v3`. Each assignment binds a normalized objective and
+Shared schemas are `workflow/execution-coordinator-v3`, `workflow/execution-wave-v3`,
+`workflow/execution-task-v3`, `workflow/worker-assignment-v2`, and
+`workflow/worker-result-v4`. Each assignment binds a normalized objective and
 immutable execution basis; each admitted result binds exact identity, ancestry,
 changed paths, validation, review and native termination. Typed `spec_gaps` return
 to the root coordinator. Workers never publish canonical specs independently.
@@ -172,7 +173,9 @@ not reopen completed waves or reseal TDD.
 Use the shared [worker contract](../../worktree/references/workflow-contract.md)
 for native launch, strict result ingestion, dispatch fences and recovery.
 `task-result` validates the complete result and independent termination; only
-its current implemented receipt can enter `task-finish --receipt`.
+its current successful receipt can enter `task-finish --receipt`. A
+`verified_no_change` result additionally requires independent `validate-target
+--task` proof and creates no commit; combined waves require `wave-complete --receipt`.
 Coordinator `task-finish` writes a digest-protected
 `workflow/task-finish-intent-v3` before invoking Git. The intent binds the
 assignment digest, base, staged tree, canonical message, structured

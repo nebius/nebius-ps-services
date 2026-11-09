@@ -15,6 +15,7 @@ classifiers = [
 # Python package dependencies (installed via pip)
 # Upper bounds stop before vendor-documented breaking runtime/API changes.
 dependencies = [
+	"vici==6.0.3",
 	"packaging>=24.2,<27.0",
 	"PyYAML>=6.0.3,<7.0.0",
 	"paramiko>=5.0.0,<6.0.0",
@@ -68,7 +69,7 @@ regex = "^nebius-vpngw-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
 describe_command = "git describe --dirty --tags --long --abbrev=40 --match nebius-vpngw-v*"
 
 # System dependencies (installed via apt on Ubuntu 24.04):
-# - strongswan >= 5.9.x (for XFRM interface support with if_id parameter)
+# - charon-systemd and strongswan-swanctl (Ubuntu-supported 5.9.x daemon)
 # - strongswan-pki
 # - libcharon-extra-plugins
 # - frr >= 10.5.0 (RECOMMENDED - use official FRR repo, not Ubuntu 24.04's 8.4.4)
@@ -131,7 +132,7 @@ files = [
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["nebius.*"]
+module = ["nebius.*", "vici.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]

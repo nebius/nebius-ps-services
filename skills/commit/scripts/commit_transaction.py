@@ -133,6 +133,13 @@ assert _pr_spec is not None and _pr_spec.loader is not None
 _pr = importlib.util.module_from_spec(_pr_spec)
 _pr_spec.loader.exec_module(_pr)
 
+_review_spec = importlib.util.spec_from_file_location(
+    "commit_review_workspace", Path(__file__).with_name("review_workspace.py")
+)
+assert _review_spec is not None and _review_spec.loader is not None
+_review = importlib.util.module_from_spec(_review_spec)
+_review_spec.loader.exec_module(_review)
+
 
 AUTH_SCHEMA = "commit-transaction.authorization.v1"
 CLAIM_SCHEMA = "commit-transaction.claim.v1"
@@ -194,10 +201,12 @@ class TransactionError(RuntimeError):
             "task_closed": "the completed or cancelled task cannot be reused",
             "task_consumed": "verify or publish the existing commit; do not create another",
             "task_missing": "begin the already authorized root task",
+            "unsupported_lfs": "retain the review; LFS content requires a separately supported workflow",
         }.get(code, "resolve the reported safety condition")
 
 
 _MUTATION_LOCK_FD: int | None = None
+_MUTATION_LOCK_FDS: tuple[int, ...] = ()
 
 
 def _digest_bytes(value: bytes) -> str:
@@ -339,7 +348,13 @@ def _run_git(
     *,
     env: dict[str, str] | None = None,
     check: bool = True,
+    _review_policy: bool = True,
+    input: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
+    private = root.is_relative_to(_codex_home() / "review-workspaces")
+    command = arguments
+    if private:
+        arguments, command = _review.private_arguments(_module(), arguments)
     environment = _git_environment(root) if env is None else env
     if env is not None and "SKILLS_GIT_PROFILE" in env:
         from git_environment import environment as owned_environment
@@ -351,6 +366,10 @@ def _run_git(
             raise TransactionError(str(error)) from error
         if "GIT_INDEX_FILE" in env:
             environment["GIT_INDEX_FILE"] = env["GIT_INDEX_FILE"]
+    if private and _review_policy and command[0] != "init":
+        # Conditional includes can activate after remote/branch changes.
+        _review.inert_git_config(_module(), root, environment)
+        _review.check_command(_module(), root, command, environment)
     try:
         completed = subprocess.run(
             ["git", "-C", str(root), *arguments],
@@ -358,8 +377,9 @@ def _run_git(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=environment,
+            input=input,
             timeout=120,
-            pass_fds=(() if _MUTATION_LOCK_FD is None else (_MUTATION_LOCK_FD,)),
+            pass_fds=_MUTATION_LOCK_FDS,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise TransactionError(
@@ -463,30 +483,47 @@ def expected_claim_path(root: Path) -> Path:
 
 @contextmanager
 def _repository_lock(common_dir: Path) -> Iterator[None]:
-    global _MUTATION_LOCK_FD
-    lock_root = _transaction_root(common_dir)
-    _secure_directory(lock_root, create=True)
-    lock_path = lock_root / ".lock"
-    flags = os.O_CREAT | os.O_RDWR
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(lock_path, flags, 0o600)
+    global _MUTATION_LOCK_FD, _MUTATION_LOCK_FDS
+    # A subordinate execution retains the original owner's lock first. Both
+    # descriptors survive in Git children, including after helper interruption.
+    descriptors = []
     try:
-        metadata = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_nlink != 1
-            or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
-        ):
-            raise TransactionError("repository transaction lock is invalid")
-        os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        _MUTATION_LOCK_FD = descriptor
+        for directory in _review.lock_directories(_module(), common_dir):
+            lock_root = _transaction_root(directory)
+            _secure_directory(lock_root, create=True)
+            descriptor = os.open(lock_root / ".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            descriptors.append(descriptor)
+            metadata = os.fstat(descriptor)
+            if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
+                    or metadata.st_uid != os.getuid()):
+                raise TransactionError("repository transaction lock is invalid")
+            os.fchmod(descriptor, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        _MUTATION_LOCK_FDS = tuple(descriptors)
+        _MUTATION_LOCK_FD = descriptors[0]
         yield
     finally:
         _MUTATION_LOCK_FD = None
+        _MUTATION_LOCK_FDS = ()
         # Closing our copy preserves the inherited lock if a Git child survives us.
-        os.close(descriptor)
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _module():
+    """Pass the canonical owner's operations to its private implementation."""
+    from types import SimpleNamespace
+    return SimpleNamespace(**globals())
+
+
+def verify_review_execution(task, *, source_root, branch, head, repository, pr, ancestor=None):
+    """Read-only proof for a direct publication consumer; grants no authority."""
+    from agent_runtime import native_session_id
+    session = native_session_id()
+    if not session:
+        raise TransactionError("review execution requires native session identity", "scope_changed")
+    return _review.verify_execution(_module(), Path(task), Path(source_root), session,
+                                    branch=branch, head=head, repository=repository, pr=pr, ancestor=ancestor)
 
 
 def _git_state_path(root: Path, name: str) -> Path:
@@ -1278,8 +1315,8 @@ def _pr_origin_digest(root: Path) -> str:
 
 ROOT_AUTH_SCHEMA = "commit-transaction.root-authorization.v2"
 ROOT_CLAIM_SCHEMA = "commit-transaction.root-claim.v2"
-TASK_SCHEMA = "commit-transaction.task.v3"
-TASK_STATE_SCHEMA = "commit-transaction.task-state.v3"
+TASK_SCHEMA = "commit-transaction.task.v4"
+TASK_STATE_SCHEMA = "commit-transaction.task-state.v4"
 ROOT_OWNERS = {"direct", "create-pr"}
 
 
@@ -1309,7 +1346,7 @@ def _task_state(path: Path, grant: dict[str, Any]) -> dict[str, Any]:
         )
     state = _load_json(state_path, "task checkpoint")
     if (
-        set(state) != {"schema", "grant_sha256", "targets", "base_head", "completion"}
+        set(state) != {"schema", "grant_sha256", "targets", "base_head", "completion", "reviews"}
         or state.get("schema") != TASK_STATE_SCHEMA
         or state.get("grant_sha256") != _digest_bytes(_stable_json(grant))
         or not isinstance(state.get("targets"), dict)
@@ -1396,6 +1433,7 @@ def _task_state(path: Path, grant: dict[str, Any]) -> dict[str, Any]:
                 "pending sync checkpoint is invalid", "effect_unknown"
             )
     _validate_completion(state["completion"], grant)
+    _review.validate_records(_module(), state["reviews"], grant)
     return state
 
 
@@ -1534,6 +1572,7 @@ def _validate_task(
         "recovery_claim_sha256",
         "completion",
         "pr_targets",
+        "review_parent",
     }
     if (
         set(grant) != keys
@@ -1570,13 +1609,14 @@ def _validate_task(
         if "refs/remotes/origin/" + binding["base_ref"] != grant["base_ref"]:
             raise TransactionError("PR base binding changed", "scope_changed")
     _validate_completion_scope(grant, root)
+    _review.validate_parent(_module(), path, grant, root, session_id, allow_closed=allow_closed)
     if _task_closed_path(path).exists() or _task_closed_path(path).is_symlink():
         closed = _task_closed_path(path)
         if not _safe_private_file(closed, private_root):
             raise TransactionError("task closure is unsafe", "scope_changed")
         closure = _load_json(closed, "task closure")
         if (
-            closure.get("schema") != "commit-transaction.task-closure.v3"
+            closure.get("schema") != "commit-transaction.task-closure.v4"
             or closure.get("grant_sha256") != evidence["owner_evidence_sha256"]
             or closure.get("status") not in {"completed", "cancelled", "superseded"}
             or set(closure)
@@ -1600,13 +1640,14 @@ def _validate_task(
         if not allow_closed or closure["status"] == "superseded":
             raise TransactionError("task is closed", "task_closed")
     if validate_scope and grant["requested_action"] != "commit":
-        if grant["origin_sha256"] != _pr_origin_digest(root) or grant[
-            "default_ref"
-        ] != _git_text(root, "symbolic-ref", "refs/remotes/origin/HEAD"):
+        if grant["origin_sha256"] != _pr_origin_digest(root) or (
+            grant["completion"]["policy"] != "review" and grant["default_ref"]
+            != _git_text(root, "symbolic-ref", "refs/remotes/origin/HEAD")
+        ):
             raise TransactionError(
                 "task origin or default branch changed", "scope_changed"
             )
-    if validate_scope and grant["base_ref"]:
+    if validate_scope and grant["base_ref"] and grant["completion"]["policy"] != "review":
         current_base = _git_text(
             root, "rev-parse", "--verify", f"{grant['base_ref']}^{{commit}}"
         )
@@ -1736,7 +1777,7 @@ def _retire_recovery_predecessor(root: Path, grant: dict[str, Any]) -> None:
         raise TransactionError("recovery predecessor changed", "effect_unknown")
     closed = _task_closed_path(Path(claim["owner_evidence_path"]))
     result = {
-        "schema": "commit-transaction.task-closure.v3",
+        "schema": "commit-transaction.task-closure.v4",
         "status": "superseded",
         "grant_sha256": claim["owner_evidence_sha256"],
         "successor_sha256": _digest_bytes(_stable_json(grant)),
@@ -1989,6 +2030,7 @@ def begin(arguments: argparse.Namespace) -> dict[str, object]:
             "initial_head": identity["head"],
             "targets": targets,
             "pr_targets": pr_targets,
+            "review_parent": None,
             "dependencies": dependencies,
             "base_ref": base_ref,
             "base_head": _git_text(root, "rev-parse", f"{base_ref}^{{commit}}")
@@ -2030,6 +2072,7 @@ def begin(arguments: argparse.Namespace) -> dict[str, object]:
                 "schema": TASK_STATE_SCHEMA,
                 "grant_sha256": _digest_bytes(_stable_json(grant)),
                 "base_head": grant["base_head"],
+                "reviews": {},
                 "completion": {
                     "phase": "active",
                     "pending": None,
@@ -2221,7 +2264,7 @@ def _validate_completion_scope(grant, root):
     if (
         not isinstance(value, dict)
         or set(value) != {"policy", "final_ref", "refs"}
-        or value["policy"] not in {"ordinary", "preserve"}
+        or value["policy"] not in {"ordinary", "preserve", "review"}
         or (grant["requested_action"] != "create-pr" and value["policy"] != "preserve")
         or not isinstance(value["refs"], dict)
         or set(value["refs"]) != {grant["initial_ref"], default}
@@ -2309,6 +2352,8 @@ def _validate_completion(value, grant):
 
 
 def _publication_open(state, ref, *, reconcile_push=False):
+    if ref in state["reviews"]:
+        raise TransactionError("target is delegated to its private review execution", "scope_changed")
     if state["targets"][ref]["publication"]["advanced_head"] is not None:
         raise TransactionError("contributor advanced published head; cancel and use fresh intake", "history_changed")
     if (
@@ -2690,6 +2735,9 @@ def checkout_target(arguments):
 
 def _verify_local_completion(root, grant, state):
     completion = state["completion"]
+    if _review.preserves_source(grant, state):
+        _review.verify_preserved_completion(_module(), grant, state)
+        return
     _checkout_identity(root, grant)
     if completion["phase"] != "done" or completion["pending"] or _status(root):
         raise TransactionError(
@@ -2756,10 +2804,12 @@ def complete_checkout(arguments):
     with _repository_lock(_common_dir(root)):
         # A failed base fetch/verification must not prevent a safe switch-back.
         path, grant, _ = _task_from_arguments(arguments, root, validate_scope=False)
-        _checkout_identity(root, grant)
         state = _task_state(path, grant)
         completion = state["completion"]
         mode = arguments.mode
+        if _review.preserves_source(grant, state) and mode != "record-merge":
+            return _review.complete_source(_module(), path, grant, state, mode)
+        _checkout_identity(root, grant)
         if arguments.merged_target or arguments.result_sha:
             if mode != "record-merge":
                 raise TransactionError(
@@ -2785,6 +2835,8 @@ def complete_checkout(arguments):
             if target["merged_result"] not in {None, arguments.result_sha}:
                 raise TransactionError("merged result changed", "history_changed")
             target["merged_result"] = arguments.result_sha
+            if ref in state["reviews"]:
+                _review.record_merge(_module(), grant, state["reviews"][ref], arguments.result_sha)
             _atomic_json(_task_state_path(path), state)
             return {
                 "status": "merged-recorded",
@@ -2977,12 +3029,15 @@ def finish(arguments: argparse.Namespace) -> dict[str, object]:
             allow_closed=True,
             validate_scope=False,
         )
+        if grant["review_parent"] is not None:
+            raise TransactionError("only the original owner can close a review operation", "scope_changed")
         closed = _task_closed_path(path)
         if closed.exists():
             if not _safe_private_file(closed, _transaction_root(_common_dir(root))):
                 raise TransactionError("task closure is unsafe", "scope_changed")
             return _load_json(closed, "task closure")
         state = _task_state(path, grant)
+        review_heads = _review.completion_heads(_module(), path, grant, state, arguments)
         if any(item["publication"]["pending"] is not None for item in state["targets"].values()):
             raise TransactionError("pending publication prevents task closure", "effect_unknown")
         if arguments.outcome == "cancelled":
@@ -3053,11 +3108,13 @@ def finish(arguments: argparse.Namespace) -> dict[str, object]:
                 ).returncode
             ):
                 raise TransactionError("scratch ref still exists", "effect_unknown")
-            if _status(root):
+            if not _review.preserves_source(grant, state) and _status(root):
                 raise TransactionError(
                     "completion requires a clean checkout", "candidate_changed"
                 )
             for ref, target in state["targets"].items():
+                if ref in review_heads:
+                    continue
                 publication = target["publication"]
                 if publication["advanced_head"] is not None:
                     raise TransactionError("advanced contributor head requires fresh intake", "history_changed")
@@ -3108,10 +3165,10 @@ def finish(arguments: argparse.Namespace) -> dict[str, object]:
                             "target has an unresolved claim", "effect_unknown"
                         )
         result = {
-            "schema": "commit-transaction.task-closure.v3",
+            "schema": "commit-transaction.task-closure.v4",
             "status": arguments.outcome,
             "grant_sha256": _digest_bytes(_stable_json(grant)),
-            "heads": {ref: item["head"] for ref, item in state["targets"].items()},
+            "heads": {ref: review_heads.get(ref, item["head"]) for ref, item in state["targets"].items()},
             "completion": state["completion"],
         }
         _atomic_json(closed, result)
@@ -4199,6 +4256,10 @@ def _parser() -> argparse.ArgumentParser:
     review_parser.add_argument("--reviewed-tree", required=True)
     for name in (
         "begin",
+        "begin-review",
+        "open-review",
+        "review-context",
+        "cleanup-review",
         "finish",
         "sync",
         "validate-order",
@@ -4215,7 +4276,11 @@ def _parser() -> argparse.ArgumentParser:
             choices=("commit", "commit-push", "create-pr"),
         )
         task_parser.add_argument("--intent-sha256", required=True)
-        if name == "checkout-target":
+        if name in {"open-review", "review-context", "cleanup-review"}:
+            task_parser.add_argument("--branch", required=True)
+            if name == "open-review":
+                task_parser.add_argument("--pr-bindings")
+        elif name == "checkout-target":
             task_parser.add_argument("--branch", required=True)
         elif name == "publish-target":
             task_parser.add_argument("--branch", required=True)
@@ -4227,7 +4292,7 @@ def _parser() -> argparse.ArgumentParser:
             )
             task_parser.add_argument("--merged-target")
             task_parser.add_argument("--result-sha")
-        elif name == "begin":
+        elif name in {"begin", "begin-review"}:
             task_parser.add_argument("--pr-bindings", help="Private JSON map of local refs to repository/number selectors")
             task_parser.add_argument(
                 "--checkout-policy", choices=("ordinary", "preserve")
@@ -4257,6 +4322,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         result = {
             "begin": begin,
+            "begin-review": lambda args: _review.begin_review(_module(), args),
+            "open-review": lambda args: _review.open_review(_module(), args),
+            "review-context": lambda args: _review.context_command(_module(), args),
+            "cleanup-review": lambda args: _review.cleanup(_module(), args),
             "finish": finish,
             "checkout-target": checkout_target,
             "publish-target": publish_target,

@@ -25,7 +25,16 @@ class LocalSample:
 def _unknown_path(readiness: LocalReadiness | None) -> LocalReadiness | None:
     if readiness is None:
         return None
-    return LocalReadiness(readiness.service_healthy, False, False, False, sample_complete=False)
+    return replace(
+        readiness,
+        static_ready=False,
+        bgp_ready=False,
+        xfrm_ready=False,
+        serving_ready=False,
+        cold_standby_ready=False,
+        sample_complete=False,
+        covered_destinations=(),
+    )
 
 
 class HeartbeatPublisher:

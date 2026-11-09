@@ -2,7 +2,7 @@
 Description=Nebius VPNGW VM-HA cold-start forwarding guard
 DefaultDependencies=no
 After=local-fs.target systemd-sysctl.service systemd-tmpfiles-setup.service
-Before=network-online.target strongswan-starter.service strongswan.service frr.service nebius-vpngw-agent.service nebius-vpngw-vm-ha.service
+Before=network-online.target strongswan.service frr.service nebius-vpngw-agent.service nebius-vpngw-vm-ha.service
 ConditionPathExists=/etc/nebius-vpngw/vm-ha-enabled
 
 [Service]

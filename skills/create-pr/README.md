@@ -5,7 +5,8 @@ Ordinary publication uses the transaction owner's
 bind separate base/head repository identities and refs. Fork repairs use unique
 local aliases and preserve the original PR/history. Every push is journaled,
 non-force, protected against advertised-head races and independently read back.
-The private task/checkpoint/closure v3 rollout requires draining old transactions.
+Private task/checkpoint/closure authority remains v4. Historical records require
+individual reconciliation, not a blanket block on new operations.
 
 `create-pr` turns local work or named branches into reviewable GitHub pull
 requests. It is designed for branch-safe PR creation without hand-driving Git
@@ -179,7 +180,7 @@ See [the completion contract](references/ordinary-completion.md).
 
 The canonical commit transaction owns safe target checkout and outer completion.
 See [the completion contract](../create-pr/references/checkout-completion.md) for
-review switch-back, create-only behavior, verified-result fast-forwards, resumed
+private review execution, parent create-only behavior, verified-result fast-forwards, resumed
 work and publication-preserving policy. Merge, CI/Pages, local refs and deletion
 are reported independently. No public skill flags are added.
 

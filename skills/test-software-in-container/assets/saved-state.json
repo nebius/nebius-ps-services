@@ -1,0 +1,63 @@
+{
+  "schema": "test-software-in-container.profile.v2",
+  "bundle_sha256": "9d4d13203651954d3c278184c4b7303752ffdc930e0906ce5b55a658ab913d20",
+  "environments": [
+    {
+      "id": "saved-state",
+      "image": "ubuntu:24.04",
+      "image_digest": "sha256:b59affc2839a20295e83ce65116418538d40d4c237b5528bbf0714080684c784",
+      "platform": "linux/amd64",
+      "profile_sha256": "2ad727e31bd75608328fa3d63a2f26c6b52bc9ba93f3bf01fe86abff8804cfff",
+      "fixture_sha256": "c5a723cfb646ef030ac127340ee7beaa4978edeb7bf1a4a82e8370661cd43416",
+      "setup_sha256": "be54ba43660e51545b5bd30204ec65dc8d60c96f26556a5a3afadfd4c86a9a8f",
+      "operations": {
+        "install": {
+          "not_applicable": "This campaign only migrates a declared state fixture."
+        },
+        "upgrade": {
+          "not_applicable": "This campaign only migrates a declared state fixture."
+        },
+        "patch": {
+          "not_applicable": "This campaign only migrates a declared state fixture."
+        },
+        "migration": {
+          "checks": {
+            "repeat-migration": "repeat"
+          },
+          "exclusions": {
+            "no_op": "Not applicable to this illustrative workflow.",
+            "packages": "Not applicable to this illustrative workflow.",
+            "recovery": "Not applicable to this illustrative workflow.",
+            "services": "Not applicable to this illustrative workflow."
+          },
+          "inputs": {
+            "source_state_sha256": "6aece0d7181f564685f6254700d9747862498cdb7587dbf6ccb0e6fcb5aaa02a",
+            "tool_sha256": "f7d17ecb40ebb2e2762f66837072af987fe2e67165a84ef3cb7737de4aa485a9",
+            "workflow_sha256": "e2f85ae3c157c4089f13fd1f926a2abfd37b24ff890ecfad40fc2e99166c0eb6",
+            "postconditions_sha256": "472a8c310367ba151f7f999521cd95d7f17080244ef7e542b77e07e164bfbf4a"
+          },
+          "baseline": {
+            "image_digest": "sha256:7d722e144368f7c8696bf46b02c68a07a9f64a6dc5039a121e96cc492bb79f4d",
+            "environment_sha256": "79061f1d53499735cb1a03ef9964c9964ce742156e7d32751bf609f3b118288b",
+            "state_sha256": "6aece0d7181f564685f6254700d9747862498cdb7587dbf6ccb0e6fcb5aaa02a",
+            "verified": true
+          },
+          "entrypoint": [
+            "migration-tool",
+            "source.json",
+            "target.sqlite"
+          ]
+        }
+      }
+    }
+  ],
+  "runtime_policy": {
+    "engine": "auto",
+    "parallel": 2,
+    "case_timeout_seconds": 900,
+    "startup_timeout_seconds": 60,
+    "stability_seconds": 10,
+    "cache": "reuse",
+    "retain_failed": false
+  }
+}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import json
 import subprocess
 from unittest.mock import patch
 
@@ -11,6 +13,7 @@ from nebius_vpngw.agent.tunnel_health_monitor import (
     TunnelHealthMonitor,
     TunnelStats,
 )
+from nebius_vpngw.ipsec_observation import ConfigurationInventory
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +22,89 @@ def installed_topology(tmp_path, monkeypatch):
     path.write_text("gateway_group: {}\n")
     monkeypatch.setattr(tunnel_health_monitor, "CONFIG_PATH", path)
     return path
+
+
+def test_component_repair_is_durable_bounded_and_requires_positive_failure(tmp_path, monkeypatch):
+    from nebius_vpngw import ordinary_operations as ops
+
+    path = tmp_path / "recovery.json"
+    monkeypatch.setattr(tunnel_health_monitor, "COMPONENT_RECOVERY_PATH", path)
+    monkeypatch.setattr(ops, "mutation_lock", contextlib.nullcontext)
+    monkeypatch.setattr(
+        tunnel_health_monitor, "authorized_configuration", lambda cfg: ConfigurationInventory()
+    )
+    now, state, effects = [100.0], ["failed"], []
+    monkeypatch.setattr(tunnel_health_monitor.time, "time", lambda: now[0])
+
+    def command(args, **kwargs):
+        if args[:2] == ["systemctl", "show"]:
+            return _completed_process(
+                args, stdout=state[0] if args[2] == "strongswan.service" else "active"
+            )
+        # The durable consumed attempt precedes the potentially uncertain effect.
+        assert "strongswan.service" in json.loads(path.read_text())["attempted"]
+        effects.append(args)
+        return _completed_process(args)
+
+    monkeypatch.setattr(ops, "bounded", command)
+    monitor = TunnelHealthMonitor(max_failures_before_restart=2)
+    monitor._repair_failed_components(False)
+    assert effects == []
+    monitor = TunnelHealthMonitor(max_failures_before_restart=2)  # process restart
+    monitor._repair_failed_components(False)
+    assert [call[:2] for call in effects] == [["systemctl", "restart"], ["swanctl", "--load-all"]]
+    monitor._repair_failed_components(False)
+    assert len(effects) == 2
+    state[0] = "active"
+    monitor._repair_failed_components(True)
+    now[0] += 60
+    monitor._repair_failed_components(True)
+    state[0] = "inactive"  # administrative stop is not a local defect
+    monitor._repair_failed_components(False)
+    assert len(effects) == 2
+    state[0] = "failed"
+    monitor._repair_failed_components(False)
+    monitor._repair_failed_components(False)
+    assert len(effects) == 4
+
+
+@pytest.mark.parametrize(
+    "inventory", ["[]", '["edge"]', "missing-key", "", "{}", '["edge", "edge"]']
+)
+def test_active_daemon_reload_requires_complete_missing_configuration(
+    tmp_path, monkeypatch, inventory
+):
+    from nebius_vpngw import ordinary_operations as ops
+
+    path = tmp_path / "recovery.json"
+    monkeypatch.setattr(tunnel_health_monitor, "COMPONENT_RECOVERY_PATH", path)
+    monkeypatch.setattr(ops, "mutation_lock", contextlib.nullcontext)
+    monkeypatch.setattr(
+        tunnel_health_monitor,
+        "authorized_configuration",
+        lambda cfg: ConfigurationInventory(frozenset({"edge"}), frozenset({"ike-psk-1"})),
+    )
+    effects = []
+
+    def command(args, **kwargs):
+        if args[:2] == ["systemctl", "show"]:
+            return _completed_process(args, stdout="active")
+        if args[-1] == "--configuration":
+            return _completed_process(args, stdout=inventory_payload(inventory))
+        assert "strongswan.service" in json.loads(path.read_text())["attempted"]
+        effects.append(args)
+        return _completed_process(args)
+
+    monkeypatch.setattr(ops, "bounded", command)
+    monitor = TunnelHealthMonitor(max_failures_before_restart=2)
+    monitor._repair_failed_components(False)
+    assert effects == []
+    monitor._repair_failed_components(False)
+    # Restarting the monitor never renews a consumed attempt.
+    TunnelHealthMonitor(max_failures_before_restart=2)._repair_failed_components(False)
+    assert effects == (
+        [["swanctl", "--load-all", "--noprompt"]] if inventory in {"[]", "missing-key"} else []
+    )
 
 
 @pytest.mark.parametrize("content", ["vm_ha: {cluster_id: cluster-a}\n", "[invalid\n", "null\n"])
@@ -155,15 +241,12 @@ def test_unknown_observation_holds_recovery_and_failure_history(ipsec, bgp):
 
 
 def test_ike_header_without_child_is_not_health():
+    from nebius_vpngw.ipsec_observation import Inventory
+
     monitor = TunnelHealthMonitor()
-    with (
-        patch("nebius_vpngw.agent.tunnel_health_monitor.shutil.which", return_value="/swanctl"),
-        patch(
-            "nebius_vpngw.agent.tunnel_health_monitor.subprocess.run",
-            return_value=_completed_process(
-                [], stdout="list-sa event {edge {uniqueid=1 state=ESTABLISHED}} list-sas reply {}"
-            ),
-        ),
+    with patch(
+        "nebius_vpngw.agent.tunnel_health_monitor.snapshot",
+        return_value=Inventory.from_events([{"edge": {"uniqueid": "1", "state": "ESTABLISHED"}}]),
     ):
         assert monitor.get_ipsec_tunnel_status("edge", 100) == "DOWN"
 
@@ -219,6 +302,7 @@ def test_immediate_recheck_unknown_preserves_first_failure():
         patch.object(monitor, "restart_tunnel") as restart,
         patch("nebius_vpngw.agent.tunnel_health_monitor.time.sleep"),
     ):
+        assert monitor.run_health_check()["edge"].assessment == "unhealthy"
         assert monitor.run_health_check()["edge"].assessment == "unknown"
     assert monitor.consecutive_failures["edge"] == 1
     restart.assert_not_called()
@@ -229,6 +313,7 @@ def test_proactive_healthy_sample_clears_history_and_publishes_recheck():
 
     monitor = TunnelHealthMonitor(enable_proactive_refresh=True)
     monitor.consecutive_failures["edge"] = 1
+    monitor.last_proactive_refresh["edge"] = 0
     healthy = TunnelHealth(
         "edge",
         "xfrm0",
@@ -302,3 +387,13 @@ def test_unavailable_enabled_ping_is_unknown_and_preserves_failure_history(error
         assert monitor.run_health_check()["edge"].assessment == "unknown"
     assert monitor.consecutive_failures["edge"] == 1
     restart.assert_not_called()
+
+
+def inventory_payload(value):
+    if value == "[]":
+        return ConfigurationInventory().json()
+    if value == '["edge"]':
+        return ConfigurationInventory(frozenset({"edge"}), frozenset({"ike-psk-1"})).json()
+    if value == "missing-key":
+        return ConfigurationInventory(frozenset({"edge"})).json()
+    return value

@@ -205,7 +205,7 @@ def test_two_node_takeover_effects_are_ordered_and_crash_replay_is_idempotent(
     ports.routes.reconcile = lambda _action: once(
         "routes", lambda: state.__setitem__("routes", True)
     )
-    ports.routes.readiness = lambda: LocalReadiness(True, True, True, True)
+    ports.routes.readiness = lambda: LocalReadiness(True, True, True, True, protection_ready=True)
     ports.routes.receipt_context = lambda: RouteReconciliationContext(
         owner_node_id="node-a",
         allocation_id="allocation-a",
@@ -317,7 +317,7 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
         configured_role=ConfiguredRole.ACTIVE,
         cloud=_owned_cloud(),
         data_plane_mode=DataPlaneMode.BLOCKED,
-        readiness=LocalReadiness(False, False, False, False),
+        readiness=LocalReadiness(False, False, False, False, protection_ready=True),
     )
     first = policy.decide(blocked, ControllerCheckpoint())
     assert first.action is not None
@@ -409,6 +409,11 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
         lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
 
+    # Native process execution now uses the bounded command adapter in HA too.
+    monkeypatch.setattr(
+        "nebius_vpngw.agent.local_commands._bounded_run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
     materialized_endpoints: list[dict[str, object]] = []
     agent = agent_main.Agent()
 
@@ -420,7 +425,7 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
     agent.reload()
 
     assert materialized_endpoints
-    assert "start_action = start" in (tmp_path / "swanctl.conf").read_text()
+    assert "start_action = trap|start" in (tmp_path / "swanctl.conf").read_text()
     assert "unique = no" in (tmp_path / "swanctl.conf").read_text()
     assert "close_action = trap" in (tmp_path / "swanctl.conf").read_text()
     assert " neighbor 169.254.10.2 activate" in (tmp_path / "frr.conf").read_text()
@@ -435,7 +440,7 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
             cloud=_owned_cloud(),
             data_plane_mode=DataPlaneMode.PASSIVE,
             peer_heartbeat=_peer(configured_role="passive"),
-            readiness=LocalReadiness(True, True, True, True),
+            readiness=LocalReadiness(True, True, True, True, protection_ready=True),
         ),
         first.checkpoint,
     )

@@ -2,17 +2,12 @@
 
 from __future__ import annotations
 
-import contextlib
-import hashlib
-import io
 import json
 import os
-import shlex
 import subprocess
 import sys
 import zipfile
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -94,9 +89,7 @@ def test_selected_dependency_shadows_distro_but_replaces_pip_owned_version(tmp_p
 
 
 def test_recovery_package_install_preserves_one_product_distribution(tmp_path, monkeypatch):
-    """Execute the SSH installer's actual pip commands against a real predecessor."""
-    from nebius_vpngw.agent.vm_ha.restoration import STANDBY_RESTORATION_CAPABILITY
-    from nebius_vpngw.deploy import ordinary_apply, ssh_push, vm_ha_package
+    """Execute the canonical installer against real predecessor distributions."""
 
     env = {key: value for key, value in os.environ.items() if not key.startswith("PIP_")}
     env.pop("PYTHONPATH", None)
@@ -123,99 +116,14 @@ def test_recovery_package_install_preserves_one_product_distribution(tmp_path, m
         return path
 
     assert run([python, "-m", "pip", "install", "--no-deps", str(wheel(1))]).returncode == 0
-    closed = []
-    observation = dict.fromkeys(vm_ha_package.PACKAGE_FIELDS)
+    from nebius_vpngw.runtime_migration import product_install_command
 
-    def inspect_plan(*args, **kwargs):
-        assert kwargs["wheel"].is_file()
-        return SimpleNamespace(
-            manifest={"dependency_wheels": {}},
-            dependency_paths=[],
-            observation=observation,
-            close=lambda: closed.append(True),
-        )
-
-    monkeypatch.setattr(vm_ha_package, "inspect_plan", inspect_plan)
-    monkeypatch.setattr(ordinary_apply, "remote", lambda *args: {"observation": observation})
-    monkeypatch.setattr(ssh_push, "configure_paramiko_host_verification", lambda *a, **k: None)
-    monkeypatch.setattr(ssh_push.ingress_ssh, "preflight", lambda *a: None)
-
-    class Stream(io.BytesIO):
-        def __init__(self, data=b"", code=0):
-            super().__init__(data)
-            self.channel = SimpleNamespace(
-                recv_exit_status=lambda: code,
-                settimeout=lambda _: None,
-                send=self.write,
-                shutdown_write=lambda: None,
-            )
-
-    class Client:
-        def __init__(self, version):
-            self.version = version
-            self.staged = tmp_path / ("staging-" + str(version))
-            self.staged.mkdir()
-
-        def open_sftp(self):
-            def putfo(stream, destination, **kwargs):
-                (self.staged / Path(destination).name).write_bytes(stream.read())
-
-            return contextlib.nullcontext(SimpleNamespace(putfo=putfo))
-
-        def exec_command(self, command, **kwargs):
-            if command == "sudo -n PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B":
-                # Checkpoint observation is simulated; emitted pip commands run below.
-                return Stream(), Stream(b'{"checkpoint":"unstarted"}'), io.BytesIO()
-            if "mktemp -d" in command:
-                return io.BytesIO(), Stream(b"/tmp/nebius-vpngw-agent.ABCDEFGHIJ\n"), io.BytesIO()
-            if "pip install" in command:
-                # apt/SSH boundaries are simulated; the emitted pip invocation is real.
-                command = command.split(" && ")[-1]
-                args = shlex.split(command)[1:]
-                args[0] = python
-                args[-1] = str(self.staged / Path(args[-1]).name)
-                result = run(args)
-                return (
-                    io.BytesIO(),
-                    Stream(result.stdout, result.returncode),
-                    io.BytesIO(result.stderr),
-                )
-            if "import cffi,cryptography" in command:
-                value = {
-                    "schema": "nebius-vpngw/vm-ha-package-v1",
-                    "package_version": f"{self.version}.0",
-                    "cryptography_version": "50.0.0",
-                    "cffi_version": "2.0.0",
-                }
-            elif "--agent-capabilities" in command:
-                value = {
-                    "schema": "nebius-vpngw.agent-capabilities.v1",
-                    "features": [STANDBY_RESTORATION_CAPABILITY],
-                }
-            else:
-                return io.BytesIO(), Stream(), io.BytesIO()
-            return io.BytesIO(), Stream(json.dumps(value).encode()), io.BytesIO()
-
-        def close(self):
-            pass
-
-    push = ssh_push.SSHPush(ssh_policy=object())
-    monkeypatch.setattr(push, "_connect_client", lambda *a, **k: None)
-    manifest = SimpleNamespace(hostname="fixture", config_yaml="gateway: {}\n")
     for version in (2, 3):
-        path = wheel(version)
-        artifact = SimpleNamespace(
-            path=path,
-            sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
-            capabilities=(),
-            dependency_plans=(),
-            open_verified=lambda p=path: p.open("rb"),
-        )
-        client = Client(version)
-        push._paramiko = SimpleNamespace(SSHClient=lambda c=client: c)
-        push.ensure_vm_ha_agent_package("203.0.113.10", manifest, {}, artifact=artifact)
+        args = product_install_command(wheel(version))
+        args[0] = python  # isolated interpreter; all installer switches are product-owned
+        result = run(args)
+        assert result.returncode == 0, result.stderr
         probe = "import importlib.metadata as m,json,nebius_vpngw as p;print(json.dumps({'versions':[d.version for d in m.distributions() if d.metadata['Name']=='nebius-vpngw'],'code':p.version}))"
         result = run([python, "-B", "-c", probe])
         assert result.returncode == 0, result.stderr
         assert json.loads(result.stdout) == {"versions": [f"{version}.0"], "code": version}
-    assert closed == [True, True]

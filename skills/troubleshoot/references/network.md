@@ -1,8 +1,15 @@
 # Network Troubleshooting Playbook
 
+## Applicability
+
 Use this playbook only after defining the failing source identity and network
 namespace, destination identity, protocol, port, expected response, incident
 window, and one affected and unaffected comparison.
+
+## Version Fingerprint
+
+Record source namespace and identity, address family, protocol, proxy/TLS endpoint,
+NIC/CNI/fabric versions and actual forward/return paths.
 
 ## Adaptive Decision Guide
 
@@ -19,8 +26,10 @@ Use only rows implicated by the failing path; record material unexamined boundar
 
 <!-- markdownlint-enable MD013 -->
 
-### Escalation Conditions
+### Diagnostic Effects
 
+Passive bounded inspection comes first. Active diagnostics remain coordinator-owned;
+workers may not launch tests, captures, debug containers, stress or repairs.
 Escalate only if the next observation can separate remaining explanations. Bound
 time, output, target and effects; preserve evidence and original settings. Treat
 production or unconfirmed targets as read-only without exact action authority.

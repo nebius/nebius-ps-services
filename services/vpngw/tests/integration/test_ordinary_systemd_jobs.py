@@ -106,6 +106,37 @@ def begin(manager):
     )
 
 
+def test_attachment_identity_observes_short_native_job_without_mutation(manager):
+    from nebius_vpngw.deploy.security_group_apply import guest_identity_script
+
+    config = Path("/etc/nebius-vpngw/config-resolved.yaml")
+    config.parent.mkdir(exist_ok=True)
+    previous = config.read_bytes() if config.exists() else None
+    previous_mode = config.stat().st_mode & 0o777 if config.exists() else None
+    config.write_text("gateway: {}\nconnections: []\n")
+    config.chmod(0o600)
+    service = Path("/etc/systemd/system/frr.service")
+    service.write_text("[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/sleep 1.2\n")
+    command("systemctl", "daemon-reload")
+    command("systemctl", "start", "--no-block", "frr.service")
+    try:
+        eventually(lambda: not manager.quiet((*ops.MANAGEMENT, *ops.DATAPLANE)))
+        before = command("systemctl", "show", "frr.service", "-p", "InvocationID")
+        result = json.loads(command(sys.executable, "-c", guest_identity_script()))
+        assert result["boot"] == Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        assert result["binding"] is None
+        assert manager.quiet((*ops.MANAGEMENT, *ops.DATAPLANE))
+        assert command("systemctl", "show", "frr.service", "-p", "InvocationID") == before
+        assert config.read_text() == "gateway: {}\nconnections: []\n"
+    finally:
+        command("systemctl", "stop", "frr.service")
+        if previous is None:
+            config.unlink()
+        else:
+            config.write_bytes(previous)
+            config.chmod(previous_mode)
+
+
 @pytest.mark.parametrize("boundary", ["manager", "routing"])
 def test_final_settlement_waits_for_real_guarded_timer_job(
     manager, tmp_path, monkeypatch, boundary
@@ -179,6 +210,7 @@ def test_shared_static_prefix_real_kernel_verification(
         "gateway": {},
         "connections": [
             {
+                "name": "static",
                 "routing_mode": "static",
                 "remote_prefixes": ["192.0.2.0/24"],
                 "tunnels": [
@@ -228,11 +260,11 @@ def test_shared_static_prefix_real_kernel_verification(
             configure("ip", "addr", "add", endpoint["local_inner_ip"] + "/30", "dev", name)
             xfrm_manager.XFRMManager()._add_static_routes(name, endpoint["remote_prefixes"])
         rows = json.loads(configure("ip", "-j", "route", "show", "192.0.2.0/24").stdout)
-        assert len(rows) == 1 and rows[0]["dev"] == "xfrm1"
+        assert len(rows) == 1 and rows[0]["dev"] == "xfrm0"
         if fault == "wrong":
-            configure("ip", "route", "replace", "192.0.2.0/24", "dev", "xfrm0")
+            configure("ip", "route", "replace", "192.0.2.0/24", "dev", "xfrm1")
         elif fault == "loser":
-            configure("ip", "route", "add", "192.0.2.0/24", "dev", "xfrm0", "metric", "50")
+            configure("ip", "route", "add", "192.0.2.0/24", "dev", "xfrm1", "metric", "50")
         elif fault == "multipath":
             configure(
                 "ip",
@@ -527,7 +559,9 @@ def test_effective_ordinary_units_remove_bootstrap_dataplane_wants(manager):
         dropin.write_bytes((assets / "nebius-vpngw-ordinary-agent-ordering.conf").read_bytes())
         command("systemctl", "daemon-reload")
         assert manager.management_admitted()
-        assert "strongswan-starter.service" in manager.unit(unit.name)["After"]
+        ordering = manager.unit(unit.name)["After"]
+        assert "strongswan.service" in ordering
+        assert "strongswan-starter.service" not in ordering
         extra = dropin.with_name("custom.conf")
         extra.write_text("[Unit]\nWants=frr.service\n")
         try:
@@ -837,6 +871,7 @@ def test_exact_static_route_retirement_in_private_kernel_namespace(manager, tmp_
         "gateway": {},
         "connections": [
             {
+                "name": "static",
                 "routing_mode": "static",
                 "tunnels": [
                     {
@@ -857,6 +892,7 @@ def test_exact_static_route_retirement_in_private_kernel_namespace(manager, tmp_
         "gateway": {},
         "connections": [
             {
+                "name": "static",
                 "routing_mode": "static",
                 "tunnels": old["connections"][0]["tunnels"][1:] if transition == "reindex" else [],
             }

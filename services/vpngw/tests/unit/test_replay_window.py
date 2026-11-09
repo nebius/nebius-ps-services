@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -183,22 +184,38 @@ def test_matching_artifact_proves_capability_and_ordinary_support(tmp_path, samp
     "stale", ["schema.py", "config_loader.py", "agent/strongswan_renderer.py", "agent/main.py"]
 )
 def test_stale_artifact_fails_explicit_window_before_package_effects(
-    tmp_path, sample_config, value, stale, monkeypatch
+    tmp_path, sample_config, value, stale
 ):
     path = wheel(tmp_path, stale_source=stale)
-    if stale in {"schema.py", "config_loader.py", "agent/main.py"}:
-        # These modules also implement mandatory ingress, so omission of the
-        # optional replay setting cannot admit an obsolete replacement artifact.
-        with pytest.raises(RuntimeError, match="mandatory managed ingress"):
-            VMHAAgentArtifact.from_wheel(path, source="test")
-        return
-    artifact = VMHAAgentArtifact.from_wheel(path, source="test")
-    assert replay_window.REPLAY_WINDOW_CAPABILITY not in artifact.capabilities
-    # Omitted configurations retain the existing HA capability contract.
+    # Mandatory HA source identity is checked before optional replay support.
+    # A stale renderer also violates the activation recovery capability.
+    ingress_stale = stale in {"schema.py", "config_loader.py", "agent/main.py"}
+    expected = "mandatory managed ingress" if ingress_stale else "activation recovery capability"
+    with pytest.raises(RuntimeError, match=expected):
+        VMHAAgentArtifact.from_wheel(path, source="test")
+    with zipfile.ZipFile(path) as archive:
+        assert not replay_window.wheel_supports_replay_window(archive)
+    tunnel(sample_config)["replay_window"] = value
+    expected = "mandatory managed ingress" if ingress_stale else "replay_window"
+    with pytest.raises(RuntimeError, match=expected):
+        ordinary_apply.artifact(path, yaml.safe_dump(sample_config))
+
+
+@pytest.mark.parametrize("value", [32, 1024])
+def test_missing_replay_capability_fails_before_ssh_effects(
+    tmp_path, sample_config, value, monkeypatch
+):
+    current = VMHAAgentArtifact.from_wheel(wheel(tmp_path), source="test")
+    artifact = replace(
+        current,
+        capabilities=tuple(
+            capability
+            for capability in current.capabilities
+            if capability != replay_window.REPLAY_WINDOW_CAPABILITY
+        ),
+    )
     replay_window.require_replay_window_capability(sample_config, artifact.capabilities)
     tunnel(sample_config)["replay_window"] = value
-    with pytest.raises(RuntimeError, match="replay_window"):
-        ordinary_apply.artifact(path, yaml.safe_dump(sample_config))
     push = SSHPush(ssh_policy=object())
     effects = Mock(side_effect=AssertionError("No SSH effects permitted"))
     monkeypatch.setattr(push, "_ensure_paramiko", effects)

@@ -75,12 +75,17 @@ def _config(mode: str) -> dict:
 
 def test_applicability_registry_covers_every_executable_leaf_and_action_mode() -> None:
     assert set(_COMMAND_APPLICABILITY) == {
+        "pair create-config",
+        "pair apply",
+        "pair status",
         "create-config",
         "vm-ha",
         "prep-network",
         "validate-config",
         "apply",
         "status",
+        "failover tunnel",
+        "failback tunnel",
         "access add-operator",
         "vm-ha --rotate-mtls",
         "add-routes-local",
@@ -90,9 +95,7 @@ def test_applicability_registry_covers_every_executable_leaf_and_action_mode() -
         "create-from-peer-config",
         "destroy",
         "failover vm",
-        "failover tunnel",
         "failback vm",
-        "failback tunnel",
     }
 
 
@@ -112,6 +115,11 @@ def test_every_executable_leaf_has_a_four_mode_applicability_contract(
     mode: str,
 ) -> None:
     all_topologies = {
+        "pair create-config",
+        "pair apply",
+        "pair status",
+        "failover tunnel",
+        "failback tunnel",
         "create-config",
         "vm-ha",
         "prep-network",
@@ -130,13 +138,11 @@ def test_every_executable_leaf_has_a_four_mode_applicability_contract(
         "failover vm",
         "failback vm",
     }
-    ordinary_bgp_only = {"failover tunnel", "failback tunnel"}
 
     allowed = (
         command in all_topologies
         or (command in ordinary_only and not vm_ha)
         or (command in vm_ha_only and vm_ha)
-        or (command in ordinary_bgp_only and (vm_ha or mode == "bgp"))
         or command == "add-routes-local"
     )
 
@@ -158,10 +164,10 @@ def test_every_executable_leaf_has_a_four_mode_applicability_contract(
         ("destroy", True, "static", True),
         ("destroy", True, "bgp", True),
         ("failover tunnel", False, "bgp", True),
-        ("failover tunnel", False, "static", False),
+        ("failover tunnel", False, "static", True),
         ("failover tunnel", True, "bgp", True),
         ("failback tunnel", False, "bgp", True),
-        ("failback tunnel", False, "static", False),
+        ("failback tunnel", False, "static", True),
         ("failback tunnel", True, "bgp", True),
         ("failover vm", False, "bgp", False),
         ("failover vm", True, "static", True),
@@ -601,7 +607,7 @@ def test_vm_ha_tunnel_restart_reports_clean_guidance_before_external_effects(
         (("failback", "tunnel", "tunnel-a"), "failback"),
     ),
 )
-def test_static_tunnel_failover_commands_fail_before_ssh(
+def test_static_tunnel_commands_dispatch_to_shared_owner(
     argv: tuple[str, ...],
     action: str,
     tmp_path,
@@ -615,22 +621,15 @@ def test_static_tunnel_failover_commands_fail_before_ssh(
     monkeypatch.setattr("nebius_vpngw.cli.load_local_config", lambda _path: config)
     monkeypatch.setattr("nebius_vpngw.cli.merge_with_peer_configs", lambda *_args: plan)
 
-    def unexpected_effect(*_args, **_kwargs):
-        raise AssertionError("SSH occurred before routing-mode rejection")
-
-    monkeypatch.setattr("subprocess.run", unexpected_effect)
-
-    result = CliRunner().invoke(
-        app,
-        [*argv, "--local-config-file", str(config_path)],
+    seen = []
+    monkeypatch.setattr("nebius_vpngw.cli._require_idle_gateway_bindings", lambda *_: None)
+    monkeypatch.setattr(
+        "nebius_vpngw.cli._ordinary_tunnel_command",
+        lambda local, resolved, verb, target: seen.append((resolved, verb, target)),
     )
-
-    assert result.exit_code == 1
-    assert result.stdout == ""
-    assert result.stderr == (
-        f"Tunnel {action} is not supported for Static routing; it is available "
-        "only for ordinary BGP configurations.\n"
-    )
+    result = CliRunner().invoke(app, [*argv, "--local-config-file", str(config_path)])
+    assert result.exit_code == 0
+    assert seen == [(plan, action, "tunnel-a")]
 
 
 @pytest.mark.parametrize("mode", ("static", "bgp"))
@@ -722,6 +721,24 @@ def test_vm_ha_only_commands_use_central_policy_before_external_effects(
 
 def test_public_command_parameter_and_alias_manifest_is_exact() -> None:
     expected = {
+        ("pair", "create-config"): (
+            ("directory",),
+            ("--left",),
+            ("--right",),
+            ("--name",),
+            ("--mode",),
+            ("--profile-a",),
+            ("--profile-b",),
+        ),
+        ("pair", "apply"): (
+            ("manifest",),
+            ("--dry-run",),
+            ("--prepare-network",),
+            ("--approve-a",),
+            ("--approve-b",),
+            ("--timeout",),
+        ),
+        ("pair", "status"): (("manifest",),),
         ("access", "add-operator"): (
             ("name",),
             ("--local-config-file", "-c"),
@@ -765,6 +782,7 @@ def test_public_command_parameter_and_alias_manifest_is_exact() -> None:
             ("--prepare-vm-ha-peer-rotation",),
             ("--approve-vm-ha-migration",),
             ("--recover-vm-ha-migration",),
+            ("--output-format",),
             ("--replace-failed-vm-ha-passive",),
         ),
         ("status",): (

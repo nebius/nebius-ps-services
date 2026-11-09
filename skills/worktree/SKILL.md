@@ -328,6 +328,13 @@ $worktree remove <generated-worktree-name>
 - `remove`: the child worktree, local child ref, and manifest are absent; remote
   state is untouched.
 
+## Recovery proof
+
+Integration records exact tree and message intent before committing; retries adopt
+only that exact merge. Replayed success revalidates current source ancestry and
+child identity. Removal verifies physical path, registration and ref absence
+before deleting ownership. Retain mismatches for owner recovery without force.
+
 ## Learning Loop
 
 When using this skill, capture durable, reusable, public-safe learnings

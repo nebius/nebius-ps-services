@@ -12,17 +12,28 @@ import stat
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from .deploy.credential_enrollment import EnrollmentJournal
+    from .deploy.replacement_cloud import Cloud
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from .nebius_pagination import collect_nebius_pages, nebius_resource_id
 from .vm_ha_credentials import (
+    VM_HA_CREDENTIAL_MAX_BYTES,
+    CredentialPurpose,
+    VMHACredentialIdentity,
     VMHACredentialIdentityError,
     VMHACredentialSet,
+    credential_ids_from_payload,
+    credential_nodes,
     display_vm_ha_credential_path,
     managed_vm_ha_credential_path,
     preflight_vm_ha_credentials,
@@ -55,6 +66,37 @@ class VMHAManagedCredentialError(RuntimeError):
     """A secret-free managed credential reconciliation failure."""
 
 
+@dataclass(frozen=True)
+class OrdinaryCredentialRecovery:
+    """Pinned installed authority and an in-memory, authenticated secret reader."""
+
+    binding: dict
+    reader: Callable[[], bytes] = field(repr=False, compare=False)
+
+    def record(self, project: str, gateway: str, nodes: tuple[str, ...]) -> dict:
+        from .ordinary_route_binding import validate
+
+        value = validate(self.binding)
+        if (value["project"], value["gateway"], (value["node"],)) != (project, gateway, nodes):
+            raise VMHAManagedCredentialError("Credential recovery crossed runtime authority")
+        return value
+
+    def read(self) -> bytes:
+        payload = self.reader()
+        ref = self.binding["credentials"]
+        if (
+            not isinstance(payload, bytes)
+            or len(payload) > VM_HA_CREDENTIAL_MAX_BYTES
+            or hashlib.sha256(payload).hexdigest() != ref["sha256"]
+            or credential_ids_from_payload(payload)
+            != (ref["service_account"], ref["authorized_key"])
+        ):
+            raise VMHAManagedCredentialError(
+                "Recovered credential differs from installed authority"
+            )
+        return payload
+
+
 def _bounded_iam_name(gateway_name: str, suffix: str) -> str:
     candidate = f"{gateway_name}{suffix}"
     if len(candidate) <= 63:
@@ -67,24 +109,43 @@ def _bounded_iam_name(gateway_name: str, suffix: str) -> str:
     return f"{prefix}-{digest}{suffix}"
 
 
-def vm_ha_service_account_name(gateway_name: str) -> str:
-    return _bounded_iam_name(gateway_name, "-vm-ha")
+def vm_ha_service_account_name(
+    gateway_name: str, *, purpose: CredentialPurpose = "ha-controller"
+) -> str:
+    suffix = {"ha-controller": "-vm-ha", "ordinary-route-writer": "-routes"}[purpose]
+    return _bounded_iam_name(gateway_name, suffix)
 
 
-def vm_ha_authorized_key_name(gateway_name: str) -> str:
-    return _bounded_iam_name(gateway_name, "-vm-ha-runtime-key")
+def vm_ha_authorized_key_name(
+    gateway_name: str, *, purpose: CredentialPurpose = "ha-controller"
+) -> str:
+    suffix = {"ha-controller": "-vm-ha-runtime-key", "ordinary-route-writer": "-route-runtime-key"}[
+        purpose
+    ]
+    return _bounded_iam_name(gateway_name, suffix)
 
 
-def vm_ha_ownership_labels(*, project_id: str, gateway_name: str) -> dict[str, str]:
+def vm_ha_ownership_labels(
+    *, project_id: str, gateway_name: str, purpose: CredentialPurpose = "ha-controller"
+) -> dict[str, str]:
     owner = hashlib.sha256(f"{project_id}\0{gateway_name}".encode()).hexdigest()[:32]
-    return {"managed-by": _MANAGED_BY, "vm-ha-owner": owner}
+    label = {"ha-controller": "vm-ha-owner", "ordinary-route-writer": "route-writer-owner"}[purpose]
+    return {"managed-by": _MANAGED_BY, label: owner}
+
+
+def _key_description(labels: Mapping[str, str]) -> str:
+    return (
+        "Nebius VPNGW ordinary route runtime key"
+        if "route-writer-owner" in labels
+        else _KEY_DESCRIPTION
+    )
 
 
 @dataclass(frozen=True)
 class VMHAManagedCredentialPlan:
     """Secret-free read-only result included in the exact apply approval."""
 
-    action: Literal["create", "reuse", "resume"]
+    action: Literal["create", "reuse", "resume", "recover"]
     project_id: str
     gateway_name: str
     service_account_name: str
@@ -99,9 +160,23 @@ class VMHAManagedCredentialPlan:
     pending_present: bool
     journal_present: bool
     public_key_sha256: str | None
+    node_ids: tuple[str, ...]
+    purpose: CredentialPurpose
     credentials: VMHACredentialSet | None = None
+    command_intent: dict[str, object] | None = None
+    recovery: OrdinaryCredentialRecovery | None = field(default=None, repr=False)
 
     def approval_record(self) -> dict[str, object]:
+        if self.command_intent is not None:
+            return deepcopy(self.command_intent)
+        return self.observation_record()
+
+    @property
+    def command_action(self) -> str:
+        return str(self.command_intent["action"]) if self.command_intent else self.action
+
+    def observation_record(self) -> dict[str, object]:
+        """Current observation stays distinct from the frozen command intent."""
         result: dict[str, object] = {
             "action": self.action,
             "algorithm": _KEY_ALGORITHM,
@@ -111,6 +186,8 @@ class VMHAManagedCredentialPlan:
             "key_size_bits": _KEY_BITS,
             "local_source_expected_absent": not self.source_present,
             "project_id": self.project_id,
+            "purpose": self.purpose,
+            "node_ids": list(self.node_ids),
             "service_account_name": self.service_account_name,
             "iam_resources": {
                 **self.iam_plan.approval_record(),
@@ -122,6 +199,10 @@ class VMHAManagedCredentialPlan:
         }
         if self.credentials is not None:
             result["runtime_credentials"] = self.credentials.approval_records()
+        if self.recovery is not None:
+            result["recovery"] = self.recovery.record(
+                self.project_id, self.gateway_name, self.node_ids
+            )
         return result
 
 
@@ -148,6 +229,7 @@ def inspect_managed_vm_ha_credentials(
     project_id: str,
     gateway_name: str,
     node_ids: Sequence[str],
+    purpose: CredentialPurpose = "ha-controller",
     tenant_id: str | None = None,
     region_id: str | None = None,
     home: Path | None = None,
@@ -156,17 +238,26 @@ def inspect_managed_vm_ha_credentials(
         inspect_vm_ha_service_account_identity
     ),
     client_factory: Callable[..., tuple[Any, bool]] = _init_client,
+    enrollment: EnrollmentJournal | None = None,
+    recovery: OrdinaryCredentialRecovery | None = None,
 ) -> VMHAManagedCredentialPlan:
     """Inspect exact local and IAM state without creating either."""
 
+    node_ids = credential_nodes(node_ids, purpose)
+    preflight = partial(preflight, purpose=purpose)
+    if enrollment is not None and (
+        enrollment.project != project_id or enrollment.gateway != gateway_name
+    ):
+        raise VMHAManagedCredentialError("Enrollment belongs to another gateway")
     home_root = Path.home() if home is None else home
     source_path = managed_vm_ha_credential_path(
         project_id=project_id,
         gateway_name=gateway_name,
         home=home_root,
+        purpose=purpose,
     )
-    sa_name = vm_ha_service_account_name(gateway_name)
-    key_name = vm_ha_authorized_key_name(gateway_name)
+    sa_name = vm_ha_service_account_name(gateway_name, purpose=purpose)
+    key_name = vm_ha_authorized_key_name(gateway_name, purpose=purpose)
     try:
         local_state = _inspect_local_credential_state(
             source_path=source_path,
@@ -177,7 +268,53 @@ def inspect_managed_vm_ha_credentials(
             authorized_key_name=key_name,
             node_ids=node_ids,
             preflight=preflight,
+            allow_pending_key_only=bool(enrollment and enrollment.permits_unpaired_pending_key()),
         )
+        if recovery is not None:
+            if purpose != "ordinary-route-writer":
+                raise VMHAManagedCredentialError("Credential recovery purpose changed")
+            value = recovery.record(project_id, gateway_name, node_ids)
+            if local_state.pending_present or local_state.journal_present:
+                raise VMHAManagedCredentialError(
+                    "Finish pending credential enrollment before recovery"
+                )
+            if not local_state.source_present:
+                payload = recovery.read()
+                public_key = _public_key_from_credential_payload(payload)
+                ref = value["credentials"]
+                local_state = replace(
+                    local_state,
+                    public_key=public_key,
+                    public_key_sha256=hashlib.sha256(public_key.encode("ascii")).hexdigest(),
+                    credentials=VMHACredentialSet(
+                        (
+                            VMHACredentialIdentity(
+                                node_ids[0],
+                                source_path,
+                                ref["sha256"],
+                                ref["service_account"],
+                                ref["authorized_key"],
+                                project_id,
+                                sa_name,
+                            ),
+                        ),
+                        purpose=purpose,
+                    ),
+                )
+            else:
+                assert local_state.credentials is not None
+                if any(
+                    (item.credential_sha256, item.service_account_id, item.authorized_key_id)
+                    != (
+                        value["credentials"]["sha256"],
+                        value["credentials"]["service_account"],
+                        value["credentials"]["authorized_key"],
+                    )
+                    for item in local_state.credentials.nodes
+                ):
+                    raise VMHAManagedCredentialError(
+                        "Local credentials conflict with recovered identity"
+                    )
         expected_service_account_id = (
             local_state.credentials.service_account_id
             if local_state.credentials is not None
@@ -186,9 +323,10 @@ def inspect_managed_vm_ha_credentials(
         labels = vm_ha_ownership_labels(
             project_id=project_id,
             gateway_name=gateway_name,
+            purpose=purpose,
         )
         cloud_mode: Literal["create", "reuse", "resume"] = (
-            "reuse" if local_state.source_present else local_state.mode
+            "reuse" if local_state.source_present or recovery is not None else local_state.mode
         )
         iam_plan = iam_inspector(
             sa_name,
@@ -217,12 +355,27 @@ def inspect_managed_vm_ha_credentials(
             region_id=region_id,
             client_factory=client_factory,
         )
+        if recovery is not None and (
+            key_action != "reuse"
+            or any(
+                action != "reuse"
+                for action in (
+                    iam_plan.service_account_action,
+                    iam_plan.group_action,
+                    iam_plan.membership_action,
+                    iam_plan.permit_action,
+                )
+            )
+        ):
+            raise VMHAManagedCredentialError("Credential recovery cannot create IAM resources")
     except (VMHACredentialIdentityError, VMHAManagedCredentialError):
         raise
     except Exception as error:
         raise VMHAManagedCredentialError("managed credential read-only inventory failed") from error
     return VMHAManagedCredentialPlan(
-        action=local_state.mode,
+        action="recover"
+        if recovery is not None and not local_state.source_present
+        else local_state.mode,
         project_id=project_id,
         gateway_name=gateway_name,
         service_account_name=sa_name,
@@ -230,6 +383,7 @@ def inspect_managed_vm_ha_credentials(
         display_path=display_vm_ha_credential_path(
             project_id=project_id,
             gateway_name=gateway_name,
+            purpose=purpose,
         ),
         home_root=home_root,
         source_path=source_path,
@@ -241,6 +395,9 @@ def inspect_managed_vm_ha_credentials(
         journal_present=local_state.journal_present,
         public_key_sha256=local_state.public_key_sha256,
         credentials=local_state.credentials,
+        node_ids=tuple(node_ids),
+        purpose=purpose,
+        recovery=recovery,
     )
 
 
@@ -554,7 +711,7 @@ def _require_exact_key(
         or actual_labels != dict(labels)
         or account_id != service_account_id
         or data != public_key.strip()
-        or description != _KEY_DESCRIPTION
+        or description != _key_description(labels)
         or has_expiry
     ):
         raise VMHAManagedCredentialError("managed authorized key has foreign identity or data")
@@ -571,6 +728,7 @@ def _reconcile_authorized_key(
     labels: Mapping[str, str],
     public_key: str,
     expected_key_id: str | None,
+    cloud: Cloud | None = None,
 ) -> str:
     from nebius.api.nebius.common.v1 import ResourceMetadata
     from nebius.api.nebius.iam.v1 import (
@@ -579,10 +737,11 @@ def _reconcile_authorized_key(
         CreateAuthPublicKeyRequest,
     )
 
+    completed = cloud.completed("authorized-key") if cloud is not None else None
     items = _list_service_account_keys(service, service_account_id)
     if len(items) > 1:
         raise VMHAManagedCredentialError("managed service account has unexpected authorized keys")
-    if action == "reuse":
+    if action == "reuse" or completed is not None:
         if len(items) != 1:
             raise VMHAManagedCredentialError("managed authorized key disappeared after approval")
         return _require_exact_key(
@@ -592,28 +751,28 @@ def _reconcile_authorized_key(
             key_name=key_name,
             labels=labels,
             public_key=public_key,
-            expected_key_id=expected_key_id,
+            expected_key_id=completed or expected_key_id,
         )
     if items:
         raise VMHAManagedCredentialError("managed authorized key appeared after approval")
     account = Account(service_account=Account.ServiceAccount(id=service_account_id))
     try:
-        _wait_operation(
-            service.create(
-                CreateAuthPublicKeyRequest(
-                    metadata=ResourceMetadata(
-                        parent_id=project_id,
-                        name=key_name,
-                        labels=dict(labels),
-                    ),
-                    spec=AuthPublicKeySpec(
-                        account=account,
-                        description=_KEY_DESCRIPTION,
-                        data=public_key,
-                    ),
-                )
-            )
+        request = CreateAuthPublicKeyRequest(
+            metadata=ResourceMetadata(
+                parent_id=project_id,
+                name=key_name,
+                labels=dict(labels),
+            ),
+            spec=AuthPublicKeySpec(
+                account=account,
+                description=_key_description(labels),
+                data=public_key,
+            ),
         )
+        if cloud is None:
+            _wait_operation(service.create(request))
+        else:
+            completed = cloud.mutate("authorized-key", request, service.create)
     except Exception as error:
         raise VMHAManagedCredentialError("managed authorized-key creation failed") from error
     reread = _list_service_account_keys(service, service_account_id)
@@ -626,7 +785,7 @@ def _reconcile_authorized_key(
         key_name=key_name,
         labels=labels,
         public_key=public_key,
-        expected_key_id=None,
+        expected_key_id=completed,
     )
 
 
@@ -730,6 +889,7 @@ def _inspect_local_credential_state(
     authorized_key_name: str,
     node_ids: Sequence[str],
     preflight: Callable[..., VMHACredentialSet],
+    allow_pending_key_only: bool = False,
 ) -> _LocalCredentialState:
     source_present = _path_present(source_path, label="managed credential source")
     parent_present = _path_present(source_path.parent, label="managed credential directory")
@@ -774,7 +934,11 @@ def _inspect_local_credential_state(
             )
         public_key = pending_public_key
 
-    if not source_present and pending_present != journal_present:
+    if (
+        not source_present
+        and pending_present != journal_present
+        and not (allow_pending_key_only and pending_present and not journal_present)
+    ):
         raise VMHAManagedCredentialError("managed credential enrollment state is incomplete")
     if not source_present and not pending_present:
         return _LocalCredentialState(
@@ -917,12 +1081,71 @@ def ensure_managed_vm_ha_credentials(
     ),
     client_factory: Callable[..., tuple[Any, bool]] = _init_client,
     preflight: Callable[..., VMHACredentialSet] = preflight_vm_ha_credentials,
+    enrollment: EnrollmentJournal | None = None,
+    iam_inspector: Callable[
+        ..., VMHAIAMReconciliationPlan
+    ] = inspect_vm_ha_service_account_identity,
 ) -> VMHAManagedCredentialResult:
     """Reconcile the approved identity and return one authenticated shared source."""
 
+    if credential_nodes(node_ids, plan.purpose) != plan.node_ids:
+        raise VMHAManagedCredentialError("Managed credential target nodes changed")
+    preflight = partial(preflight, purpose=plan.purpose)
+    if enrollment is not None:
+        if enrollment.project != plan.project_id or enrollment.gateway != plan.gateway_name:
+            raise VMHAManagedCredentialError("Enrollment belongs to another gateway")
+        plan = enrollment.admit(plan)
+    if plan.recovery is not None:
+        # Recheck the pinned source and exact existing IAM graph immediately
+        # before exclusive local publication. Recovery never rotates a key.
+        observed = inspect_managed_vm_ha_credentials(
+            project_id=plan.project_id,
+            gateway_name=plan.gateway_name,
+            node_ids=plan.node_ids,
+            purpose=plan.purpose,
+            tenant_id=tenant_id,
+            region_id=region_id,
+            home=plan.home_root,
+            preflight=preflight,
+            iam_inspector=iam_inspector,
+            client_factory=client_factory,
+            recovery=plan.recovery,
+        )
+        if (
+            observed.iam_plan.approval_record() != plan.iam_plan.approval_record()
+            or observed.authorized_key_id != plan.authorized_key_id
+            or observed.public_key_sha256 != plan.public_key_sha256
+            or observed.credentials != plan.credentials
+        ):
+            raise VMHAManagedCredentialError("Credential recovery authority changed after approval")
+        if not observed.source_present:
+            payload = plan.recovery.read()
+            _ensure_private_parent(plan.source_path, home=plan.home_root, expected_uid=os.getuid())
+            try:
+                _atomic_private_write(plan.source_path, payload, replace=False)
+            except VMHAManagedCredentialError:
+                # A concurrent or lost-reply publication is admissible only for
+                # these exact bytes; different material is never overwritten.
+                if read_vm_ha_credential_source(plan.source_path) != payload:
+                    raise
+            descriptor = os.open(plan.source_path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        credentials = preflight(
+            plan.node_ids,
+            source_path=plan.source_path,
+            project_id=plan.project_id,
+            requested_service_account_name=plan.service_account_name,
+        )
+        if credentials != plan.credentials:
+            raise VMHAManagedCredentialError("Recovered credential authentication changed")
+        plan = replace(plan, action="reuse", source_present=True, credentials=credentials)
     labels = vm_ha_ownership_labels(
         project_id=plan.project_id,
         gateway_name=plan.gateway_name,
+        purpose=plan.purpose,
     )
     if tuple(sorted(labels.items())) != plan.iam_plan.ownership_labels:
         raise VMHAManagedCredentialError("managed credential IAM ownership plan changed")
@@ -936,6 +1159,7 @@ def ensure_managed_vm_ha_credentials(
         authorized_key_name=plan.authorized_key_name,
         node_ids=node_ids,
         preflight=preflight,
+        allow_pending_key_only=bool(enrollment and enrollment.permits_unpaired_pending_key()),
     )
     _require_approved_local_state(plan, current)
 
@@ -982,6 +1206,9 @@ def ensure_managed_vm_ha_credentials(
                 credentials=None,
             )
 
+    if enrollment is not None:
+        enrollment.select(public_key)
+
     try:
         token_identity = identity_ensurer(
             plan.service_account_name,
@@ -991,6 +1218,11 @@ def ensure_managed_vm_ha_credentials(
             verified_role_ids=("editor",),
             ownership_labels=labels,
             reconciliation_plan=plan.iam_plan,
+            **(
+                {"cloud_factory": lambda sdk: enrollment.cloud(sdk, public_key)}
+                if enrollment is not None
+                else {}
+            ),
         )
     except VMHAManagedCredentialError:
         raise
@@ -1016,6 +1248,7 @@ def ensure_managed_vm_ha_credentials(
             labels=labels,
             public_key=public_key,
             expected_key_id=plan.authorized_key_id,
+            cloud=enrollment.cloud(client, public_key) if enrollment is not None else None,
         )
     except VMHAManagedCredentialError:
         raise
@@ -1058,10 +1291,14 @@ def ensure_managed_vm_ha_credentials(
         project_id=plan.project_id,
         requested_service_account_name=plan.service_account_name,
     )
+    if credentials.purpose != plan.purpose or tuple(credentials.by_node()) != plan.node_ids:
+        raise VMHAManagedCredentialError("Published credential runtime scope changed")
     if credentials.service_account_id != token_identity.service_account_id:
         raise VMHAManagedCredentialError("published credential service account did not verify")
     if credentials.authorized_key_id != key_id:
         raise VMHAManagedCredentialError("published credential authorized key did not verify")
+    if enrollment is not None:
+        enrollment.complete(credentials.resource_bindings())
     if current.pending_present or current.journal_present or not current.source_present:
         _cleanup_enrollment_state(
             pending_path=pending_path,

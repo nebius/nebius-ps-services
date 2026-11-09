@@ -27,7 +27,9 @@ def ports(kind=OrdinaryReplacement):
     )
     value.deployment = SimpleNamespace(
         gateway={},
-        gateway_group=SimpleNamespace(name="gateway", vm_spec={}, ingress_policies=[None, None]),
+        gateway_group=SimpleNamespace(
+            security_group_ids=(), name="gateway", vm_spec={}, ingress_policies=[None, None]
+        ),
     )
     value.ssh = SimpleNamespace(_ssh_policy=SimpleNamespace(identity_for=lambda _: object()))
     value.instances = {
@@ -37,8 +39,7 @@ def ports(kind=OrdinaryReplacement):
         for index in range(2)
     }
     value.snapshots = {
-        logical: {"projection": projection(), "digest": "a" * 64}
-        for logical in value.instances
+        logical: {"projection": projection(), "digest": "a" * 64} for logical in value.instances
     }
     return value
 
@@ -66,7 +67,9 @@ def test_inspection_checks_later_member_before_admitting_group(monkeypatch, tmp_
         "inspect_plan",
         lambda _ssh, _address, config, *_args, **_kwargs: SimpleNamespace(
             observation={
-                "config_sha256": replacement_ordinary.ordinary_apply.sha(config.config_yaml.encode()),
+                "config_sha256": replacement_ordinary.ordinary_apply.sha(
+                    config.config_yaml.encode()
+                ),
                 "verified": True,
             },
             close=lambda: None,
@@ -77,7 +80,10 @@ def test_inspection_checks_later_member_before_admitting_group(monkeypatch, tmp_
         "capture",
         lambda *_: [NICSecurityGroups("eth0", "subnet-test", "network-test", (), ())],
     )
-    monkeypatch.setattr(replacement_ordinary.replacement_routes, "inventory", lambda *_: ())
+    monkeypatch.setattr(replacement_ordinary.replacement_routes, "inventory", lambda *_, **_kw: ())
+    monkeypatch.setattr(
+        replacement_ordinary.replacement_runtime_routes, "inspect", lambda *_: (None, None)
+    )
     assert len(value.inspect().members) == 2
     oversize(value.snapshots["gateway-1"])
     with pytest.raises(ValueError, match="cloud-init exceeds"):

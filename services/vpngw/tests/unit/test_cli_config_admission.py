@@ -60,3 +60,23 @@ def test_apply_with_resolved_environment_reaches_implementation(
 
     assert result.exit_code == 0, result.output
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_removed_initial_security_groups_fail_before_authentication_and_lock(
+    monkeypatch, tmp_path, sample_config, dry_run
+):
+    sample_config["gateway_group"]["initial_security_group_ids"] = ["sg-example"]
+    config = tmp_path / "gateway.yaml"
+    config.write_text(yaml.safe_dump(sample_config))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("renamed input must stop before any effect")
+
+    for boundary in ("VMHAApplyLock", "_apply_impl", "_ensure_authentication"):
+        monkeypatch.setattr(cli, boundary, forbidden)
+    result = CliRunner().invoke(
+        cli.app, ["apply", "-c", str(config)] + (["--dry-run"] if dry_run else [])
+    )
+    assert result.exit_code != 0
+    assert "was renamed to gateway_group.security_group_ids" in str(result.exception)

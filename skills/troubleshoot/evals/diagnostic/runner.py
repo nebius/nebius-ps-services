@@ -15,7 +15,8 @@ import time
 import uuid
 from pathlib import Path
 
-from cases import CASES, DECISIVE, REPLAYS, case
+from accounting import native_accounting
+from cases import CASES, DECISIVE, PARALLEL_ELIGIBLE, REPLAYS, case
 from fixtures import build, verify_report
 from oracle import program
 
@@ -75,8 +76,10 @@ def bounded(
     started = time.monotonic()
     events = []
     pending = bytearray()
+    malformed = 0
 
     def capture(chunk):
+        nonlocal malformed
         pending.extend(chunk)
         while b"\n" in pending:
             line, _, rest = pending.partition(b"\n")
@@ -84,15 +87,22 @@ def bounded(
             try:
                 event = json.loads(line)
             except ValueError:
+                if line.strip():
+                    malformed += 1
                 continue
             if isinstance(event, dict):
                 event["_observed_seconds"] = time.monotonic() - started
                 events.append(event)
+            else:
+                malformed += 1
 
     result = observe(
         command, timeout=timeout, stdout_limit=MAX_BYTES, on_stdout=capture
     )
     result["events"] = events
+    result["stream_complete"] = (
+        result["status"] == "ok" and malformed == 0 and not pending.strip()
+    )
     return {**result, "elapsed_seconds": time.monotonic() - started}
 
 
@@ -138,69 +148,41 @@ def base_command(
     ]
 
 
-def trace_metrics(events: list[dict], case_id: str = "") -> dict:
-    calls = []
-    tokens = None
-    decisive_time = None
-    decisive_actions = None
+def trace_metrics(
+    events: list[dict],
+    case_id: str = "",
+    *,
+    host: str = "codex",
+    stream_complete: bool = True,
+) -> dict:
+    metrics = native_accounting(events, host=host, stream_complete=stream_complete)
+    decisive_time = decisive_actions = None
     patterns = DECISIVE.get(case_id, [])
-    for event in events:
-        if event.get("type") == "item.completed":
-            item = event.get("item", {})
-            if item.get("type") in {"command_execution", "mcp_tool_call", "web_search"}:
-                calls.append(
-                    json.dumps(
-                        {
-                            k: item[k]
-                            for k in ("type", "command", "server", "tool", "arguments")
-                            if k in item
-                        },
-                        sort_keys=True,
-                    )
-                )
-        for block in (
-            event.get("message", {}).get("content", [])
-            if isinstance(event.get("message"), dict)
-            else []
-        ):
-            if isinstance(block, dict) and block.get("type") == "tool_use":
-                calls.append(
-                    json.dumps(
-                        {k: block[k] for k in ("name", "input") if k in block},
-                        sort_keys=True,
-                    )
-                )
-        item = event.get("item", {})
+    for index, event in enumerate(events):
+        item = event.get("item") or {}
         evidence = (
             str(item.get("aggregated_output", ""))
             if event.get("type") == "item.completed"
             and item.get("type") == "command_execution"
             else ""
         )
-        if event.get("type") == "user":
+        message = event.get("message") or {}
+        if event.get("type") == "user" and isinstance(message, dict):
             evidence += " ".join(
                 str(b.get("content", ""))
-                for b in event.get("message", {}).get("content", [])
+                for b in message.get("content", [])
                 if isinstance(b, dict)
                 and b.get("type") == "tool_result"
                 and not b.get("is_error")
             )
-        if (
-            patterns
-            and decisive_actions is None
-            and all(p in evidence for p in patterns)
-        ):
+        if patterns and all(p in evidence for p in patterns):
             decisive_time = event.get("_observed_seconds")
-            decisive_actions = len(calls)
-        usage = event.get("usage")
-        if isinstance(usage, dict) and all(
-            isinstance(v, int) and v >= 0 for v in usage.values()
-        ):
-            tokens = usage
+            decisive_actions = native_accounting(
+                events[: index + 1], host=host, stream_complete=False
+            )["diagnostic_actions"]
+            break
     return {
-        "diagnostic_actions": len(calls),
-        "duplicate_actions": len(calls) - len(set(calls)),
-        "usage": tokens,
+        **metrics,
         "time_to_decisive_evidence_seconds": decisive_time,
         "actions_to_decisive_evidence": decisive_actions,
     }
@@ -283,6 +265,20 @@ def run_trial(
             f"type=bind,src={protected},dst=/protected/secret,readonly",
         ]
         native_command = native.native_command(agent, prompt, model=model)
+        if agent == "claude":
+            # Current official CLI forwards child tools; text is required for review.
+            help_command = base_command(image, identity + "-help", volume)
+            help_command.insert(help_command.index(image), "--rm")
+            help_result = bounded(help_command + [agent, "--help"], 20)
+            if (
+                help_result["status"] != "ok"
+                or b"--forward-subagent-text" not in help_result["stdout"]
+            ):
+                return {
+                    "state": "UNAVAILABLE",
+                    "reason": "pinned CLI lacks descendant text export",
+                }
+            native_command.insert(-1, "--forward-subagent-text")
         # Probe forbidden paths before starting the CLI, in the exact trial mount namespace.
         bootstrap = (
             "import os,pathlib,json\n"
@@ -303,7 +299,9 @@ def run_trial(
         result = {
             "state": "RUNTIME_PASS" if raw["status"] == "ok" else "FAIL",
             "elapsed_seconds": raw["elapsed_seconds"],
-            **trace_metrics(events, item["id"]),
+            **trace_metrics(
+                events, item["id"], host=agent, stream_complete=raw["stream_complete"]
+            ),
             "loaded": native.observed_loading(
                 events, "troubleshoot", (skill / "SKILL.md").read_text()
             ),
@@ -369,11 +367,7 @@ def run_trial(
                 result["state"] = "FAIL"
         # Keep bounded execution evidence outside the scored environment for review.
         result["trace"] = events
-        result["trace_complete"] = raw["status"] not in {
-            "truncated",
-            "timeout",
-            "interrupted",
-        }
+        result["trace_complete"] = raw["stream_complete"]
 
         def sanitize(value):
             if isinstance(value, str):
@@ -392,6 +386,7 @@ def run_trial(
             name,
             identity + "-init",
             identity + "-metadata",
+            identity + "-help",
             identity + "-verify",
         ):
             bounded(["docker", "rm", "-f", container], 15)
@@ -443,6 +438,8 @@ def main() -> int:
             "readonly_inputs": True,
             "no_host_mounts": True,
         },
+        "parallel_eligible_cases": sorted(PARALLEL_ELIGIBLE),
+        "accounting_contract": "native-tree-v1",
         "promotion": "NOT_RUN",
         "trials": [],
     }

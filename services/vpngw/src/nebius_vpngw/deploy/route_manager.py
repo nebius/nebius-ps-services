@@ -349,8 +349,10 @@ class NebiusSDKRouteBackend:
         """Freshly prove the full declared parent chain before route authority is used."""
 
         from nebius.api.nebius.vpc.v1 import (
+            GetNetworkRequest,
             GetRouteTableRequest,
             GetSubnetRequest,
+            NetworkServiceClient,
             RouteTableServiceClient,
             SubnetServiceClient,
         )
@@ -375,6 +377,8 @@ class NebiusSDKRouteBackend:
         subnet_spec = getattr(subnet, "spec", None)
         table_metadata = getattr(route_table, "metadata", None)
         table_spec = getattr(route_table, "spec", None)
+        effective = getattr(getattr(subnet, "status", None), "route_table", None)
+        explicit_table = str(getattr(subnet_spec, "route_table_id", "") or "")
         observed = VMHARouteTarget(
             project_id=str(getattr(subnet_metadata, "parent_id", "") or ""),
             network_id=str(getattr(subnet_spec, "network_id", "") or ""),
@@ -383,11 +387,35 @@ class NebiusSDKRouteBackend:
         )
         if (
             observed != target
-            or str(getattr(subnet_spec, "route_table_id", "") or "") != target.route_table_id
+            or str(getattr(effective, "id", "") or "") != target.route_table_id
+            or (explicit_table and explicit_table != target.route_table_id)
             or str(getattr(table_metadata, "parent_id", "") or "") != target.project_id
             or str(getattr(table_spec, "network_id", "") or "") != target.network_id
         ):
             raise RuntimeError("VM-HA route target membership changed")
+
+        if not explicit_table:
+            # An inherited attachment has no spec.route_table_id. Prove its
+            # effective table against the owning network instead of treating
+            # an empty specification as drift or trusting status alone.
+            assignment = getattr(getattr(route_table, "status", None), "assignment", None)
+            if getattr(effective, "default", None) is not True or set(
+                getattr(assignment, "subnets", ()) or ()
+            ) != {target.workload_subnet_id}:
+                raise RuntimeError("VM-HA route target membership changed")
+            network = (
+                NetworkServiceClient(self.sdk)
+                .get(GetNetworkRequest(id=target.network_id), **vm_ha_request_kwargs())
+                .wait()
+            )
+            metadata = getattr(network, "metadata", None)
+            status = getattr(network, "status", None)
+            if (
+                str(getattr(metadata, "id", "") or "") != target.network_id
+                or str(getattr(metadata, "parent_id", "") or "") != target.project_id
+                or str(getattr(status, "default_route_table_id", "") or "") != target.route_table_id
+            ):
+                raise RuntimeError("VM-HA route target membership changed")
 
     def verify_migration_route(self, binding: VMHAMigrationRouteBinding) -> bool:
         """Reobserve one exact approval-bound route without adopting by name."""
@@ -4455,522 +4483,69 @@ class RouteManager:
         swap_route_table: bool = False,
         rollback_dir: Path | None = None,
     ) -> None:
-        """Ensure routes for connection.remote_prefixes and assign custom route tables when needed."""
-        try:
-            channel = self._channel()
-        except Exception as e:
-            raise RouteManagementError(f"Failed to open the VPC SDK channel: {e}") from e
+        """Use the same receipt-bound ordinary route owner as apply."""
+        from .ordinary_route_command import run
 
-        # Create compute channel using same auth pattern as VPC channel
-        try:
-            import os
-
-            import grpc  # type: ignore
-
-            token = self.auth_token or os.environ.get("NEBIUS_IAM_TOKEN")
-            if not token:
-                raise ValueError("No authentication token available.")
-
-            def auth_metadata_plugin(context, callback):
-                callback([("authorization", f"Bearer {token}")], None)
-
-            auth_creds = grpc.metadata_call_credentials(t.cast(t.Any, auth_metadata_plugin))
-            ssl_creds = grpc.ssl_channel_credentials()
-            composite_creds = grpc.composite_channel_credentials(ssl_creds, auth_creds)
-            compute_channel = grpc.secure_channel("compute.api.nebius.cloud:443", composite_creds)
-        except Exception:
-            compute_channel = None
-
-        from nebius.api.nebius.common.v1 import metadata_pb2  # type: ignore[attr-defined]
-        from nebius.api.nebius.vpc.v1 import (  # type: ignore[attr-defined]
-            route_pb2,
-            route_service_pb2,
-            route_service_pb2_grpc,
-            route_table_pb2,
-            route_table_service_pb2,
-            route_table_service_pb2_grpc,
-            subnet_pb2,
-            subnet_service_pb2,
-            subnet_service_pb2_grpc,
+        run(
+            self,
+            plan,
+            local_cfg,
+            summarize=summarize,
+            force_copy=swap_route_table,
+            rollback_dir=rollback_dir,
         )
 
-        gateway_prefixes = self._parse_ipv4_networks(
-            local_cfg.get("gateway", {}).get("local_prefixes") or []
-        )
-        if not gateway_prefixes:
-            raise RouteManagementError(
-                "No gateway.local_prefixes are configured; workload subnets cannot be selected."
-            )
+    def selected_peer_routes(
+        self,
+        bgp_data: dict,
+        *,
+        peers: set[str],
+        allowed: tuple = (),
+    ) -> tuple[str, ...]:
+        """Read a complete FRR RIB, scoped to configured peers and best paths.
 
-        allocations_by_index: dict[int, str] = {}
-        if compute_channel:
-            allocations_by_index = self._find_gateway_private_allocations_by_index(
-                compute_channel, plan
-            )
-        if not allocations_by_index:
-            raise RouteManagementError(
-                "Could not resolve private gateway allocations; no routes were changed."
-            )
-
-        target_network_id = self._resolve_target_network_id(channel, local_cfg)
-        if not target_network_id:
-            raise RouteManagementError(
-                "Could not resolve the target network for route updates. Set "
-                "gateway_group.network_id explicitly."
-            )
-
-        network_pool_networks = self._get_network_private_pool_cidrs(
-            channel,
-            network_id=target_network_id,
-        )
-
-        try:
-            prefix_targets = self._collect_remote_prefix_targets(
-                plan, local_cfg, allocations_by_index
-            )
-        except ValueError as error:
-            raise RouteManagementError(str(error)) from error
-
-        if not prefix_targets:
-            raise RouteManagementError(
-                "No remote prefixes were found (BGP: no learned routes; static: "
-                "no configured connection or tunnel prefixes)."
-            )
-
-        # Filter out local prefixes (don't create routes for our own VPC networks)
-        local_networks = self._parse_ipv4_networks(
-            local_cfg.get("gateway", {}).get("local_prefixes") or []
-        )
-        (
-            prefix_targets,
-            skipped_local_prefixes,
-            skipped_network_pool_prefixes,
-        ) = self._filter_prefix_targets(
-            prefix_targets,
-            local_networks=local_networks,
-            network_pool_networks=network_pool_networks,
-        )
-
-        for prefix in skipped_local_prefixes:
-            print(f"[dim]Skipping {prefix} (overlaps with local_prefixes)[/dim]")
-        for prefix, pool_cidr in skipped_network_pool_prefixes:
-            print(
-                f"[dim]Skipping {prefix} (overlaps target network private pool {pool_cidr})[/dim]"
-            )
-
-        if not prefix_targets:
-            print(
-                "[yellow]No remote prefixes to add (all learned routes are local networks)[/yellow]"
-            )
-            return
-
-        original_prefix_count = len(prefix_targets)
-        if summarize:
-            summarized_targets = self._summarize_prefix_targets(prefix_targets)
-            if len(summarized_targets) < original_prefix_count:
-                print(
-                    f"[cyan]Summarized remote prefixes from {original_prefix_count} "
-                    f"to {len(summarized_targets)} exact route(s)[/cyan]"
-                )
-            else:
-                print("[dim]Summarization produced no exact route reduction[/dim]")
-            prefix_targets = summarized_targets
-
-        print(f"[cyan]Found {len(prefix_targets)} remote prefix(es) to add as VPC routes[/cyan]")
-
-        sstub = subnet_service_pb2_grpc.SubnetServiceStub(channel)
-        rtstub = route_table_service_pb2_grpc.RouteTableServiceStub(channel)
-        rstub = route_service_pb2_grpc.RouteServiceStub(channel)
-        gateway_subnet_name = self._gateway_subnet_name(local_cfg)
-
-        subnets = collect_nebius_pages(
-            lambda page_token: sstub.List(
-                subnet_service_pb2.ListSubnetsRequest(
-                    parent_id=self.project_id or "",
-                    page_size=1000,
-                    page_token=page_token,
-                )
-            ),
-            context="Workload subnet",
-            item_identity=nebius_resource_id,
-        )
-        selected_subnets, subnet_selection_diagnostics = self._select_local_prefix_subnets(
-            subnets,
-            gateway_prefixes,
-            target_network_id=target_network_id,
-            gateway_subnet_name=gateway_subnet_name,
-        )
-
-        for diagnostic in subnet_selection_diagnostics:
-            print(diagnostic)
-
-        if not selected_subnets:
-            raise RouteManagementError(
-                "No workload subnets matched gateway.local_prefixes in network "
-                f"{target_network_id}; no routes were changed."
-            )
-
-        route_tables = collect_nebius_pages(
-            lambda page_token: rtstub.List(
-                route_table_service_pb2.ListRouteTablesRequest(
-                    parent_id=self.project_id or "",
-                    page_size=1000,
-                    page_token=page_token,
-                )
-            ),
-            context="Route table",
-            item_identity=nebius_resource_id,
-        )
-        route_tables_by_name: dict[str, object] = {}
-        for route_table in route_tables:
-            metadata = getattr(route_table, "metadata", None)
-            route_table_id = self._metadata_id(route_table)
-            route_table_name = self._metadata_name(route_table)
+        Both SSH deployment observations and the in-guest runtime use this parser.
+        A malformed row anywhere makes this snapshot unknown, never absent.
+        """
+        if not peers:
+            raise RouteManagementError("BGP route inventory has no exact configured peers")
+        if not isinstance(bgp_data, dict) or not isinstance(bgp_data.get("routes"), dict):
+            raise RouteManagementError("BGP route inventory is incomplete")
+        result = set()
+        for raw_prefix, value in bgp_data["routes"].items():
+            network = self._parse_ipv4_network(str(raw_prefix))
+            paths = [value] if isinstance(value, dict) else value
             if (
-                not route_table_id
-                or not route_table_name
-                or str(getattr(metadata, "parent_id", "") or "") != (self.project_id or "")
+                network is None
+                or not isinstance(paths, list)
+                or not paths
+                or any(
+                    not isinstance(path, dict)
+                    or type(path.get("valid")) is not bool
+                    or not isinstance(path.get("peerId"), str)
+                    or any(
+                        key in path and type(path[key]) is not bool
+                        for key in ("bestpath", "multipath")
+                    )
+                    or not isinstance(path.get("nexthops"), list)
+                    or any(
+                        not isinstance(hop, dict) or not hop.get("ip") for hop in path["nexthops"]
+                    )
+                    for path in paths
+                )
             ):
-                raise RouteManagementError("Route table inventory returned an inexact identity.")
-            if route_table_name in route_tables_by_name:
-                raise RouteManagementError("Route table inventory contains an ambiguous name.")
-            route_tables_by_name[route_table_name] = route_table
-
-        preflight_route_table_ids = {
-            str(getattr(self._subnet_route_table(subnet), "id", "") or "")
-            for subnet, _selected_cidrs in selected_subnets
-        }
-        if not swap_route_table:
-            for subnet, _selected_cidrs in selected_subnets:
-                existing = route_tables_by_name.get(
-                    self._route_table_name(self._metadata_name(subnet))
-                )
-                if existing is not None:
-                    preflight_route_table_ids.add(self._metadata_id(existing))
-        preflight_route_table_ids.discard("")
-        preflight_routes = {
-            route_table_id: self._list_route_table_routes(
-                rstub,
-                route_service_pb2,
-                route_table_id=route_table_id,
-            )
-            for route_table_id in sorted(preflight_route_table_ids)
-        }
-
-        completed_subnets: set[str] = set()
-
-        for sn, _selected_cidrs in selected_subnets:
-            subnet_name = self._metadata_name(sn)
-            rt_info = self._subnet_route_table(sn)
-            current_route_table_id = str(getattr(rt_info, "id", "") or "")
-            current_route_table_default = bool(getattr(rt_info, "default", False))
-            current_route_table_label = current_route_table_id or "default route table"
-            subnet_network_id = self._subnet_network_id(sn) or target_network_id
-
-            if swap_route_table:
-                source_route_table_id = current_route_table_id
-                if not source_route_table_id:
-                    print(
-                        f"[yellow]Cannot swap route table for subnet {subnet_name}: "
-                        "the currently attached route table ID is unavailable, so a "
-                        "safe rollback target cannot be generated.[/yellow]"
-                    )
-                    continue
-
-                print(
-                    f"[cyan]Subnet {subnet_name} will swap from route table "
-                    f"{source_route_table_id} to a fresh custom table...[/cyan]"
-                )
-
-                swap_rt_name = self._swap_route_table_name(subnet_name)
-                try:
-                    op = rtstub.Create(
-                        route_table_service_pb2.CreateRouteTableRequest(
-                            metadata=metadata_pb2.ResourceMetadata(
-                                name=swap_rt_name,
-                                parent_id=self.project_id,
-                            ),
-                            spec=route_table_pb2.RouteTableSpec(network_id=subnet_network_id),
-                        )
-                    )
-                    rt_id = op.resource_id or ""
-                except Exception as e:
-                    print(
-                        f"[yellow]Failed to create swap route table for subnet {subnet_name}: {e}[/yellow]"
-                    )
-                    continue
-
-                if not rt_id:
-                    print(
-                        f"[red]Route table create returned no resource_id for subnet {subnet_name}; skipping.[/red]"
-                    )
-                    continue
-
-                existing_routes = []
-                if source_route_table_id:
-                    existing_routes = list(preflight_routes[source_route_table_id])
-
-                routes_to_copy = self._copyable_routes(existing_routes)
-                copied, copy_failures = self._copy_routes_to_route_table(
-                    rstub,
-                    route_service_pb2,
-                    metadata_pb2,
-                    destination_route_table_id=rt_id,
-                    routes_to_copy=routes_to_copy,
-                )
-                if routes_to_copy:
-                    print(
-                        f"[cyan]Copied {copied}/{len(routes_to_copy)} non-vpngw route(s) "
-                        f"from {current_route_table_label} to {rt_id}[/cyan]"
-                    )
-                else:
-                    print(
-                        f"[dim]No non-vpngw routes to copy from {current_route_table_label}[/dim]"
-                    )
-
-                if copy_failures:
-                    print(
-                        f"[yellow]Swap route table {rt_id} is incomplete; copy failures prevent cutover.[/yellow]"
-                    )
-                    for dest_label, error_text in copy_failures:
-                        print(
-                            f"[yellow]  Could not copy preserved route {dest_label}: {error_text}[/yellow]"
-                        )
-                    print(
-                        f"[yellow]Leaving unattached swap route table {rt_id} for inspection. "
-                        "Current subnet attachment is unchanged.[/yellow]"
-                    )
-                    continue
-
-                existing_routes = self._reconcile_route_table(
-                    rstub,
-                    route_service_pb2,
-                    route_pb2,
-                    metadata_pb2,
-                    route_table_id=rt_id,
-                    prefix_targets=prefix_targets,
-                    summarize=summarize,
-                    initial_routes=preflight_routes.get(rt_id),
-                )
-
-                preserved_signatures = {
-                    signature
-                    for route in routes_to_copy
-                    if (signature := self._route_signature(route)) is not None
-                }
-                missing_preserved_routes = self._missing_route_signatures(
-                    preserved_signatures,
-                    existing_routes,
-                )
-                installed_prefix_targets = self._installed_prefix_targets(
-                    existing_routes,
-                    prefix_targets,
-                )
-                missing_prefix_targets = sorted(set(prefix_targets) - set(installed_prefix_targets))
-
-                if missing_preserved_routes or missing_prefix_targets:
-                    print(
-                        f"[yellow]Swap route table {rt_id} failed validation; subnet "
-                        f"{subnet_name} will stay on {current_route_table_label}.[/yellow]"
-                    )
-                    for destination, next_hop in missing_preserved_routes:
-                        print(
-                            f"[yellow]  Missing preserved route after copy: {destination} -> "
-                            f"{next_hop}[/yellow]"
-                        )
-                    for prefix in missing_prefix_targets:
-                        print(
-                            f"[yellow]  Missing managed route after reconciliation: {prefix}[/yellow]"
-                        )
-                    print(
-                        f"[yellow]Leaving unattached swap route table {rt_id} for inspection. "
-                        "Current subnet attachment is unchanged.[/yellow]"
-                    )
-                    continue
-
-                if rollback_dir is None:
-                    rollback_dir = Path.cwd() / ".nebius-vpngw-rollbacks"
-                rollback_path = self._write_swap_rollback_spec(
-                    rollback_dir=rollback_dir,
-                    subnet_obj=sn,
-                    previous_route_table_id=current_route_table_id,
-                )
-
-                try:
-                    self._attach_route_table_to_subnet(
-                        sstub,
-                        subnet_service_pb2,
-                        metadata_pb2,
-                        subnet_pb2,
-                        subnet_obj=sn,
-                        route_table_id=rt_id,
-                    )
-                except Exception as e:
-                    print(
-                        f"[yellow]Failed to attach swap route table {rt_id} to subnet "
-                        f"{subnet_name}: {e}[/yellow]"
-                    )
-                    print(
-                        f"[yellow]Rollback spec saved to {rollback_path}, but the subnet "
-                        "attachment was not changed.[/yellow]"
-                    )
-                    continue
-
-                print(
-                    f"[green]Swapped subnet {subnet_name} from {current_route_table_label} "
-                    f"to fresh route table {rt_id}[/green]"
-                )
-                print(f"[cyan]Rollback spec saved to {rollback_path}[/cyan]")
-                print(
-                    "[yellow]Rollback command:[/yellow] "
-                    f"[bold]nebius vpc subnet update --file {shlex.quote(str(rollback_path))}[/bold]"
-                )
-                completed_subnets.add(subnet_name)
+                raise RouteManagementError("BGP route inventory contains malformed paths")
+            if allowed and not any(network.subnet_of(item) for item in allowed):
                 continue
-
-            if not current_route_table_default and current_route_table_id:
-                print(
-                    f"[cyan]Subnet {subnet_name} already uses custom route table {current_route_table_id}; "
-                    "adding VPN routes...[/cyan]"
-                )
-                rt_id = current_route_table_id
-            else:
-                # A reusable name does not prove a previous copy completed. Every
-                # attempt proves the full source policy before changing attachment.
-                if not current_route_table_id:
-                    raise RouteManagementError(
-                        f"Cannot identify the current default table for {subnet_name}; attachment unchanged"
-                    )
-                source_routes = tuple(preflight_routes[current_route_table_id])
-                if any(self._route_spec(route) is None for route in source_routes):
-                    raise RouteManagementError(
-                        "Default route table has an unreadable route specification"
-                    )
-                rt_name = self._route_table_name(subnet_name)
-                existing_rt = route_tables_by_name.get(rt_name)
-                if existing_rt is not None:
-                    rt_id = self._metadata_id(existing_rt)
-                else:
-                    op = rtstub.Create(
-                        route_table_service_pb2.CreateRouteTableRequest(
-                            metadata=metadata_pb2.ResourceMetadata(
-                                name=rt_name, parent_id=self.project_id
-                            ),
-                            spec=route_table_pb2.RouteTableSpec(network_id=subnet_network_id),
-                        )
-                    )
-                    rt_id = op.resource_id or ""
-                if not rt_id:
-                    raise RouteManagementError(
-                        "New route table has no identity; attachment unchanged"
-                    )
-                observed = tuple(
-                    self._list_route_table_routes(rstub, route_service_pb2, route_table_id=rt_id)
-                )
-                missing = [
-                    route
-                    for route in source_routes
-                    if not any(
-                        self._route_spec(route) == self._route_spec(candidate)
-                        for candidate in observed
-                    )
-                ]
-                _, failures = self._copy_routes_to_route_table(
-                    rstub,
-                    route_service_pb2,
-                    metadata_pb2,
-                    destination_route_table_id=rt_id,
-                    routes_to_copy=missing,
-                )
-                if failures:
-                    raise RouteManagementError(
-                        f"Route table {rt_id} is incomplete; source routes and subnet attachment were preserved"
-                    )
-                observed = self._reconcile_route_table(
-                    rstub,
-                    route_service_pb2,
-                    route_pb2,
-                    metadata_pb2,
-                    route_table_id=rt_id,
-                    prefix_targets=prefix_targets,
-                    summarize=summarize,
-                )
-                if any(
-                    not any(
-                        self._route_spec(route) == self._route_spec(candidate)
-                        for candidate in observed
-                    )
-                    for route in source_routes
-                ) or set(self._installed_prefix_targets(observed, prefix_targets)) != set(
-                    prefix_targets
-                ):
-                    raise RouteManagementError(
-                        "Copied route table failed complete readback; attachment unchanged"
-                    )
-                fresh_source = self._list_route_table_routes(
-                    rstub, route_service_pb2, route_table_id=current_route_table_id
-                )
-                if {
-                    self._metadata_id(route): self._route_spec(route) for route in fresh_source
-                } != {self._metadata_id(route): self._route_spec(route) for route in source_routes}:
-                    raise RouteManagementError(
-                        "Source route table changed during copy; attachment unchanged"
-                    )
-                fresh_subnet = sstub.Get(
-                    subnet_service_pb2.GetSubnetRequest(id=self._metadata_id(sn))
-                )
-                if (
-                    fresh_subnet.spec != t.cast(t.Any, sn).spec
-                    or self._subnet_route_table(fresh_subnet) != rt_info
-                    or getattr(fresh_subnet.metadata, "resource_version", None)
-                    != getattr(t.cast(t.Any, sn).metadata, "resource_version", None)
-                ):
-                    raise RouteManagementError(
-                        "Subnet changed during route preparation; attachment unchanged"
-                    )
-                self._attach_route_table_to_subnet(
-                    sstub,
-                    subnet_service_pb2,
-                    metadata_pb2,
-                    subnet_pb2,
-                    subnet_obj=fresh_subnet,
-                    route_table_id=rt_id,
-                )
-                completed_subnets.add(subnet_name)
-                continue
-
-            reconciled_routes = self._reconcile_route_table(
-                rstub,
-                route_service_pb2,
-                route_pb2,
-                metadata_pb2,
-                route_table_id=rt_id,
-                prefix_targets=prefix_targets,
-                summarize=summarize,
-                initial_routes=preflight_routes.get(rt_id),
-            )
-            installed_prefix_targets = self._installed_prefix_targets(
-                reconciled_routes,
-                prefix_targets,
-            )
-            missing_prefix_targets = sorted(set(prefix_targets) - set(installed_prefix_targets))
-            if missing_prefix_targets:
-                print(
-                    f"[yellow]Route reconciliation on subnet {subnet_name} did not "
-                    "reach its requested postcondition.[/yellow]"
-                )
-                for prefix in missing_prefix_targets:
-                    print(f"[yellow]  Missing managed route: {prefix}[/yellow]")
-                continue
-            completed_subnets.add(subnet_name)
-
-        expected_subnets = {self._metadata_name(subnet) for subnet, _ in selected_subnets}
-        incomplete_subnets = sorted(expected_subnets - completed_subnets)
-        if incomplete_subnets:
-            raise RouteManagementError(
-                "Route management did not converge on workload subnet(s): "
-                + ", ".join(incomplete_subnets)
-            )
+            if any(
+                path["valid"]
+                and (path.get("bestpath") is True or path.get("multipath") is True)
+                and path["peerId"] in peers
+                and self._path_nexthops(path) & peers
+                for path in paths
+            ):
+                result.add(str(network))
+        return tuple(sorted(result))
 
     def _get_bgp_learned_routes(
         self, plan: ResolvedDeploymentPlan, conn: dict, local_cfg: dict
@@ -4992,7 +4567,7 @@ class RouteManager:
                 if network is not None:
                     whitelist_networks.append(network)
 
-        learned_prefixes = []
+        learned_prefixes: list[str] = []
         queried_gateway = False
 
         target_instance_indices = set(self._connection_instance_indices(conn))
@@ -5027,47 +4602,14 @@ class RouteManager:
                     )
 
                 bgp_data = json.loads(result.stdout)
-                routes = bgp_data.get("routes", {})
-
-                selected_prefixes_for_host = 0
-                for prefix, route_data in routes.items():
-                    if isinstance(route_data, dict):
-                        paths = [route_data]
-                    elif isinstance(route_data, list):
-                        paths = route_data
-                    else:
-                        continue
-
-                    relevant_paths = []
-                    for path in paths:
-                        path_nexthops = self._path_nexthops(path)
-                        if not path_nexthops:
-                            continue
-                        if peer_ips and not (path_nexthops & peer_ips):
-                            continue
-                        relevant_paths.append(path)
-
-                    if not relevant_paths:
-                        continue
-
-                    # Apply whitelist filter if configured
-                    if whitelist_networks:
-                        try:
-                            prefix_net = self._parse_ipv4_network(str(prefix))
-                            if prefix_net is None:
-                                continue
-                            allowed = any(
-                                prefix_net.subnet_of(wl) or prefix_net == wl
-                                for wl in whitelist_networks
-                            )
-                            if not allowed:
-                                continue
-                        except Exception:
-                            continue
-
-                    if prefix not in learned_prefixes:
-                        learned_prefixes.append(prefix)
-                        selected_prefixes_for_host += 1
+                selected = self.selected_peer_routes(
+                    bgp_data,
+                    peers=peer_ips,
+                    allowed=tuple(whitelist_networks),
+                )
+                selected_prefixes_for_host = len(set(selected) - set(learned_prefixes))
+                learned_prefixes.extend(p for p in selected if p not in learned_prefixes)
+                routes = bgp_data["routes"]
 
                 print(
                     f"[cyan]Selected {selected_prefixes_for_host} connection-scoped BGP "

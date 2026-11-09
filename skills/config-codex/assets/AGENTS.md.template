@@ -53,6 +53,26 @@
   `find /tmp/<task-owned-tree> -depth -delete`. Never target the temporary root
   or pass an unresolved variable.
 
+## Host Memory Safety
+
+- Keep 2 GiB of available host memory as the hard operational floor. Check the
+  current execution host before workloads and monitor throughout agent-owned
+  work, using `global-context-management` host-memory guidance and helper.
+- At or below 4 GiB but above 2 GiB, tell the user memory headroom is low and
+  continue the task. A warning alone must not stop work or block new launches.
+- At or below 2 GiB, stop agent-owned work safely, preserve progress and tell
+  the user: "The host is running out of memory; I stopped my work to protect
+  the remaining headroom." Continue only lightweight communication, diagnosis
+  and safe cleanup until memory recovers above 2 GiB; warn while below 4 GiB.
+- If host memory cannot be measured reliably, report that separately and pause
+  memory-heavy work until visibility is restored. Use available/reclaimable
+  memory, not process RSS or raw free pages alone; do not count swap as RAM.
+- Stop only exactly owned jobs and use each resource owner's cleanup path for
+  browsers, containers and remote workloads. Never kill unrelated applications
+  or OS services, tune OS memory, or reset workflow evidence or repair budgets.
+- These are sampled operational controls, not a physical RAM reservation.
+  Keep monitors active while owned work runs and close them when it finishes.
+
 ## Live Product Validation
 
 - When a live target is used to verify product behavior, define and freeze the

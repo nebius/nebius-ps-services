@@ -1,8 +1,4 @@
-"""Pure HA connection policy; never rewrites configured roles or interface identities.
-
-Ordinary gateways must not consult selector state. The controller supplies validated
-operational selections via ``_ha_tunnel_selections`` on its effective configuration.
-"""
+"""Shared connection policy; authority adapters supply the effective selection."""
 
 from __future__ import annotations
 
@@ -50,8 +46,6 @@ def covers(prefixes: frozenset[str], required: frozenset[str]) -> bool:
 
 def connection_policies(cfg: dict[str, Any]) -> tuple[ConnectionPolicy, ...]:
     """Project per-member topology, preserving the canonical enabled-tunnel order."""
-    if not cfg.get("vm_ha") or cfg["vm_ha"].get("enabled") is False:
-        return ()
     index = 0
     result: list[ConnectionPolicy] = []
     for connection in cfg.get("connections", []):
@@ -112,7 +106,7 @@ def connection_policies(cfg: dict[str, Any]) -> tuple[ConnectionPolicy, ...]:
             reason = "mixed-tunnel-routing-modes"
         elif len(paths) < 2:
             reason = "no-same-owner-alternative"
-        elif not required:
+        elif not required and mode == "static":
             reason = "destination-coverage-unspecified"
         elif not all(covers(p.destinations, required) for p in paths):
             reason = "unequal-destination-coverage"
@@ -136,7 +130,10 @@ def connection_policies(cfg: dict[str, Any]) -> tuple[ConnectionPolicy, ...]:
                 for a in policy.destinations
                 for b in other.destinations
             ):
-                reason = "conflicting-route-ownership"
+                raise ValueError(
+                    "Overlapping destination ownership across connections; put redundant "
+                    "tunnels with complete coverage in one connection"
+                )
             if policy.mode == "static" and any(
                 a.outer_pair == b.outer_pair for a in policy.paths for b in other.paths
             ):
@@ -175,10 +172,10 @@ def selections(cfg: dict[str, Any]) -> dict[str, str]:
 
 
 def tunnel_preferred(cfg: dict[str, Any], connection: dict, tunnel: dict) -> bool:
-    target = selections(cfg).get(str(connection.get("name"))) if cfg.get("vm_ha") else None
+    target = selections(cfg).get(str(connection.get("name")))
     return tunnel.get("name") == target if target else tunnel.get("ha_role", "active") == "active"
 
 
 def tunnel_exports(cfg: dict[str, Any], connection: dict, tunnel: dict) -> bool:
-    target = selections(cfg).get(str(connection.get("name"))) if cfg.get("vm_ha") else None
+    target = selections(cfg).get(str(connection.get("name")))
     return target is None or tunnel.get("name") == target

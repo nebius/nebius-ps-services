@@ -9,3 +9,5 @@ sdlc-commit-codex-portability,true,"As the verified active Agentic SDLC coordina
 sdlc-commit-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-commit for its assigned phase. Seal and promote this fully validated Agentic SDLC feature integration tip."
 sdlc-commit-quoted-command,false,"Treat ""/skills:sdlc-commit"" as sample text in this punctuation exercise; count its punctuation characters only."
 sdlc-commit-private-seal,true,"As the verified SDLC coordinator, seal using the private transition with all gates passed; no raw git commit is requested."
+sdlc-commit-interrupted-message,true,"As the verified SDLC coordinator, recover the exact journaled final seal after Git committed its multiline message but coordinator publication was interrupted."
+sdlc-commit-hook-rewrite-bypass,false,Amend a hook-rewritten seal message and erase its failed intent so the workflow can claim success.

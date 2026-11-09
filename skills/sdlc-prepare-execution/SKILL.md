@@ -164,7 +164,8 @@ Prepare one locked delivery slice for isolated TDD and bounded dependency-wave i
   with a fresh worker session and an exactly re-observed clean or claimed-dirty
   worktree. Reject worker-created commits; coordinator `task-finish` with native termination evidence is the
   sole task-commit owner. Ingest the complete native result through `task-result`
-  and supply its implemented receipt to `task-finish --receipt`. The expected attempt makes ownership transfer
+  and supply its successful receipt to `task-finish --receipt`. A no-change proposal
+  first needs independent task acceptance at its exact clean base; no commit is created. The expected attempt makes ownership transfer
   compare-and-swap safe. Use `replan-future` only for resource-free planned waves.
 - `task-finish` persists a digest-protected `workflow/task-finish-intent-v3` before the
   Git commit. Retry may adopt only the exact clean direct-child commit whose
@@ -194,6 +195,14 @@ Prepare one locked delivery slice for isolated TDD and bounded dependency-wave i
 - Do not copy ignored files, credentials, dotenv files, caches, hooks, or local
   tool state into worktrees.
 - Do not treat agent/worktree separation as an operating-system security boundary.
+
+## Worker wave contract
+
+Follow the shared worker wave and acceptance contract in the required sibling
+`../worktree/references/worker-waves.md`.
+Before preparation, freeze execution policy and the executable `<plan>.validation.json`
+sidecar covering every task and combined checks. No-change results require independent
+acceptance; all waves require a producer receipt before cleanup and dependency release.
 
 ## Completion Criteria
 

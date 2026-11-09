@@ -13,11 +13,16 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from nebius_vpngw.agent.strongswan_renderer import SWANCTL_CONF, StrongSwanRenderer
+from nebius_vpngw.agent.strongswan_renderer import (
+    STRONGSWAN_CONF_DIR,
+    SWANCTL_CONF,
+    StrongSwanRenderer,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -38,10 +43,13 @@ class Endpoint:
     process: subprocess.Popen
     config: Path
     address: str
+    log: Path
 
     def command(self, *args: str) -> subprocess.CompletedProcess[str]:
         assert self.process.poll() is None, "fixture charon exited"
-        return run("nsenter", "-t", str(self.process.pid), "-m", "-n", "--", *args)
+        result = run("nsenter", "-t", str(self.process.pid), "-m", "-n", "--", *args, check=False)
+        assert result.returncode == 0, result.stderr[:4000]
+        return result
 
     def sas(self) -> tuple[tuple[int, ...], int]:
         output = self.command("swanctl", "--list-sas").stdout
@@ -64,7 +72,7 @@ def endpoints(tmp_path, request):
     assert Path("/proc/1/comm").read_text().strip() == "systemd"
     for command in ("ip", "tc", "unshare", "nsenter", "mount", "swanctl"):
         assert shutil.which(command), f"required fixture command unavailable: {command}"
-    charon = "/usr/lib/ipsec/charon"
+    charon = "/usr/sbin/charon-systemd"
     assert Path(charon).is_file()
     suffix = uuid.uuid4().hex[:7]
     namespaces = [f"ike-{suffix}-{index}" for index in (1, 2)]
@@ -101,8 +109,24 @@ def endpoints(tmp_path, request):
                 "src",
                 f"10.200.{index}.1",
             )
-            # Both native start actions must begin before either handshake can
-            # finish. This delay belongs only to the isolated collision fixture.
+            # Hold initial packets until both peer configurations are loaded.
+            # A delay alone permits a fast starter to receive a permanent
+            # NO_PROPOSAL_CHOSEN from an unconfigured peer, which is a different
+            # case from simultaneous configured-peer initiation.
+            run(
+                *prefix,
+                "iptables",
+                "-I",
+                "OUTPUT",
+                "-p",
+                "udp",
+                "-m",
+                "multiport",
+                "--dports",
+                "500,4500",
+                "-j",
+                "DROP",
+            )
             run(*prefix, "tc", "qdisc", "add", "dev", "eth0", "root", "netem", "delay", "500ms")
             config = {
                 "gateway": {
@@ -117,6 +141,7 @@ def endpoints(tmp_path, request):
                 },
                 "connections": [
                     {
+                        "name": "fixture",
                         "routing_mode": "static",
                         "tunnels": [
                             {
@@ -145,7 +170,17 @@ def endpoints(tmp_path, request):
             swanctl.write_text(rendered[SWANCTL_CONF])
             swanctl.chmod(0o600)
             settings = tmp_path / f"strongswan-{index}.conf"
-            settings.write_text("""charon {
+            settings.write_text("""charon-systemd {
+  filelog {
+    stdout {
+      default = 1
+      flush_line = yes
+      time_format = %Y-%m-%dT%H:%M:%S
+      time_add_ms = yes
+    }
+  }
+}
+charon {
   load_modular = yes
   install_routes = no
   reuse_ikesa = no
@@ -157,7 +192,12 @@ def endpoints(tmp_path, request):
   }
 }
 """)
-            log = (tmp_path / f"charon-{index}.log").open("w")
+            # Exercise the product policy, including its retransmission sequence,
+            # rather than inheriting upstream defaults in the native fixture.
+            with settings.open("a") as stream:
+                stream.write(rendered[STRONGSWAN_CONF_DIR.parent / "nebius-vpngw.conf"])
+            log_path = tmp_path / f"charon-{index}.log"
+            log = log_path.open("w")
             logs.append(log)
             # Each owned daemon receives a private /run, including its PID file
             # and VICI socket. No host namespace or credential is mounted.
@@ -183,10 +223,18 @@ def endpoints(tmp_path, request):
                 start_new_session=True,
             )
             processes.append(process)
-            endpoint = Endpoint(namespace, process, swanctl, f"10.200.{index}.1")
+            endpoint = Endpoint(namespace, process, swanctl, f"10.200.{index}.1", log_path)
             deadline = time.monotonic() + 10
             while True:
                 assert process.poll() is None, "fixture charon failed to start"
+                # Popen initially names ip/unshare/Python, before the private /run
+                # mount exists. Its inherited socket may belong to the container's
+                # system daemon. That reply cannot establish endpoint readiness.
+                executable = Path(f"/proc/{process.pid}/exe").resolve()
+                if executable != Path(charon).resolve():
+                    assert time.monotonic() < deadline, "fixture namespace bootstrap stalled"
+                    time.sleep(0.05)
+                    continue
                 ready = run(
                     "nsenter",
                     "-t",
@@ -224,7 +272,7 @@ def endpoints(tmp_path, request):
                 line
                 for line in lines
                 if re.search(
-                    r"failed|unable|not supported|not found|kernel|proposal|loaded plugins",
+                    r"failed|unable|not supported|not found|kernel|proposal|loaded plugins|initiating|retransmit|giving up",
                     line,
                     re.I,
                 )
@@ -242,6 +290,27 @@ def establish(endpoints: list[Endpoint], ike_version: int) -> None:
             )
         )
     assert all(result.returncode == 0 for result in results)
+    for endpoint in endpoints:
+        assert "fixture:" in endpoint.command("swanctl", "--list-conns").stdout
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        list(
+            pool.map(
+                lambda e: e.command(
+                    "iptables",
+                    "-D",
+                    "OUTPUT",
+                    "-p",
+                    "udp",
+                    "-m",
+                    "multiport",
+                    "--dports",
+                    "500,4500",
+                    "-j",
+                    "DROP",
+                ),
+                endpoints,
+            )
+        )
     deadline = time.monotonic() + 20
     while not all(endpoint.sas()[1] for endpoint in endpoints):
         assert time.monotonic() < deadline, (
@@ -340,6 +409,12 @@ def test_simultaneous_start_converges_and_peer_close_recovers(endpoints) -> None
     endpoints, ike_version = endpoints
     establish(endpoints, ike_version)
     stable_sessions(endpoints)
+    # Loading current configuration to restore another missing connection must
+    # leave established healthy connections forwarding with the same identities.
+    before_reload = [endpoint.sas() for endpoint in endpoints]
+    endpoints[0].command("swanctl", "--load-all", "--file", str(endpoints[0].config))
+    time.sleep(0.2)
+    assert [endpoint.sas() for endpoint in endpoints] == before_reload
     from nebius_vpngw.agent.vm_ha.tunnel_observation import NativeTunnelObserver
     from nebius_vpngw.agent.vm_ha.tunnels import Health
     from nebius_vpngw.ha_tunnel_policy import ConnectionPolicy, TunnelPath
@@ -379,3 +454,49 @@ def test_simultaneous_start_converges_and_peer_close_recovers(endpoints) -> None
     for endpoint in endpoints:
         policies = endpoint.command("ip", "xfrm", "policy").stdout
         assert "proto esp" in policies and "if_id 0x64" in policies
+
+
+@pytest.mark.parametrize(
+    "endpoints", [(2, False), (1, False)], indirect=True, ids=["ikev2", "ikev1"]
+)
+def test_initial_negotiation_uses_bounded_native_retry_sequence(endpoints) -> None:
+    endpoints, _ = endpoints
+    endpoint = endpoints[0]
+    # The fixture's packet barrier remains in place. Only the initiating peer
+    # is configured, so no remote response can end the retransmission sequence.
+    endpoint.command("tc", "qdisc", "del", "dev", "eth0", "root")
+    endpoint.command("swanctl", "--load-all", "--file", str(endpoint.config))
+    deadline = time.monotonic() + 27
+    while True:
+        lines = endpoint.log.read_text().splitlines()
+        giving_up = [line for line in lines if "giving up after 5 retransmits" in line]
+        if giving_up:
+            break
+        assert time.monotonic() < deadline, "native initial negotiation did not finish its sequence"
+        time.sleep(0.1)
+    starts = [line for line in lines if "initiating " in line and "IKE_SA fixture[" in line]
+    assert starts, "initial negotiation start was not observed"
+    started = datetime.fromisoformat(starts[0].split()[0])
+    ended = datetime.fromisoformat(giving_up[0].split()[0])
+    duration = (ended - started).total_seconds()
+    # Six waits sum to 20.78125s before jitter, at least 18.703125s with
+    # 10% subtractive jitter. Allow small scheduling/clock granularity overhead.
+    assert 18.5 <= duration <= 22, f"native retransmission sequence took {duration:.3f}s"
+    assert [int(n) for n in re.findall(r"retransmit (\d+) of request", "\n".join(lines))][:5] == [
+        1,
+        2,
+        3,
+        4,
+        5,
+    ]
+    while True:
+        log = endpoint.log.read_text()
+        if (
+            "keying attempt 2" in log
+            or sum("initiating " in line and "IKE_SA fixture[" in line for line in log.splitlines())
+            >= 2
+        ):
+            break
+        assert time.monotonic() < deadline, "persistent connection did not restart initiation"
+        time.sleep(0.1)
+    assert endpoint.process.poll() is None

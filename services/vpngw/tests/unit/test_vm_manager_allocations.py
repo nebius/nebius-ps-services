@@ -362,8 +362,12 @@ def test_replacement_accepted_operation_resumes_from_disk_with_real_effect_guard
 @pytest.mark.parametrize("oversized_cloud_init", [False, True])
 def test_missing_standby_executor_creates_only_fresh_disk_and_non_owner_compute(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     oversized_cloud_init: bool,
 ) -> None:
+    spec = replace(_ha_spec(), security_group_ids=("sg-first", "sg-second"))
+    verify_groups = Mock()
+    monkeypatch.setattr("nebius_vpngw.deploy.security_groups.verify_desired", verify_groups)
     manager = VMManager(project_id="project-1", region="eu-north1")
     _journal, disk_name = _install_missing_standby_replacement_journal(manager, tmp_path)
     client = object()
@@ -380,6 +384,7 @@ def test_missing_standby_executor_creates_only_fresh_disk_and_non_owner_compute(
         disk_type="NETWORK_SSD",
         disk_block_bytes=4096,
         cloud_init="#cloud-config\n",
+        security_group_ids=spec.security_group_ids,
     )
     disk = SimpleNamespace(id="disk-new")
     compute = SimpleNamespace(id="compute-new")
@@ -439,7 +444,7 @@ def test_missing_standby_executor_creates_only_fresh_disk_and_non_owner_compute(
         if oversized_cloud_init:
             with pytest.raises(ValueError, match="cloud-init.*32768"):
                 manager.replace_missing_vm_ha_standby(
-                    _ha_spec(), ["10.0.0.0/8"], approval_digest="e" * 64
+                    spec, ["10.0.0.0/8"], approval_digest="e" * 64
                 )
             manager._begin_vm_ha_effect.assert_not_called()
             manager._submit_boot_disk_create.assert_not_called()
@@ -448,7 +453,7 @@ def test_missing_standby_executor_creates_only_fresh_disk_and_non_owner_compute(
             disk_client.delete.assert_not_called()
             return
         result = manager.replace_missing_vm_ha_standby(
-            _ha_spec(),
+            spec,
             ["10.0.0.0/8"],
             approval_digest="e" * 64,
         )
@@ -467,6 +472,8 @@ def test_missing_standby_executor_creates_only_fresh_disk_and_non_owner_compute(
     assert not disk_client.delete.called
     assert isinstance(result, VMProvisioningResult)
     assert result.vm_ha_runtime_binding is runtime_binding
+    assert verify_groups.call_count == 1
+    assert verify_groups.call_args.args[2] == ("sg-first", "sg-second")
 
 
 def test_missing_standby_executor_rejects_foreign_disk_after_accepted_create(
@@ -520,7 +527,11 @@ def test_missing_standby_executor_rejects_foreign_disk_after_accepted_create(
 
 def test_missing_standby_executor_adopts_accepted_compute_allocation_owner(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    spec = replace(_ha_spec(), security_group_ids=("sg-first", "sg-second"))
+    verify_groups = Mock()
+    monkeypatch.setattr("nebius_vpngw.deploy.security_groups.verify_desired", verify_groups)
     manager = VMManager(project_id="project-1", region="eu-north1")
     journal, _disk_name = _install_missing_standby_replacement_journal(manager, tmp_path)
     create_disk_effect = "replace-missing-gateway-1-create-boot-disk"
@@ -540,6 +551,7 @@ def test_missing_standby_executor_adopts_accepted_compute_allocation_owner(
         disk_type="NETWORK_SSD",
         disk_block_bytes=4096,
         cloud_init="#cloud-config\n",
+        security_group_ids=spec.security_group_ids,
     )
     client = object()
     allocation_client = object()
@@ -572,7 +584,7 @@ def test_missing_standby_executor_adopts_accepted_compute_allocation_owner(
     manager._build_vm_ha_runtime_binding = Mock(return_value=object())
 
     manager.replace_missing_vm_ha_standby(
-        _ha_spec(),
+        spec,
         ["10.0.0.0/8"],
         approval_digest="e" * 64,
     )
@@ -594,6 +606,8 @@ def test_missing_standby_executor_adopts_accepted_compute_allocation_owner(
     ]
     manager._begin_vm_ha_effect.assert_called_once_with(create_compute_effect)
     manager._create_instance_with_fallback.assert_not_called()
+    assert verify_groups.call_count == 1
+    assert verify_groups.call_args.args[2] == ("sg-first", "sg-second")
 
 
 def _public_allocation(
@@ -3912,25 +3926,146 @@ def test_current_product_marker_binds_exact_compute_member_for_ssh_recovery() ->
 
 def test_vm_ha_ssh_compute_reread_uses_bounded_request_policy() -> None:
     vm_mgr = VMManager(project_id="project-1", region="eu-north1")
-    response = object()
+    response = SimpleNamespace(
+        metadata=SimpleNamespace(id="compute-0", name="gateway-0", parent_id="project-1")
+    )
     operation = SimpleNamespace(wait=MagicMock(return_value=response))
     service = SimpleNamespace(get=MagicMock(return_value=operation))
-    request_kwargs = {"timeout": 17.0}
 
     with (
         patch(
             "nebius.api.nebius.compute.v1.InstanceServiceClient",
             return_value=service,
         ),
-        patch(
-            "nebius_vpngw.deploy.vm_manager.vm_ha_request_kwargs",
-            return_value=request_kwargs,
-        ),
     ):
         result = vm_mgr._get_vm_by_id_for_vm_ha_preflight(object(), "compute-0")
 
     assert result is response
-    assert service.get.call_args.kwargs == request_kwargs
+    assert service.get.call_args.kwargs == {
+        "timeout": 10.0,
+        "auth_timeout": 10.0,
+        "per_retry_timeout": 10.0,
+        "retries": 1,
+    }
+
+
+def test_malformed_compute_read_preserves_unknown_without_identity_drift():
+    from nebius_vpngw.deploy.authority_observation import AuthorityUnavailable
+
+    manager = VMManager(project_id="project-1", region="eu-north1")
+    operation = SimpleNamespace(wait=MagicMock(return_value=SimpleNamespace(metadata=None)))
+    service = SimpleNamespace(get=MagicMock(return_value=operation))
+    with (
+        patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
+        pytest.raises(AuthorityUnavailable) as caught,
+    ):
+        manager._get_vm_by_id_for_vm_ha_preflight(object(), "compute-0")
+    assert caught.value.first.reasons == ("compute-response-incomplete",)
+    assert not caught.value.retryable and operation.wait.call_count == 1
+
+
+@pytest.mark.parametrize("revision", ["7", "8"])
+def test_transient_reread_rechecks_exact_identity_before_admitting_ssh(revision):
+    from copy import deepcopy
+
+    spec = _ha_spec()
+    marker = render_provisioning_marker(spec, 0)
+    expected = SimpleNamespace(
+        metadata=SimpleNamespace(
+            id="compute-0", name="gateway-0", parent_id="project-1", resource_version="7"
+        ),
+        spec=SimpleNamespace(
+            cloud_init_user_data=f"#cloud-config\n# nebius-vpngw-vm-ha-provisioning-v1: {marker}\n"
+        ),
+        status=SimpleNamespace(
+            network_interfaces=[
+                SimpleNamespace(public_ip_address=SimpleNamespace(address="203.0.113.10/32"))
+            ]
+        ),
+    )
+    fresh = deepcopy(expected)
+    fresh.metadata.resource_version = revision
+    manager = VMManager(project_id="project-1", region="eu-north1")
+    manager._vm_ha_ssh_preflight_snapshot = {"gateway-0": (expected, "203.0.113.10")}
+    service = SimpleNamespace(
+        get=MagicMock(
+            return_value=SimpleNamespace(wait=MagicMock(side_effect=[TimeoutError(), fresh]))
+        )
+    )
+    with (
+        patch.object(manager, "_build_sdk_client", return_value=object()),
+        patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
+    ):
+        check = manager.vm_ha_ssh_trust_bindings(spec, retained_hosts={"gateway-0"})["gateway-0"]
+        if revision == "7":
+            check()
+        else:
+            with pytest.raises(RuntimeError, match="evidence changed"):
+                check()
+    assert service.get.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (TimeoutError("sensitive"), "compute-read-timeout"),
+        (PermissionError("sensitive"), "compute-read-denied"),
+        (RuntimeError("DEADLINE_EXCEEDED sensitive"), "compute-read-failed"),
+        (None, "compute-response-empty"),
+        *[
+            (
+                RequestError(SimpleNamespace(code=code)),  # type: ignore[arg-type]
+                reason,
+            )
+            for code, reason in (
+                (StatusCode.DEADLINE_EXCEEDED, "compute-read-timeout"),
+                (StatusCode.UNAVAILABLE, "compute-read-unavailable"),
+                (StatusCode.PERMISSION_DENIED, "compute-read-denied"),
+                (StatusCode.UNAUTHENTICATED, "compute-read-unauthenticated"),
+                (StatusCode.NOT_FOUND, "compute-not-found"),
+            )
+        ],
+    ],
+)
+def test_ssh_compute_observation_failure_is_not_reported_as_identity_drift(error, reason):
+    from nebius_vpngw.deploy.apply_diagnostics import first_failure
+    from nebius_vpngw.deploy.apply_result import ApplyReport
+    from nebius_vpngw.deploy.vm_ha_package import package_step
+
+    manager = VMManager(project_id="project-1", region="eu-north1")
+    operation = SimpleNamespace(wait=MagicMock(side_effect=error, return_value=None))
+    service = SimpleNamespace(get=MagicMock(return_value=operation))
+    with (
+        patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
+        pytest.raises(RuntimeError) as caught,
+        package_step("package-admission"),
+        package_step("inspect-predecessor"),
+    ):
+        manager._get_vm_by_id_for_vm_ha_preflight(object(), "compute-0")
+        pytest.fail("Missing Compute authority must stop before SSH or guest work")
+
+    failure = first_failure(caught.value)
+    assert failure is not None
+    assert failure.phase == "verify-ssh-authority"
+    assert failure.predicate == "compute-observation-unavailable"
+    assert failure.reasons == (reason,)
+    assert caught.value.__cause__ is error
+    report = ApplyReport(started=True)
+    report.failed(caught.value)
+    assert report.mapping()["failure"] == failure.mapping()
+    from nebius_vpngw import cli
+
+    projected = cli._vm_ha_convergence_diagnostics(
+        caught.value, cli._VMHAProgressPhase.EXECUTE_APPLY
+    )
+    assert "phase-verify-ssh-authority" in projected
+    assert "predicate-compute-observation-unavailable" in projected
+    assert reason in projected
+    assert "identity changed" not in str(caught.value)
+    assert "sensitive" not in str(caught.value) + str(report.mapping())
+    attempts = 3 if reason in {"compute-read-timeout", "compute-read-unavailable"} else 1
+    assert operation.wait.call_count == service.get.call_count == attempts
+    assert all(call.args == () and call.kwargs == {} for call in operation.wait.call_args_list)
 
 
 def test_retained_ordinary_members_are_adopted_from_exact_lifecycle_and_runtime_proof() -> None:

@@ -15,6 +15,7 @@ def source() -> str:
     for name in (prefix, prefix + ".agent", prefix + ".agent.vm_ha"):
         result += f"_p=types.ModuleType({name!r});_p.__path__=[];sys.modules[{name!r}]=_p\n"
     for relative in (
+        "faults.py",
         "agent/vm_ha/models.py",
         "agent/vm_ha_controller.py",
         "agent/vm_ha_checkpoint.py",

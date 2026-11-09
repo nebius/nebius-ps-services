@@ -77,9 +77,9 @@ class CommitContractTest(unittest.TestCase):
             "execute committed history and block if the task depends",
             "on uncommitted product/spec content",
             "Never copy source dirt into a worker",
-            "Only an `implemented` result may proceed after native termination",
-            "coordinator finishes through the shared owner",
-            "transaction for one direct-child commit",
+            "Both `implemented` and `verified_no_change` proposals may proceed after native termination.",
+            "The former requires one direct-child commit; the latter requires independent task acceptance",
+            "through `validate-target --task` at its exact clean base and creates no commit.",
             "`task-result --result <private-json> --termination <observation>`",
             "`task-finish --receipt`",
             "Never project summary, validation or review into a second completion path",
@@ -136,13 +136,19 @@ class CommitContractTest(unittest.TestCase):
             "remote-only",
         ):
             self.assertIn(required, contract)
-        for skill in ("create-pr", "review-pr", "merge-pr"):
+        for skill in ("create-pr", "merge-pr"):
             self.assertIn(
                 "checkout-completion",
                 self.text(f"{skill}/SKILL.md").replace(
                     "checkout completion", "checkout-completion"
                 ),
             )
+        review = self.text("review-pr/SKILL.md")
+        self.assertIn("private-review", review)
+        self.assertIn("caller checkout, index, files and local refs untouched", review)
+        private = self.text("create-pr/references/private-review.md")
+        for action in ("begin-review", "open-review", "review-context", "cleanup-review"):
+            self.assertIn(action, private)
         for skill, ref in (
             ("publish-release", "orchestration"),
             ("publish-helm", "ordinary-publication"),

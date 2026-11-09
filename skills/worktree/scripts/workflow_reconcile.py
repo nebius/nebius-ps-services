@@ -8,8 +8,14 @@ from workflow_state import WorkflowError, read, write, lock, digest
 
 def termination(run_dir: Path, feature: str, wave: str, task: str, evidence: Path, session: str):
     """Validate an immutable owner observation; it is never itself proof of a test pass."""
+    authorize_coordinator(run_dir, session)
+    return observe_termination(run_dir, feature, wave, task, evidence)
+
+
+def observe_termination(run_dir: Path, feature: str, wave: str, task: str, evidence: Path):
+    """Read exact retained native proof without acquiring coordinator authority."""
     from workflow_execution import assignment_path, task_path, _validate_assignment_record
-    run, _ = authorize_coordinator(run_dir, session)
+    run, _ = validate_run(run_dir)
     assignment = read(assignment_path(run_dir, feature, wave, task))
     _validate_assignment_record(assignment)
     state = read(task_path(run_dir, feature, wave, task))
@@ -31,6 +37,8 @@ def reconcile_worker(run_dir: Path, feature: str, wave: str, task: str, evidence
     """Fence-safe reconciliation retains work and evidence without result admission."""
     from workflow_execution import wave_path, task_path, _execution_transition_lock
     with _execution_transition_lock(run_dir, feature):
+        from workflow_validation import require_quiescent
+        require_quiescent(run_dir, feature, wave_id=wave, task_id=task)
         run, _ = authorize_coordinator(run_dir, session)
         if not run.get("fence"):
             raise WorkflowError("RECONCILIATION_INVALID", "normal results must use validated admission")
@@ -74,7 +82,7 @@ def retire_fenced_waves(run_dir: Path, session: str):
         wave = read(path)
         if wave["status"] in {"planned", "done", "failed", "superseded"}:
             continue
-        if wave.get("merged_task_ids") or wave["status"] in {"integrating", "integrated"}:
+        if wave.get("integrated_task_ids") or wave["status"] in {"integrating", "integrated"}:
             raise WorkflowError("RECOVERY_REQUIRED", "reconcile the existing integration journal before changing its basis")
         feature = path.parent.parent.name
         assignments = []
@@ -216,6 +224,8 @@ def authorize_recovery(run_dir, feature, wave, task, evidence, session, next_ses
     from workflow_execution import _load_coordinator, _assert_current_assignment
     import re
     with lock(run_dir.parent):
+        from workflow_validation import require_quiescent
+        require_quiescent(run_dir, feature, wave_id=wave, task_id=task)
         assignment, state, observation = termination(run_dir, feature, wave, task, evidence, session)
         _assert_current_assignment(run_dir, feature, _load_coordinator(run_dir, feature), assignment)
         if state['status'] != 'running':

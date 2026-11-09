@@ -213,7 +213,7 @@ def parser() -> argparse.ArgumentParser:
     prepare.add_argument("--project-root", type=Path, required=True)
     prepare.add_argument("--execution", required=True)
     prepare.add_argument("--plan", type=Path, required=True)
-    prepare.add_argument("--capacity", type=int, default=4)
+    prepare.add_argument("--capacity", type=int, default=None)
 
     tdd = sub.add_parser("seal-tdd")
     tdd.add_argument("--run-dir", type=Path, required=True)
@@ -268,7 +268,7 @@ def parser() -> argparse.ArgumentParser:
     replan.add_argument("--run-dir", type=Path, required=True)
     replan.add_argument("--execution", required=True)
     replan.add_argument("--plan", type=Path, required=True)
-    replan.add_argument("--capacity", type=int, default=1)
+    replan.add_argument("--capacity", type=int, default=None)
 
     task_start = sub.add_parser("task-start")
     task_start.add_argument("--run-dir", type=Path, required=True)
@@ -333,7 +333,7 @@ def parser() -> argparse.ArgumentParser:
     task_finish.add_argument("--wave", required=True)
     task_finish.add_argument("--task", required=True)
     task_finish.add_argument("--receipt", type=Path, required=True)
-    task_finish.add_argument("--message", required=True)
+    task_finish.add_argument("--message", default="")
     task_finish.add_argument("--oracle-evidence-json", default="null")
 
     ingest = sub.add_parser("task-result")
@@ -353,7 +353,24 @@ def parser() -> argparse.ArgumentParser:
     complete.add_argument("--run-dir", type=Path, required=True)
     complete.add_argument("--execution", required=True)
     complete.add_argument("--wave", required=True)
-    complete.add_argument("--evidence", required=True)
+    complete.add_argument("--receipt", type=Path, required=True)
+
+    validation = sub.add_parser("validate-target")
+    validation.add_argument("--run-dir", type=Path, required=True)
+    validation.add_argument("--execution", required=True)
+    validation.add_argument("--wave", required=True)
+    validation.add_argument("--task", default=None)
+
+    policy = sub.add_parser("configure-policy")
+    policy.add_argument("--run-dir", type=Path, required=True)
+    policy.add_argument("--worker-limit", type=int, default=4)
+    policy.add_argument("--wave-task-limit", type=int, default=None)
+    policy.add_argument("--worker-worktree-limit", type=int, default=None)
+
+    capacity = sub.add_parser("observe-capacity")
+    capacity.add_argument("--run-dir", type=Path, required=True)
+    capacity.add_argument("--native-slots", type=int, default=None)
+    capacity.add_argument("--evidence", required=True)
 
     failed = sub.add_parser("wave-fail")
     failed.add_argument("--run-dir", type=Path, required=True)
@@ -395,6 +412,10 @@ def parser() -> argparse.ArgumentParser:
 
 def execute(args: argparse.Namespace) -> Any:
     from workflow_state import lock
+    if args.command == "validate-target":
+        # Producer owns short admission/publication locks; evaluators must not
+        # block independent worker heartbeats behind the outer CLI lock.
+        return _execute(args)
     if hasattr(args, "run_dir"):
         with lock(args.run_dir.parent):
             return _execute(args)
@@ -550,8 +571,17 @@ def _execute(args: argparse.Namespace) -> Any:
         )
     if args.command == "wave-integrate":
         return integrate_wave(args.run_dir, args.execution, args.wave)
+    if args.command == "validate-target":
+        from workflow_validation import produce
+        return produce(args.run_dir, args.execution, args.wave, args.task, session=session)
+    if args.command == "configure-policy":
+        from workflow_capacity import configure
+        return configure(args.run_dir, args.worker_limit, args.wave_task_limit, args.worker_worktree_limit, session)
+    if args.command == "observe-capacity":
+        from workflow_capacity import observe
+        return observe(args.run_dir, native_slots=args.native_slots, evidence=args.evidence, session=session)
     if args.command == "wave-complete":
-        return complete_wave(args.run_dir, args.execution, args.wave, args.evidence)
+        return complete_wave(args.run_dir, args.execution, args.wave, args.receipt)
     if args.command == "wave-fail":
         return fail_wave(args.run_dir, args.execution, args.wave, args.classification, args.dispatch, args.evidence)
     if args.command == "seal-feature":

@@ -7,6 +7,9 @@ missing specs and justified no-change outcomes. Fork updates retain the original
 PR through [bound publication](create-pr/references/pr-publication.md). The
 [protected protocol](merge-pr/references/actions-protocol.md) documents the
 coordinated schema cutover; source changes do not activate installed workflows.
+Worker waves now use configurable active-worker, wave-task and retained-worktree
+limits, independently verified no-change results and exact combined-validation
+receipts. See the [shared wave contract](worktree/references/worker-waves.md).
 
 This folder contains public, reusable Agent Skills for common engineering
 workflows. Each skill lives in its own folder and is discovered by the presence
@@ -64,7 +67,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Skill Catalog
 
-The catalog contains 74 flat skill folders with shared execution instructions,
+The catalog contains 75 flat skill folders with shared execution instructions,
 native invocation controls, and separate standard, host and distribution checks.
 Stateful workflows use the selected host's private home, identity and hook
 adapters. Read the [executing-agent contract](global-context-management/references/agent-hosts.md)
@@ -79,6 +82,10 @@ Implement and Agentic SDLC keep separate coordinators over one
 worker launch contracts, result ingestion, dependency waves, runtime leases and
 recovery. Both use `maintain-project-specs` for canonical requirements/design
 publication.
+Managed SDLC completion freshly validates separately recorded source-integration
+proof. Seal creation, interrupted recovery and historical verification share
+the execution owner's full-message contract, retaining failed hook-rewrite
+evidence without automatic commit rewriting.
 Workers preserve unexpected failed checks and return to their coordinator before
 repair or rerun. Expected negative test feedback must be declared in advance.
 Known permission prerequisites use supported native approvals. Proven active
@@ -125,10 +132,10 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | --- | --- | --- |
 | `agent-nebius-auth-diagnose` | Implicit allowed | Resolve an explicit or config-owned default-profile Nebius project and diagnose agent-auth or hook failures without mutation. |
 | `agent-nebius-auth-setup` | Explicit only | Converge one service account, one exact-permit group, project-bound auth, or a bounded local-repair lease. |
-| `sdlc-workflow-test` | Explicit only | Run the unchanged lightweight SDLC verifier or explicitly create, keep, resume, and destroy one owned real three-tier Docker application with headless Playwright Test GUI UAT. |
+| `sdlc-workflow-test` | Explicit only | Run deterministic SDLC checks or explicitly create, keep, resume, and destroy owned lightweight/live fixtures, with three-tier Docker and headless Playwright Test GUI UAT. |
 | `attach-ubuntu` | Explicit only | Launch or reuse a disposable Ubuntu Docker container for the current project and best-effort open it through VS Code Dev Containers. |
 | `code-info` | Explicit only | Produce read-only project descriptions and code statistics for local folders or GitHub repositories without changing files. |
-| `jira-report` | Implicit allowed | Report one person's dated Jira involvement through an existing MCP connection; filter by user, start date and title text, with ticket number, title, latest involvement date and current status. |
+| `jira-report` | Implicit allowed | Report one person's dated Jira involvement, including Participants additions, through an existing MCP connection; filter by user, start date and title text, with ticket number, title, latest involvement date and current status. |
 | `config-claude` | Explicit only | Reconcile native Claude instructions, settings, roles, shared hooks and private task state; preserve personal configuration and offer selected MCP integrations, including Nebius Docs, and recovery. |
 | `config-codex` | Explicit only | Configure a public-safe local Codex home setup, including global policy, selected MCP integrations such as Nebius Docs, hooks, task-state layout, custom read-only agents, owner-correct repo-guard recovery, and validation. |
 | `install-grafana-mcp-for-nebius` | Explicit only | Install Nebius Grafana MCP with a pinned human CLI profile, private identity binding, protected token cache, and enforced read-only tools. |
@@ -177,6 +184,7 @@ measuring performance.
 | `nebius-audit-log` | Explicit only | Verify caller and tenant audit access, then query explicit resource, actor or tenant scope with bounded, sanitized results. |
 | `nebius-grafana-query` | Implicit allowed | Query authorized metrics, logs, dashboards, and traces through human-authenticated Nebius Grafana, returning either ranked reports or bounded structured evidence facts. |
 | `optimize-pytest` | Implicit allowed | Measure, review, and safely optimize pytest suite performance with phased evidence, cumulative-cost analysis, and like-for-like validation. |
+| `test-software-in-container` | Implicit allowed | Test the current project source in containers, plus explicit installed-image, install, upgrade, patch and migration tests. |
 | `project-agent-instructions` | Explicit only | Conditionally render and terminally seal concise selected-project rules from shared-owner specs, including explicit existing-user compatibility intent, with nearest-marker discovery, registry-backed managed-tail ownership, guarded retirement, and fail-closed recovery. |
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with one uv and `pyproject.toml`/`uv.lock` workflow, profile-selected dependencies, `src/` layout, tests, and locked CI. |
 | `scaffold-project` | Implicit allowed | Own repository topology, exact technology-to-unit binding, per-path routing, candidate validation, digest integrity, validation, and guarded scaffold apply after architecture approval. |
@@ -200,6 +208,10 @@ validated before spec-dependent planning and dispatch.
 `maintain-project-specs` remains the canonical semantic spec owner; `align` is
 the pre-commit alignment phase, and `troubleshoot` is conditional runtime
 support for ambiguous failure diagnosis.
+
+Fresh SDLC phase state is published by the bound coordinator's private
+initialization helper. Hook audit telemetry is preserved separately from phase
+completion; active registration alone never authorizes resetting a checkpoint.
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
@@ -334,6 +346,9 @@ $scaffold-project Plan a multi-component repository from this approved architect
 $frontend-project Create a React, TypeScript, and Vite component with strict type checking and tests, but do not install dependencies.
 
 $container Review this repository's image and runtime contract, harden the production path, validate what can be proven locally, and report untested platforms and sibling-skill handoffs.
+
+$test-software-in-container
+$test-software-in-container ./product --upgrade --past-releases 4 --platform linux/amd64
 
 $code-review Review the current local branch, fix only safe in-scope findings, validate each fix with focused repository-native checks, and report the prioritized fixed and gated findings.
 
@@ -702,6 +717,27 @@ local opt-ins. `github-workflows` owns CI YAML, `publish-image` owns registry
 publication and signing actions, and `helmchart` owns Kubernetes resources
 derived from the container runtime handoff.
 
+### `test-software-in-container`
+
+Test the current project's source live in disposable containers. Bare invocation
+means `--test --test-target source --suite auto`, with project-local profile and
+suite discovery. `--list-suites` is static. Use `--test-target installed --image`
+for preinstalled software, or explicit `--install`, `--upgrade`, `--patch` and
+`--migration` modes. Source and lifecycle campaigns stay separate; `--all-tests`
+covers applicable lifecycle operations and explicitly declared installed targets.
+
+The public, product-neutral skill reuses the project's harness, authentic release
+baselines and fresh writable state. Neutral suite receipts account for separately
+collected IDs, setup/call/teardown outcomes, skipped coverage and actual process
+completion. An optional pytest reporter observes hooks; offline helpers do not
+execute tests or authenticate claims. Containers do not qualify VM boot, another
+kernel/hardware or production behavior.
+
+See the [complete flag/default and suite guide](test-software-in-container/README.md),
+[skill](test-software-in-container/SKILL.md) and
+[profile contract](test-software-in-container/references/profile.md).
+Skills CI runs focused helper and pytest-adapter regressions plus Ruff.
+
 ### `code-review`
 
 `code-review` performs a neutral, evidence-based review of the current local
@@ -850,6 +886,17 @@ removes inspection edits inside the exact disposable owned run.
 
 ### `sdlc-workflow-test`
 
+The verifier now groups suite failures separately from dependent capability
+impacts and reports bounded progress. Aggregate destroy covers validated
+lightweight and live fixtures, preserves reports and resumes exact cleanup
+checkpoints. Startup source discovery and native hook activation are distinct
+receipts; fresh Codex qualification requires both. See the skill README for
+setup, supported native evidence and ownership limits.
+Native lifecycle operations also bind one physical installed catalog. Source
+checks remain separate, and live semantic validation runs in a fresh process
+from the configured installed owner so cached source imports cannot change the
+execution basis.
+
 Prepared SDLC execution supports admitted active-task design correction through
 the shared Worktree owners. Failed worker artifacts remain retained; semantic
 publication, exact contract sealing and fresh plan/basis dispatch are distinct
@@ -865,13 +912,20 @@ the 64 KiB limit for small profile files and preserving precise rejection causes
 Sealed checkouts accept the specific editor branch-history hint only when its
 value matches the bound owned origin default; unknown or executable settings
 remain rejected, and ordinary Git configuration stays unchanged.
-Read-only classifier observations may inspect unsealed registered integration
-files during classification. Runtime and acceptance cleanliness gates remain
-unchanged; observation never authorizes a deployment or application test.
+Read-only classifier and TDD observations may inspect unsealed registered
+integration files at their matching checkpoints, including documented TDD output
+before sealing. Runtime and acceptance cleanliness gates remain unchanged;
+observation never authorizes a deployment or application test.
+The classifier can observe a pending design revision only after the Worktree
+owner validates its active design authority, immutable preparation, retained
+writer proofs and quiescence. A material replan requires fresh observations of
+invalidated phases after revalidation; previous attempts remain immutable.
 
 Final certification retains original TDD evidence across appended corrective
 waves only when owner replan records, locked plans, completed task definitions
-and the original seal prove its lineage. Later acceptance uses the current basis.
+and the original seal prove its lineage. A pre-seal observation binds through
+the owner's exact direct-child seal and original wave base, never arbitrary
+ancestry. Later acceptance uses the current basis.
 
 Three-tier test acceptance uses owner-executed result receipts tied to the
 clean promoted image; free-form logs cannot certify PASS. Post-UAT documentation
@@ -980,6 +1034,10 @@ Mixed local/Nebius payloads are split into separate Bash calls so local-only
 commands remain unprefixed and receive no injected credential context. When
 the project is already authoritative, the agent retries the corrected payload
 once without rediscovery or `verify`.
+Hook feedback follows this same recovery path. A denied mixed payload has not
+run either segment, so execute local preparation separately before retrying the
+selected operation. Resolve absent or conflicting task project evidence through
+read-only diagnosis; a formatting denial alone does not imply broken auth.
 
 `agent-nebius-auth-setup` is explicit-only. Invoking it directly authorizes one
 bounded convergence, without a second prompt or confirmation digest. It locks
@@ -1235,7 +1293,10 @@ or unclear diffs block automatic commits. It builds one durable private
 candidate, retains merge conflicts for recovery, exposes the exact candidate
 for non-mutating combined validation, and fast-forwards the source checkout
 only to that validated two-parent merge. Successful preparatory commits remain
-local history if a later step fails. Direct managed-child push and PR creation
+local history if a later step fails. Ready candidates must retain their exact
+registration and attached branch before promotion. Active acceptance validators
+retain ownership until termination is proven, including across coordinator handoff.
+Direct managed-child push and PR creation
 are rejected. Implement and Agentic SDLC release into this explicit
 primary-checkout handoff. `remove` remains a separate exact-proof action. The
 skill never fetches for lifecycle decisions, force-removes, mutates remote
@@ -1296,6 +1357,12 @@ Shared hooks retain their existing installer/plugin owner. Trusted-local full
 access, delegation policy, Implement storage and MCP integrations remain
 explicit options. See [Config Claude](config-claude/README.md) for native scope,
 recovery, checker options and evidence boundaries.
+
+Both setup skills also maintain a compact host memory policy: warn and continue
+at <=4 GiB while above 2 GiB, and safely stop owned work at <=2 GiB with a user
+notification. A selected memory-only update preserves partial native setups.
+The shared [memory guide](global-context-management/references/host-memory.md)
+provides sampling, explicit foreground supervision and cleanup boundaries.
 
 Both setup skills support optional pinned Tavily OAuth bridges with separate
 private per-host credential stores, ordinary client launch and compact global research
@@ -1544,8 +1611,10 @@ and Date. Reporting is read-only and does not save files or publish. See
 `jira-report` reports dated Jira involvement through the connected MCP, using
 the authenticated user and last 90 days by default. Use `--user EMAIL_OR_ID`,
 `--date YYYY-MM-DD`, and `--title TEXT` to select a person, start date and literal
-case-insensitive title substring. Assignments, reporting, any authored comments
-and explicit credited contributions require dated evidence in the interval.
+case-insensitive title substring. Assignments, Participants membership, reporting,
+any authored comments and explicit credited contributions require dated evidence
+in the interval. Participants qualifies through recorded additions or proven
+initial membership; current membership alone does not qualify.
 The four columns are Ticket #, Title, Date and Status. Date is latest qualifying
 recorded involvement; Status is Jira's current exact value. Missing comments,
 history or pagination remain explicit coverage limits. The skill is company-neutral,
@@ -1572,6 +1641,12 @@ See [usage and boundaries](review-github-issues/README.md).
 
 ### `review-pr`
 
+`review-pr` preserves your working branch, index and files throughout every
+standalone or nested review. Checkout-dependent work uses an independent private
+repository. Safe fixes may advance the remote PR; your local branch stays unchanged.
+Unused global LFS settings are tolerated without executing LFS; actual LFS-managed
+content remains unsupported and stops private review explicitly.
+
 `review-pr` is the merge-readiness skill for pull requests. Use it to review a
 PR by number, URL, or current branch against its base branch, inspect GitHub
 checks and review state, fix safe issues when the branch can be updated safely,
@@ -1594,7 +1669,7 @@ controls, examples, and CI expectations.
 
 ### `troubleshoot`
 
-`troubleshoot` uses adaptive failing-path coverage and causally investigates difficult code, shell, CI, installed
+`troubleshoot` uses layered, evidence-driven failing-path coverage and causally investigates difficult code, shell, CI, installed
 software, service, container, network, storage, and infrastructure failures.
 It preserves evidence, maintains competing hypotheses, runs discriminating
 experiments, proves the earliest causal divergence, applies the smallest
@@ -1602,6 +1677,16 @@ durable repair, and verifies the original failure plus affected boundaries.
 Live mutations are bounded to confirmed non-production unless the user
 authorizes an exact production action; destructive and high-impact changes
 always require action-specific approval.
+
+Seven phases preserve the canonical states and initially route code,
+infrastructure, mixed or undetermined failures. Scoped hypothesis exclusions reopen
+on contradictory evidence or relevant changes. One coordinator may assign independent
+questions to normally two enforceably read-only native investigators (ceiling three),
+under five-minute deadlines and one shared budget. Host authorization remains binding;
+active diagnostics and repair stay with the coordinator, with serial fallback.
+Technology guides include exact version/resource boundaries, NVIDIA, AMD, Kubernetes
+and provider proof limits. Aggregate evaluation includes every investigator and
+separate coordination overhead; missing child traces or usage cannot qualify gains.
 
 Discovery starts with the implicated component, effective configuration and immediate
 dependencies. Evidence determines expansion. Record examined and material unexamined
@@ -2017,7 +2102,8 @@ Only explicit resume renews waiting budgets, and a pending direct async merge
 does not require queue membership.
 
 Ordinary PR workflows use transaction-owned [checkout completion](create-pr/references/checkout-completion.md):
-review switches back without integrating; confirmed merged results refresh only
+review always uses private execution without changing the caller checkout;
+confirmed parent-owned merged results refresh only
 eligible local refs; publication callers preserve their prepared checkout.
 
 Publication YAML templates and deterministic evidence utilities are owned by
@@ -2033,7 +2119,8 @@ for direct SecretStash and other IAM APIs, with optional ESO synchronization.
 
 The shared [document delivery contract](worktree/references/document-delivery.md)
 defines portable source coverage, private phase/slice plans, cross-feature tasks,
-four-worker/four-retained-worktree bounds and explicit completion policy. Extract
+independent worker/wave/retained-worktree bounds (defaults 4/8/16) and explicit
+completion policy. Extract
 requirements before reconciling supplied designs; preserve accepted contracts.
 The default stops at a reviewed PR. Opted-in protected direct merge additionally
 requires executed qualification, exact review/CI identity and merged-result checks.

@@ -1,15 +1,19 @@
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import ANY, Mock
 
 import pytest
+from test_replacement import Ports
+from test_replacement import plan as replacement_plan
 from typer.testing import CliRunner
 
 from nebius_vpngw import cli
 from nebius_vpngw.deploy import (
+    apply_command,
     replacement,
     replacement_ha,
     replacement_ordinary,
     replacement_trust,
+    security_group_apply,
 )
 from nebius_vpngw.deploy.vm_ha_lifecycle import VMHAApplyLock
 
@@ -22,8 +26,6 @@ def test_public_replacement_retains_coordinator_lock_without_reacquiring(
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     config_path = tmp_path / "config.yaml"
     config_path.write_text("# Configuration is supplied by the isolated loader.\n")
-    bundle = tmp_path / "recovery.json"
-    bundle.write_text("{}\n")
     local = {"project_id": "project-test"}
     plan = SimpleNamespace(
         vm_ha=object() if ha else None,
@@ -37,18 +39,36 @@ def test_public_replacement_retains_coordinator_lock_without_reacquiring(
     monkeypatch.setattr(replacement_trust, "preview", Mock())
     monkeypatch.setattr(replacement_trust, "resolve", Mock())
 
-    journal = Mock(bundle=bundle)
-    journal_context = Mock()
-    journal_context.__enter__ = Mock(return_value=journal)
-    journal_context.__exit__ = Mock(return_value=False)
-    monkeypatch.setattr(replacement, "Journal", Mock(return_value=journal_context))
-    ports = Mock()
-    ports.inspect.return_value = SimpleNamespace(members=(), routes=(), mapping=lambda: {})
+    desired = replacement_plan()
+    journal = replacement.Journal("project-test", "gateway-test", root=tmp_path / "child")
+    envelope = apply_command.CommandJournal(
+        "project-test", "gateway-test", root=tmp_path / "parent"
+    )
+    bundle = tmp_path / "recovery.json"
+    if resume:
+        with journal:
+            journal.start(desired, replacement.digest(desired.mapping()))
+        bundle.write_bytes(journal.path.read_bytes())
+        bundle.chmod(0o600)
+    journal.start = Mock(wraps=journal.start)
+    journal.import_bundle = Mock(wraps=journal.import_bundle)
+    monkeypatch.setattr(replacement, "Journal", lambda *args, **kwargs: journal)
+    monkeypatch.setattr(apply_command, "CommandJournal", lambda *args, **kwargs: envelope)
+    monkeypatch.setattr(
+        security_group_apply,
+        "AttachmentJournal",
+        lambda *args: SimpleNamespace(pending=lambda: None),
+    )
+    ports = Ports()
+    ports.inspect = Mock(return_value=desired)
+    ports.terminal_receipt = Mock(return_value={"independently_verified": True})
     monkeypatch.setattr(replacement_ordinary, "OrdinaryReplacement", Mock(return_value=ports))
     monkeypatch.setattr(replacement_ha, "HAReplacement", Mock(return_value=ports))
 
     def lock():
         return VMHAApplyLock(project_id="project-test", gateway_name="gateway-test")
+
+    real_run = replacement.run
 
     def run(current_journal, current_ports, *, checkpoint):
         assert current_journal is journal
@@ -56,6 +76,7 @@ def test_public_replacement_retains_coordinator_lock_without_reacquiring(
         # A competing writer must remain excluded throughout replacement.
         with pytest.raises(RuntimeError, match="another gateway apply owns"), lock():
             pytest.fail("replacement lost its coordinator lock")
+        real_run(current_journal, current_ports, checkpoint=checkpoint)
 
     runner = Mock(side_effect=run)
     monkeypatch.setattr(replacement, "run", runner)
@@ -82,11 +103,13 @@ def test_public_replacement_retains_coordinator_lock_without_reacquiring(
     assert result.exit_code == 0, (result.output, result.exception)
     runner.assert_called_once()
     if resume:
-        journal.import_bundle.assert_called_once_with(bundle)
+        journal.import_bundle.assert_called_once_with(bundle, admit=ANY)
         journal.start.assert_not_called()
     else:
         journal.start.assert_called_once()
         journal.import_bundle.assert_not_called()
+    assert envelope.pending() is None
+    assert journal.snapshot()["transaction"]["phase"] == "complete"
     # The public coordinator releases ownership once the operation returns.
     with lock():
         pass

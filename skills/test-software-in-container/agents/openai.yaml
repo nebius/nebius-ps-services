@@ -1,0 +1,6 @@
+interface:
+  display_name: "Test Software In Container"
+  short_description: "Test project source and software lifecycle in containers"
+  default_prompt: "Use $test-software-in-container to test the current project source in disposable containers, or run explicitly selected lifecycle tests."
+policy:
+  allow_implicit_invocation: true

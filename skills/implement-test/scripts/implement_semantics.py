@@ -416,9 +416,11 @@ def _validate_orchestration(
                 or wave["ready_task_ids"]
                 or wave["active_task_ids"]
                 or set(wave["admitted_task_ids"]) != set(wave["task_ids"])
-                or wave["merged_task_ids"] != wave["task_ids"]
+                or wave["integrated_task_ids"] != wave["task_ids"]
             ):
                 raise ValueError("wave lacks stable ordered integration and cleanup")
+            from workflow_validation import verify_recorded_wave
+            verify_recorded_wave(run_dir, "FEAT-001", wave, coordinator)
             for task_id in wave["task_ids"]:
                 task = state.read(
                     execution.task_path(run_dir, "FEAT-001", wave["wave_id"], task_id)
@@ -456,7 +458,7 @@ def _validate_orchestration(
                     execution.worker_liveness_profile(task["task"]["dependencies"]),
                 ):
                     raise ValueError("worker assignment is not self-contained")
-                if _git(
+                if result["status"] == "implemented" and _git(
                     project, "rev-list", "--parents", "-n", "1", result["commit"]
                 ).split() != [result["commit"], assignment["base_head"]]:
                     raise ValueError(

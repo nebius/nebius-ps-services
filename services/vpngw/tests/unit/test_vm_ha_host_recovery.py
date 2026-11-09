@@ -634,7 +634,7 @@ def test_public_recovery_executor_replays_host_effects_without_cloud_recreation(
         def verify_vm_ha_standby_replacement_quiescent(self, *args, **kwargs):
             events.append("owner-ready-proof")
 
-    def install(ssh, target, instance, local, *, artifact):
+    def install(ssh, target, instance, local, *, artifact, recovery_scope=None):
         assert stopped == {"node-0", "node-1"}
         node = instance.vm_ha_node.node_id
         if node == "node-0":

@@ -15,8 +15,11 @@ Use the original release prompt receipt with the existing `create-pr` transactio
 no separate PR/commit invocation or release-specific grant is required. Let the
 caller prepare release metadata before reviewing the complete candidate. Return
 the final locally reviewed PR/head to the caller before checkpoint binding and
-merge-pr. Authorized review-pr/merge-pr repairs use the same private preparation
-handoff and active grant; this path cannot recursively review or merge. A checkpoint never replaces authorization; fresh-session commit work
+merge-pr. Authorized review-pr/merge-pr repairs use [private review execution](private-review.md)
+through the same preparation owner and original active grant. Use the returned
+execution root and subordinate authorization/claim paths; never import repairs
+into the caller checkout. This handoff cannot recursively review or merge.
+A checkpoint never replaces authorization; fresh-session commit work
 requires fresh canonical intake after reconciliation of uncertain prior effects.
 
 Read [PR publication](pr-publication.md) for existing PR bindings, fork intake
@@ -47,7 +50,7 @@ own authority and do not use this root-task protocol.
    after changes. Publish only the reviewed target through private `publish-target`, inspect current-head
    checks, and continue safe repairs under the same task until complete.
 6. Run outer-owner `complete-checkout --mode finalize` under the inherited policy,
-   then call private `finish --outcome completed` only at the selected public
+   then call private `finish --outcome completed` on the original owner only at the selected public
    completion boundary, including zero-commit tasks. Never close it during a
    private preparation handoff or delegated review repairs. Use `finish --outcome cancelled` when abandoning the
    task. Actual uncertain effects remain available for exact metadata-only

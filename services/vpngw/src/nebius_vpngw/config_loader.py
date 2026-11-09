@@ -44,7 +44,7 @@ class GatewayGroupSpec:
     subnet: dict = field(default_factory=dict)
     vm_ha: VMHAProvisioningSpec | None = None
     ingress_policies: dict[int, dict[str, t.Any]] = field(default_factory=dict)
-    initial_security_group_ids: tuple[str, ...] = ()
+    security_group_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -400,12 +400,13 @@ def _build_vm_ha_cluster_record(local_cfg: dict) -> VMHAClusterRecord | None:
             )
 
     canonical_config = copy.deepcopy(local_cfg)
+    canonical_config["gateway_group"].pop("security_group_ids", None)
     for key in ("ssh_public_key", "ssh_public_key_path", "ssh_private_key_path"):
         canonical_config["gateway_group"].get("vm_spec", {}).pop(key, None)
     # An empty optional probe map has no operational semantics. Keep omitted
     # and explicit-empty inputs identical, including across package refreshes.
-    if not canonical_config["gateway_group"]["vm_ha"].get("tunnel_probes"):
-        canonical_config["gateway_group"]["vm_ha"].pop("tunnel_probes", None)
+    if not canonical_config["gateway"].get("tunnel_probes"):
+        canonical_config["gateway"].pop("tunnel_probes", None)
     canonical_config["gateway_group"]["vm_ha"]["members"] = sorted(
         canonical_config["gateway_group"]["vm_ha"]["members"],
         key=lambda item: int(item["instance_index"]),
@@ -967,7 +968,6 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
     # Build normalized peer specs
     peer_specs = [_parse_peer_file(p) for p in peer_files]
     gg = local_cfg.get("gateway_group", {})
-    vm_ha_cluster = _build_vm_ha_cluster_record(local_cfg)
     instance_count = int(gg.get("instance_count", 1))
     name = gg.get("name", "nebius-vpn-gw")
     # Prefer gateway_group.region, then top-level region_id. Never invent a zone.
@@ -996,8 +996,13 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
     # Ensure num_nics is in vm_spec for downstream processing
     vm_spec["num_nics"] = num_nics
 
+    # Generation identity describes the effective plan. Resolve the region and
+    # VM defaults before hashing so an equivalent explicit region (including
+    # nested command inspection) or a repeated merge cannot change identity.
+    vm_ha_cluster = _build_vm_ha_cluster_record(local_cfg)
+
     gateway_group = GatewayGroupSpec(
-        initial_security_group_ids=tuple(gg.get("initial_security_group_ids") or ()),
+        security_group_ids=tuple(sorted(gg.get("security_group_ids") or ())),
         name=name,
         instance_count=instance_count,
         region=region,
@@ -1157,6 +1162,15 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
             "defaults": local_cfg.get("defaults", {}),
             "connections": merged_connections,
         }
+        probes = local_cfg.get("gateway", {}).get("tunnel_probes", {})
+        if probes:
+            local_names = {t["name"] for c in merged_connections for t in c["tunnels"]}
+            per_vm_cfg["gateway"] = {
+                **per_vm_cfg["gateway"],
+                "tunnel_probes": {
+                    name: probe for name, probe in probes.items() if name in local_names
+                },
+            }
         vm_ha_node: VMHANodeRecord | None = None
         if vm_ha_cluster is not None:
             vm_ha_node = next(
@@ -1165,17 +1179,6 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
             digests = vm_ha_cluster.generation.digests
             per_vm_cfg["vm_ha"] = {
                 "cluster_id": vm_ha_cluster.cluster_id,
-                "tunnel_probes": {
-                    name: probe
-                    for name, probe in (
-                        local_cfg.get("gateway_group", {}).get("vm_ha", {}).get("tunnel_probes", {})
-                    ).items()
-                    if any(
-                        t.get("name") == name
-                        for c in per_vm_cfg["connections"]
-                        for t in c["tunnels"]
-                    )
-                },
                 "node": {
                     "node_id": vm_ha_node.node_id,
                     "instance_index": vm_ha_node.instance_index,

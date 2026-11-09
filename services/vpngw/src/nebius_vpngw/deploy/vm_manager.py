@@ -1466,6 +1466,13 @@ class VMManager:
             raise RuntimeError("VM-HA approved active primary allocation is malformed")
 
         targets_by_table = {target.route_table_id: target for target in route_targets}
+        from .ordinary_route_migration import matches, persisted
+
+        if not self.project_id:
+            raise RuntimeError("VM-HA migration route authority requires an exact project")
+        ordinary_receipts = persisted(
+            dict(transaction.resource_bindings), self.project_id, spec.name, expected_instance_name
+        )
         route_indexes = sorted(
             {
                 int(matched.group(1))
@@ -1505,7 +1512,18 @@ class VMManager:
             legacy_name = f"vpngw-{prefix.replace('/', '-')}"[:63]
             if string_values["allocation_id"] == primary_allocation_id:
                 if string_values["name"] != legacy_name:
-                    continue
+                    receipt = ordinary_receipts.get(string_values["route_id"])
+                    if receipt is None:
+                        continue
+                    snapshot_digest = self._normalized_observation_value(
+                        transaction.observation, f"{base}/snapshot_sha256"
+                    )
+                    if not matches(
+                        receipt,
+                        string_values,
+                        snapshot_digest if isinstance(snapshot_digest, str) else None,
+                    ):
+                        continue
             elif string_values["name"] not in self._vm_ha_managed_route_names(
                 cluster_id=spec.vm_ha.cluster_id,
                 route_target=route_target,
@@ -1783,6 +1801,9 @@ class VMManager:
         from .route_manager import NebiusSDKRouteBackend, RouteManager
 
         backend = NebiusSDKRouteBackend(client)
+        from ..apply_approval import digest as route_snapshot_digest
+        from .ordinary_route_ownership import snapshot as route_snapshot
+
         route_rows: list[dict[str, object]] = []
         for target in route_targets:
             backend.verify_target(target)
@@ -1804,6 +1825,7 @@ class VMManager:
                         "route_id": RouteManager._metadata_id(route),
                         "route_table_id": target.route_table_id,
                         "revision": self._metadata_revision(route),
+                        "snapshot_sha256": route_snapshot_digest(route_snapshot(route)),
                     }
                 )
         route_rows.sort(
@@ -2226,14 +2248,9 @@ class VMManager:
         *,
         strict: bool = False,
     ) -> None:
-        from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
-        from nebius.api.nebius.vpc.v1 import (
-            GetPoolRequest,
-            PoolCidr,
-            PoolServiceClient,
-            PoolSpec,
-            UpdatePoolRequest,
-        )  # type: ignore
+        from nebius.api.nebius.vpc.v1 import GetPoolRequest, PoolServiceClient
+
+        from .provisioning_network import extend_pool
 
         network_pools = self._get_network_private_pools(client, network_obj)
         for _, pool_obj in network_pools:
@@ -2282,38 +2299,13 @@ class VMManager:
             if (network := _parse_ipv4_network(str(getattr(pool_cidr, "cidr", "") or "")))
             is not None
         }
-        updated_cidrs = [
-            PoolCidr(
-                cidr=getattr(pool_cidr, "cidr", ""),
-                max_mask_length=getattr(pool_cidr, "max_mask_length", 0),
-                state=getattr(pool_cidr, "state", None),
-            )
-            for pool_cidr in getattr(pool_spec, "cidrs", []) or []
-        ]
-        updated_cidrs.append(PoolCidr(cidr=str(desired_network)))
-
-        updated_spec = PoolSpec(
-            cidrs=updated_cidrs,
-            version=getattr(pool_spec, "version", None),
-            visibility=getattr(pool_spec, "visibility", None),
-            source_pool_id=getattr(pool_spec, "source_pool_id", ""),
-        )
-
         pool_name = getattr(pool_meta, "name", None) or pool_id
         print(
             f"[VMManager] Extending network private pool '{pool_name}' with {desired_network} ..."
         )
 
         update_operation = pool_client.update(
-            UpdatePoolRequest(
-                metadata=ResourceMetadata(
-                    id=getattr(pool_meta, "id", pool_id),
-                    parent_id=getattr(pool_meta, "parent_id", ""),
-                    name=getattr(pool_meta, "name", ""),
-                    resource_version=int(getattr(pool_meta, "resource_version", 0) or 0),
-                ),
-                spec=updated_spec,
-            )
+            extend_pool(pool_obj, self.project_id or "", str(desired_network))
         ).wait()
         if not strict:
             return
@@ -2482,9 +2474,10 @@ class VMManager:
         deadline = start_time + timeout
         if timeout <= 0:
             return False
+        client_auth = self._require_ssh_client_auth()
         ssh_base = build_openssh_base_command(
-            key_path=(self._management_key_path if self._management_public_key is None else None),
-            client_auth=self._require_ssh_client_auth(),
+            key_path=self._management_key_path if client_auth is None else None,
+            client_auth=client_auth,
             connect_timeout=min(5, timeout),
             policy=self._ssh_policy,
             hostname=vm_name if self._ssh_policy is not None else None,
@@ -2606,9 +2599,10 @@ class VMManager:
 
         # Wait a moment for VM to boot and network to initialize
         time.sleep(2)
+        client_auth = self._require_ssh_client_auth()
         ssh_base = build_openssh_base_command(
-            key_path=(self._management_key_path if self._management_public_key is None else None),
-            client_auth=self._require_ssh_client_auth(),
+            key_path=self._management_key_path if client_auth is None else None,
+            client_auth=client_auth,
             connect_timeout=5,
             policy=self._ssh_policy,
             hostname=vm_name if self._ssh_policy is not None else None,
@@ -2710,13 +2704,13 @@ class VMManager:
                 ssh_base
                 + [
                     ssh_target,
-                    'dpkg -l strongswan frr 2>/dev/null | grep "^ii" && systemctl is-active nebius-vpngw-agent 2>/dev/null',
+                    'dpkg -l charon-systemd frr 2>/dev/null | grep "^ii" && systemctl is-active nebius-vpngw-agent 2>/dev/null',
                 ],
                 capture_output=True,
                 timeout=10,
                 text=True,
             )
-            if "strongswan" in pkg_check.stdout:
+            if "charon-systemd" in pkg_check.stdout:
                 result["strongswan_installed"] = True
             if "frr" in pkg_check.stdout:
                 result["frr_installed"] = True
@@ -3302,25 +3296,24 @@ class VMManager:
         return policy
 
     def _get_vm_by_id_for_vm_ha_preflight(self, client: t.Any, compute_id: str) -> t.Any:
-        try:
-            from nebius.api.nebius.compute.v1 import (  # type: ignore
-                GetInstanceRequest,
-                InstanceServiceClient,
-            )
+        from nebius.api.nebius.compute.v1 import GetInstanceRequest, InstanceServiceClient
 
-            response = (
+        from .authority_observation import AuthorityUnavailable, read_compute
+
+        value = read_compute(
+            lambda options: (
                 InstanceServiceClient(client)
-                .get(
-                    GetInstanceRequest(id=compute_id),
-                    **vm_ha_request_kwargs(),
-                )
+                .get(GetInstanceRequest(id=compute_id), **options)
                 .wait()
             )
-        except Exception as error:
-            raise RuntimeError("VM-HA Compute identity changed after SSH preflight") from error
-        if response is None:
-            raise RuntimeError("VM-HA Compute identity changed after SSH preflight")
-        return response
+        )
+        metadata = getattr(value, "metadata", None)
+        if not all(
+            isinstance(getattr(metadata, field, None), str) and getattr(metadata, field)
+            for field in ("id", "name", "parent_id")
+        ):
+            raise AuthorityUnavailable("compute-response-incomplete")
+        return value
 
     def _vm_ha_ssh_member_signature(self, vm_obj: t.Any) -> tuple[str, str, str, str, str, str]:
         metadata = getattr(vm_obj, "metadata", None)
@@ -3861,11 +3854,10 @@ class VMManager:
         if selected_policy is None:
             raise RuntimeError("VM-HA existing-member verification requires an SSH policy")
         for name, public_ip in existing.items():
+            client_auth = self._require_ssh_client_auth()
             ssh_base = build_openssh_base_command(
-                key_path=(
-                    self._management_key_path if self._management_public_key is None else None
-                ),
-                client_auth=self._require_ssh_client_auth(),
+                key_path=self._management_key_path if client_auth is None else None,
+                client_auth=client_auth,
                 connect_timeout=max(1, min(5, math.ceil(probe_timeout))),
                 policy=selected_policy,
                 hostname=name,
@@ -4085,18 +4077,11 @@ class VMManager:
         spec: GatewayGroupSpec,
         local_prefixes: list[str] | None,
     ) -> VMProvisioningConfig:
-        num_nics = int(spec.vm_spec.get("num_nics", 1))
-        if num_nics > 1:
-            print(
-                f"[VMManager] WARNING: num_nics={num_nics} but current platform only supports 1 NIC. Using num_nics=1."
-            )
-            num_nics = 1
-
-        if spec.initial_security_group_ids:
+        if spec.security_group_ids:
             from .security_groups import validate_groups
 
             _, network_id, _, _ = self._resolve_gateway_network(client, spec, strict=True)
-            validate_groups(client, network_id, spec.initial_security_group_ids)
+            validate_groups(client, network_id, spec.security_group_ids)
 
         subnet_id = self._ensure_vpngw_subnet(client, spec)
         self._ensure_vpngw_route_table(client, subnet_id)
@@ -4109,8 +4094,21 @@ class VMManager:
             ingress=spec.ingress_policies[0],
         )
 
+        return self._resolved_vm_provisioning_config(spec, subnet_id, cloud_init)
+
+    def _resolved_vm_provisioning_config(
+        self, spec: GatewayGroupSpec, subnet_id: str | None, cloud_init: str
+    ) -> VMProvisioningConfig:
+        """Render a frozen resource specification from already selected inputs."""
+        num_nics = int(spec.vm_spec.get("num_nics", 1))
+        if num_nics > 1:
+            print(
+                f"[VMManager] WARNING: num_nics={num_nics} but current platform only supports 1 NIC. Using num_nics=1."
+            )
+            num_nics = 1
+
         return VMProvisioningConfig(
-            security_group_ids=spec.initial_security_group_ids,
+            security_group_ids=spec.security_group_ids,
             subnet_id=subnet_id,
             num_nics=num_nics,
             platform=spec.vm_spec.get("platform") or "cpu-d3",
@@ -4727,24 +4725,10 @@ class VMManager:
         operation_id: str | None = None,
     ) -> t.Any | None:
         try:
-            from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
-            from nebius.api.nebius.vpc.v1 import (  # type: ignore
-                AllocationSpec,
-                CreateAllocationRequest,
-                IPv4PublicAllocationSpec,
-            )
+            from .provisioning_network import create_allocation
 
-            request = CreateAllocationRequest(
-                metadata=ResourceMetadata(
-                    name=alloc_name,
-                    parent_id=self.project_id or "",
-                ),
-                spec=AllocationSpec(
-                    ipv4_public=IPv4PublicAllocationSpec(
-                        subnet_id=subnet_id,
-                        cidr="/32" if not desired_ip else desired_ip,
-                    )
-                ),
+            request = create_allocation(
+                self.project_id or "", alloc_name, subnet_id, public=True, address=desired_ip
             )
             operation = alloc_client.create(
                 request,
@@ -4959,20 +4943,9 @@ class VMManager:
         operation_id: str | None = None,
     ) -> t.Any | None:
         try:
-            from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
-            from nebius.api.nebius.vpc.v1 import (  # type: ignore
-                AllocationSpec,
-                CreateAllocationRequest,
-                IPv4PrivateAllocationSpec,
-            )
+            from .provisioning_network import create_allocation
 
-            request = CreateAllocationRequest(
-                metadata=ResourceMetadata(
-                    name=alloc_name,
-                    parent_id=self.project_id or "",
-                ),
-                spec=AllocationSpec(ipv4_private=IPv4PrivateAllocationSpec(subnet_id=subnet_id)),
-            )
+            request = create_allocation(self.project_id or "", alloc_name, subnet_id, public=False)
             operation = alloc_client.create(
                 request,
                 **(
@@ -5272,6 +5245,78 @@ class VMManager:
 
         return alloc_ids
 
+    def _build_instance_create_request(
+        self,
+        inst_name: str,
+        provisioning: VMProvisioningConfig,
+        boot_disk_id: str,
+        alloc_ids: list[str],
+        private_alloc_ids: list[str],
+    ) -> t.Any:
+        """Build the reviewed request without discovery, mutation or secret persistence."""
+        if not boot_disk_id or not boot_disk_id.strip():
+            raise RuntimeError("Compute creation requires an authoritative boot disk identity")
+        require_cloud_init_size(provisioning.cloud_init)
+        from nebius.api.nebius.common.v1 import ResourceMetadata
+        from nebius.api.nebius.compute.v1 import (
+            AttachedDiskSpec,
+            CreateInstanceRequest,
+            ExistingDisk,
+            InstanceSpec,
+            IPAddress,
+            NetworkInterfaceSpec,
+            PublicIPAddress,
+            ResourcesSpec,
+            SecurityGroup,
+        )
+
+        metadata = ResourceMetadata(name=inst_name, parent_id=self.project_id or "")
+        if provisioning.preset:
+            resources = ResourcesSpec(
+                platform=provisioning.platform,
+                preset=t.cast(t.Any, provisioning.preset),
+            )
+        else:
+            resources = ResourcesSpec(platform=provisioning.platform)
+        ni_msgs = []
+        for nic_idx in range(min(provisioning.num_nics, 1)):
+            nic_name = f"eth{nic_idx}"
+            pub = (
+                PublicIPAddress(allocation_id=alloc_ids[nic_idx], static=True)
+                if nic_idx < len(alloc_ids)
+                else PublicIPAddress()
+            )
+            priv = (
+                IPAddress(allocation_id=private_alloc_ids[nic_idx])
+                if nic_idx < len(private_alloc_ids)
+                else IPAddress()
+            )
+            ni_msgs.append(
+                NetworkInterfaceSpec(
+                    name=nic_name,
+                    ip_address=priv,
+                    public_ip_address=pub,
+                    subnet_id=provisioning.subnet_id,
+                    security_groups=[
+                        SecurityGroup(id=value) for value in provisioning.security_group_ids
+                    ],
+                )
+            )
+
+        return CreateInstanceRequest(
+            metadata=metadata,
+            spec=InstanceSpec(
+                resources=resources,
+                network_interfaces=ni_msgs,
+                cloud_init_user_data=provisioning.cloud_init,
+                boot_disk=AttachedDiskSpec(
+                    attach_mode=t.cast(t.Any, "READ_WRITE"),
+                    device_id="boot",
+                    existing_disk=ExistingDisk(id=boot_disk_id),
+                ),
+            ),
+        )
+
     def _create_instance_with_fallback(
         self,
         client: t.Any,
@@ -5291,94 +5336,19 @@ class VMManager:
 
         created = False
         try:
-            from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
-            from nebius.api.nebius.compute.v1 import (
-                AttachedDiskSpec,
-                CreateInstanceRequest,
-                ExistingDisk,
-                InstanceServiceClient,
-                InstanceSpec,
-                IPAddress,
-                NetworkInterfaceSpec,
-                PublicIPAddress,
-                ResourcesSpec,
-                SecurityGroup,
-            )  # type: ignore
+            from nebius.api.nebius.compute.v1 import InstanceServiceClient
 
             isc = InstanceServiceClient(client)  # type: ignore
             print(
                 f"[VMManager] Creating instance {inst_name} via InstanceServiceClient (project_id={self.project_id}) ..."
             )
-            metadata = ResourceMetadata(name=inst_name, parent_id=self.project_id or "")
-            if provisioning.preset:
-                resources = ResourcesSpec(
-                    platform=provisioning.platform,
-                    preset=t.cast(t.Any, provisioning.preset),
-                )
-            else:
-                resources = ResourcesSpec(platform=provisioning.platform)
-            boot_disk_msg = None
-            if boot_disk_id:
-                boot_disk_msg = AttachedDiskSpec(
-                    attach_mode=t.cast(t.Any, "READ_WRITE"),
-                    device_id="boot",
-                    existing_disk=ExistingDisk(id=boot_disk_id),
-                )
-            ni_msgs = []
-            for nic_idx in range(provisioning.num_nics):
-                nic_name = f"eth{nic_idx}"
-                pub = (
-                    PublicIPAddress(allocation_id=alloc_ids[nic_idx], static=True)
-                    if nic_idx < len(alloc_ids)
-                    else None
-                )
-                priv_alloc_id = None
-                priv = None
-                if nic_idx < len(self._private_alloc_ids.get(inst_name, [])):
-                    priv_alloc_id = self._private_alloc_ids[inst_name][nic_idx]
-                    priv = IPAddress(allocation_id=priv_alloc_id)
-                if priv is None:
-                    priv = IPAddress()
-                ni_msgs.append(
-                    NetworkInterfaceSpec(
-                        name=nic_name,
-                        ip_address=priv,
-                        public_ip_address=pub if pub is not None else PublicIPAddress(),
-                        subnet_id=provisioning.subnet_id,
-                        security_groups=[
-                            SecurityGroup(id=value) for value in provisioning.security_group_ids
-                        ],
-                    )
-                )
-                print(
-                    f"[VMManager] NIC {nic_name} configured with public={alloc_ids[nic_idx] if nic_idx < len(alloc_ids) else 'auto'}, private={priv_alloc_id or 'auto'}"
-                )
-
-            if len(ni_msgs) > 1:
-                print(
-                    f"[VMManager] WARNING: {len(ni_msgs)} NICs configured but platform only supports 1. Using first NIC only."
-                )
-                ni_msgs = ni_msgs[:1]
-
-            try:
-                print(f"[VMManager] Using boot_disk_id={boot_disk_id}")
-            except Exception:
-                pass
-
-            if boot_disk_msg is not None and boot_disk_id:
-                spec = InstanceSpec(
-                    resources=resources,
-                    network_interfaces=ni_msgs,
-                    cloud_init_user_data=provisioning.cloud_init,
-                    boot_disk=boot_disk_msg,
-                )
-            else:
-                spec = InstanceSpec(
-                    resources=resources,
-                    network_interfaces=ni_msgs,
-                    cloud_init_user_data=provisioning.cloud_init,
-                )
-            req = CreateInstanceRequest(metadata=metadata, spec=spec)
+            req = self._build_instance_create_request(
+                inst_name,
+                provisioning,
+                boot_disk_id,
+                alloc_ids,
+                self._private_alloc_ids.get(inst_name, []),
+            )
             try:
                 op = isc.create(
                     req,
@@ -5517,23 +5487,22 @@ class VMManager:
         )
         if not created:
             raise RuntimeError("Compute creation did not complete")
-        if provisioning.security_group_ids:
-            from .security_groups import capture
+        from .security_groups import capture
 
-            created_instance = self._get_vm_by_name(client, inst_name)
-            if created_instance is None:
-                raise RuntimeError(
-                    "Created gateway identity is unavailable for Security Group verification"
-                )
-            groups = capture(client, created_instance)
-            if len(groups) != provisioning.num_nics or any(
-                group.subnet_id != provisioning.subnet_id
-                or group.explicit_ids != tuple(sorted(provisioning.security_group_ids))
-                for group in groups
-            ):
-                raise RuntimeError(
-                    "Created gateway Security Groups differ from the requested customer policy"
-                )
+        created_instance = self._get_vm_by_name(client, inst_name)
+        if created_instance is None:
+            raise RuntimeError(
+                "Created gateway identity is unavailable for Security Group verification"
+            )
+        groups = capture(client, created_instance)
+        if len(groups) != provisioning.num_nics or any(
+            group.subnet_id != provisioning.subnet_id
+            or group.explicit_ids != tuple(sorted(provisioning.security_group_ids))
+            for group in groups
+        ):
+            raise RuntimeError(
+                "Created gateway Security Groups differ from the desired customer policy"
+            )
         if spec.vm_ha is not None:
             authoritative = self._get_ha_instance_by_name(client, inst_name)
             compute_id = self._resource_id(authoritative)
@@ -5735,6 +5704,9 @@ class VMManager:
                 or self._resource_id(replacement_compute) != replacement_compute_id
             ):
                 raise RuntimeError("VM-HA completed missing standby identity drifted")
+            from .security_groups import verify_desired
+
+            verify_desired(client, replacement_compute, spec.security_group_ids)
             replacement_public_ip = self._vm_public_ip_from_object(replacement_compute)
             if not replacement_public_ip:
                 raise RuntimeError("VM-HA completed missing standby has no public IP")
@@ -5912,6 +5884,9 @@ class VMManager:
             or accepted_compute_id != replacement_compute_id
         ):
             raise RuntimeError("VM-HA fresh standby Compute identity is invalid")
+        from .security_groups import verify_desired
+
+        verify_desired(client, replacement_compute, spec.security_group_ids)
         self._complete_vm_ha_effect(
             create_compute_effect,
             resource_updates={
@@ -6023,6 +5998,9 @@ class VMManager:
                 or self._resource_id(replacement_compute) != replacement_compute_id
             ):
                 raise RuntimeError("VM-HA completed passive replacement identity drifted")
+            from .security_groups import verify_desired
+
+            verify_desired(client, replacement_compute, spec.security_group_ids)
             replacement_public_ip = self._vm_public_ip_from_object(replacement_compute)
             if not replacement_public_ip:
                 raise RuntimeError("VM-HA completed passive replacement has no public IP")
@@ -6224,6 +6202,9 @@ class VMManager:
         replacement_compute_id = self._resource_id(replacement_compute)
         if not replacement_compute_id or replacement_compute_id == retired_compute_id:
             raise RuntimeError("VM-HA replacement passive Compute identity is invalid")
+        from .security_groups import verify_desired
+
+        verify_desired(client, replacement_compute, spec.security_group_ids)
         self._complete_vm_ha_effect(
             create_compute_effect,
             resource_updates={
@@ -7528,31 +7509,10 @@ class VMManager:
         network_id: str,
         cidr_to_use: str,
     ) -> t.Any | None:
-        from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
-        from nebius.api.nebius.vpc.v1 import (  # type: ignore
-            CreateSubnetRequest,
-            IPv4PrivateSubnetPools,
-            SubnetCidr,
-            SubnetPool,
-            SubnetSpec,
-        )
+        from .provisioning_network import create_subnet
 
         print(f"[VMManager] Creating gateway subnet '{subnet_name}' with CIDR {cidr_to_use}")
-
-        ipv4_private_pools = IPv4PrivateSubnetPools()
-        ipv4_private_pools.pools.extend([SubnetPool(cidrs=[SubnetCidr(cidr=cidr_to_use)])])
-        ipv4_private_pools.use_network_pools = False
-
-        request = CreateSubnetRequest(
-            metadata=ResourceMetadata(
-                name=subnet_name,
-                parent_id=self.project_id or "",
-            ),
-            spec=SubnetSpec(
-                network_id=network_id,
-                ipv4_private_pools=ipv4_private_pools,
-            ),
-        )
+        request = create_subnet(self.project_id or "", subnet_name, network_id, cidr_to_use)
         operation = subnet_client.create(request)
         self._sync_operation(operation)
 
@@ -7876,16 +7836,9 @@ class VMManager:
 
         route_table_id = self._resource_id(route_table) or ""
 
-        from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
-        from nebius.api.nebius.vpc.v1 import CreateRouteRequest, route_pb2  # type: ignore
+        from .provisioning_network import create_default_route
 
-        request = CreateRouteRequest(
-            metadata=ResourceMetadata(name="default-egress", parent_id=route_table_id),
-            spec=route_pb2.RouteSpec(
-                destination=route_pb2.DestinationMatch(cidr="0.0.0.0/0"),
-                next_hop=route_pb2.NextHop(default_egress_gateway=True),
-            ),
-        )
+        request = create_default_route(route_table_id)
         try:
             operation = route_client.create(request).wait()
             self._sync_preparation_operation(operation, action="Default egress route creation")
@@ -7919,17 +7872,14 @@ class VMManager:
             raise RuntimeError("Default egress route postcondition is not uniquely satisfied")
 
     def _reconcile_vpngw_route_table(self, client: t.Any, subnet_id: str) -> None:
-        from nebius.api.nebius.common.v1 import ResourceMetadata  # type: ignore
         from nebius.api.nebius.vpc.v1 import (  # type: ignore
-            CreateRouteTableRequest,
             GetSubnetRequest,
             RouteServiceClient,
             RouteTableServiceClient,
-            RouteTableSpec,
             SubnetServiceClient,
-            SubnetSpec,
-            UpdateSubnetRequest,
         )
+
+        from .provisioning_network import attach_table, create_table
 
         subnet_client = SubnetServiceClient(client)
         route_table_client = RouteTableServiceClient(client)
@@ -7969,13 +7919,7 @@ class VMManager:
         route_table_name = self._gateway_route_table_name(subnet_name)
         route_table = self._strict_route_table_by_name(route_table_client, route_table_name)
         if route_table is None:
-            request = CreateRouteTableRequest(
-                metadata=ResourceMetadata(
-                    name=route_table_name,
-                    parent_id=self.project_id or "",
-                ),
-                spec=RouteTableSpec(network_id=network_id),
-            )
+            request = create_table(self.project_id or "", route_table_name, network_id)
             try:
                 operation = route_table_client.create(request).wait()
                 self._sync_preparation_operation(operation, action="Route table creation")
@@ -8013,20 +7957,7 @@ class VMManager:
             require_exclusive_before_create=False,
         )
 
-        update = UpdateSubnetRequest(
-            metadata=ResourceMetadata(
-                id=subnet_id,
-                parent_id=str(getattr(subnet_metadata, "parent_id", "") or ""),
-                name=subnet_name,
-                resource_version=int(getattr(subnet_metadata, "resource_version", 0) or 0),
-            ),
-            spec=SubnetSpec(
-                network_id=network_id,
-                route_table_id=route_table_id,
-                ipv4_private_pools=getattr(subnet_spec, "ipv4_private_pools", None),
-                ipv4_public_pools=getattr(subnet_spec, "ipv4_public_pools", None),
-            ),
-        )
+        update = attach_table(subnet, self.project_id or "", route_table_id)
         operation = subnet_client.update(update).wait()
         self._sync_preparation_operation(operation, action="Route table attachment")
         try:
@@ -8131,9 +8062,9 @@ class VMManager:
             "#cloud-config\n"
             f"{users_section}"
             "package_update: true\n"
-            "package_upgrade: true\n"
+            "package_upgrade: false\n"
             "packages:\n"
-            "  - strongswan\n"
+            "  - charon-systemd\n"
             "  - strongswan-swanctl\n"
             "  - strongswan-pki\n"
             "  - libcharon-extra-plugins\n"
@@ -8280,7 +8211,7 @@ class VMManager:
             "            [Unit]\n"
             "            Description=Nebius VPNGW ESP4 kernel module readiness preflight\n"
             "            After=local-fs.target systemd-modules-load.service\n"
-            "            Before=strongswan-starter.service strongswan.service frr.service nebius-vpngw-agent.service\n"
+            "            Before=strongswan.service frr.service nebius-vpngw-agent.service\n"
             "            \n"
             "            [Service]\n"
             "            Type=oneshot\n"
@@ -8319,8 +8250,8 @@ class VMManager:
             "            # Nebius VPN Gateway – XFRM Routing Stack\n"
             "            ########################################\n"
             "            \n"
-            "            # 1. Global forwarding – the box is a router\n"
-            f"            net.ipv4.ip_forward = {0 if vm_ha else 1}\n"
+            "            # 1. Boot fenced; the agent enables protected forwarding\n"
+            "            net.ipv4.ip_forward = 0\n"
             "            \n"
             "            # 1.1 TCP MTU probing – recover when PMTUD is blocked\n"
             "            net.ipv4.tcp_mtu_probing = 1\n"
@@ -8355,7 +8286,7 @@ class VMManager:
             "            net.ipv6.conf.default.accept_redirects = 0\n"
             "            net.ipv6.conf.all.accept_ra = 0\n"
             "            net.ipv6.conf.default.accept_ra = 0\n"
-            "  - path: /etc/systemd/system/strongswan-starter.service.d/override.conf\n"
+            "  - path: /etc/systemd/system/strongswan.service.d/override.conf\n"
             '    permissions: "0644"\n'
             "    owner: root:root\n"
             "    content: |\n"
@@ -8368,15 +8299,15 @@ class VMManager:
             "    owner: root:root\n"
             "    content: |\n"
             "            [Unit]\n"
-            "            After=strongswan-starter.service\n"
-            "            Wants=strongswan-starter.service\n"
+            "            After=strongswan.service\n"
+            "            Wants=strongswan.service\n"
             "  - path: /etc/systemd/system/nebius-vpngw-agent.service.d/override.conf\n"
             '    permissions: "0644"\n'
             "    owner: root:root\n"
             "    content: |\n"
             "            [Unit]\n"
-            "            After=strongswan-starter.service frr.service\n"
-            + ("            Wants=strongswan-starter.service frr.service\n" if vm_ha else "")
+            "            After=strongswan.service frr.service\n"
+            + ("            Wants=strongswan.service frr.service\n" if vm_ha else "")
         )
 
         # Add runcmd section
@@ -8416,13 +8347,13 @@ class VMManager:
             "  - [ systemctl, enable, fail2ban ]\n"
             "  - [ systemctl, enable, log-restart-required.timer ]\n"
             "  - [ systemctl, enable, nebius-vpngw-esp4-preflight ]\n"
-            "  - [ systemctl, enable, strongswan-starter ]\n"
+            "  - [ systemctl, enable, strongswan ]\n"
             "  - [ systemctl, enable, frr ]\n"
             "  - [ systemctl, enable, nebius-vpngw-agent ]\n"
             "  - [ systemctl, start, auditd ]\n"
             "  - [ systemctl, start, fail2ban ]\n"
             "  - [ systemctl, start, log-restart-required.timer ]\n"
-            '  - [ bash, -lc, "if [ ! -f /var/lib/nebius-vpngw/esp4-reboot-pending ]; then systemctl start nebius-vpngw-esp4-preflight strongswan-starter frr; fi" ]\n'
+            '  - [ bash, -lc, "if [ ! -f /var/lib/nebius-vpngw/esp4-reboot-pending ]; then systemctl start nebius-vpngw-esp4-preflight strongswan frr; fi" ]\n'
             "  # Validate SSH configuration, then activate the service model provided by the image\n"
             '  - [ bash, -lc, "set -e; install -d -o root -g root -m 0755 /run/sshd; /usr/sbin/sshd -t; systemctl reset-failed ssh.service ssh.socket 2>/dev/null || true; if systemctl is-active --quiet ssh.socket || systemctl is-enabled --quiet ssh.socket; then systemctl restart ssh.socket; else systemctl restart ssh.service; fi; ss -H -lnt sport = :22 | grep -q ." ]\n'
             "  # Reboot only after cloud-init has written files and enabled services\n"
@@ -8434,6 +8365,17 @@ class VMManager:
         # standalone Python executable byte-identical to the selected product source.
         policy = ingress_policy.validate(ingress)
         document = yaml.safe_load(cloud)
+        daemon_asset = Path(__file__).parents[1] / "systemd/nebius-vpngw-strongswan.conf"
+        daemon_path = "/etc/systemd/system/strongswan.service.d/override.conf"
+        for entry in document["write_files"]:
+            if entry["path"] == daemon_path:
+                entry["content"] = daemon_asset.read_text()
+            elif entry["path"] == "/etc/systemd/system/nebius-vpngw-esp4-preflight.service":
+                entry["content"] = (
+                    resources.files("nebius_vpngw")
+                    .joinpath("systemd/nebius-vpngw-esp4-preflight.service")
+                    .read_text()
+                )
         for entry in document["write_files"]:
             if entry["path"] == "/etc/vpngw_peer_ips":
                 entry["content"] = "\n".join(policy["peer_ips"]) + "\n"

@@ -8,6 +8,7 @@ import re
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from ... import ipsec_observation
 from ...ha_tunnel_policy import ConnectionPolicy, TunnelPath, covers
 from ...ipsec_observation import parse_sas
 from .tunnels import Health
@@ -82,21 +83,33 @@ def xfrm_records(raw: str, *, policy: bool) -> list[dict[str, Any]]:
             raise ValueError("invalid XFRM record")
         # charon's IKE sockets install bypass policies. They have no template
         # or XFRM interface and are not evidence for any encrypted path.
-        if policy and re.search(r"(?m)^\s+socket (?:in|out) priority \d+\s*$", block):
+        if policy and re.search(r"(?m)^\s+socket (?:in|out)\b", block):
             if re.search(r"\b(?:tmpl|if_id|reqid)\b", block):
                 raise ValueError("ambiguous XFRM socket policy")
             continue
         record: dict[str, Any] = {"src": endpoints[1], "dst": endpoints[2]}
-        for key in ("if_id", "reqid", "spi", "dir", "mode", "proto"):
+        for key in ("if_id", "reqid", "spi", "dir", "mode", "proto", "index", "mark", "ctx"):
             match = re.search(r"\b" + key + r"\s+(\S+)", block)
             if match:
-                record[key] = match[1]
+                value = match[1]
+                if key in {"reqid", "spi"} and "(" in value:
+                    # iproute2 statistics print both decimal and hexadecimal
+                    # identities. Accept the pair only when they agree.
+                    pair = re.fullmatch(
+                        r"(0x[0-9a-fA-F]+|[0-9]+)\((0x[0-9a-fA-F]+|[0-9]+)\)", value
+                    )
+                    if pair is None or _number(pair[1]) != _number(pair[2]):
+                        raise ValueError("ambiguous XFRM numeric identity")
+                    value = pair[1]
+                record[key] = value
         if policy and "dir" not in record or not policy and "spi" not in record:
             raise ValueError("incomplete XFRM record")
         if policy:
-            template = re.search(r"\btmpl src (\S+) dst (\S+)", block)
-            if template:
-                record.update(tmpl_src=template[1], tmpl_dst=template[2])
+            templates = re.findall(r"\btmpl src (\S+) dst (\S+)", block)
+            if len(templates) != len(re.findall(r"\btmpl\b", block)) or len(templates) > 1:
+                raise ValueError("ambiguous XFRM policy template")
+            if templates:
+                record.update(tmpl_src=templates[0][0], tmpl_dst=templates[0][1])
         records.append(record)
     return records
 
@@ -118,6 +131,7 @@ def path_health(
     require_routes: bool,
 ) -> Health:
     try:
+        required = policy.destinations or frozenset({str(ipaddress.IPv4Network(path.peer + "/32"))})
         ike = parse_sas(sas)
         state = xfrm_records(states, policy=False)
         rules = xfrm_records(policies, policy=True)
@@ -151,9 +165,9 @@ def path_health(
                 # while the authenticated identities match the configured peer.
                 for child in sa.get("child-sas", {}).values():
                     if child.get("name") == path.name and child.get("state") == "INSTALLED":
-                        if not covers(
-                            frozenset(child["remote-ts"]), policy.destinations
-                        ) or not covers(frozenset(child["local-ts"]), path.local_selectors):
+                        if not covers(frozenset(child["remote-ts"]), required) or not covers(
+                            frozenset(child["local-ts"]), path.local_selectors
+                        ):
                             continue
                         installed.append((child, sa["local-host"], sa["remote-host"]))
         usable = False
@@ -198,7 +212,7 @@ def path_health(
                     for r in matching
                 )
                 for local in path.local_selectors
-                for remote in policy.destinations
+                for remote in required
                 for direction, src, dst in (
                     ("out", local, remote),
                     ("in", remote, local),
@@ -210,7 +224,7 @@ def path_health(
         if not usable:
             return Health.DOWN
         if require_routes:
-            for prefix in policy.destinations:
+            for prefix in required:
                 observed = [
                     r
                     for r in routes
@@ -237,7 +251,7 @@ class NativeTunnelObserver:
             health = path_health(
                 path,
                 policy,
-                sas=self.run(("swanctl", "--list-sas", "--raw")),
+                sas=self.run(ipsec_observation.command()),
                 states=self.run(("ip", "-j", "xfrm", "state")),
                 policies=self.run(("ip", "-j", "xfrm", "policy")),
                 links=json.loads(self.run(("ip", "-d", "-j", "link", "show", "type", "xfrm"))),

@@ -16,7 +16,7 @@ from dataclasses import replace
 
 from .models import PeerHeartbeat, StateValidationError
 
-HEARTBEAT_CAPABILITY = "independent-heartbeat-v5"
+HEARTBEAT_CAPABILITY = "independent-heartbeat-v6"
 SAMPLE_MAX_AGE = 5.0
 CHALLENGE_MAX_AGE = 10.0
 PEER_HEALTH_MAX_AGE = 20.0
@@ -43,6 +43,8 @@ class PeerEvidenceTracker:
         self._sample_id = -1
         self._expiry: float | None = None
         self._service_expiry: float | None = None
+        self._observation_expiry: float | None = None
+        self._authority_expiry: float | None = None
         self._sample_age = 0.0
         self._closed = False
 
@@ -67,6 +69,8 @@ class PeerEvidenceTracker:
                 self._challenges.popitem(last=False)
             return replace(
                 heartbeat,
+                observation_valid_until=None,
+                authority_valid_until=None,
                 health_valid_until=None,
                 service_valid_until=None,
                 echo_valid_until=None,
@@ -85,6 +89,8 @@ class PeerEvidenceTracker:
             self._echo = evidence.challenge
             if evidence.process_id != self._peer_process:
                 self._peer_process = evidence.process_id
+                self._observation_expiry = None
+                self._authority_expiry = None
                 self._sample_id, self._expiry, self._service_expiry, self._sample_age = (
                     -1,
                     None,
@@ -94,11 +100,15 @@ class PeerEvidenceTracker:
             if evidence.sample_id < self._sample_id:
                 return replace(
                     heartbeat,
+                    observation_valid_until=None,
+                    authority_valid_until=None,
                     health_valid_until=None,
                     service_valid_until=None,
                     echo_valid_until=None,
                 )
             same_sample = evidence.sample_id == self._sample_id
+            previous_observation_expiry = self._observation_expiry
+            previous_authority_expiry = self._authority_expiry
             previous_expiry = self._expiry
             previous_service_expiry = self._service_expiry
             decreasing_age = same_sample and evidence.age_seconds < self._sample_age
@@ -126,9 +136,32 @@ class PeerEvidenceTracker:
                 upper_age = evidence.age_seconds + now - sent
                 if upper_age < PEER_HEALTH_MAX_AGE:
                     expiry = now + PEER_HEALTH_MAX_AGE - upper_age
+            observation_expiry = expiry
+            # Cloud age is measured at send time. Conservatively charge the
+            # full challenge round trip; a receiver must not extend that proof.
+            authority_expiry = None
+            if (
+                expiry is not None
+                and sent is not None
+                and heartbeat.authority_ready
+                and evidence.cloud_status in {"complete", "in-progress"}
+                and evidence.cloud_age_seconds is not None
+                and evidence.cloud_age_seconds + now - sent < 30
+            ):
+                authority_expiry = min(expiry, sent + 30 - evidence.cloud_age_seconds)
             service_expiry = expiry if heartbeat.service_healthy else None
             expiry = expiry if evidence.state == "healthy" else None
             if same_sample:
+                authority_expiry = (
+                    min(previous_authority_expiry, authority_expiry)
+                    if previous_authority_expiry is not None and authority_expiry is not None
+                    else None
+                )
+                observation_expiry = (
+                    min(previous_observation_expiry, observation_expiry)
+                    if previous_observation_expiry is not None and observation_expiry is not None
+                    else None
+                )
                 # Each evidence channel expires independently and cannot resurrect.
                 expiry = (
                     min(previous_expiry, expiry)
@@ -140,10 +173,14 @@ class PeerEvidenceTracker:
                     if previous_service_expiry is not None and service_expiry is not None
                     else None
                 )
+            self._observation_expiry = observation_expiry
+            self._authority_expiry = authority_expiry
             self._expiry = expiry
             self._service_expiry = service_expiry
             return replace(
                 heartbeat,
+                observation_valid_until=observation_expiry,
+                authority_valid_until=authority_expiry,
                 health_valid_until=expiry,
                 service_valid_until=service_expiry,
                 echo_valid_until=echo_expiry,
@@ -152,6 +189,8 @@ class PeerEvidenceTracker:
     def close(self) -> None:
         with self._lock:
             self._closed = True
+            self._observation_expiry = None
+            self._authority_expiry = None
             self._expiry = None
             self._service_expiry = None
             self._challenges.clear()

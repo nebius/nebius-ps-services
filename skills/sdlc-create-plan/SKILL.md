@@ -159,6 +159,14 @@ a dependency-safe task graph.
 - Expand feature scope.
 - Reopen sealed, promoted, or completed execution.
 
+## Worker wave contract
+
+Follow the shared worker wave and acceptance contract in the required sibling
+`../worktree/references/worker-waves.md`.
+Before preparation, freeze execution policy and the executable `<plan>.validation.json`
+sidecar covering every task and combined checks. No-change results require independent
+acceptance; all waves require a producer receipt before cleanup and dependency release.
+
 ## Completion Criteria
 
 - Local plan exists and is locked.

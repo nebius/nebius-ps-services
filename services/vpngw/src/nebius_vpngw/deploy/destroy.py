@@ -2156,6 +2156,10 @@ class NebiusDestroyBackend:
 
         return instance_cloud_state(instance) is InstanceCloudState.STOPPED
 
+    def command_compute_absent(self, resource_id: str) -> bool:
+        """Observe an old command target without admitting it for deletion."""
+        return self._get_instance_by_id(resource_id) is None
+
     def route_absent(self, route: DestroyRoute) -> bool:
         return self._route_by_id(route) is None
 
@@ -2480,7 +2484,7 @@ def execute_destroy(
             ):
                 raise RuntimeError("VM-HA destroy configuration changed after durable intent")
             journal = VMHADestroyJournal(VMHALifecycleJournal(lifecycle_store, lifecycle_state))
-            return DestroyCoordinator(backend, journal).run()
+            return _execute_ha_destroy(backend, journal)
         if lifecycle_state.status is VMHALifecycleStatus.DESTROYED:
             raise RuntimeError("VM-HA destroyed lifecycle has no destruction transaction")
 
@@ -2543,4 +2547,21 @@ def execute_destroy(
             predecessor_sha256=lifecycle_state.record_sha256,
         )
         journal = VMHADestroyJournal(VMHALifecycleJournal(lifecycle_store, destruction))
-        return DestroyCoordinator(backend, journal).run()
+        return _execute_ha_destroy(backend, journal)
+
+
+def _execute_ha_destroy(
+    backend: NebiusDestroyBackend, journal: VMHADestroyJournal
+) -> DestroyResult:
+    from .apply_command import CommandJournal
+    from .destroy_command import retire
+
+    result = DestroyCoordinator(backend, journal).run()
+    try:
+        retire(CommandJournal(journal.plan.project_id, journal.plan.gateway_name), journal, backend)
+    except Exception as error:
+        raise DestroyFailure(
+            "destroy-terminal-verification-failed",
+            "Destroyed gateway command admission could not be retired",
+        ) from error
+    return result

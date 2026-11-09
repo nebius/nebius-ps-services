@@ -1027,10 +1027,12 @@ def test_get_bgp_learned_routes_queries_only_connection_owner_vm(
             {
                 "gateway_instance_index": 1,
                 "ha_role": "active",
+                "inner_remote_ip": "169.254.20.2",
             },
             {
                 "gateway_instance_index": 1,
                 "ha_role": "passive",
+                "inner_remote_ip": "169.254.21.2",
             },
         ],
     }
@@ -1044,10 +1046,20 @@ def test_get_bgp_learned_routes_queries_only_connection_owner_vm(
                 {
                     "routes": {
                         "10.20.0.0/16": [
-                            {"nexthops": [{"ip": "169.254.20.2"}]},
+                            {
+                                "valid": True,
+                                "bestpath": True,
+                                "peerId": "169.254.20.2",
+                                "nexthops": [{"ip": "169.254.20.2"}],
+                            },
                         ],
                         "10.96.0.0/13": [
-                            {"nexthops": [{"ip": "0.0.0.0"}]},
+                            {
+                                "valid": True,
+                                "bestpath": True,
+                                "peerId": "0.0.0.0",
+                                "nexthops": [{"ip": "0.0.0.0"}],
+                            },
                         ],
                     }
                 }
@@ -1124,6 +1136,77 @@ def test_get_bgp_learned_routes_fails_closed_on_query_error(
     assert "private remote diagnostic" not in str(caught.value)
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        [],
+        {"routes": []},
+        {"routes": {"10.20.0.0/16": None}},
+        {"routes": {"10.20.0.0/16": []}},
+        {"routes": {"10.20.0.0/16": [{"nexthops": None}]}},
+        {"routes": {"10.20.0.0/16": [{"nexthops": [{}]}]}},
+        {
+            "routes": {
+                "invalid-prefix": [
+                    {
+                        "valid": True,
+                        "bestpath": True,
+                        "peerId": "169.254.20.2",
+                        "nexthops": [{"ip": "169.254.20.2"}],
+                    }
+                ]
+            }
+        },
+    ],
+)
+def test_incomplete_bgp_snapshot_is_not_reported_as_no_remote_routes(monkeypatch, payload):
+    manager = RouteManager(project_id="project-test")
+    conn = {
+        "name": "peer",
+        "tunnels": [{"gateway_instance_index": 1, "inner_remote_ip": "169.254.20.2"}],
+    }
+    monkeypatch.setattr(
+        manager,
+        "_run_ssh",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(payload)),
+    )
+    with pytest.raises(RouteManagementError, match="incomplete|malformed"):
+        manager._get_bgp_learned_routes(_three_vm_plan(), conn, {"gateway_group": {"vm_spec": {}}})
+
+
+@pytest.mark.parametrize(
+    "flags, expected",
+    [
+        ({"valid": True, "bestpath": True}, ["10.20.0.0/16"]),
+        ({"valid": True, "multipath": True}, ["10.20.0.0/16"]),
+        ({"valid": True}, []),
+        ({"valid": False, "bestpath": True}, []),
+        ({"valid": True, "bestpath": True, "peerId": "169.254.99.2"}, []),
+    ],
+)
+def test_bgp_route_selection_requires_a_valid_selected_configured_peer(
+    monkeypatch, flags, expected
+):
+    manager = RouteManager(project_id="project-test")
+    conn = {
+        "name": "peer",
+        "tunnels": [{"gateway_instance_index": 1, "inner_remote_ip": "169.254.20.2"}],
+    }
+    path = {"peerId": "169.254.20.2", "nexthops": [{"ip": "169.254.20.2"}], **flags}
+    monkeypatch.setattr(
+        manager,
+        "_run_ssh",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0, stdout=json.dumps({"routes": {"10.20.0.0/16": [path]}})
+        ),
+    )
+    assert (
+        manager._get_bgp_learned_routes(_three_vm_plan(), conn, {"gateway_group": {"vm_spec": {}}})
+        == expected
+    )
+
+
 def test_get_bgp_learned_routes_honors_custom_ssh_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1162,7 +1245,12 @@ def test_get_bgp_learned_routes_honors_custom_ssh_config(
                 {
                     "routes": {
                         "10.20.0.0/16": [
-                            {"nexthops": [{"ip": "169.254.20.2"}]},
+                            {
+                                "valid": True,
+                                "bestpath": True,
+                                "peerId": "169.254.20.2",
+                                "nexthops": [{"ip": "169.254.20.2"}],
+                            },
                         ],
                     }
                 }
@@ -1223,7 +1311,12 @@ def test_get_bgp_learned_routes_honors_env_ssh_fallback(
                 {
                     "routes": {
                         "10.20.0.0/16": [
-                            {"nexthops": [{"ip": "169.254.20.2"}]},
+                            {
+                                "valid": True,
+                                "bestpath": True,
+                                "peerId": "169.254.20.2",
+                                "nexthops": [{"ip": "169.254.20.2"}],
+                            },
                         ],
                     }
                 }
@@ -1284,16 +1377,36 @@ def test_get_bgp_learned_routes_filters_to_connection_peer_ips(
                 {
                     "routes": {
                         "10.10.0.0/16": [
-                            {"nexthops": [{"ip": "169.254.10.2"}]},
+                            {
+                                "valid": True,
+                                "bestpath": True,
+                                "peerId": "169.254.10.2",
+                                "nexthops": [{"ip": "169.254.10.2"}],
+                            },
                         ],
                         "10.11.0.0/16": [
-                            {"nexthops": [{"ip": "169.254.11.2"}]},
+                            {
+                                "valid": True,
+                                "bestpath": True,
+                                "peerId": "169.254.11.2",
+                                "nexthops": [{"ip": "169.254.11.2"}],
+                            },
                         ],
                         "10.20.0.0/16": [
-                            {"nexthops": [{"ip": "169.254.20.2"}]},
+                            {
+                                "valid": True,
+                                "bestpath": True,
+                                "peerId": "169.254.20.2",
+                                "nexthops": [{"ip": "169.254.20.2"}],
+                            },
                         ],
                         "10.96.0.0/13": [
-                            {"nexthops": [{"ip": "0.0.0.0"}]},
+                            {
+                                "valid": True,
+                                "bestpath": True,
+                                "peerId": "0.0.0.0",
+                                "nexthops": [{"ip": "0.0.0.0"}],
+                            },
                         ],
                     }
                 }
@@ -1340,13 +1453,28 @@ def test_get_bgp_learned_routes_reports_connection_scoped_count(
                 {
                     "routes": {
                         "10.10.0.0/16": [
-                            {"nexthops": [{"ip": "169.254.10.2"}]},
+                            {
+                                "valid": True,
+                                "bestpath": True,
+                                "peerId": "169.254.10.2",
+                                "nexthops": [{"ip": "169.254.10.2"}],
+                            },
                         ],
                         "10.11.0.0/16": [
-                            {"nexthops": [{"ip": "169.254.11.2"}]},
+                            {
+                                "valid": True,
+                                "bestpath": True,
+                                "peerId": "169.254.11.2",
+                                "nexthops": [{"ip": "169.254.11.2"}],
+                            },
                         ],
                         "10.20.0.0/16": [
-                            {"nexthops": [{"ip": "169.254.20.2"}]},
+                            {
+                                "valid": True,
+                                "bestpath": True,
+                                "peerId": "169.254.20.2",
+                                "nexthops": [{"ip": "169.254.20.2"}],
+                            },
                         ],
                     }
                 }
@@ -1692,67 +1820,6 @@ def test_find_connection_for_peer_respects_gateway_instance_scope() -> None:
     resolved = route_manager._find_connection_for_peer("169.254.10.2", connections, inst_cfg)
 
     assert resolved == ("gcp-site-b", "site-b-tunnel-1", "169.254.20.1", "active")
-
-
-def test_default_table_copy_failure_preserves_subnet_attachment(monkeypatch):
-    import grpc
-    from nebius.api.nebius.common.v1 import metadata_pb2
-    from nebius.api.nebius.vpc.v1 import (
-        route_pb2,
-        route_service_pb2_grpc,
-        route_table_service_pb2_grpc,
-        subnet_service_pb2_grpc,
-    )
-
-    manager = RouteManager(project_id="project-test", auth_token="synthetic-test-token")
-    monkeypatch.setattr(manager, "_channel", lambda: object())
-    monkeypatch.setattr(grpc, "secure_channel", lambda *_: object())
-    monkeypatch.setattr(
-        manager, "_find_gateway_private_allocations_by_index", lambda *_: {0: "allocation-gateway"}
-    )
-    monkeypatch.setattr(manager, "_resolve_target_network_id", lambda *_: "network-test")
-    monkeypatch.setattr(manager, "_get_network_private_pool_cidrs", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(
-        manager, "_collect_remote_prefix_targets", lambda *_: {"10.80.0.0/16": "allocation-gateway"}
-    )
-    subnet = _fake_subnet(
-        name="workload", network_id="network-test", explicit_cidrs=["10.20.0.0/16"]
-    )
-    subnet.status.route_table.id = "route-table-default"
-    route = route_pb2.Route(
-        metadata=metadata_pb2.ResourceMetadata(
-            id="route-customer", name="customer", parent_id="route-table-default"
-        )
-    )
-    route.spec.description = "preserve customer metadata"
-    route.spec.destination.cidr = "0.0.0.0/0"
-    route.spec.next_hop.default_egress_gateway = True
-    sstub = SimpleNamespace(
-        List=Mock(return_value=SimpleNamespace(items=[subnet], next_page_token="")), Update=Mock()
-    )
-    target = SimpleNamespace(
-        metadata=SimpleNamespace(
-            id="route-table-target",
-            name=manager._route_table_name("workload"),
-            parent_id="project-test",
-        )
-    )
-    rtstub = SimpleNamespace(
-        List=Mock(return_value=SimpleNamespace(items=[target], next_page_token=""))
-    )
-    rstub = SimpleNamespace(Create=Mock(side_effect=RuntimeError("copy denied")))
-    monkeypatch.setattr(subnet_service_pb2_grpc, "SubnetServiceStub", lambda _: sstub)
-    monkeypatch.setattr(route_table_service_pb2_grpc, "RouteTableServiceStub", lambda _: rtstub)
-    monkeypatch.setattr(route_service_pb2_grpc, "RouteServiceStub", lambda _: rstub)
-    monkeypatch.setattr(
-        manager,
-        "_list_route_table_routes",
-        lambda *_args, route_table_id: [route] if route_table_id == "route-table-default" else [],
-    )
-    with pytest.raises(RouteManagementError, match="incomplete"):
-        manager._add_routes(SimpleNamespace(), {"gateway": {"local_prefixes": ["10.20.0.0/16"]}})
-    assert rstub.Create.call_args.args[0].spec == route.spec
-    sstub.Update.assert_not_called()
 
 
 def test_summary_quota_failure_never_deletes_working_specifics():

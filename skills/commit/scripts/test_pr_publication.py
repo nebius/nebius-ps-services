@@ -9,6 +9,8 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import shlex
+import shutil
 import unittest
 from unittest.mock import patch
 
@@ -35,7 +37,21 @@ class PublicationTests(fixture.TransactionFixture):
         return json.loads(output.getvalue())
 
     def setUp(self):
-        super().setUp()
+        fixture.TransactionFixture.setUp(self)
+        # Disposable transport fixtures must not inherit operator Git filters.
+        test_home = self.base / "home"
+        test_home.mkdir()
+        test_bin = self.base / "bin"
+        test_bin.mkdir()
+        (test_bin / "git").write_text("#!/bin/sh\nexec env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "
+                                      + shlex.quote(shutil.which("git")) + ' "$@"\n')
+        (test_bin / "git").chmod(0o700)
+        environment = patch.dict(fixture.os.environ, {
+            "HOME": str(test_home), "XDG_CONFIG_HOME": str(test_home / "config"),
+            "PATH": str(test_bin) + fixture.os.pathsep + fixture.os.environ["PATH"],
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
         self.origin = self.base / 'base.git'
         self.fork = self.base / 'fork.git'
         for path in (self.origin, self.fork):
@@ -70,6 +86,9 @@ class PublicationTests(fixture.TransactionFixture):
         self.bindings = self.base / 'bindings.json'
         self.bindings.write_text(json.dumps({'refs/heads/' + self.alias: {'repository': 'org/base', 'number': 7}}))
         self.authorize('Review and repair the selected contributor PR')
+        self.start_task()
+
+    def start_task(self):
         self.begin('create-pr', pr_base='trunk', target=[self.alias], pr_bindings=str(self.bindings))
         self.run_helper(*self.task_args('checkout-target'), '--branch', self.alias)
 
@@ -372,6 +391,399 @@ class OrdinaryPublicationTests(fixture.TransactionFixture):
         with patch.object(tx._pr, 'push') as push:
             self.assertEqual(self.publish(expected=2)['code'], 'publication_blocked')
             push.assert_not_called()
+
+
+
+class ReviewWorkspaceTests(fixture.TransactionFixture):
+    setUp = PublicationTests.setUp
+    api = PublicationTests.api
+    run_helper = PublicationTests.run_helper
+    repair = PublicationTests.repair
+    publish = PublicationTests.publish
+
+    def snapshot(self):
+        return {
+            "ref": git(self.source, "symbolic-ref", "HEAD"),
+            "head": git(self.source, "rev-parse", "HEAD"),
+            "refs": git(self.source, "show-ref"),
+            "index": (self.source / ".git/index").read_bytes(),
+            "files": {str(p.relative_to(self.source)): p.read_bytes()
+                      for p in self.source.rglob("*") if p.is_file() and ".git" not in p.relative_to(self.source).parts},
+        }
+
+    def start_task(self):
+        self.source = self.root
+        (self.source / "staged.txt").write_text("user staged work\n")
+        git(self.source, "add", "staged.txt")
+        (self.source / "untracked.txt").write_text("user untracked work\n")
+        self.before = self.snapshot()
+        result = self.run_helper(*self.task_args("begin-review"), "--pr-base", "trunk", "--target", self.alias,
+                                 "--pr-bindings", str(self.bindings))
+        self.source_task = Path(result["task"])
+        self.execution = result["executions"]["refs/heads/" + self.alias]
+        self.root = Path(self.execution["repo_root"])
+        self.task_contexts["session-1"] = self.execution
+
+    def source_args(self, action):
+        return (action, "--repo-root", str(self.source), "--session-id", "session-1",
+                "--requested-action", "create-pr", "--intent-sha256", self.request_assertions["session-1"][-1])
+
+    def close_source(self, *, expected=0):
+        self.run_helper(*self.source_args("complete-checkout"), "--mode", "finalize")
+        return self.run_helper(*self.source_args("finish"), "--outcome", "completed", expected=expected)
+
+    def test_private_repair_publication_and_closure_preserve_concurrent_user_work(self):
+        self.assertEqual(self.snapshot(), self.before)
+        self.assertNotEqual(tx._common_dir(self.root), tx._common_dir(self.source))
+        self.assertFalse((self.root / "staged.txt").exists())
+        (self.source / "staged.txt").write_text("user kept editing\n")
+        (self.source / "another.txt").write_text("more user work\n")
+        expected = self.snapshot()
+        repaired = self.repair()
+        self.assertEqual(self.publish()["head"], repaired)
+        closure = self.close_source()
+        self.assertEqual(closure["heads"]["refs/heads/" + self.alias], repaired)
+        self.assertEqual(self.snapshot(), expected)
+        self.assertEqual(git(self.fork, "rev-parse", "topic"), repaired)
+        self.run_helper(*self.source_args("cleanup-review"), "--branch", self.alias)
+        self.assertFalse(self.root.exists())
+        self.assertEqual(self.snapshot(), expected)
+
+    def test_retry_uses_registered_workspace_and_blocks_parent_mutation(self):
+        again = self.run_helper(*self.source_args("begin-review"), "--pr-base", "trunk", "--target", self.alias,
+                                "--pr-bindings", str(self.bindings))
+        self.assertEqual(again["executions"]["refs/heads/" + self.alias]["repo_root"], str(self.root))
+        blocked = self.run_helper(*self.source_args("checkout-target"), "--branch", self.alias, expected=2)
+        self.assertEqual(blocked["code"], "scope_changed")
+        self.assertEqual(self.snapshot(), self.before)
+
+    def test_unpublished_repair_blocks_completion_and_retains_workspace(self):
+        self.repair()
+        self.assertEqual(self.close_source(expected=2)["code"], "effect_unknown")
+        self.assertTrue(self.root.exists())
+        self.assertEqual(self.snapshot(), self.before)
+
+    def test_closed_original_revokes_execution(self):
+        self.close_source()
+        (self.root / "repair.txt").write_text("late edit\n")
+        self.assertEqual(self.pr_prepare(expected=2)["code"], "task_closed")
+        self.assertEqual(self.snapshot(), self.before)
+
+    def test_execution_cannot_close_independently(self):
+        result = self.run_helper(*self.task_args("finish"), "--outcome", "cancelled", expected=2)
+        self.assertEqual(result["code"], "scope_changed")
+        self.close_source()
+
+    def test_forged_parent_binding_is_rejected(self):
+        task = Path(self.execution["task"])
+        grant = json.loads(task.read_text())
+        grant["review_parent"]["sha256"] = "0" * 64
+        tx._atomic_json(task, grant)
+        (self.root / "repair.txt").write_text("repair\n")
+        self.assertEqual(self.pr_prepare(expected=2)["code"], "scope_changed")
+
+    def test_remote_advance_preserves_caller_and_never_overwrites(self):
+        self.repair()
+        self.allow = False
+        self.assertEqual(self.publish(expected=2)["code"], "publication_blocked")
+        self.assertEqual(self.snapshot(), self.before)
+
+    def test_pause_never_switches_or_cleans_caller(self):
+        self.run_helper(*self.source_args("complete-checkout"), "--mode", "pause")
+        self.assertEqual(self.snapshot(), self.before)
+        self.repair()
+        self.publish()
+        self.close_source()
+        self.assertEqual(self.snapshot(), self.before)
+
+    def test_cleanup_cannot_delete_unpublished_cancelled_repairs(self):
+        self.repair()
+        self.run_helper(*self.source_args("finish"), "--outcome", "cancelled")
+        self.assertEqual(self.run_helper(*self.source_args("cleanup-review"), "--branch", self.alias, expected=2)["code"], "effect_unknown")
+        self.assertTrue((self.root / "repair.txt").exists())
+
+class ReviewHookTests(fixture.TransactionFixture):
+    setUp = PublicationTests.setUp
+    api = PublicationTests.api
+    run_helper = PublicationTests.run_helper
+    snapshot = ReviewWorkspaceTests.snapshot
+
+    def start_task(self):
+        self.source = self.root
+
+    def reject_hook(self, hook_dir):
+        hook_dir.mkdir(exist_ok=True)
+        hook = hook_dir / "pre-commit"
+        hook.write_text('#!/bin/sh\npwd > .git/hook-cwd\necho changed > "$(dirname "$0")/../../caller-sentinel"\nexit 0\n')
+        hook.chmod(0o700)
+        before = self.snapshot()
+        result = self.run_helper(*self.task_args("begin-review"), "--pr-base", "trunk", "--target", self.alias,
+                                 "--pr-bindings", str(self.bindings), expected=2)
+        self.assertEqual(result["code"], "scope_changed")
+        self.assertIn("executable trusted hooks", result["reason"])
+        self.assertFalse((self.source / ".git/hook-cwd").exists())
+        self.assertEqual(self.snapshot(), before)
+
+    def test_source_relative_hook_writes_are_blocked_before_execution(self):
+        self.reject_hook(self.root / ".git/hooks")
+
+    def test_relative_hook_policy_is_blocked_before_execution(self):
+        git(self.root, "config", "core.hooksPath", "operator-hooks")
+        self.reject_hook(self.root / "operator-hooks")
+
+    def test_new_hook_blocks_before_commit(self):
+        ReviewWorkspaceTests.start_task(self)
+        hook = self.source / ".git/hooks/pre-commit"
+        hook.write_text("#!/bin/sh\nexit 0\n")
+        hook.chmod(0o700)
+        (self.root / "repair.txt").write_text("repair\n")
+        self.assertEqual(self.pr_prepare(expected=2)["code"], "scope_changed")
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), self.initial_head)
+
+    def test_private_hook_override_is_rejected(self):
+        ReviewWorkspaceTests.start_task(self)
+        git(self.root, "config", "core.hooksPath", str(self.source / ".git/hooks"))
+        (self.root / "repair.txt").write_text("repair\n")
+        self.assertEqual(self.pr_prepare(expected=2)["code"], "scope_changed")
+
+
+class ReviewExecutableConfigTests(fixture.TransactionFixture):
+    setUp = PublicationTests.setUp
+    api = PublicationTests.api
+    run_helper = PublicationTests.run_helper
+    snapshot = ReviewWorkspaceTests.snapshot
+    start_task = ReviewHookTests.start_task
+
+    def reject_candidate_program(self, config, *, remote_condition=False):
+        candidate = self.base / "candidate"
+        git(self.source, "clone", "-b", "topic", str(self.fork), str(candidate))
+        git(candidate, "config", "user.name", "Test User")
+        git(candidate, "config", "user.email", "test@example.com")
+        sentinel = self.codex_home / "candidate-executed"
+        (candidate / "aa-candidate.sh").write_text(
+            "#!/bin/sh\nprintf touched > " + shlex.quote(str(sentinel)) + "\ncat\n")
+        (candidate / ".gitattributes").write_text("*.txt filter=reviewattack\n")
+        git(candidate, "add", "-A")
+        git(candidate, "commit", "-qm", "candidate program")
+        git(candidate, "push", "origin", "topic")
+        policy = self.base / "include-policy"
+        command_policy = self.base / "candidate-policy"
+        command_policy.write_text(config)
+        condition = ("hasconfig:remote.*.url:" + str(self.origin) if remote_condition
+                     else "gitdir:" + str(self.codex_home) + "/review-workspaces/")
+        policy.write_text('[includeIf "' + condition + '"]\n'
+                          ' path = ' + str(command_policy) + '\n')
+        real = tx._run_git
+        def with_policy(root, arguments, **kwargs):
+            return real(root, ("-c", "include.path=" + str(policy), *arguments), **kwargs)
+        before = self.snapshot()
+        # A real Git includeIf is activated only in the private execution path.
+        with patch.object(tx, "_run_git", side_effect=with_policy):
+            result = self.run_helper(*self.task_args("begin-review"), "--pr-base", "trunk", "--target", self.alias,
+                                     "--pr-bindings", str(self.bindings), expected=2)
+        self.assertIn("executable Git", result["reason"])
+        self.assertFalse(sentinel.exists())
+        self.assertEqual(self.snapshot(), before)
+
+    def lfs_policy(self):
+        sentinel = self.base / "lfs-executed"
+        policy = self.base / "operator-lfs"
+        command = "touch " + shlex.quote(str(sentinel))
+        policy.write_text('[filter "lfs"]\n clean = ' + command + '\n smudge = ' + command
+                          + '\n process = ' + command + '\n required = true\n')
+        wrapper = self.base / "bin/git"
+        wrapper.write_text(wrapper.read_text().replace("GIT_CONFIG_GLOBAL=/dev/null",
+                           "GIT_CONFIG_GLOBAL=" + shlex.quote(str(policy))))
+        return sentinel
+
+    def test_unused_global_lfs_allows_private_repair_and_publication(self):
+        sentinel = self.lfs_policy()
+        ReviewWorkspaceTests.start_task(self)
+        PublicationTests.repair(self)
+        PublicationTests.publish(self)
+        self.assertFalse(sentinel.exists())
+        self.assertEqual(self.snapshot(), self.before)
+
+    def test_lfs_in_exact_incoming_tree_is_rejected(self):
+        candidate = self.base / "lfs-candidate"
+        git(self.source, "clone", "-b", "topic", str(self.fork), str(candidate))
+        git(candidate, "config", "user.name", "Test")
+        git(candidate, "config", "user.email", "test@example.com")
+        (candidate / ".gitattributes").write_text("*.txt filter=lfs\n")
+        git(candidate, "add", "-A")
+        git(candidate, "commit", "-qm", "LFS attributes")
+        git(candidate, "push", "origin", "topic")
+        sentinel = self.lfs_policy()
+        before = self.snapshot()
+        result = self.run_helper(*self.task_args("begin-review"), "--pr-base", "trunk", "--target", self.alias,
+                                 "--pr-bindings", str(self.bindings), expected=2)
+        self.assertIn("LFS content is not supported", result["reason"])
+        self.assertFalse(sentinel.exists())
+        self.assertEqual(self.snapshot(), before)
+
+    def test_lfs_working_and_index_attributes_block_repair(self):
+        sentinel = self.lfs_policy()
+        ReviewWorkspaceTests.start_task(self)
+        attributes = self.root / ".gitattributes"
+        attributes.write_text("*.txt filter=lfs\n")
+        (self.root / "new.txt").write_text("new binary placeholder\n")
+        result = self.pr_prepare(expected=2)
+        self.assertIn("LFS content is not supported", result["reason"])
+        blob = git(self.root, "hash-object", "-w", str(attributes))
+        # Fixture-only index setup; never execute the ambient sentinel filter.
+        git(self.root, "-c", "filter.lfs.process=", "-c", "filter.lfs.clean=",
+            "-c", "filter.lfs.required=false", "update-index", "--add", "--cacheinfo",
+            "100644," + blob + ",.gitattributes")
+        attributes.unlink()
+        result = self.pr_prepare(expected=2)
+        self.assertIn("LFS content is not supported", result["reason"])
+        self.assertFalse(sentinel.exists())
+        self.assertEqual(self.snapshot(), self.before)
+
+    def test_required_lfs_driver_fences_missed_attribute_check(self):
+        sentinel = self.lfs_policy()
+        ReviewWorkspaceTests.start_task(self)
+        (self.root / ".gitattributes").write_text("*.txt filter=lfs\n")
+        (self.root / "new.txt").write_text("must not stage raw content\n")
+        before = (self.root / ".git/index").read_bytes()
+        with patch.object(tx._review, "no_lfs"):
+            result = tx._run_git(self.root, ("-c", "filter.lfs.required=false", "add", "-A"), check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"filter", result.stderr)
+        self.assertFalse(sentinel.exists())
+        self.assertEqual((self.root / ".git/index").read_bytes(), before)
+
+    def test_private_path_filter_cannot_execute_candidate_with_operator_access(self):
+        self.reject_candidate_program('[filter "reviewattack"]\n smudge = sh aa-candidate.sh\n')
+
+    def test_private_path_fsmonitor_cannot_execute_candidate_with_operator_access(self):
+        self.reject_candidate_program('[core]\n fsmonitor = sh aa-candidate.sh\n')
+
+    def test_new_origin_conditional_filter_is_blocked_before_checkout(self):
+        self.reject_candidate_program('[filter "reviewattack"]\n smudge = sh aa-candidate.sh\n', remote_condition=True)
+
+    def test_later_filter_policy_is_rejected(self):
+        ReviewWorkspaceTests.start_task(self)
+        git(self.root, "config", "filter.reviewattack.process", "sh aa-candidate.sh")
+        (self.root / "repair.txt").write_text("repair\n")
+        self.assertEqual(self.pr_prepare(expected=2)["code"], "scope_changed")
+
+
+class NestedReviewWorkspaceTests(fixture.TransactionFixture):
+    setUp = PublicationTests.setUp
+    api = PublicationTests.api
+    run_helper = PublicationTests.run_helper
+    repair = PublicationTests.repair
+    publish = PublicationTests.publish
+    snapshot = ReviewWorkspaceTests.snapshot
+    source_args = ReviewWorkspaceTests.source_args
+    close_source = ReviewWorkspaceTests.close_source
+
+    def start_task(self):
+        self.source = self.root
+        parent = self.begin("create-pr", pr_base="trunk", target=[self.alias], pr_bindings=str(self.bindings))
+        self.source_task = Path(parent["task"])
+        (self.source / "user.txt").write_text("concurrent user work\n")
+        self.before = self.snapshot()
+        self.execution = self.run_helper(*self.task_args("open-review"), "--branch", self.alias)
+        self.root = Path(self.execution["repo_root"])
+        self.task_contexts["session-1"] = self.execution
+
+    def test_nested_repair_closes_original_without_importing_new_head(self):
+        self.repair()
+        self.publish()
+        proof = tx._review.verify_execution(tx._module(), Path(self.execution["task"]), self.source,
+                                           "session-1", branch=self.alias, head=git(self.root,"rev-parse","HEAD"),
+                                           repository="org/base", pr=7)
+        self.assertEqual(proof["repo_root"], str(self.root))
+        with self.assertRaises(tx.TransactionError):
+            tx._review.verify_execution(tx._module(), Path(self.execution["task"]), self.source,
+                                        "session-1", branch=self.alias, head=proof["head"], repository="org/base", pr=99)
+        self.close_source()
+        self.assertEqual(self.snapshot(), self.before)
+
+    def test_registered_directory_substitution_is_rejected(self):
+        replacement = self.root.parent / "replaced"
+        self.root.rename(replacement)
+        import shutil
+        shutil.copytree(replacement, self.root)
+        self.assertEqual(self.run_helper(*self.source_args("review-context"), "--branch", self.alias, expected=2)["code"], "scope_changed")
+        self.assertEqual(self.snapshot(), self.before)
+
+    def test_cleanup_replays_after_delete_before_checkpoint(self):
+        self.close_source()
+        real_write = tx._atomic_json
+        def interrupt(path, value):
+            if value.get("reviews", {}).get("refs/heads/" + self.alias, {}).get("phase") == "removed":
+                raise RuntimeError("simulated helper interruption")
+            return real_write(path, value)
+        with patch.object(tx, "_atomic_json", side_effect=interrupt):
+            with self.assertRaises(RuntimeError):
+                self.run_helper(*self.source_args("cleanup-review"), "--branch", self.alias)
+        self.assertFalse(self.root.exists())
+        result = self.run_helper(*self.source_args("cleanup-review"), "--branch", self.alias)
+        self.assertEqual(result["status"], "removed")
+        self.assertEqual(self.snapshot(), self.before)
+
+    def test_cleanup_rejects_replacement_after_removal_intent(self):
+        self.close_source()
+        with patch.object(tx._review.shutil, "rmtree", side_effect=RuntimeError("interrupted")):
+            with self.assertRaises(RuntimeError):
+                self.run_helper(*self.source_args("cleanup-review"), "--branch", self.alias)
+        directory = self.root.parent
+        original = directory.with_name(directory.name + "-original")
+        directory.rename(original)
+        directory.mkdir(mode=0o700)
+        sentinel = directory / "unrelated.txt"
+        sentinel.write_text("keep replacement")
+        self.run_helper(*self.source_args("cleanup-review"), "--branch", self.alias, expected=2)
+        self.assertEqual(sentinel.read_text(), "keep replacement")
+
+
+
+class ReviewAllocationTests(fixture.TransactionFixture):
+    setUp = PublicationTests.setUp
+    api = PublicationTests.api
+    run_helper = PublicationTests.run_helper
+    start_task = PublicationTests.start_task
+    # Only allocation tests run here; inherited publication regressions continue
+    # on the original PublicationTests fixture below through default start_task.
+    def test_allocation_failure_can_retry_from_owned_empty_directory(self):
+        source = self.root
+        # This existing fixture already checked out its target; review itself
+        # must preserve that exact checkout, including dirty files.
+        args = self.task_args("open-review")
+        real_git = tx._run_git
+        def fail_init(root, words, **kwargs):
+            if words[0] == "init":
+                raise tx.TransactionError("simulated allocation interruption")
+            return real_git(root, words, **kwargs)
+        with patch.object(tx, "_run_git", side_effect=fail_init):
+            self.run_helper(*args, "--branch", self.alias, expected=2)
+        result = self.run_helper(*args, "--branch", self.alias)
+        self.assertNotEqual(result["repo_root"], str(source))
+
+    def test_ordinary_parent_returns_to_original_after_private_review(self):
+        original = "feature/test"
+        self.assertEqual(git(self.root, "symbolic-ref", "--short", "HEAD"), self.alias)
+        self.run_helper(*self.task_args("open-review"), "--branch", self.alias)
+        completion = self.run_helper(*self.task_args("complete-checkout"), "--mode", "finalize")
+        self.assertEqual(git(self.root, "symbolic-ref", "--short", "HEAD"), original)
+        self.assertEqual(completion["checkout"], "refs/heads/" + original)
+        self.run_helper(*self.task_args("finish"), "--outcome", "completed")
+
+    def test_dirty_parent_blocks_its_own_switch_but_never_discards_edits(self):
+        self.run_helper(*self.task_args("open-review"), "--branch", self.alias)
+        (self.root / "user.txt").write_text("keep this\n")
+        self.run_helper(*self.task_args("complete-checkout"), "--mode", "finalize", expected=2)
+        self.assertEqual((self.root / "user.txt").read_text(), "keep this\n")
+        self.assertEqual(git(self.root, "symbolic-ref", "--short", "HEAD"), self.alias)
+
+    def test_failed_allocation_can_cancel_original_authority(self):
+        with patch.object(tx._review, "allocate", side_effect=tx.TransactionError("fixture fetch failure")):
+            self.run_helper(*self.task_args("open-review"), "--branch", self.alias, expected=2)
+        result = self.run_helper(*self.task_args("finish"), "--outcome", "cancelled")
+        self.assertEqual(result["status"], "cancelled")
 
 
 if __name__ == '__main__':

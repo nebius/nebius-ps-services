@@ -12,9 +12,12 @@ import workflow_execution as engine
 import workflow_impact as impact
 import workflow_objectives as objectives
 from workflow_refinement import refinement, settle
-from workflow_state import WorkflowError, read, write
-from test_workflow_execution import git
+from workflow_state import WorkflowError, read
+from test_workflow_execution import git, capacity_fixture
 
+
+from test_workflow_execution import write_private  # noqa: E402
+from test_workflow_fixture import prepare_execution as fixture_prepare_execution  # noqa: E402
 
 class SdlcContractPreparationTests(unittest.TestCase):
     """Exercise first publication from an accepted, committed README-only source."""
@@ -92,12 +95,10 @@ class SdlcContractPreparationTests(unittest.TestCase):
             "- Done criteria: both documents publish together\n"
             "- Rollback or stop conditions: stop on changed scope\n")
         self.plan.with_suffix(".md.lock").write_text("locked\n")
-        write(self.run_dir / "host-capacity.json", {
-            "schema": "workflow/host-capacity-v1", "native_slots": 1,
-            "evidence": "deterministic test capacity; not native proof"})
+        write_private(self.run_dir / "host-capacity.json", capacity_fixture(self.run_dir, 1))
 
     def prepare(self):
-        return engine.prepare_execution(self.run_dir, self.project, "FEAT-001", self.plan, 1)
+        return fixture_prepare_execution(self.run_dir, self.project, "FEAT-001", self.plan, None)
 
     def test_initial_pair_is_committed_once_before_execution(self):
         self.publish_and_plan()
@@ -276,7 +277,7 @@ class SdlcContractPreparationTests(unittest.TestCase):
         self.publish_and_plan()
         self.plan.write_text(self.plan.read_text().replace("# FEAT-001", "# SLICE-001")
                              .replace("- Requirements: REQ-001", "- Requirements: REQ-001\n- Features: FEAT-001"))
-        result = engine.prepare_execution(self.run_dir, self.project, "SLICE-001", self.plan, 1)
+        result = fixture_prepare_execution(self.run_dir, self.project, "SLICE-001", self.plan, None)
         self.assertEqual(result["base_head"], git(self.repo, "rev-parse", "HEAD"))
         self.assertEqual(set(git(self.repo, "diff", "--name-only", self.base, "HEAD").splitlines()),
                          set(self.bundle_files) | {"docs/design.md", "docs/requirements.md"})

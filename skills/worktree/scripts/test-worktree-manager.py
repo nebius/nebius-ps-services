@@ -725,6 +725,70 @@ class WorktreeManagerTest(unittest.TestCase):
         with self.assertRaisesRegex(wm.WorktreeError, "unclaimed checkout"):
             wm.publication_guard(cwd=unclaimed, action="push")
 
+    def test_detached_candidate_is_rejected_before_commit(self):
+        result = self.add()
+        self.commit_child(result, "skills/skill.txt", "child\n")
+        with mock.patch.object(wm, "_seal_candidate", side_effect=wm.WorktreeError("injected interruption")):
+            with self.assertRaisesRegex(wm.WorktreeError, "injected"):
+                self.integrate(result)
+        reservation = interop_state.load_reservation(self.repo, str(result["name"]))
+        candidate = Path(reservation["integration_worktree"])
+        git("checkout", "--detach", reservation["source_head"], cwd=candidate)
+        with self.assertRaises(wm.WorktreeError):
+            self.integrate(result)
+        self.assertEqual(git("rev-parse", "HEAD", cwd=candidate), reservation["source_head"])
+        self.assertEqual(interop_state.load_reservation(self.repo, str(result["name"]))["state"], "present")
+
+    def test_ready_detached_candidate_is_rejected_before_promotion(self):
+        result = self.add()
+        self.commit_child(result, "skills/skill.txt", "candidate\n")
+        ready = self.integrate(result)
+        candidate = ready["candidate_head"]
+        git("switch", "--detach", candidate, cwd=Path(ready["candidate_worktree"]))
+        with self.assertRaises(wm.WorktreeError):
+            self.integrate(result, validated_head=candidate)
+        self.assertEqual(git("rev-parse", "HEAD", cwd=self.repo), self.source)
+        self.assertEqual(wm.load_manifest(self.repo, str(result["name"])).status, "active")
+
+    def test_commit_effect_reconciles_after_ready_save_interruption(self):
+        result = self.add()
+        self.commit_child(result, "skills/skill.txt", "child\n")
+        original = wm.update_integration
+        def interrupt(*args, **kwargs):
+            if kwargs.get("state") == "ready":
+                raise interop_state.InteropError("injected ready-save interruption")
+            return original(*args, **kwargs)
+        with mock.patch.object(wm, "update_integration", side_effect=interrupt):
+            with self.assertRaisesRegex(wm.WorktreeError, "injected"):
+                self.integrate(result)
+        reservation = interop_state.load_reservation(self.repo, str(result["name"]))
+        self.assertEqual(reservation["state"], "committing")
+        head = git("rev-parse", "HEAD", cwd=Path(reservation["integration_worktree"]))
+        prepared = self.integrate(result)
+        self.assertEqual(prepared["candidate_head"], head)
+        self.assertEqual(self.integrate(result, validated_head=head)["status"], "integrated")
+
+    def test_integrated_replay_requires_current_ancestry_and_child(self):
+        result = self.add()
+        self.commit_child(result, "skills/skill.txt", "child\n")
+        candidate = self.integrate(result)["candidate_head"]
+        self.integrate(result, validated_head=candidate)
+        git("reset", "--hard", self.source, cwd=self.repo)
+        with self.assertRaisesRegex(wm.WorktreeError, "proof no longer"):
+            self.integrate(result)
+
+    def test_removal_retains_manifest_when_unregistered_path_reappears(self):
+        result = self.add()
+        path = Path(result["worktree"])
+        git("worktree", "remove", str(path), cwd=self.repo)
+        git("branch", "-d", str(result["branch"]), cwd=self.repo)
+        path.mkdir()
+        with self.assertRaisesRegex(wm.WorktreeError, "path, registration or branch remains"):
+            wm.remove_worktree(cwd=self.repo, name=str(result["name"]))
+        self.assertTrue(wm.manifest_path(self.repo, str(result["name"])).exists())
+        path.rmdir()
+        self.assertEqual(wm.remove_worktree(cwd=self.repo, name=str(result["name"]))["status"], "already-removed")
+
     def test_integrate_records_two_parent_merge_and_promotes_source(self) -> None:
         result = self.add()
         child = self.commit_child(result, "skills/skill.txt", "child\n")

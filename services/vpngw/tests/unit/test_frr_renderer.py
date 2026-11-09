@@ -49,6 +49,24 @@ def test_ensure_bgpd_enabled_creates_daemons_file(tmp_path, monkeypatch) -> None
     assert "bfdd=yes" in rendered
 
 
+@pytest.mark.parametrize("graceful", [None, False, True])
+def test_renderer_uses_canonical_bgp_defaults_and_preserves_explicit_graceful_restart(
+    sample_config, graceful
+):
+    from nebius_vpngw.schema import BGPDefaults
+
+    cfg = _bgp_config(sample_config)
+    cfg["defaults"]["routing"]["bgp"] = {} if graceful is None else {"graceful_restart": graceful}
+    rendered = {}
+    FRRRenderer().render_and_apply(cfg, rendered_files=rendered)
+    text = rendered[frr_renderer.FRR_CONF]
+    defaults = BGPDefaults()
+    assert f" timers bgp {defaults.keepalive_seconds} {defaults.hold_time_seconds}" in text
+    assert (" bgp graceful-restart\n" in text) is (
+        defaults.graceful_restart if graceful is None else graceful
+    )
+
+
 def test_render_and_apply_writes_expected_bgp_config(
     tmp_path,
     monkeypatch,

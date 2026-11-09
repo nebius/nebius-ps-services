@@ -23,6 +23,7 @@ from ..agent.vm_ha.auto_healing import (
     StandbyAutoHealing,
     encode_policy_request,
 )
+from .package_recovery import owner_scope
 from .replacement import Journal, digest
 from .ssh_push import VMHAAgentArtifact, VMHAApplyLockReceipt, VMHAStageReceipt
 
@@ -33,7 +34,13 @@ class Runtime:
         self.tx = journal.state["transaction"]
         self.index = self.tx["member"]
         self.key = f"ha-runtime-{self.index}"
-        self.record = self.tx["results"].setdefault(self.key, {})
+        # Terminal verification must not invent a runtime record for member 2
+        # after both members have completed. All mutation paths are pending.
+        self.record = (
+            self.tx["results"].get(self.key, {})
+            if self.tx.get("phase") == "complete"
+            else self.tx["results"].setdefault(self.key, {})
+        )
         self.operation = digest([self.tx["approval"], self.index, "ha-pair-apply"])
         self.artifact = VMHAAgentArtifact.from_wheel(ports.wheel, source="staged-replacement")
 
@@ -116,9 +123,21 @@ class Runtime:
         )
         if proof["boot_id"] != snapshot["context"]["boot"]:
             raise RuntimeError("HA candidate rebooted during passive preparation")
-        ports.ssh.ensure_vm_ha_agent_package(
-            target.address, ports.instances[target.hostname], ports.local, artifact=self.artifact
-        )
+        with owner_scope(
+            journal.root,
+            self.tx["plan"]["operation_id"],
+            {
+                "lane": "replacement-runtime",
+                "approval": self.tx["approval"],
+                "artifact": self.artifact.sha256,
+            },
+        ):
+            ports.ssh.ensure_vm_ha_agent_package(
+                target.address,
+                ports.instances[target.hostname],
+                ports.local,
+                artifact=self.artifact,
+            )
         binding = ports.runtime_binding(journal, candidate=True)
         source = self.config(member["compute_id"], member["logical_name"])["config"]["vm_ha"][
             "runtime_binding"
@@ -275,12 +294,21 @@ class Runtime:
                 "runtime_binding"
             ]
             node = next(item for item in source["nodes"] if item["compute_id"] == owner.compute_id)
-            ports.ssh.ensure_vm_ha_agent_package(
-                targets[owner.instance_name],
-                ports.instances[owner.instance_name],
-                ports.local,
-                artifact=self.artifact,
-            )
+            with owner_scope(
+                journal.root,
+                self.tx["plan"]["operation_id"],
+                {
+                    "lane": "replacement-runtime",
+                    "approval": self.tx["approval"],
+                    "artifact": self.artifact.sha256,
+                },
+            ):
+                ports.ssh.ensure_vm_ha_agent_package(
+                    targets[owner.instance_name],
+                    ports.instances[owner.instance_name],
+                    ports.local,
+                    artifact=self.artifact,
+                )
             staged = self.stage(
                 owner.compute_id,
                 owner.instance_name,
@@ -365,7 +393,7 @@ class Runtime:
                     binding,
                     lambda value: bool(
                         value.get("data_plane_mode") == "passive"
-                        and value.get("heartbeat", {}).get("peer_v5_fresh") is True
+                        and value.get("heartbeat", {}).get("peer_v6_fresh") is True
                         and cli._vm_ha_mtls_agent_evidence_matches(
                             mtls, str(value.get("node_id")), value
                         )

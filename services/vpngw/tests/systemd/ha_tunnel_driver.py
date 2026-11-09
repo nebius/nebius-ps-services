@@ -17,6 +17,7 @@ from nebius_vpngw.agent.vm_ha.tunnel_observation import parse_sas, xfrm_records
 from nebius_vpngw.agent.vm_ha.tunnel_runtime import NativeTunnelEffects
 from nebius_vpngw.agent.vm_ha.tunnels import Authority, TunnelController, effective_config
 from nebius_vpngw.ha_tunnel_policy import connection_policies
+from nebius_vpngw.ipsec_observation import command as ipsec_command
 
 
 def recover_owner(cfg, config_path, state_dir):
@@ -60,7 +61,10 @@ def recover_owner(cfg, config_path, state_dir):
         auto_healing_policy_digest="e" * 64,
         tunnel_capability=True,
     )
-    snapshots = SimpleNamespace(last_snapshot=None)
+    snapshots = SimpleNamespace(
+        last_snapshot=None,
+        providers=SimpleNamespace(apply_lock_operation_id=lambda: None),
+    )
     vm_effects = []
 
     def observe():
@@ -81,7 +85,7 @@ def recover_owner(cfg, config_path, state_dir):
             peer_received_at=now,
             apply_locked=False,
             emergency_active_only=False,
-            readiness=LocalReadiness(True, ready, True, True),
+            readiness=LocalReadiness(True, ready, True, True, protection_ready=True),
             cloud=CloudObservation(
                 authoritative=True,
                 allocation_id="allocation",
@@ -131,7 +135,7 @@ def recover_owner(cfg, config_path, state_dir):
         # readiness snapshot. No observer or selector result is substituted.
         tunnels.effects.run(("ip", "link", "set", "xfrm0", "down"))
         decision = runtime.controller.step()
-        assert decision.reasons == ("static-tunnel-recovery-active",), decision.reasons
+        assert decision.reasons == ("native-path-recovery",), decision.reasons
         deadline = time.monotonic() + 35
         while time.monotonic() < deadline:
             runtime.tunnel_step()
@@ -164,7 +168,17 @@ def main() -> None:
         "native-fixture", cfg.get("_fixture_owner", "owner"), "allocation", "1", 1, "a" * 64
     )
     state_dir = Path("/var/lib/nebius-vpngw/vm-ha")
+    if not cfg.get("vm_ha"):
+        from nebius_vpngw.agent.ordinary_selection import authority as ordinary_authority
+
+        authority = ordinary_authority(cfg, "native-boot")
+        state_dir = Path("/var/lib/nebius-vpngw/ordinary")
     state_dir.mkdir(parents=True, exist_ok=True)
+    if command in {"activation-checkpoint", "activation"}:
+        activate_retained_static(
+            cfg, Path(sys.argv[1]), state_dir, checkpoint=command.endswith("checkpoint")
+        )
+        return
     if command == "recover-owner":
         recover_owner(cfg, Path(sys.argv[1]), state_dir)
         return
@@ -176,6 +190,33 @@ def main() -> None:
         return observed == authority
 
     effects = NativeTunnelEffects(cfg, state_dir, revalidate, active_revalidate=revalidate)
+    if command == "prepared-static-health":
+        from nebius_vpngw.agent.vm_ha.tunnel_runtime import ControllerTunnelRuntime
+        from nebius_vpngw.agent.vm_ha_controller import DataPlaneMode
+
+        # The fixture has completed owner preparation and closed forwarding.
+        # Exercise the production read collectors against real VICI/XFRM/FRR.
+        assert effects.run(("sysctl", "-n", "net.ipv4.ip_forward")).strip() == "0"
+        plane = SimpleNamespace(mode=lambda: DataPlaneMode.PASSIVE)
+        runtime = ControllerTunnelRuntime(
+            Path(sys.argv[1]),
+            state_dir,
+            None,
+            SimpleNamespace(data_plane=plane, routes=SimpleNamespace()),
+        )
+        before = SWANCTL_CONF.read_bytes()
+        assert plane.ipsec_configuration_observer() is None
+        assert runtime.static_ready()
+        try:
+            plane.ipsec_configuration_provider()
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("prepared Static policy granted standby reload authority")
+        assert SWANCTL_CONF.read_bytes() == before
+        assert effects.run(("sysctl", "-n", "net.ipv4.ip_forward")).strip() == "0"
+        print("prepared-static-health-verified")
+        return
     if command in {"materialize", "peer"}:
         rendered = {}
         StrongSwanRenderer().render_and_apply(
@@ -196,11 +237,27 @@ def main() -> None:
         return
     selector = TunnelController(cfg, state_dir / "tunnel-selection.json", effects)
     policy = next(p for p in connection_policies(cfg) if p.name == "site")
+    if command == "protect-learned":
+        from nebius_vpngw.agent.vm_ha.forwarding import DestinationProtection
+
+        protection = DestinationProtection(
+            state_dir / "destination-protection.json",
+            cluster=cfg["vm_ha"]["cluster_id"],
+            policies=connection_policies(cfg),
+            local_prefixes=tuple(cfg["gateway"]["local_prefixes"]),
+        )
+        protection.admit(frozenset({"10.200.2.1/32"}))
+        protection.verify()
+        print("learned-destination-protected")
+        return
+    if command == "probe-preferred":
+        print(effects.probe_preferred(policy, policy.preferred, authority).value)
+        return
     if command == "diagnose":
         print(
             json.dumps(
                 {
-                    "sas": parse_sas(effects.run(("swanctl", "--list-sas", "--raw"))),
+                    "sas": parse_sas(effects.run(ipsec_command())),
                     "states": xfrm_records(effects.run(("ip", "xfrm", "state")), policy=False),
                     "policies": effects.run(("ip", "xfrm", "policy")),
                     "routes": json.loads(
@@ -256,6 +313,120 @@ def main() -> None:
             return
         time.sleep(0.3)
     raise RuntimeError("native tunnel operation did not converge")
+
+
+def activate_retained_static(cfg, config_path, state_dir, *, checkpoint):
+    """Fixture cloud/checkpoint inputs; real product preparation and kernel effects."""
+    import hashlib
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from tests.unit.test_vm_ha_controller import _owned_cloud
+    from tests.unit.test_vm_ha_runtime_ports import (
+        FakeCredentialBundle,
+        FakeRouteBackend,
+        FakeSDK,
+        MemoryReplayStore,
+        _runtime_config,
+    )
+
+    from nebius_vpngw.agent import main as agent
+    from nebius_vpngw.agent.vm_ha.models import DigestSet
+    from nebius_vpngw.agent.vm_ha.runtime import build_runtime_ports
+    from nebius_vpngw.agent.vm_ha.store import atomic_write_json
+    from nebius_vpngw.agent.vm_ha.tunnels import read_state
+    from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_to_dict
+    from nebius_vpngw.agent.vm_ha_controller import (
+        ActionKind,
+        ControllerAction,
+        ControllerCheckpoint,
+        DataPlaneMode,
+    )
+
+    if checkpoint:
+        vm = _runtime_config(state_dir)
+        manifest = json.dumps(
+            [
+                {"connection": c["name"], "remote_prefixes": c["remote_prefixes"]}
+                for c in cfg["connections"]
+            ]
+        )
+        digest = hashlib.sha256(manifest.encode()).hexdigest()
+        vm["generation"]["logical_manifests"]["static_routes_json"] = manifest
+        vm["generation"]["digests"]["static_routes"] = digest
+        vm["readiness"]["digests"]["static_routes"] = digest
+        vm["runtime_binding"]["static_routes_digest"] = digest
+        vm.update(gateway=cfg["gateway"], connections=cfg["connections"], defaults=cfg["defaults"])
+        cfg["vm_ha"] = vm
+        config_path.write_text(yaml.safe_dump(cfg))
+        config_path.chmod(0o600)
+        authority = Authority("cluster-a", "node-a", "allocation-a", "42", 1, "a" * 64)
+        selector = TunnelController(cfg, state_dir / "tunnel-selection.json", SimpleNamespace())
+        selector.bind(authority)
+        selector.state["selected"] = {"site": "backup"}
+        selector._save()
+        atomic_write_json(
+            state_dir / "controller-checkpoint.json",
+            controller_checkpoint_to_dict(ControllerCheckpoint(ownership_incarnation=1)),
+        )
+        print("retained-backup-checkpoint")
+        return
+
+    before = (state_dir / "tunnel-selection.json").read_bytes()
+    vm = cfg["vm_ha"]
+    ports = build_runtime_ports(
+        vm,
+        state_dir=state_dir,
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **kw: FakeSDK(),
+        credential_bundle_factory=lambda *a: FakeCredentialBundle(),
+        route_backend_factory=lambda sdk: FakeRouteBackend(),
+        candidate_preparer=lambda: agent._prepare_vm_ha_static_tunnels(config_path),
+    )
+    ports.cloud.observe = lambda: replace(
+        _owned_cloud(),
+        observed_owner_node_id="node-a",
+        former_owner_node_id="node-b",
+        allocation_id="allocation-a",
+    )
+    plane = ports.data_plane
+    action = ControllerAction(
+        ActionKind.PREPARE_CANDIDATE_DATAPLANE,
+        "retained-activation",
+        "native-boot",
+        "node-a",
+        "allocation-a",
+        "42",
+        "a" * 64,
+        DigestSet(**vm["generation"]["digests"]),
+        ownership_incarnation=1,
+    )
+    try:
+        plane._write_state(action, DataPlaneMode.PASSIVE)
+        plane._write_guard(action, DataPlaneMode.PASSIVE)
+        assert not plane._forwarding()
+        plane.prepare_candidate(action)
+        assert not plane._forwarding()
+        # Independently inspect exact kernel objects before forwarding admission.
+        effects = NativeTunnelEffects(
+            cfg, state_dir, lambda a: True, active_revalidate=lambda a: True
+        )
+        for argv, policy in [
+            (("ip", "xfrm", "state", "list", "nokeys"), False),
+            (("ip", "-s", "xfrm", "policy"), True),
+        ]:
+            assert not any(
+                int(str(o.get("if_id", 0)), 0) == 100
+                for o in xfrm_records(effects.run(argv), policy=policy)
+            ), "activation retained unselected kernel objects"
+        plane.enable_active(replace(action, kind=ActionKind.ENABLE_ACTIVE))
+        assert plane._forwarding()
+        plane.destination_protection.verify()
+        plane.enable_active(replace(action, kind=ActionKind.ENABLE_ACTIVE))
+        assert (state_dir / "tunnel-selection.json").read_bytes() == before
+        assert read_state(state_dir / "tunnel-selection.json")["selected"] == {"site": "backup"}
+        print(json.dumps({"selected": {"site": "backup"}, "phase": "succeeded"}))
+    finally:
+        ports.close()
 
 
 if __name__ == "__main__":

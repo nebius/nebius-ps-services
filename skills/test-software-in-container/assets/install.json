@@ -1,0 +1,50 @@
+{
+  "schema": "test-software-in-container.profile.v2",
+  "bundle_sha256": "004e9dbc24adf470e770e58f8debd5c96f345ed901d1d225559e91da7ecc269e",
+  "environments": [
+    {
+      "id": "install",
+      "image": "ubuntu:24.04",
+      "image_digest": "sha256:b59affc2839a20295e83ce65116418538d40d4c237b5528bbf0714080684c784",
+      "platform": "linux/amd64",
+      "profile_sha256": "3294f1f5467d0a728dc615742203f76b8e12472acb5fd74f42de1783a96ae30c",
+      "fixture_sha256": "6a634393a2b5ffc5345b18ddd4b24c2115ce4472235f951df91293aa496e57da",
+      "setup_sha256": "d68b4c5566c0e2c9316642242198d120767b84c97c741f3c8184e6cfe5d702dc",
+      "operations": {
+        "install": {
+          "checks": {
+            "packages": "packages",
+            "startup": "services",
+            "repeat-install": "repeat",
+            "unchanged": "no_op"
+          },
+          "exclusions": {
+            "recovery": "Not applicable to this illustrative workflow."
+          },
+          "entrypoint": [
+            "example-software",
+            "install"
+          ]
+        }
+      }
+    }
+  ],
+  "runtime_policy": {
+    "engine": "auto",
+    "parallel": 2,
+    "case_timeout_seconds": 900,
+    "startup_timeout_seconds": 60,
+    "stability_seconds": 10,
+    "cache": "reuse",
+    "retain_failed": false
+  },
+  "artifact": {
+    "version": "2.0.0",
+    "source_sha256": "d8452741e3649d8ae344c76a7aa903c5cabb5ae0463f1fdc76eaa0ae519762c4",
+    "artifacts": {
+      "linux/amd64": {
+        "sha256": "cbd4225bcc80fa699f7d692109945701a70ec05322bd735b0b206aec859e98d7"
+      }
+    }
+  }
+}

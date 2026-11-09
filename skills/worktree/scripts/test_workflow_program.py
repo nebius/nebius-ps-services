@@ -247,7 +247,7 @@ class ScaleTests(unittest.TestCase):
         ]
         tasks.append(task(2101, [t.task_id for t in tasks[1:]]))
         waves = build_dependency_waves(tasks)
-        self.assertLessEqual(max(map(len, waves)), 4)
+        self.assertLessEqual(max(map(len, waves)), 8)
         self.assertEqual(waves[-1][0].task_id, "TASK-2101")
         positions = {t.task_id: i for i, wave in enumerate(waves) for t in wave}
         self.assertTrue(

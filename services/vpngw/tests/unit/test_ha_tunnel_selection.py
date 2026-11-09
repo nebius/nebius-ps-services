@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -13,6 +14,8 @@ from nebius_vpngw.agent.vm_ha.tunnels import (
     read_state,
 )
 from nebius_vpngw.ha_tunnel_policy import connection_policies, selections
+from nebius_vpngw.ipsec_observation import Inventory
+from nebius_vpngw.ipsec_observation import command as inventory_command
 from nebius_vpngw.tunnel_state import collect_tunnel_state
 
 
@@ -62,6 +65,10 @@ class Effects:
     def candidate(self, policy, target):
         return self.health[target]
 
+    def probe_preferred(self, policy, target, authority):
+        self.calls.append(("probe", target))
+        return self.health[target]
+
     def observe(self, policy, target, *, selected):
         return self.health[target]
 
@@ -76,16 +83,19 @@ class Effects:
     def verify(self, policy, target):
         return self.health[target or policy.preferred]
 
+    def authority_restored(self, policy, target, authority):
+        return self.revalidate(authority) and not self.fail_activate
+
     def fence(self):
         self.calls.append(("fence",))
 
 
-def test_ordinary_static_order_and_no_policy():
+def test_ordinary_static_uses_shared_preferred_policy():
     cfg = config()
     del cfg["vm_ha"]
-    assert connection_policies(cfg) == ()
+    assert connection_policies(cfg)[0].preferred == "preferred"
     endpoints = collect_tunnel_state(cfg)[2]
-    assert [e["remote_prefixes"] for e in endpoints] == [["10.1.0.0/16"]] * 2
+    assert [e["remote_prefixes"] for e in endpoints] == [["10.1.0.0/16"], []]
 
 
 def test_static_defaults_and_selection_preserve_interfaces_and_roles():
@@ -109,9 +119,9 @@ def test_disjoint_paths_are_preserved_and_switching_unavailable():
     assert all(e["remote_prefixes"] for e in collect_tunnel_state(cfg)[2])
 
 
-@pytest.mark.parametrize("mode", ["static", "bgp"])
 @pytest.mark.parametrize("prefixes", [None, []])
-def test_unspecified_destinations_leave_native_policy_and_reject_switch(tmp_path, mode, prefixes):
+def test_unspecified_static_destinations_leave_native_policy_and_reject_switch(tmp_path, prefixes):
+    mode = "static"
     cfg = config(mode)
     cfg["connections"][0]["remote_prefixes"] = prefixes
     cfg["connections"][0]["bgp"] = {"remote_prefixes": prefixes}
@@ -159,6 +169,64 @@ def test_manual_progress_is_persisted_and_retry_is_idempotent(tmp_path):
     assert effects.calls == [("suspend", "site"), ("activate", "backup")]
 
 
+@pytest.mark.parametrize("mode", ["static", "bgp"])
+def test_failback_already_preferred_verifies_without_native_mutation(tmp_path, mode):
+    effects = Effects()
+    path = tmp_path / "state.json"
+    selector = TunnelController(config(mode), path, effects)
+    operation = selector.request("failback", "preferred", AUTH, 100)
+    for now in (101, 102, 103, 104):
+        selector = TunnelController(config(mode), path, effects)
+        selector.tick(AUTH, now)
+    assert selector.state["operation"]["id"] == operation
+    assert effects.calls == []
+    assert selector.state["operation"]["phase"] == "succeeded"
+    assert selector.state["operation"]["successes"] == 2
+    assert selector.state["episode"] is None
+
+
+def test_unchanged_failback_does_not_renew_consumed_episode(tmp_path):
+    effects = Effects()
+    selector = TunnelController(config(), tmp_path / "state", effects)
+    selector.bind(AUTH)
+    selector._episode(50, AUTH)
+    selector.state["episode"].update(exhausted=True, last_observed=99, healthy_since=90)
+    selector._save()
+    selector.request("failback", "preferred", AUTH, 100)
+    selector.tick(AUTH, 101)
+    selector.tick(AUTH, 102)
+    assert selector.state["operation"]["phase"] == "succeeded"
+    assert selector.state["episode"]["started"] == 50
+    assert selector.state["episode"]["deadline"] == 80
+    assert selector.state["episode"]["healthy_since"] == 90
+    assert effects.calls == []
+
+
+@pytest.mark.parametrize("mode", ["static", "bgp"])
+@pytest.mark.parametrize("failure", ["down", "unknown", "fenced", "timeout", "disconnected"])
+def test_unchanged_failback_requires_fresh_active_evidence(tmp_path, mode, failure):
+    effects = Effects()
+    selector = TunnelController(config(mode), tmp_path / "state", effects)
+    selector.request("failback", "preferred", AUTH, 100)
+    selector.tick(AUTH, 101)
+    if failure in {"down", "unknown"}:
+        effects.health["preferred"] = Health(failure)
+    elif failure == "fenced":
+        effects.active = lambda authority: False
+    elif failure == "disconnected":
+
+        def disconnected(*args):
+            raise RuntimeError("bounded native observation disconnected")
+
+        effects.verify = disconnected
+    selector._advance(AUTH, 130 if failure == "timeout" else 102)
+    assert selector.state["operation"]["phase"] != "succeeded"
+    if selector._pending():
+        selector._advance(AUTH, 130)
+    assert selector.state["operation"]["phase"] == "failed"
+    assert effects.calls == []
+
+
 def test_consumed_episode_rejects_healthy_manual_switch_without_fencing(tmp_path):
     effects = Effects()
     selector = TunnelController(config(), tmp_path / "state", effects)
@@ -203,7 +271,9 @@ def test_episode_not_extended_by_restart_config_retry_or_second_failure(tmp_path
     selector.tick(changed, 120)
     assert selector.state["episode"]["deadline"] == deadline == 130
     selector.tick(changed, 129)
-    assert effects.calls[-1] == ("fence",)
+    assert ("fence",) not in effects.calls
+    assert not selector.state["episode"]["exhausted"]
+    selector.tick(changed, 130)
     assert selector.state["episode"]["exhausted"]
     selector.tick(changed, 140)
     assert selector.state["episode"]["deadline"] == 130
@@ -242,13 +312,36 @@ def test_bgp_failed_override_restores_native_policy(tmp_path):
         selector.tick(AUTH, now)
 
 
-def raw_sas(extra=""):
-    return (
-        "list-sa event {preferred {uniqueid=1 state=ESTABLISHED local-host=192.0.2.2 remote-host=192.0.2.1 local-id=192.0.2.2 remote-id=192.0.2.1 child-sas {preferred-1 {"
-        "name=preferred state=INSTALLED reqid=1 spi-in=00000001 spi-out=00000002 local-ts=[0.0.0.0/0] remote-ts=[0.0.0.0/0]}}}}\n"
-        + extra
-        + "list-sas reply {}\n"
-    )
+def raw_sas(extra=None):
+    return Inventory.from_events(
+        [
+            {
+                "preferred": {
+                    "uniqueid": "1",
+                    "state": "ESTABLISHED",
+                    "local-host": "192.0.2.2",
+                    "remote-host": "192.0.2.1",
+                    "local-id": "192.0.2.2",
+                    "remote-id": "192.0.2.1",
+                    "child-sas": {
+                        "preferred-1": {
+                            "name": "preferred",
+                            "state": "INSTALLED",
+                            "protocol": "ESP",
+                            "if-id-in": "00000064",
+                            "if-id-out": "00000064",
+                            "reqid": "1",
+                            "spi-in": "00000001",
+                            "spi-out": "00000002",
+                            "local-ts": ["0.0.0.0/0"],
+                            "remote-ts": ["0.0.0.0/0"],
+                        }
+                    },
+                }
+            },
+            *([extra] if extra is not None else []),
+        ]
+    ).json()
 
 
 def observation():
@@ -275,7 +368,7 @@ def test_rekey_overlap_keeps_exact_installed_replacement_healthy():
     policy = connection_policies(config())[0]
     evidence = observation()
     evidence["sas"] = raw_sas(
-        "list-sa event {preferred {uniqueid=2 state=CONNECTING child-sas {}}}\n"
+        {"preferred": {"uniqueid": "2", "state": "CONNECTING", "child-sas": {}}}
     )
     assert path_health(policy.paths[0], policy, **evidence) is Health.HEALTHY
 
@@ -303,9 +396,11 @@ def test_native_nat_socket_matches_kernel_and_authenticated_public_identity():
     policy = connection_policies(config())[0]
     path = replace(policy.paths[0], outer_pair=("203.0.113.1", "192.0.2.1"))
     evidence = observation()
-    evidence["sas"] = evidence["sas"].replace("local-id=192.0.2.2", "local-id=203.0.113.1")
+    evidence["sas"] = evidence["sas"].replace('"local-id":"192.0.2.2"', '"local-id":"203.0.113.1"')
     assert path_health(path, policy, **evidence) is Health.HEALTHY
-    evidence["sas"] = evidence["sas"].replace("local-id=203.0.113.1", "local-id=203.0.113.99")
+    evidence["sas"] = evidence["sas"].replace(
+        '"local-id":"203.0.113.1"', '"local-id":"203.0.113.99"'
+    )
     assert path_health(path, policy, **evidence) is Health.DOWN
 
 
@@ -314,7 +409,11 @@ def test_interface_or_partial_evidence_cannot_prove_health(missing):
     policy = connection_policies(config())[0]
     evidence = observation()
     evidence[missing] = (
-        [] if missing in {"routes", "links"} else "" if missing != "sas" else "list-sas reply {}"
+        []
+        if missing in {"routes", "links"}
+        else ""
+        if missing != "sas"
+        else Inventory.from_events([]).json()
     )
     assert path_health(policy.paths[0], policy, **evidence) is Health.DOWN
 
@@ -322,7 +421,7 @@ def test_interface_or_partial_evidence_cannot_prove_health(missing):
 def test_shared_unrelated_child_blocks_scoped_termination():
     with pytest.raises(ValueError, match="unrelated"):
         scoped_ike_ids(
-            raw_sas().replace("name=preferred", "name=unrelated"), {"preferred", "backup"}
+            raw_sas().replace('"name":"preferred"', '"name":"unrelated"'), {"preferred", "backup"}
         )
 
 
@@ -401,7 +500,7 @@ def native_bgp_effects(tmp_path, peer_state="Idle"):
         {"dst": "10.1.0.0/16", "dev": "xfrm0", "gateway": policy.paths[0].peer, "protocol": "bgp"}
     ]
     responses = {
-        ("swanctl", "--list-sas", "--raw"): evidence["sas"],
+        inventory_command(): evidence["sas"],
         ("ip", "-j", "xfrm", "state"): evidence["states"],
         ("ip", "-j", "xfrm", "policy"): evidence["policies"],
         ("ip", "-d", "-j", "link", "show", "type", "xfrm"): json.dumps(evidence["links"]),
@@ -483,7 +582,7 @@ def test_controller_base_exports_are_canonical(tmp_path, prefixes, expected):
         cfg["connections"][0]["routing_mode"] = mode
         for index, tunnel in enumerate(connection_policies(cfg)[0].paths, 1):
             assert tunnel.local_selectors == frozenset({*expected, f"169.254.{index}.0/30"})
-    assert runtime.watchdog is None
+    assert not hasattr(runtime, "watchdog")
 
 
 @pytest.mark.parametrize("level", ["summary", "ipv4Unicast", "peers"])
@@ -652,12 +751,289 @@ def test_native_suspension_scope_rejects_before_mutations(tmp_path):
 
     def run(argv):
         calls.append(tuple(argv))
-        return raw_sas().replace("name=preferred", "name=unrelated")
+        return raw_sas().replace('"name":"preferred"', '"name":"unrelated"')
 
     effects.run = run
     with pytest.raises(TunnelScopeError):
         effects.suspend(selector.policies["site"], AUTH)
-    assert calls == [("swanctl", "--list-sas", "--raw")]
+    assert calls == [inventory_command()]
+
+
+def test_static_suspension_removes_orphan_kernel_objects_after_daemon_loss(tmp_path):
+    from nebius_vpngw.agent.vm_ha.tunnel_runtime import NativeTunnelEffects
+
+    effects = NativeTunnelEffects(
+        config(),
+        tmp_path,
+        lambda authority: authority == AUTH,
+        active_revalidate=lambda authority: authority == AUTH,
+        routing_lock=tmp_path / "route.lock",
+        clock=lambda: 101,
+    )
+    selector = TunnelController(config(), tmp_path / "tunnel-selection.json", effects)
+    selector.request("failover", "backup", AUTH, 100)
+    local, peer = "198.51.100.10", "192.0.2.1"
+    states = [
+        {
+            "src": src,
+            "dst": dst,
+            "proto": "esp",
+            "mode": "tunnel",
+            "reqid": 1,
+            "spi": hex(spi),
+            "if_id": if_id,
+        }
+        for if_id in (100, 777)
+        for src, dst, spi in ((local, peer, 1000 + if_id), (peer, local, 2000 + if_id))
+    ]
+    policies = [
+        {
+            "src": "0.0.0.0/0",
+            "dst": "0.0.0.0/0",
+            "dir": "out",
+            "index": if_id * 8 + 1,
+            "if_id": if_id,
+            "tmpl": [{"src": local, "dst": peer, "proto": "esp", "mode": "tunnel", "reqid": 1}],
+        }
+        for if_id in (100, 777)
+    ]
+    unrelated = (
+        [dict(x) for x in states if x["if_id"] == 777],
+        [dict(x) for x in policies if x["if_id"] == 777],
+    )
+    unloaded = False
+
+    def unload(cfg):
+        nonlocal unloaded
+        assert cfg["_ha_suspended_connections"] == ["site"]
+        unloaded = True
+
+    def run(argv):
+        argv = tuple(argv)
+        if argv == inventory_command():
+            return Inventory.from_events([]).json()
+        if argv == (*inventory_command(), "--connections"):
+            return "[]"
+        if argv == ("ip", "-s", "xfrm", "policy"):
+            return json.dumps(policies)
+        if argv[:3] == ("ip", "xfrm", "state"):
+            if "delete" in argv:
+                assert unloaded
+                spi = argv[argv.index("spi") + 1]
+                states[:] = [s for s in states if int(s["spi"], 0) != int(spi, 0)]
+                return ""
+            return json.dumps(states)
+        if argv[:3] == ("ip", "xfrm", "policy"):
+            if "delete" in argv:
+                assert unloaded
+                index = int(argv[argv.index("index") + 1])
+                policies[:] = [p for p in policies if p["index"] != index]
+                return ""
+            return json.dumps(policies)
+        if "link" in argv:
+            return json.dumps(
+                [
+                    {
+                        "ifname": f"xfrm{i}",
+                        "linkinfo": {"info_kind": "xfrm", "info_data": {"if_id": 100 + i}},
+                    }
+                    for i in range(2)
+                ]
+            )
+        if "address" in argv:
+            return json.dumps([{"addr_info": [{"local": local}]}])
+        raise AssertionError(argv)
+
+    effects.run = run
+    effects._swan_config = unload
+    effects.suspend(selector.policies["site"], AUTH)
+    assert states == unrelated[0], "VICI absence must not leave orphan SAs on the suspended path"
+    assert policies == unrelated[1], "suspension must also remove orphan scoped policies"
+
+
+@pytest.mark.parametrize(
+    "outcome", ["expired", "still-present", "unknown", "authority-lost", "loaded", "partial-native"]
+)
+def test_kernel_cleanup_requires_authority_and_complete_effect_readback(tmp_path, outcome):
+    from nebius_vpngw.agent.vm_ha.tunnel_runtime import NativeTunnelEffects
+
+    effects = NativeTunnelEffects(
+        config(),
+        tmp_path,
+        lambda authority: outcome != "authority-lost",
+        active_revalidate=lambda authority: True,
+        routing_lock=tmp_path / "route.lock",
+    )
+    command = (
+        "ip",
+        "xfrm",
+        "state",
+        "delete",
+        "src",
+        "198.51.100.10",
+        "dst",
+        "192.0.2.1",
+        "proto",
+        "esp",
+        "spi",
+        "0x1234",
+    )
+    mutated = False
+    remaining = True
+
+    def inventory(policy):
+        if mutated and outcome == "unknown":
+            raise RuntimeError("incomplete kernel readback")
+        return (command,) if remaining else ()
+
+    def run(argv):
+        nonlocal mutated, remaining
+        if tuple(argv) == (*inventory_command(), "--connections"):
+            if outcome == "loaded":
+                return '["preferred"]'
+            if outcome == "partial-native":
+                return '{"incomplete":true}'
+            return "[]"
+        if tuple(argv) == inventory_command():
+            return Inventory.from_events([]).json()
+        assert tuple(argv) == command
+        mutated = True
+        if outcome == "expired":
+            remaining = False
+        raise RuntimeError("deletion reply unavailable")
+
+    effects.run = run
+    effects._kernel_deletions = inventory
+    policy = connection_policies(config())[0]
+    if outcome == "expired":
+        effects._remove_orphan_kernel_objects(policy, AUTH)
+        assert mutated and not remaining
+    else:
+        with pytest.raises(RuntimeError):
+            effects._remove_orphan_kernel_objects(policy, AUTH)
+        assert remaining
+        assert mutated is (outcome in {"still-present", "unknown"})
+
+
+@pytest.mark.parametrize("candidate", [False, True])
+@pytest.mark.parametrize("admitted", [False, True])
+def test_activation_kernel_cleanup_uses_exact_effective_file_and_fenced_authority(
+    tmp_path, monkeypatch, candidate, admitted
+):
+    from types import SimpleNamespace
+
+    from nebius_vpngw.agent import strongswan_renderer
+    from nebius_vpngw.agent.vm_ha import tunnel_runtime
+    from nebius_vpngw.agent.vm_ha.tunnel_runtime import (
+        NativeTunnelEffects,
+        reconcile_inactive_static,
+    )
+
+    cfg = config()
+    cfg["_ha_tunnel_selections"] = {"site": "backup"}
+    effective = cfg if candidate else {**cfg, "_ha_static_passive": True}
+    path = tmp_path / "swanctl.conf"
+    monkeypatch.setattr(strongswan_renderer, "SWANCTL_CONF", path)
+    monkeypatch.setattr(tunnel_runtime, "SWANCTL_CONF", path)
+    files = {}
+    strongswan_renderer.StrongSwanRenderer().render_and_apply(effective, rendered_files=files)
+    path.write_text(files[path])
+    path.chmod(0o600)
+    original = path.read_bytes()
+    removed = []
+    loads = []
+
+    def runner(argv, timeout):
+        assert 0 < timeout <= 3
+        if tuple(argv) == inventory_command():
+            return SimpleNamespace(returncode=0, stdout=Inventory.from_events([]).json())
+        assert tuple(argv) == ("swanctl", "--load-all", "--noprompt")
+        loads.append(path.read_text())
+        return SimpleNamespace(returncode=0, stdout="")
+
+    def cleanup(self, policy, authority):
+        assert self.revalidate(authority)
+        assert "  preferred {" not in path.read_text()
+        assert ("  backup {" in path.read_text()) is candidate
+        removed.extend(p.name for p in policy.paths)
+
+    monkeypatch.setattr(NativeTunnelEffects, "_remove_orphan_kernel_objects", cleanup)
+    monkeypatch.setattr(NativeTunnelEffects, "_kernel_deletions", lambda *a: ())
+    args = dict(candidate=candidate, permitted=lambda deadline: admitted, runner=runner)
+    if not admitted:
+        with pytest.raises(RuntimeError, match="authority is unproven"):
+            reconcile_inactive_static(cfg, tmp_path, AUTH, **args)
+        assert removed == []
+        return
+    reconcile_inactive_static(cfg, tmp_path, AUTH, **args)
+    assert removed == (["preferred"] if candidate else ["preferred", "backup"])
+    assert path.read_bytes() == original
+    assert len(loads) == (2 if candidate else 0)
+    if candidate:
+        assert "  preferred {" not in loads[0] and "  backup {" in loads[0]
+        assert "  preferred {" in loads[1] and "start_action = none" in loads[1]
+    removed.clear()
+    path.write_text("changed loader authority")
+    with pytest.raises(RuntimeError, match="loader policy is unproven"):
+        reconcile_inactive_static(cfg, tmp_path, AUTH, **args)
+    assert not removed
+
+
+@pytest.mark.parametrize(
+    "failure", ["inventory-unknown", "authority-after-write", "authority-after-load", "cleanup"]
+)
+def test_candidate_cleanup_never_restores_responders_after_unproven_authority(
+    tmp_path, monkeypatch, failure
+):
+    from types import SimpleNamespace
+
+    from nebius_vpngw.agent import strongswan_renderer
+    from nebius_vpngw.agent.vm_ha import tunnel_runtime
+
+    cfg = config()
+    cfg["_ha_tunnel_selections"] = {"site": "backup"}
+    path = tmp_path / "swanctl.conf"
+    monkeypatch.setattr(strongswan_renderer, "SWANCTL_CONF", path)
+    monkeypatch.setattr(tunnel_runtime, "SWANCTL_CONF", path)
+    files = {}
+    strongswan_renderer.StrongSwanRenderer().render_and_apply(cfg, rendered_files=files)
+    path.write_text(files[path])
+    path.chmod(0o600)
+    original = path.read_bytes()
+    loads = []
+    cleanup = []
+
+    def runner(argv, timeout):
+        if tuple(argv) == inventory_command():
+            return SimpleNamespace(
+                returncode=int(failure == "inventory-unknown"),
+                stdout=Inventory.from_events([]).json(),
+            )
+        assert tuple(argv) == ("swanctl", "--load-all", "--noprompt")
+        loads.append(path.read_text())
+        return SimpleNamespace(returncode=0, stdout="")
+
+    def permitted(deadline):
+        if failure == "authority-after-write":
+            return path.read_bytes() == original
+        return not (failure == "authority-after-load" and loads)
+
+    def remove(self, policy, authority):
+        cleanup.append(policy.name)
+        raise RuntimeError("kernel teardown unproven")
+
+    monkeypatch.setattr(tunnel_runtime.NativeTunnelEffects, "_kernel_deletions", lambda *a: ())
+    monkeypatch.setattr(tunnel_runtime.NativeTunnelEffects, "_remove_orphan_kernel_objects", remove)
+    with pytest.raises(RuntimeError):
+        tunnel_runtime.reconcile_inactive_static(
+            cfg, tmp_path, AUTH, candidate=True, permitted=permitted, runner=runner
+        )
+    assert len(loads) == int(failure in {"authority-after-load", "cleanup"})
+    assert cleanup == (["site"] if failure == "cleanup" else [])
+    assert (path.read_bytes() == original) is (failure == "inventory-unknown")
+    assert "  backup {" in path.read_text()
+    if loads:
+        assert all("  preferred {" not in content for content in loads)
 
 
 @pytest.mark.parametrize("after_failure", ["absent", "present", "unavailable", "shared"])
@@ -677,17 +1053,24 @@ def test_failed_termination_requires_fresh_proof_of_scoped_sa_absence(tmp_path, 
     terminated = []
 
     def run(argv):
+        if tuple(argv) in {
+            ("ip", "xfrm", "state", "list", "nokeys"),
+            ("ip", "-s", "xfrm", "policy"),
+        }:
+            return "[]"
+        if tuple(argv) == (*inventory_command(), "--connections"):
+            return "[]"
         if argv[1] == "--terminate":
             terminated.append(tuple(argv))
             raise RuntimeError("termination command failed")
-        assert tuple(argv) == ("swanctl", "--list-sas", "--raw")
+        assert tuple(argv) == inventory_command()
         if not terminated or after_failure == "present":
             return raw_sas()
         if after_failure == "unavailable":
             raise RuntimeError("observation unavailable")
         if after_failure == "shared":
-            return raw_sas().replace("name=preferred", "name=unrelated")
-        return "list-sas reply {}"
+            return raw_sas().replace('"name":"preferred"', '"name":"unrelated"')
+        return Inventory.from_events([]).json()
 
     effects.run = run
     effects._swan_config = lambda cfg: None
@@ -704,17 +1087,37 @@ def test_exhausted_episode_allows_restored_health_without_renewing_repair_budget
     effects.health = {"preferred": Health.DOWN, "backup": Health.DOWN}
     selector = TunnelController(config(), tmp_path / "state", effects)
     selector.tick(AUTH, 100)
-    selector.tick(AUTH, 129)
+    selector.tick(AUTH, 130)
     assert selector.state["episode"]["exhausted"]
     fences = effects.calls.count(("fence",))
     effects.health["preferred"] = Health.HEALTHY
     selector.tick(AUTH, 130)
     assert effects.calls.count(("fence",)) == fences
     assert selector.state["episode"]["deadline"] == 130
+
     effects.health["preferred"] = Health.DOWN
     selector.tick(AUTH, 131)
-    assert effects.calls.count(("fence",)) == fences + 1
+    assert effects.calls.count(("fence",)) == fences == 0
     assert selector.state["episode"]["deadline"] == 130
+
+
+def test_exhausted_restore_survives_restart_until_authority_is_verified(tmp_path):
+    effects = Effects()
+    effects.health = {"preferred": Health.DOWN, "backup": Health.DOWN}
+    path = tmp_path / "state"
+    selector = TunnelController(config(), path, effects)
+    selector.tick(AUTH, 100)
+    selector.tick(AUTH, 130)
+    assert selector.state["operation"]["phase"] == "verify-restore"
+    effects.fail_activate = True  # independent readback is indeterminate
+    selector = TunnelController(config(), path, effects)
+    selector.tick(AUTH, 140)
+    assert selector.state["operation"]["phase"] == "verify-restore"
+    effects.fail_activate = False
+    selector.tick(AUTH, 141)
+    assert selector.state["operation"]["result"] == "native-recovery-retained"
+    assert selector.state["episode"]["deadline"] == 130
+    assert effects.calls.count(("activate", "preferred")) == 1
 
 
 def request_config():
@@ -855,7 +1258,7 @@ def test_tunnel_composition_accepts_real_frozen_runtime_ports_without_starting_w
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(request_config()))
     runtime = ControllerTunnelRuntime(path, tmp_path, None, ports)
-    assert runtime.watchdog is None
+    assert not hasattr(runtime, "watchdog")
     bound = replace(ports, tunnel_recovery_provider=runtime.recovery_claim)
     assert bound.tunnel_recovery_provider() is None
     assert ports.routes.static_readiness_provider == runtime.static_ready
@@ -1005,7 +1408,7 @@ def test_serving_export_alternatives_are_current_and_connection_scoped(tmp_path,
     if case == "generation":
         cfg["vm_ha"]["generation"]["generation_id"] = "b" * 64
     if case == "ineligible":
-        cfg["connections"][0]["remote_prefixes"] = []
+        cfg["connections"][0]["tunnels"][1]["ha_role"] = "disable"
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(cfg))
     (tmp_path / "controller-checkpoint.json").write_text(
@@ -1097,3 +1500,43 @@ def test_release_retains_installed_requested_policy_until_native_restore(tmp_pat
     else:
         selector.tick(AUTH, selector.state["operation"]["deadline"] + 1)
     assert effects.release_observed
+
+
+@pytest.mark.parametrize("prefixes", [None, []])
+def test_bgp_without_required_destinations_keeps_manual_selection(tmp_path, prefixes):
+    cfg = config("bgp")
+    cfg["connections"][0]["remote_prefixes"] = prefixes
+    policy = connection_policies(cfg)[0]
+    assert policy.eligible and not policy.destinations
+    effects = Effects()
+    selector = TunnelController(cfg, tmp_path / "state", effects)
+    selector.request("failover", "backup", AUTH, 100)
+    assert selector.state["operation"]["target"] == "backup"
+
+
+def test_bgp_empty_required_prefixes_still_checks_exact_encryption(tmp_path):
+    effects, policy, responses = native_bgp_effects(tmp_path)
+    effects.cfg["connections"][0]["remote_prefixes"] = []
+    policy = connection_policies(effects.cfg)[0]
+    assert effects.verify(policy, None) is Health.HEALTHY
+    responses[("ip", "-j", "xfrm", "policy")] = "[]"
+    assert effects.verify(policy, None) is not Health.HEALTHY
+
+
+def test_bgp_selection_retains_currently_learned_admitted_coverage(tmp_path):
+    from nebius_vpngw.agent.vm_ha.forwarding import SCHEMA
+
+    effects, _, responses = native_bgp_effects(tmp_path)
+    effects.cfg["connections"][0]["remote_prefixes"] = []
+    path = tmp_path / "destination-protection.json"
+    path.write_text(
+        json.dumps({"schema": SCHEMA, "cluster": "cluster", "admitted": {"10.2.0.0/16": "site"}})
+    )
+    path.chmod(0o600)
+    policy = connection_policies(effects.cfg)[0]
+    responses[
+        ("vtysh", "-c", f"show bgp ipv4 unicast neighbors {policy.paths[0].peer} routes json")
+    ] = json.dumps({"routes": {"10.2.0.0/16": [{"valid": True}]}})
+    assert effects.verify(policy, None) is Health.DOWN
+    path.write_text("{}")
+    assert effects.verify(policy, None) is Health.UNKNOWN

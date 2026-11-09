@@ -5,11 +5,10 @@ including tunnel status, BGP sessions, and routing table invariants.
 """
 
 import json
-import re
-import shutil
 import subprocess
 from typing import Any
 
+from ..ipsec_observation import snapshot
 from .routing_guard import has_table_220_rule, table_220_routes_from_all_json
 
 
@@ -100,100 +99,28 @@ def check_strongswan_tunnels() -> dict[str, Any]:
         - tunnels: List[Dict] with name, status, peer_ip, uptime
         - overall_status: "healthy" | "degraded" | "error"
     """
-    if shutil.which("swanctl"):
-        result = subprocess.run(["swanctl", "--list-sas"], capture_output=True, text=True)
-        if result.returncode == 0 and result.stdout:
-            tunnels = []
-            tunnel_pattern = re.compile(
-                r"^(\S+?)(?:\[\d+\])?:\s+.*\b(ESTABLISHED|CONNECTING)\b",
-                re.IGNORECASE,
-            )
-
-            for line in result.stdout.splitlines():
-                match = tunnel_pattern.search(line)
-                if not match:
-                    continue
-                tunnels.append(
-                    {
-                        "name": match.group(1),
-                        "status": match.group(2).upper(),
-                        "uptime": "n/a",
-                        "peer_ip": "",
-                    }
-                )
-
-            if tunnels:
-                overall = (
-                    "healthy" if all(t["status"] == "ESTABLISHED" for t in tunnels) else "degraded"
-                )
-                return {"tunnels": tunnels, "overall_status": overall}
-
-    result = subprocess.run(["ipsec", "statusall"], capture_output=True, text=True)
-
-    if result.returncode != 0:
-        return {
-            "tunnels": [],
-            "overall_status": "error",
-            "error": result.stderr.strip(),
-        }
-
-    def parse_strongswan_uptime(uptime_str: str) -> str:
-        """Parse strongSwan uptime format (e.g., '5 hours ago', '32 minutes ago') and convert to 'Xh Ym Zs' format."""
-        # Parse the uptime string
-        match = re.match(r"(\d+)\s+(second|minute|hour|day)s?\s+ago", uptime_str)
-        if not match:
-            # If we can't parse it, return as-is
-            return uptime_str
-
-        value = int(match.group(1))
-        unit = match.group(2)
-
-        # Convert to seconds
-        if unit == "second":
-            total_seconds = value
-        elif unit == "minute":
-            total_seconds = value * 60
-        elif unit == "hour":
-            total_seconds = value * 3600
-        elif unit == "day":
-            total_seconds = value * 86400
-        else:
-            return uptime_str
-
-        # Format as "Xh Ym Zs"
-        hours = total_seconds // 3600
-        minutes = (total_seconds % 3600) // 60
-        seconds = total_seconds % 60
-
-        return f"{hours}h {minutes}m {seconds}s"
-
+    inventory = snapshot()
+    if not inventory.complete:
+        return {"tunnels": [], "overall_status": "unknown"}
     tunnels = []
-    tunnel_pattern = re.compile(
-        r"(\S+)\[\d+\]:\s+(\w+)\s+(.+?),\s+[\d.]+\[[\d.]+\]\.\.\.(\d+\.\d+\.\d+\.\d+)\["
-    )
-
-    for match in tunnel_pattern.finditer(result.stdout):
-        raw_uptime = match.group(3)
-        formatted_uptime = parse_strongswan_uptime(raw_uptime)
-
+    for sa in inventory.sas:
+        ready = sa.state == "ESTABLISHED" and any(
+            c.state == "INSTALLED" and c.fields.get("protocol") == "ESP" for c in sa.children
+        )
         tunnels.append(
             {
-                "name": match.group(1),
-                "status": match.group(2),
-                "uptime": formatted_uptime,
-                "peer_ip": match.group(4),
+                "name": sa.name,
+                "status": "ESTABLISHED" if ready else "DOWN",
+                "peer_ip": sa.fields.get("remote-host", ""),
+                "uptime": sa.fields.get("established", "n/a"),
             }
         )
-
-    # Determine overall status
-    if not tunnels:
-        overall = "error"
-    elif all(t["status"] == "ESTABLISHED" for t in tunnels):
-        overall = "healthy"
-    else:
-        overall = "degraded"
-
-    return {"tunnels": tunnels, "overall_status": overall}
+    return {
+        "tunnels": tunnels,
+        "overall_status": "healthy"
+        if tunnels and all(t["status"] == "ESTABLISHED" for t in tunnels)
+        else "degraded",
+    }
 
 
 def check_bgp_sessions() -> dict[str, Any]:

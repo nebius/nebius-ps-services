@@ -277,6 +277,13 @@ jobs:
           python -B github-report/scripts/test_github_report.py
           ruff check --no-cache github-report/scripts
 
+      - name: Validate container software test helpers offline
+        run: |
+          set -euo pipefail
+          python -m pip install pytest==8.4.2
+          python -B -m unittest discover -s test-software-in-container/scripts -p 'test_*.py'
+          ruff check --no-cache test-software-in-container/scripts
+
       - name: Validate Nebius capacity planning
         run: |
           set -euo pipefail
@@ -300,6 +307,7 @@ jobs:
           set -euo pipefail
           python -B global-context-management/scripts/check-plugin-manifests.py --catalogs
           python -B global-context-management/scripts/test-agent-installation.py
+          python -B global-context-management/scripts/test_host_memory.py
           python -B config-codex/scripts/test-check-local-idempotency.py
           python -B config-claude/scripts/test-check-local-idempotency.py
           python -B global-context-management/scripts/test-claude-roles.py
@@ -341,6 +349,8 @@ jobs:
           python -B commit/scripts/test-commit-contract.py
           python -B commit/scripts/test-commit-transaction.py
           python -B commit/scripts/test_pr_publication.py
+          python -B commit/scripts/test_transaction_retirement.py
+          python -B -m unittest discover -s publish-release/scripts -p 'test_release_*.py'
           python -B implement/scripts/test_implement_contract.py
           python -B sdlc-start/scripts/test_validate_project_specs.py
           python -B sdlc-start/scripts/test_sdlc_start_contract.py
@@ -351,6 +361,8 @@ jobs:
           python -B project-agent-instructions/scripts/test_project_agent_instructions.py
           python -B project-agent-instructions/scripts/test_project_specs_retention.py
           python -B agent-nebius-auth-setup/scripts/test_install_hook_registration.py
+          python -B agent-nebius-auth-setup/scripts/test_pre_tool_use_nebius_auth.py
+          python -B agent-nebius-auth-setup/scripts/test_agent_nebius_auth_contract.py
 
       - name: Run native workflow harness regressions
         env:

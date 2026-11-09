@@ -143,8 +143,25 @@ def frr_policy_rows(text: str) -> set[tuple[str, str]]:
     return rows
 
 
+def destination_protection(cfg: dict, *, state_dir: Path | None = None):
+    from ..ha_tunnel_policy import connection_policies
+    from .vm_ha.forwarding import DestinationProtection
+
+    return DestinationProtection(
+        (state_dir or Path("/var/lib/nebius-vpngw/ordinary")) / "destination-protection.json",
+        cluster="ordinary",
+        policies=connection_policies(cfg),
+        local_prefixes=tuple(cfg.get("gateway", {}).get("local_prefixes", ())),
+        run=run,
+    )
+
+
 def observe_local(cfg: dict[str, Any]) -> str:
     """Verify local invariants and fingerprint loaded config, excluding peer liveness."""
+    from .ordinary_selection import effective
+
+    cfg = effective(cfg)
+    destination_protection(cfg).verify()
     ingress_policy.verify(
         ingress_policy.from_config(cfg),
         run=lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, _output(argv)),
@@ -156,7 +173,7 @@ def observe_local(cfg: dict[str, Any]) -> str:
         else:
             _require(path.read_text() == expected)
     _require(SWANCTL_CONF.stat().st_mode & 0o777 == 0o600)
-    _require(_output(["systemctl", "is-active", "strongswan-starter"]) == "active")
+    _require(_output(["systemctl", "is-active", "strongswan"]) == "active")
     _require(_output(["systemctl", "is-active", "frr"]) == "active")
     _require("Status: active" in _output(["ufw", "status"]))
     for key, value in REQUIRED_SYSCTLS.items():
@@ -168,7 +185,9 @@ def observe_local(cfg: dict[str, Any]) -> str:
     parent = _json(["ip", "-d", "-j", "link", "show", "dev", "eth0"])
     _require(len(parent) == 1 and isinstance(parent[0].get("mtu"), int))
     endpoints = StrongSwanRenderer().build_interface_endpoints(cfg)
-    effective_static = ordinary_routes.effective_static_routes(ordinary_routes.projection(cfg))
+    effective_static = ordinary_routes.effective_static_routes(
+        ordinary_routes.projection(cfg, effective=True)
+    )
     allowed_apipa = set()
     static_routes: dict[str, set[ipaddress.IPv4Network | ipaddress.IPv6Network]] = {}
     static_inner: dict[str, ipaddress.IPv4Network | ipaddress.IPv6Network] = {}
@@ -325,6 +344,11 @@ def verify_unchanged(cfg: dict[str, Any], raw: bytes) -> bool:
 def reconcile_locked(
     cfg: dict[str, Any], raw: bytes, *, verify_only: bool, force: bool = False
 ) -> str:
+    from .ordinary_selection import effective, require_quiescent
+
+    require_quiescent(cfg)
+    configured = cfg
+    cfg = effective(cfg)
     budget = CURRENT.get()
     if budget is None or budget.operation is None:
         require_idle()
@@ -380,6 +404,7 @@ def reconcile_locked(
     assert operation is not None
     budget.effect_deadline = budget.deadline - 30
     try:
+        destination_protection(cfg).install()
         obligations = route_store.cleanup(operation, cfg, run, start_boot)
         endpoints = StrongSwanRenderer().render_and_apply(cfg)
         if endpoints:
@@ -400,7 +425,7 @@ def reconcile_locked(
         )
         obligations = route_store.verify(cfg, run, start_boot, obligations=obligations)
         ledger_digest = route_store.commit(operation.check(), obligations)
-        StateStore(STATE).save_last_applied(cfg)
+        StateStore(STATE).save_last_applied(configured)
         atomic_write_json(
             PROOF,
             {

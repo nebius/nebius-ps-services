@@ -108,7 +108,7 @@ def _registry(project: Path, env: dict[str, str]) -> dict[str, dict[str, str]]:
 def resolve_target(
     state: dict, *, skills_root: Path, agent: str, require_clean: bool = True,
     worker_task: str | None = None, assignment_digest: str | None = None,
-    classifier_observation: bool = False,
+    phase_observation: str | None = None,
 ) -> dict[str, str]:
     """Resolve the exact active integration or completed promotion, never a caller path."""
     try:
@@ -116,7 +116,7 @@ def resolve_target(
             return _resolve_target(
                 state, skills_root=skills_root, agent=agent, require_clean=require_clean,
                 worker_task=worker_task, assignment_digest=assignment_digest,
-                classifier_observation=classifier_observation,
+                phase_observation=phase_observation,
             )
     except TargetError:
         raise
@@ -133,7 +133,26 @@ def resolve_target(
         ) from error
 
 
-def _registration(state: dict, agent: str):
+def _registration(state: dict, agent: str, *, coordinator_session: str | None = None):
+    try:
+        return _owned_registration(state, agent, coordinator_session=coordinator_session, cleanup=False)
+    except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as error:
+        if isinstance(error, TargetError):
+            raise
+        raise TargetError("Workflow coordinator registration is unavailable or invalid.") from error
+
+
+def cleanup_registration(state: dict, agent: str):
+    """Resolve ownership for quiescence only; never certify phase admission."""
+    try:
+        return _owned_registration(state, agent, coordinator_session=None, cleanup=True)
+    except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as error:
+        if isinstance(error, TargetError):
+            raise
+        raise TargetError("Workflow cleanup ownership is unavailable or invalid.") from error
+
+
+def _owned_registration(state: dict, agent: str, *, coordinator_session: str | None, cleanup: bool):
     if agent not in {"codex", "claude"}:
         raise TargetError("Workflow host is invalid.")
     boundary = Path(state["run_root"])
@@ -153,17 +172,41 @@ def _registration(state: dict, agent: str):
     runs = home / "sdlc-runs"
     _safe_path(runs, boundary)
     startup = validate_startup_receipt(state) if state.get('workflow_startup') else None
+    expected_context = None
     if startup:
+        if coordinator_session is not None:
+            raise TargetError("Coordinator selector is only valid for initial startup observation.")
         # Startup identity is immutable; its former session may bind another run.
         if any(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", startup[key]) is None
                for key in ('project_id', 'run_id')):
             raise TargetError('Startup run identity is invalid.')
         run_dir = runs / startup['project_id'] / startup['run_id']
+    elif cleanup:
+        # The product owner derives the project identity under the sealed Git
+        # environment. Cleanup need not manufacture a successful startup receipt.
+        script = (
+            "import json,sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); "
+            "from workflow_objectives import project_context; "
+            "root,context,_,_=project_context(Path(sys.argv[2]),Path(sys.argv[3]),'agentic-sdlc'); "
+            "print(json.dumps({'root':str(root),'context':context}))"
+        )
+        discovered = json.loads(_run([
+            sys.executable, "-c", script,
+            str(Path(__file__).resolve().parents[2] / "worktree/scripts"), str(project), str(home),
+        ], env))
+        project_dir = Path(discovered["root"])
+        expected_context = discovered["context"]
+        if project_dir.parent != runs or project_dir.name != expected_context.get("project_id"):
+            raise TargetError("Cleanup project identity escapes the workflow home.")
+        pointer = _private_json(project_dir / "active-run.json", boundary)
+        run_id = pointer.get("run_id")
+        if not isinstance(run_id, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", run_id) is None:
+            raise TargetError("Cleanup active run identity is invalid.")
+        run_dir = project_dir / run_id
     else:
-        native = env.get('CODEX_THREAD_ID') if agent == 'codex' else env.get('SKILLS_SESSION_ID')
-        if not native:
-            raise TargetError('Native coordinator identity is required for initial observation.')
-        session_sha = hashlib.sha256(native.encode()).hexdigest()
+        if not isinstance(coordinator_session, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}", coordinator_session) is None:
+            raise TargetError('An explicit native coordinator selector is required for initial observation.')
+        session_sha = hashlib.sha256(coordinator_session.encode()).hexdigest()
         binding = _private_json(runs / 'bindings' / (session_sha + '.json'), boundary)
         if (binding.get('schema') != 'workflow/session-binding-v1' or binding.get('owner') != 'agentic-sdlc'
                 or binding.get('session_sha256') != session_sha or binding.get('project_root') != str(project)):
@@ -175,15 +218,22 @@ def _registration(state: dict, agent: str):
     workspace = _private_json(manifest, boundary)
     active = _private_json(run_dir.parent / 'active-run.json', boundary)
     lock = _private_json(run_dir.parent / 'active.lock', boundary)
-    current = _private_json(run_dir / 'current-state.json', boundary)
+    current_path = run_dir / 'current-state.json'
+    current = (None if cleanup and not startup and not current_path.exists() and not current_path.is_symlink()
+               else _private_json(current_path, boundary))
     with workflow_imports(Path(__file__).resolve().parents[2]):
         from workflow_objectives import validate_run
         run, objective = validate_run(run_dir, owner='agentic-sdlc')
+    if expected_context is not None and any(workspace.get(key) != value for key, value in expected_context.items()):
+        raise TargetError("Cleanup project registration differs from the product owner context.")
     if startup:
         if (startup['run_id'] != run_dir.name or startup['project_id'] != workspace.get('project_id')
                 or startup['objective_sha256'] not in {item['sha256'] for item in objective['revisions']}):
             raise TargetError('Startup receipt belongs to a different run or objective ancestry.')
+    if startup or cleanup:
         session_sha = run['coordinator_session_sha256']
+        if not isinstance(session_sha, str) or re.fullmatch(r"[0-9a-f]{64}", session_sha) is None:
+            raise TargetError("Recorded coordinator identity is invalid.")
         binding = _private_json(runs / 'bindings' / (session_sha + '.json'), boundary)
         if (binding.get('schema') != 'workflow/session-binding-v1' or binding.get('owner') != 'agentic-sdlc'
                 or binding.get('session_sha256') != session_sha or binding.get('project_root') != str(project)
@@ -195,15 +245,16 @@ def _registration(state: dict, agent: str):
             or lock.get('schema') != 'workflow/coordinator-ownership-v1' or lock.get('owner') != 'agentic-sdlc'
             or any(lock.get(key) != value for key, value in identity.items())
             or run.get('coordinator_session_sha256') != session_sha or lock.get('owner_session_hash') != session_sha
+            or run.get('project_root') != str(project) or workspace.get('project_root') != str(project)
             or binding.get('objective_id') != objective['objective_id']
-            or current.get('run_id') != run_dir.name or current.get('project_id') != workspace['project_id']):
+            or current is not None and (current.get('run_id') != run_dir.name or current.get('project_id') != workspace['project_id'])):
         raise TargetError('Hook ownership record does not bind the active workflow.')
-    return manifest, workspace, active, lock, run_dir, current, env
+    return manifest, workspace, active, lock, run_dir, current or {}, env
 
 
-def current_objective(state: dict, *, agent: str) -> str:
+def current_objective(state: dict, *, agent: str, coordinator_session: str | None = None) -> str:
     """Read the current revision through the previously observed binding."""
-    _manifest, _workspace, _active, _lock, run_dir, _current, _env = _registration(state, agent)
+    _manifest, _workspace, _active, _lock, run_dir, _current, _env = _registration(state, agent, coordinator_session=coordinator_session)
     return _private_json(run_dir / "objective.json", Path(state["run_root"]))["revisions"][-1]["sha256"]
 
 
@@ -242,7 +293,7 @@ def _validate_historical_basis(
     def basis(fingerprint):
         value = _private_json(run_dir / "bases" / feature / (fingerprint + ".json"), boundary)
         if (canonical(value) != fingerprint
-                or value.get("schema") != "workflow/objective-impact-execution-basis-v1"):
+                or value.get("schema") != "workflow/objective-impact-execution-basis-v2"):
             raise TargetError("Historical execution basis changed.")
         return value
 
@@ -325,8 +376,7 @@ def _validate_original_tdd_replan(state, run_dir, boundary, prior, latest, recor
                 or not state["git"].get("promoted_sha")):
             raise TargetError("Historical original TDD requires completed clean promotion.")
         for value in (prior, latest):
-            if (value["assignment_plan_sha256"] != value["plan_digest"]
-                    or value["validation_plan_sha256"] != value["plan_digest"]):
+            if value["assignment_plan_sha256"] != value["plan_digest"]:
                 raise TargetError("Historical TDD locked plan bindings changed.")
 
         # Resolve exact hashes, never a latest-named plan or caller-selected replacement.
@@ -354,9 +404,14 @@ def _validate_original_tdd_replan(state, run_dir, boundary, prior, latest, recor
                     for item in execution.parse_locked_plan(raw.decode("utf-8"))}
 
         for value in (prior, latest):
-            tasks(value["plan_digest"])
+            from workflow_validation import digest as validation_digest, plan_path, validate_plan
+            definitions = tasks(value["plan_digest"])
             if str(plans[value["plan_digest"]][0]) != value["plan_path"]:
                 raise TargetError("Historical TDD locked plan path changed.")
+            checks = _private_json(plan_path(Path(value["plan_path"])), boundary)
+            validate_plan(checks, list(definitions))
+            if validation_digest(checks) != value["validation_plan_sha256"]:
+                raise TargetError("Historical TDD executable validation plan changed.")
 
         rows = [json.loads(line) for line in _private_bytes(
             execution.journal_path(run_dir, feature, "coordinator"), boundary,
@@ -364,8 +419,38 @@ def _validate_original_tdd_replan(state, run_dir, boundary, prior, latest, recor
         if any(not isinstance(row, dict) for row in rows):
             raise TargetError("Historical TDD replan succession is malformed.")
         seals = [(index, row) for index, row in enumerate(rows) if row.get("event") == "tdd_sealed"]
-        if len(seals) != 1 or seals[0][1].get("head") != recorded_head:
+        if len(seals) != 1:
             raise TargetError("Historical original TDD seal is missing or changed.")
+        seal_index, seal = seals[0]
+        sealed_head = seal.get("head")
+        wave_ids = coordinator.get("wave_ids")
+        if (not isinstance(sealed_head, str)
+                or re.fullmatch(r"[0-9a-f]{40,64}", sealed_head) is None
+                or not isinstance(wave_ids, list) or not wave_ids):
+            raise TargetError("Historical original TDD seal is missing or changed.")
+        first_wave = _private_json(execution.wave_path(run_dir, feature, wave_ids[0]), boundary)
+        if first_wave.get("base_head") != sealed_head:
+            raise TargetError("Historical original TDD seal does not bind the first wave.")
+        project = Path(state["project_root"])
+        if sealed_head != recorded_head:
+            # TDD normally reports its uncommitted output before the owner seals it.
+            # Only that exact journaled direct-child seal may bridge the receipt.
+            parents = execution.git(
+                project, ["rev-list", "--parents", "-n", "1", sealed_head],
+                "inspect historical TDD seal parent",
+            ).split()
+            message = execution.sealed_commit_message(project, sealed_head)
+            if (parents != [sealed_head, recorded_head]
+                    or not any(row.get("event") == "tdd_seal_intent"
+                               and row.get("base") == recorded_head
+                               and isinstance(row.get("message"), str)
+                               and execution.canonical_seal_message(project, row["message"]) == message
+                               for row in rows[:seal_index])):
+                raise TargetError("Historical original TDD seal intent or parent changed.")
+        execution.git(
+            project, ["merge-base", "--is-ancestor", sealed_head, coordinator["promoted_head"]],
+            "verify historical TDD seal ancestry",
+        )
 
         original_tasks = tasks(prior["plan_digest"])
         cursor = prior["plan_digest"]
@@ -392,6 +477,8 @@ def _validate_original_tdd_replan(state, run_dir, boundary, prior, latest, recor
         if pending is not None or cursor != latest["plan_digest"]:
             raise TargetError("Historical TDD replan succession is incomplete.")
 
+        from workflow_validation import verify_recorded_wave
+        checked_waves = set()
         for task_id, definition in original_tasks.items():
             wave_id = coordinator["task_waves"][task_id]
             wave = _private_json(execution.wave_path(run_dir, feature, wave_id), boundary)
@@ -400,10 +487,11 @@ def _validate_original_tdd_replan(state, run_dir, boundary, prior, latest, recor
             unsigned = dict(assignment)
             digest = unsigned.pop("assignment_digest", None)
             if (wave.get("execution_id") != feature or wave.get("status") != "done"
-                    or task_id not in wave.get("merged_task_ids", [])
-                    or task.get("status") != "committed" or task.get("task") != definition
+                    or task_id not in wave.get("integrated_task_ids", [])
+                    or task.get("status") != "finished" or task.get("task") != definition
                     or task.get("task_definition_digest") != execution.sha256_json(definition)
                     or digest != execution.sha256_json(unsigned) or task.get("assignment_digest") != digest
+                    or assignment.get("base_head") != wave.get("base_head")
                     or assignment.get("schema") != execution.ASSIGNMENT_SCHEMA
                     or assignment.get("owner") != latest["owner"]
                     or assignment.get("basis_sha256") != recorded
@@ -411,12 +499,16 @@ def _validate_original_tdd_replan(state, run_dir, boundary, prior, latest, recor
                     or assignment.get("task_id") != task_id or assignment.get("wave_id") != wave_id
                     or assignment.get("execution_id") != feature or assignment.get("run_dir") != str(run_dir)):
                 raise TargetError("Historical TDD preserved task evidence changed.")
+            checked_waves.add(wave_id)
+        for wave_id in sorted(checked_waves):
+            wave = _private_json(execution.wave_path(run_dir, feature, wave_id), boundary)
+            verify_recorded_wave(run_dir, feature, wave, coordinator)
 
 
-def observe_startup(state: dict, *, skills_root: Path, agent: str) -> dict:
+def observe_startup(state: dict, *, skills_root: Path, agent: str, coordinator_session: str | None = None) -> dict:
     """Observe registration before the first phase; never repair product state."""
     try:
-        manifest, workspace, active, lock, run_dir, current, env = _registration(state, agent)
+        manifest, workspace, active, lock, run_dir, current, env = _registration(state, agent, coordinator_session=coordinator_session)
         if (
             state["git"].get("promoted_sha") is not None
             or current.get("current_phase") != "sdlc-start"
@@ -425,23 +517,27 @@ def observe_startup(state: dict, *, skills_root: Path, agent: str) -> dict:
         ):
             raise TargetError("Workflow startup observation is too late; start a fresh trial.")
         project = Path(state["project_root"])
+        owned_git_origin.validate(project, Path(state["run_root"]), state["verification_id"],
+                                  baseline=state["git"]["baseline_sha"], require_clean=True)
         if _run(["git", "-C", str(project), "rev-parse", "HEAD"], env) != state["git"]["baseline_sha"]:
             raise TargetError("Workflow startup requires the unchanged fixture baseline.")
+        if coordinator_session is None:
+            raise TargetError("An explicit native coordinator selector is required for source discovery.")
         script = (
             "import json,sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); "
             "from sdlc_state import load_active_run; "
-            "r=load_active_run(Path(sys.argv[2]),Path(sys.argv[3])); "
+            "r=load_active_run(Path(sys.argv[2]),Path(sys.argv[3]),session_id=sys.argv[4]); "
             "print(json.dumps(None if r is None else "
             "{'project_id':r.project_id,'run_id':r.run_id,'run_dir':str(r.run_dir)}))"
         )
         home = Path(state["private_root"]) / f"{agent}-home"
         observed = json.loads(_run([
             sys.executable, "-c", script,
-            str(skills_root / "sdlc-start/assets/hooks/lib"), str(project), str(home),
+            str(skills_root / "sdlc-start/assets/hooks/lib"), str(project), str(home), coordinator_session,
         ], env))
         expected = {"project_id": workspace["project_id"], "run_id": run_dir.name, "run_dir": str(run_dir)}
         if observed != expected:
-            raise TargetError("Hook discovery did not resolve the exact startup run.")
+            raise TargetError("Source state discovery did not resolve the exact startup run.")
         lock_path = manifest.parent / "active.lock"
         boundary = Path(state["run_root"])
         if (
@@ -451,14 +547,14 @@ def observe_startup(state: dict, *, skills_root: Path, agent: str) -> dict:
         ):
             raise TargetError("Workflow startup registration changed during inspection.")
         return {
-            "schema": "agentic-sdlc/workflow-startup-v2",
+            "schema": "agentic-sdlc/workflow-startup-v3",
             "verification_id": state["verification_id"],
             "baseline_sha": state["git"]["baseline_sha"],
             "project_id": workspace["project_id"],
             "run_id": run_dir.name,
             "agent": agent,
             "current_phase": "sdlc-start",
-            "hook_discovery": "MATCH",
+            "source_state_discovery": "MATCH",
             "owner_session_hash": lock["owner_session_hash"],
             "lock_sha256": hashlib.sha256(lock_path.read_bytes()).hexdigest(),
             "objective_sha256": _private_json(run_dir / 'objective.json', boundary)['revisions'][-1]['sha256'],
@@ -479,13 +575,13 @@ def validate_startup_receipt(state: dict) -> dict:
         if hashlib.sha256(path.read_bytes()).hexdigest() != receipt["sha256"]:
             raise TargetError("Workflow startup receipt digest does not match.")
         if (
-            set(value) != {"schema", "verification_id", "baseline_sha", "project_id", "run_id", "agent", "current_phase", "hook_discovery", "owner_session_hash", "lock_sha256", "objective_sha256", "observed_at"}
-            or value.get("schema") != "agentic-sdlc/workflow-startup-v2"
+            set(value) != {"schema", "verification_id", "baseline_sha", "project_id", "run_id", "agent", "current_phase", "source_state_discovery", "owner_session_hash", "lock_sha256", "objective_sha256", "observed_at"}
+            or value.get("schema") != "agentic-sdlc/workflow-startup-v3"
             or value.get("verification_id") != state["verification_id"]
             or value.get("baseline_sha") != state["git"]["baseline_sha"]
             or value.get("agent") not in {"codex", "claude"}
             or value.get("current_phase") != "sdlc-start"
-            or value.get("hook_discovery") != "MATCH"
+            or value.get("source_state_discovery") != "MATCH"
             or any(not isinstance(value.get(key), str) or not value[key] for key in ("project_id", "run_id", "observed_at"))
             or any(re.fullmatch(r"[0-9a-f]{64}", str(value.get(key, ""))) is None for key in ("owner_session_hash", "lock_sha256", "objective_sha256"))
         ):
@@ -498,12 +594,14 @@ def validate_startup_receipt(state: dict) -> dict:
 def _resolve_target(
     state: dict, *, skills_root: Path, agent: str, require_clean: bool,
     worker_task: str | None, assignment_digest: str | None,
-    classifier_observation: bool,
+    phase_observation: str | None,
 ) -> dict[str, str]:
-    if type(classifier_observation) is not bool or (
-        classifier_observation and (worker_task is not None or assignment_digest is not None)
+    if phase_observation is not None and (
+        not isinstance(phase_observation, str)
+        or phase_observation not in {"sdlc-classify-failure", "sdlc-tdd"}
+        or worker_task is not None or assignment_digest is not None
     ):
-        raise TargetError("Classifier observation requires a root coordinator target.")
+        raise TargetError("Phase observation requires a supported root coordinator purpose.")
     if (worker_task is None) != (assignment_digest is None) or (
         worker_task is not None and (
             re.fullmatch(r"TASK-[0-9]{3,}", worker_task) is None
@@ -516,15 +614,21 @@ def _resolve_target(
     project = Path(state["project_root"])
     run_id = run_dir.name
     feature = current.get("current_execution")
-    # Classification must be observable after an authoring check fails, before
-    # the normal final seal. Runtime callers never opt into this read-only path.
+    # Classification and documented TDD output must be observable before sealing.
+    # Runtime callers never opt into this read-only path.
     # An explicit clean request still wins, and the primary checkout below is
     # always clean, so this exception cannot qualify a dirty promoted deployment.
+    observation_checkpoints = {
+        "sdlc-classify-failure": {"sdlc-classify-failure"},
+        "sdlc-tdd": {"sdlc-tdd", "tests_red", "tests_ready"},
+    }
+    unsealed_checkpoints = (
+        {"sdlc-tdd", "sdlc-update-documents", "align"}
+        if phase_observation is None else observation_checkpoints[phase_observation]
+    )
     require_clean = require_clean or not (
         current.get("status") == "running"
-        and (current.get("current_phase") in {"sdlc-tdd", "sdlc-update-documents", "align"}
-             or (classifier_observation
-                 and current.get("current_phase") == "sdlc-classify-failure"))
+        and current.get("current_phase") in unsealed_checkpoints
     )
     if (
         current.get("run_id") != run_id
@@ -596,9 +700,19 @@ def _resolve_target(
         if state["git"]["promoted_sha"] not in {None, expected}:
             raise TargetError("Recorded lifecycle promotion differs from execution.")
     else:
+        pending_classifier = (
+            phase_observation == "sdlc-classify-failure"
+            and current.get("status") == "running"
+            and current.get("current_phase") == "sdlc-classify-failure"
+            and coordinator["status"] == "design_revision_pending"
+        )
+        if pending_classifier:
+            from workflow_design_revision import observe_pending_revision
+            observe_pending_revision(run_dir, feature)
         if (
-            coordinator["status"]
-            not in {"prepared", "tdd_sealed", "waves_running", "integrated", "sealed"}
+            (coordinator["status"]
+             not in {"prepared", "tdd_sealed", "waves_running", "integrated", "sealed"}
+             and not pending_classifier)
             or coordinator["promoted_head"] is not None
             or state["git"]["promoted_sha"] is not None
             or git(project, "rev-parse", "HEAD") != coordinator["base_head"]

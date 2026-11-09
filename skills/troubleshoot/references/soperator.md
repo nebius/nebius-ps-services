@@ -1,10 +1,17 @@
 # Soperator Troubleshooting Playbook
 
+## Applicability
+
 Use this playbook for a Slurm cluster managed by Soperator. Pin the installed
 chart, controller image, CRD, and Slurm versions and use documentation from the
 matching Soperator revision. Continue into `kubernetes.md`, `slurm.md`, and the
 relevant host, network, storage, or GPU playbooks rather than treating Soperator
 as a single component.
+
+## Version Fingerprint
+
+Pin chart/controller/CRD/Slurm versions, configured check script revision and
+resource requests; distinguish scheduler placement from Kubernetes node placement.
 
 ## Adaptive Decision Guide
 
@@ -18,8 +25,10 @@ Use only rows implicated by the failing path; record material unexamined boundar
 
 <!-- markdownlint-enable MD013 -->
 
-### Escalation Conditions
+### Diagnostic Effects
 
+Passive bounded inspection comes first. Active diagnostics remain coordinator-owned;
+workers may not launch tests, captures, debug containers, stress or repairs.
 Escalate only if the next observation can separate remaining explanations. Bound
 time, output, target and effects; preserve evidence and original settings. Treat
 production or unconfirmed targets as read-only without exact action authority.
@@ -46,8 +55,9 @@ ActiveCheck custom resource -> CronJob -> Kubernetes Job
                             -> optional Slurm job -> reaction
 ```
 
-ActiveChecks are dedicated diagnostic jobs. GPU checks commonly request a
-complete or exclusive GPU allocation and therefore consume schedulable capacity.
+ActiveChecks are dedicated diagnostic jobs. Inspect whether the deployed check
+requests a complete or exclusive GPU allocation; exact requests depend on the
+chart and script revision. Dedicated checks consume schedulable capacity.
 Do not describe them as safely running inside a customer's existing training
 allocation. Scheduling or launching an ActiveCheck is a live workload mutation
 with capacity, cost, and availability implications and requires the applicable

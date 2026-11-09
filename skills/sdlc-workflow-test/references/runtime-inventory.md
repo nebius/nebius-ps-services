@@ -39,6 +39,29 @@ state. Their profile, configuration, marker and origin files keep the 64 KiB
 limit. Size and integrity failures remain distinct from JSON decoding failures;
 never truncate or remove observations to make native commands or cleanup pass.
 
+Read-only phase collection uses `phase_observation="sdlc-classify-failure"` or
+`phase_observation="sdlc-tdd"` in the existing target owner. The classifier-only
+boolean is removed without an alias. Matching running TDD checkpoints include
+`sdlc-tdd`, `tests_red` and `tests_ready`; the last two are documented phase
+outputs whose tests remain unsealed. This exception permits observation only.
+Runtime commands never supply a purpose, explicit clean requests still prevail,
+and worker or dirty promoted targets remain rejected. Clean historical receipt
+validation retains its existing lineage rules after the phase advances.
+At the running classifier checkpoint, `design_revision_pending` is observable
+only through the Worktree owner's read-only pending-revision validator. It binds
+the active counted design dispatch, immutable preparation, exact unchanged
+objective/plan/basis and integration parent, retained native termination proofs,
+superseded unmerged wave, and writer/resource/validation quiescence. It does not
+adopt the coordinator identity or admit runtime work. Missing or changed proof,
+a completed dispatch, a sealed revision, or another checkpoint fails closed.
+Material design or plan changes invalidate affected phase receipts. Preserve
+their immutable attempts, perform the required owner revalidation, and record
+fresh classifier and preparation observations against the resulting current
+basis before final certification. Historical admission is not broadened.
+After corrective replan, a pre-seal TDD receipt additionally binds through the
+owner's exact seal intent, direct-child commit and original wave/assignment bases;
+read [the historical contract](three-tier-live.md) before final certification.
+
 Worker observations remain development evidence, including when the worktree
 is clean. They never publish canonical inventory. Normal acceptance selects the
 clean integration or promoted checkout and requires its matching build and
@@ -70,7 +93,7 @@ environment-evidence gap does not establish a Docker failure: native worker and
 phase evidence gaps use the phase owner and classifier route. Cleanup still
 discovers all exactly owned historical images and resources.
 
-Lifecycle v7 is incompatible with earlier active state and requires a fresh trial;
+Lifecycle v8 is incompatible with earlier active state and requires a fresh trial;
 historical reports remain historical without migration. After the owned UAT
 restart, refresh inventory through this same operation before the fresh
 post-restart browser stage. Preserve the named volume and do not reset the

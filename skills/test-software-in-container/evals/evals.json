@@ -1,0 +1,125 @@
+{
+  "skill_name": "test-software-in-container",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Install our CLI from the frozen source into Ubuntu 24.04 AMD64 and run its smoke check. No historical releases exist.",
+      "expected_output": "A explicit install-only trial with frozen artifact/image identities and independent installed probes.",
+      "files": [],
+      "assertions": [
+        "Does not require historical releases or create upgrade cases.",
+        "Separates build/setup from the product installer and observed smoke assertions.",
+        "Reports only executed container behavior, with private evidence and exact cleanup."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Use --image example/software:2.0 --test --test-target installed --suite api. If the binary is missing, can you install it first?",
+      "expected_output": "Explicit installed-image testing with frozen suite identity; missing software fails.",
+      "files": [],
+      "assertions": [
+        "Does not install missing software in installed-target testing.",
+        "Does not require an install artifact or predecessor catalog.",
+        "Records named suite assertions and image identity; unavailable suite stays blocked."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Run --all-tests for a bare Ubuntu base; only install and upgrade apply. There is no preinstalled target, patch or migration workflow.",
+      "expected_output": "Applicable lifecycle trials and their checks, explicit patch/migration exclusions, no standalone test-only case.",
+      "files": [],
+      "assertions": [
+        "Does not test bare Ubuntu as if it contained the target.",
+        "Does not automatically select every named functional suite.",
+        "Does not silently skip missing lifecycle declarations or claim all-N/A success."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Plan upgrades from four historical Python service releases. The base includes new runtime dependencies and systemd fails on cgroups.",
+      "expected_output": "Reject contaminated baselines and preflight the actual runtime before expensive fanout.",
+      "files": [],
+      "assertions": [
+        "Uses authentic predecessor entrypoints and historical dependencies.",
+        "Does not default to privileged access, fake systemctl or blanket package overwrite.",
+        "Separates package evidence from required unavailable startup and retains failed trials."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Test a same-version config hotfix and a JSON-to-SQLite migration as independent container trials. Neither requires installing a new product release.",
+      "expected_output": "Separate patch and pure migration input identities and verified state baselines.",
+      "files": [],
+      "assertions": [
+        "Does not require fictional package predecessors or target artifact.",
+        "Checks patch deltas, migration target state and preserved invariants.",
+        "Declares repeat, no-op and recovery applicability before execution."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "A warm predecessor cache exists but the test harness changed. Run preflight only and report whether the matrix can run.",
+      "expected_output": "Resolve full bundle drift separately from verified baseline cache identity and perform bounded capability probes only.",
+      "files": [],
+      "assertions": [
+        "Does not execute product lifecycle operations during preflight-only.",
+        "Checks actual execution-host resources, tools, manager and architecture.",
+        "Does not rebuild unaffected baselines solely because candidate or harness changed."
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Run $test-software-in-container here for our current Linux project.",
+      "expected_output": "Source test with auto suite selection in the exact current project.",
+      "files": [],
+      "assertions": [
+        "Discovers project-local profile or derives one from inspected documentation; does not ascend monorepo.",
+        "Uses declared target first, otherwise observes engine-native platform for source only.",
+        "Does not invent installed-artifact checks for source coverage."
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "List available suites from an external profile, without running anything.",
+      "expected_output": "Static suite inventory retaining the selected current project.",
+      "files": [],
+      "assertions": [
+        "Lists names, purpose, applicability, origins and defaults.",
+        "Resolves relative profile filesystem paths from selected project.",
+        "Does not import modules, collect tests, pull images or start containers."
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Run --test --upgrade --suite integration on the source checkout.",
+      "expected_output": "Reject conflicting source/lifecycle selection and explain explicit installed testing or separate campaigns.",
+      "files": [],
+      "assertions": [
+        "Does not silently switch source to installed.",
+        "Does not filter incompatible suites out of generated cases."
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "The suite exits zero after skipping all tests. Report success for the matrix?",
+      "expected_output": "Incomplete suite coverage with retained counts and reasons.",
+      "files": [],
+      "assertions": [
+        "Requires independently frozen inventory and ordinary passing tests per suite/case.",
+        "Does not infer completion from printed pass counts or exit status alone.",
+        "Requires actual harness-observed process completion and exact plan/case receipt binding."
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "A restricted service cannot import tests after snapshotting. Can we disable its sandbox?",
+      "expected_output": "Investigate staging ownership and directory traversal; preserve the failed trial.",
+      "files": [],
+      "assertions": [
+        "Freezes directory modes and symlink chains as well as file bytes.",
+        "Probes actual restricted-user access instead of weakening service security.",
+        "Repairs the proven owner and replays fresh without relabeling old evidence."
+      ]
+    }
+  ]
+}

@@ -1,9 +1,16 @@
 # Kubernetes Troubleshooting Playbook
 
+## Applicability
+
 Use this playbook after identifying the cluster version, distribution, control
 plane ownership, container runtime, CNI, CSI, DNS, ingress or gateway, and
 workload deployment model. Verify version-sensitive behavior against the
 matching Kubernetes and vendor documentation.
+
+## Version Fingerprint
+
+Pin distribution/version, container runtime, CNI, CSI, DNS and service-routing
+implementation before choosing commands; do not assume kube-proxy exists.
 
 ## Adaptive Decision Guide
 
@@ -17,8 +24,10 @@ Use only rows implicated by the failing path; record material unexamined boundar
 
 <!-- markdownlint-enable MD013 -->
 
-### Escalation Conditions
+### Diagnostic Effects
 
+Passive bounded inspection comes first. Active diagnostics remain coordinator-owned;
+workers may not launch tests, captures, debug containers, stress or repairs.
 Escalate only if the next observation can separate remaining explanations. Bound
 time, output, target and effects; preserve evidence and original settings. Treat
 production or unconfirmed targets as read-only without exact action authority.
@@ -29,6 +38,12 @@ Replay the original operation from the same relevant identity and workload, comp
 an unaffected control, and verify the implicated boundary independently. Invalidate
 pre-change observations and state material unverified scope. A passing status
 command cannot replace the workload oracle.
+
+Narrow admission → scheduling → image/startup → readiness → Service path, starting
+where evidence points. Keep CNI, CSI, node and managed-control-plane branches
+separate. A ready Pod does not establish DNS, EndpointSlice selection, transport,
+TLS or application response. AKS Cilium and kube-proxy paths require different
+checks. `kubectl debug` may add an ephemeral container and is a mutation.
 
 ## Failing Path And Component Identity
 
@@ -100,6 +115,10 @@ namespace and resource, timeout, data sensitivity, performance impact, cleanup,
 and rollback. Restore changed logging or workload settings and prove cleanup.
 
 ## Official Sources
+
+- [Service troubleshooting](https://kubernetes.io/docs/tasks/debug/debug-application/debug-service/)
+- [Debugging running Pods](https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/)
+- [AKS data-plane checks](https://learn.microsoft.com/troubleshoot/azure/azure-kubernetes/connectivity/troubleshoot-connection-pods-services-same-cluster)
 
 - [Kubernetes cluster architecture](https://kubernetes.io/docs/concepts/architecture/)
 - [Application troubleshooting](https://kubernetes.io/docs/tasks/debug/debug-application/)

@@ -29,8 +29,10 @@ from nebius_vpngw.schema import validate_config
         ("10.0.0.1/16", "203.0.113.1/24", "10.0.0.2", "203.0.114.5", "target is outside"),
     ],
 )
-def test_vm_ha_probe_coverage_preserves_accepted_cidr_spelling(
+@pytest.mark.parametrize("ha", [False, True])
+def test_shared_probe_coverage_preserves_accepted_cidr_spelling(
     sample_config,
+    ha,
     local_prefix,
     remote_prefix,
     source,
@@ -62,11 +64,11 @@ def test_vm_ha_probe_coverage_preserves_accepted_cidr_spelling(
         inner_remote_ip="169.254.19.2",
     )
     connection["tunnels"].append(second)
+    if not ha:
+        cfg["gateway_group"].pop("vm_ha")
     # Existing CIDR validation accepts host bits without rewriting the config.
     assert validate_config(cfg).gateway.local_prefixes == [local_prefix]
-    cfg["gateway_group"]["vm_ha"]["tunnel_probes"] = {
-        "tunnel-1": {"source_ip": source, "target_ip": target}
-    }
+    cfg["gateway"]["tunnel_probes"] = {"tunnel-1": {"source_ip": source, "target_ip": target}}
     if error:
         with pytest.raises(ValueError, match=error):
             validate_config(cfg)
@@ -74,7 +76,7 @@ def test_vm_ha_probe_coverage_preserves_accepted_cidr_spelling(
         validated = validate_config(cfg)
         assert validated.gateway.local_prefixes == [local_prefix]
         assert validated.connections[0].remote_prefixes == [remote_prefix]
-        assert validated.gateway_group.vm_ha.tunnel_probes["tunnel-1"].source_ip == source
+        assert validated.gateway.tunnel_probes["tunnel-1"].source_ip == source
 
 
 def test_load_local_config_reads_ssh_public_key_from_path(
@@ -231,8 +233,21 @@ def test_vm_ha_resolves_two_deterministic_node_manifests(sample_config: dict) ->
 
     first_plan = merge_with_peer_configs(deepcopy(normalized), [])
     second_plan = merge_with_peer_configs(deepcopy(normalized), [])
+    # Public apply later inspects status with the effective region made
+    # explicit. That equivalent input must retain the installed generation.
+    explicit_region = deepcopy(normalized)
+    explicit_region["gateway_group"]["region"] = normalized["region_id"]
+    explicit_plan = merge_with_peer_configs(explicit_region, [])
+    assert explicit_plan.vm_ha.generation == first_plan.vm_ha.generation
+    repeated = deepcopy(normalized)
+    repeated_first = merge_with_peer_configs(repeated, [])
+    assert merge_with_peer_configs(repeated, []).vm_ha.generation == repeated_first.vm_ha.generation
+    different_region = deepcopy(normalized)
+    different_region["gateway_group"]["region"] = "eu-north1"
+    different_plan = merge_with_peer_configs(different_region, [])
+    assert different_plan.vm_ha.generation != first_plan.vm_ha.generation
     omitted_probes = deepcopy(normalized)
-    omitted_probes["gateway_group"]["vm_ha"].pop("tunnel_probes", None)
+    omitted_probes["gateway"].pop("tunnel_probes", None)
     omitted_plan = merge_with_peer_configs(omitted_probes, [])
     assert omitted_plan.vm_ha.generation == first_plan.vm_ha.generation
     reordered = deepcopy(normalized)
@@ -487,3 +502,67 @@ def test_merge_peer_configs_can_prefer_peer_values(sample_config: dict) -> None:
     assert connection["bgp"]["remote_asn"] == 65100
     assert tunnel["psk"] == "peer-psk"
     assert tunnel["remote_public_ip"] == "198.51.100.88"
+
+
+@pytest.mark.parametrize("ha", [False, True])
+def test_probe_projection_is_local_and_does_not_mutate_source(sample_config, ha):
+    cfg = deepcopy(sample_config)
+    cfg["gateway_group"].update(instance_count=2, external_ips=[["203.0.113.10"], ["203.0.113.20"]])
+    if ha:
+        cfg["gateway_group"]["vm_ha"] = {
+            "enabled": True,
+            "cluster_id": "cluster",
+            "members": [
+                {"node_id": "a", "instance_index": 0, "role": "active"},
+                {"node_id": "b", "instance_index": 1, "role": "passive"},
+            ],
+        }
+    first = cfg["connections"][0]["tunnels"][0]
+    second = deepcopy(first)
+    second.update(name="second-node", gateway_instance_index=1)
+    cfg["connections"][0]["tunnels"] = [first, second]
+    cfg["gateway"]["tunnel_probes"] = {
+        tunnel["name"]: {
+            "source_ip": tunnel["inner_local_ip"],
+            "target_ip": tunnel["inner_remote_ip"],
+        }
+        for tunnel in (first, second)
+    }
+    original = deepcopy(cfg)
+    validated = validate_config(cfg)
+    plan = merge_with_peer_configs(validated.model_dump(mode="python"), [])
+    assert cfg == original
+    for instance, tunnel in zip(plan.per_instance, (first, second), strict=True):
+        rendered = yaml.safe_load(instance.config_yaml)
+        assert set(rendered["gateway"]["tunnel_probes"]) == {tunnel["name"]}
+        assert "tunnel_probes" not in rendered.get("vm_ha", {})
+
+
+@pytest.mark.parametrize("fault", ["unknown", "bgp", "disabled", "old-field"])
+def test_shared_probe_rejects_invalid_scope_before_rendering(sample_config, fault):
+    cfg = deepcopy(sample_config)
+    tunnel = cfg["connections"][0]["tunnels"][0]
+    cfg["gateway"]["tunnel_probes"] = {
+        "missing" if fault == "unknown" else tunnel["name"]: {
+            "source_ip": tunnel["inner_local_ip"],
+            "target_ip": tunnel["inner_remote_ip"],
+        }
+    }
+    if fault == "bgp":
+        cfg["connections"][0]["routing_mode"] = "bgp"
+        cfg["connections"][0]["bgp"].update(enabled=True, remote_asn=65001)
+    elif fault == "disabled":
+        tunnel["ha_role"] = "disable"
+    elif fault == "old-field":
+        cfg["gateway_group"]["vm_ha"] = {
+            "enabled": False,
+            "tunnel_probes": cfg["gateway"].pop("tunnel_probes"),
+        }
+    expected = {
+        "unknown": "unknown tunnel",
+        "bgp": "enabled Static",
+        "disabled": "enabled Static",
+        "old-field": "Move gateway_group.vm_ha.tunnel_probes",
+    }
+    with pytest.raises(ValueError, match=expected[fault]):
+        validate_config(cfg)

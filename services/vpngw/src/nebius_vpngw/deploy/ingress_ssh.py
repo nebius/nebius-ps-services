@@ -45,9 +45,16 @@ print(json.dumps(observed))
 
 
 def _read(client: Any, command: str) -> dict[str, Any]:
-    _stdin, stdout, _stderr = client.exec_command(command, timeout=30)
-    raw = stdout.read(65537)
-    if len(raw) > 65536 or stdout.channel.recv_exit_status():
+    from .ssh_commands import DEADLINE, run
+
+    deadline = DEADLINE.get()
+    if deadline is not None:
+        rc, raw, _ = run(client, command, deadline=deadline, limit=65537)
+    else:
+        _stdin, stdout, _stderr = client.exec_command(command, timeout=30)
+        raw = stdout.read(65537)
+        rc = stdout.channel.recv_exit_status()
+    if len(raw) > 65536 or rc:
         raise RuntimeError("Unable to verify authenticated SSH ingress state")
     result = json.loads(raw)
     if not isinstance(result, dict):

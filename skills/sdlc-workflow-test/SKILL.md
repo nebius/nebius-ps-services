@@ -1,6 +1,6 @@
 ---
 name: sdlc-workflow-test
-description: "Use only when explicitly asked, outside Agentic SDLC, to verify the workflow with the no-flag check or --create-live-test/--keep/--resume/--destroy for one owned local three-tier Docker app plus GUI UAT and sanitized cleanup."
+description: "Use only when explicitly asked, outside Agentic SDLC, to verify the workflow with the no-flag check or --create-live-test/--keep/--resume/--destroy with deterministic checks, one owned local three-tier Docker app, GUI UAT and cleanup of both fixture types."
 disable-model-invocation: true
 ---
 
@@ -55,8 +55,9 @@ the SDLC system itself.
 
 - Do not use as part of a normal Agentic SDLC product run.
 - Do not use to implement product features directly.
-- Do not use to install, sync, trust, or repair hooks unless the user asks for
-  that separate remediation after reviewing the report.
+- Do not repair ordinary installed skills or hooks during verification. Explicit
+  maintenance uses their installer before the trial; live fixture setup may install
+  reviewed runtime/hooks into only its owned disposable native home.
 - Do not use on production repositories or real customer projects.
 - Do not use as a replacement for `sdlc-start` or any `sdlc-*` phase skill.
 
@@ -92,8 +93,9 @@ The default report path is:
 - Do not create a new SDLC CLI or make hooks orchestrate phases.
 - Do not create project-local skills.
 - Do not modify either host's installed skill catalog.
-- Do not edit, delete, install, trust, or rewrite hooks under `<agent-home>/hooks`
-  or hook configuration.
+- Do not modify ordinary native hooks or their configuration. Disposable native
+  setup precedes the trial and uses the existing installer and normal native trust
+  review; never manufacture trust records or bypass the host review control.
 - Do not run on a production or user project. Use only the disposable
   verification project.
 - Do not push, create a real PR, merge, force-push, or publish anything.
@@ -144,25 +146,27 @@ Allowed writes:
   evidence, exact Docker inventory, sanitized per-run report, and lifecycle
   archive as defined by `references/three-tier-live.md`.
 
-Do not write to real project source trees, installed skill folders, hook
-configuration, credential directories, external systems, or non-disposable Git
-remotes.
+Do not write to real project source trees, ordinary installed skill folders,
+ordinary hook configuration or credentials, external systems, or non-disposable
+Git remotes. The separately declared disposable native setup stores only its
+necessary authentication in that home's protected native store.
 
 ## Process
 
 1. Parse the invocation mode before any mutation.
    With no lifecycle flag, run steps 2-10 exactly as the existing lightweight
    verifier and do not create or inspect a Docker or browser application. With
-   `--create-live-test` or `--create-live-test --keep`, first run the unchanged lightweight
-   preflight, then safely destroy the previous active exactly owned test
-   environment before preparing a fresh replacement and following the
-   Three-Tier Live Process below. Never run two live test environments for one
+   `--create-live-test` or `--create-live-test --keep`, first run aggregate owned
+   cleanup through `verification_workspace.py --verification-root <root> destroy`,
+   then run fresh lightweight preflight before preparing the live replacement
+   and following the Three-Tier Live Process below. Never run two live test environments for one
    verification root.
    With `--resume`, skip project creation, revalidate the one retained failed
    or partial lifecycle, and continue from its earliest incomplete recorded
    phase. With `--destroy`, skip project creation and follow the standalone
-   destroy process in `references/three-tier-live.md`. A missing active
-   application is the successful idempotent result `ALREADY_DESTROYED`.
+   aggregate destroy process in `references/three-tier-live.md`. Return
+   `ALREADY_DESTROYED` only when both live and lightweight fixtures are absent;
+   missing ownership or orphaned raw state is cleanup failure.
 2. Establish the source of truth.
    Read `docs/agentic-sdlc-design.md` and
    `references/verification-checklist.md`. Treat the design doc as the
@@ -273,13 +277,21 @@ For explicit `--create-live-test`, `--create-live-test --keep`, or `--resume`, r
 steps, including capability proof, immutable generation fencing, normal SDLC
 execution, GUI readiness, evidence collection and exact-resource cleanup.
 The mode, authority, failure and completion rules in this file remain required.
+Run native lifecycle, launcher and workspace commands in fresh processes from
+the selected host's installed catalog. Preparation pins that physical catalog
+and its runtime closure; source and installed paths are not interchangeable even
+when bytes match. The launcher rejects a source-catalog native launch. Source
+preflight stays separate, and aggregate ingestion delegates read-only semantic
+validation to the configured installed owner. Never normalize an execution basis
+or import a second catalog into an existing owner process.
 
 ## Idempotency
 
 - The verifier may be rerun at any time.
 - Reuse the same verification root and overwrite only generated verification
   files under `<agent-home>/sdlc-verification/`.
-- Preserve or supersede prior reports by writing the current report atomically.
+- Preserve prior report bytes in the private reports archive before a new run;
+  publish incremental and final reports atomically.
 - Do not duplicate requirements, design, plans, tests, commits, or evidence in
   the disposable project when inputs are unchanged.
 - If a previous verification run is incomplete, resume from the report and
@@ -291,10 +303,10 @@ The mode, authority, failure and completion rules in this file remain required.
   the immutable verification ID, so a superseded workflow stops before its
   next mutation instead of recreating the old stack. Cleanup ambiguity fails
   closed and blocks replacement. Standalone destroy is
-  resumable and returns `ALREADY_DESTROYED` when no active lifecycle exists.
+  resumable and returns `ALREADY_DESTROYED` only when both fixture classes are absent.
   Destroy retains sanitized reports and the lifecycle archive, but removes the
-  owned project, raw evidence, private run state, containers, network, database
-  volume, and built image. Every terminal path closes and verifies the absence
+  owned live and lightweight projects, origins, profiles, auxiliary fixture homes,
+  context-bound raw evidence, containers, network, database volume and built image. Every terminal path closes and verifies the absence
   of its exactly owned browser processes. Ambiguous browser ownership blocks
   cleanup rather than targeting personal browser sessions.
 - `--resume` accepts only an owned KEPT run whose prior result is FAIL or
@@ -339,7 +351,7 @@ The mode, authority, failure and completion rules in this file remain required.
   and contexts, and digest-bound stage receipts. No native desktop capture or
   unlocked-screen prerequisite applies. Preserve failed stages and clean up
   exact owned processes; identity ambiguity remains `CLEANUP_FAILED`.
-- If any command would push, publish, merge, edit installed hooks, or touch a
+- If any command would push, publish, merge, edit ordinary installed hooks, or touch a
   non-disposable project, stop and report the unsafe action.
 - For three-tier cleanup, inspect every recorded/discovered alias, require both
   ownership labels, resolve its canonical Docker identity, and deduplicate by
@@ -356,7 +368,7 @@ The helper script is limited to static inspection, local fixture setup, local
 Git operations inside the disposable verification project, and hook execution
 with a disposable selected agent home. Full workflow verification may create local
 commits only inside the disposable project. It must never push, open real PRs,
-merge, publish, alter credentials, or mutate installed hooks or skills.
+merge, publish, alter ordinary credentials, or mutate ordinary installed hooks or skills.
 
 The verification root must be a dedicated, verifier-owned directory outside
 the source repository. It uses private `0700` permissions on POSIX; the root
@@ -429,13 +441,13 @@ Shipping and UAT always require a clean promoted checkout. After completed promo
 Compose uses the exact promoted primary checkout and requires integration
 resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
 
-Read-only classifier observations have a separate explicit target purpose. While
-the bound root coordinator is running `sdlc-classify-failure`, it may observe
-unsealed integration files without committing them or changing phase. Exact
-worktree, objective, basis, branch, HEAD, ownership and ancestry checks remain.
-This purpose is never used by Compose, runtime inventory, build certification,
-browser acceptance or test execution; explicit clean-target requests still win.
-Worker selectors and dirty promoted checkouts remain rejected.
+Read-only phase observations use a named private purpose. Classification permits
+unsealed integration files during `sdlc-classify-failure`; TDD additionally permits
+its documented `tests_red` and `tests_ready` output checkpoints before sealing.
+Exact worktree, objective, basis, branch, HEAD, ownership and ancestry checks remain.
+These purposes never reach Compose, inventory, build, browser or test execution;
+explicit clean requests still win. Worker selectors and dirty promoted checkouts
+remain rejected. Read the runtime-inventory reference before phase collection.
 
 For final historical TDD validation, follow the exact lineage checks in
 [the live contract](references/three-tier-live.md). Never rewrite old receipts
@@ -443,8 +455,15 @@ or use preserved TDD evidence to admit stale application acceptance.
 
 Before dispatching the first phase, record `sdlc-start` PASS while the coordinator
 checkpoint still names `sdlc-start` and Git remains at the fixture baseline.
-The lifecycle independently checks the JSON ownership record and actual hook
-discovery and stores a digest-bound startup receipt. Every later phase PASS and
+Supply the actual native identity through the initial recorder's private
+`--coordinator-session` selector; never impersonate it in the outer environment.
+The lifecycle independently checks JSON ownership and source state-loader
+discovery in a `workflow-startup-v3` receipt. This is not native hook activation.
+After naturally emitted tool/hook events exist, collect `record-native-activation`
+with the immutable verification ID; the separate native receipt correlates the
+owned Codex session and executed-command item IDs with installed hook events without copying prompt bodies.
+The current adapter supports Codex CLI 0.166.0; unavailable host/event formats
+remain a qualification gap. Full three-tier PASS requires both receipts. Every later phase PASS and
 final semantic ingestion require that receipt. Empty or mismatched ownership
 also blocks runtime targeting. A late ownership repair requires a fresh trial;
 it cannot restore full-workflow validity to earlier evidence.
@@ -486,8 +505,8 @@ not serve concurrent worker tests.
 - Any required deterministic or supplied live FAIL makes final status FAIL;
   PASS requires all required deterministic and live lanes to pass.
 - The report states PASS, PARTIAL, or FAIL and lists top issues and fixes.
-- No installed skills, hook configuration, credentials, real repositories, or
-  external services were modified.
+- No ordinary installed skills, hook configuration, credentials, real repositories,
+  or external services were modified by verification; disposable setup is reported separately.
 - In three-tier create mode, every logical layer, SDLC phase, named test class,
   local deployment, headless Playwright Test GUI journey, API/database correlation, and
   restart-persistence assertion has semantic evidence. The report records all
@@ -510,3 +529,19 @@ PASS/PARTIAL/FAIL interpretation.
 Include the top issues and recommended fixes, validation commands, and skipped
 live or external checks with their reasons. State whether the evidence supports
 trying the workflow on a low-risk real repository.
+
+## Verifier Ownership And Progress
+
+`verification_suites.py` owns suite commands, capability dependencies and bounded
+timeouts. Dispatch has a measured 600-second budget. Suite start/completion and
+30-second progress messages contain identifiers and elapsed time, never raw test
+output. Reports distinguish failed suites from dependent capability impacts;
+interruption retains completed evidence and never qualifies an incomplete gate.
+
+`verification_workspace.py` owns root admission, exact lightweight generation
+receipts, operation exclusion and aggregate cleanup. It delegates live resources
+to the three-tier owner. Preserve sanitized reports and minimal cleanup records.
+Missing profiles or generation receipts require a fresh root, not adoption or
+manual deletion. Stop owned native coordinators normally and let the product
+release workers, validators and leases before cleanup; absence of a browser alone
+is not writer quiescence. Historical receipts are never converted into authority.

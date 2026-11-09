@@ -6,16 +6,25 @@ never establish cloud allocation ownership or authorize promotion.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$")
 _ROLES = frozenset({"active", "passive"})
+
+
+class RepairDisposition(str, Enum):
+    """Dispatch evidence, never a substitute for independently observed health."""
+
+    DEFERRED = "deferred"
+    ATTEMPTED = "attempted"
 
 
 class StateValidationError(ValueError):
@@ -302,14 +311,42 @@ class PeerHeartbeat:
     promotion_ready: bool
     auto_healing_policy_state: str
     auto_healing_policy_digest: str
+    data_plane_mode: str = "blocked"
+    origination_ready: bool = False
+    fault_category: str = "unknown"
+    authority_ready: bool = False
+    coverage_state: str = "unknown"
+    required_destinations: tuple[str, ...] = ()
+    covered_destinations: tuple[str, ...] = ()
     tunnel_capability: bool = True
     tunnel_recovery: dict[str, Any] | None = None
     evidence: HeartbeatEvidence = field(default_factory=HeartbeatEvidence)
     # Set only by the current receiving process after authenticated round trip.
     # Excluded from all wire/persistence serialization.
+    observation_valid_until: float | None = field(default=None, compare=False, repr=False)
+    authority_valid_until: float | None = field(default=None, compare=False, repr=False)
     health_valid_until: float | None = field(default=None, compare=False, repr=False)
     service_valid_until: float | None = field(default=None, compare=False, repr=False)
     echo_valid_until: float | None = field(default=None, compare=False, repr=False)
+
+    def authority_fresh(self, now: float) -> bool:
+        return bool(
+            self.authority_ready
+            and self.authority_valid_until is not None
+            and math.isfinite(now)
+            and now < self.authority_valid_until
+            and self.evidence.cloud_status in {"complete", "in-progress"}
+            and self.evidence.cloud_age_seconds is not None
+            and self.evidence.cloud_age_seconds < 30
+        )
+
+    def coverage_fresh(self, now: float) -> bool:
+        return bool(
+            self.coverage_state == "healthy"
+            and self.observation_valid_until is not None
+            and math.isfinite(now)
+            and now < self.observation_valid_until
+        )
 
     def local_health_fresh(self, now: float) -> bool:
         return bool(
@@ -355,6 +392,15 @@ class PeerHeartbeat:
             raise StateValidationError(
                 "generation_id must equal the canonical configuration digest"
             )
+        if self.data_plane_mode not in {"blocked", "passive", "originating", "active"}:
+            raise StateValidationError("invalid data plane mode")
+        _require_bool("origination_ready", self.origination_ready)
+        if self.origination_ready and (
+            self.data_plane_mode != "originating"
+            or self.observed_owner_id != self.node_id
+            or self.authority_ready
+        ):
+            raise StateValidationError("invalid owner origination evidence")
         _require_bool("service_healthy", self.service_healthy)
         _require_bool("route_ready", self.route_ready)
         _require_bool("promotion_ready", self.promotion_ready)
@@ -366,11 +412,41 @@ class PeerHeartbeat:
         }:
             raise StateValidationError("auto_healing_policy_state is invalid")
         _require_sha256("auto_healing_policy_digest", self.auto_healing_policy_digest)
+        from ...faults import FaultCategory
+
+        try:
+            FaultCategory(self.fault_category)
+        except ValueError:
+            raise StateValidationError("invalid fault category") from None
+        _require_bool("authority_ready", self.authority_ready)
+        if self.coverage_state not in {"healthy", "unhealthy", "unknown"}:
+            raise StateValidationError("invalid destination coverage")
+        for prefixes in (self.required_destinations, self.covered_destinations):
+            if not isinstance(prefixes, tuple) or tuple(sorted(set(prefixes))) != prefixes:
+                raise StateValidationError("invalid coverage destinations")
+            try:
+                if any(str(ipaddress.IPv4Network(p, strict=True)) != p for p in prefixes):
+                    raise ValueError
+            except ValueError:
+                raise StateValidationError("invalid coverage destinations") from None
+        if not set(self.covered_destinations).issubset(self.required_destinations):
+            raise StateValidationError("coverage exceeds declared destinations")
+        if (
+            self.coverage_state == "healthy"
+            and self.covered_destinations != self.required_destinations
+        ):
+            raise StateValidationError("healthy coverage is incomplete")
         _require_bool("tunnel_capability", self.tunnel_capability)
         if self.tunnel_recovery is not None:
             claim = self.tunnel_recovery
-            if not isinstance(claim, dict) or set(claim) != {"owner", "started", "deadline"}:
+            if not isinstance(claim, dict) or set(claim) != {
+                "owner",
+                "started",
+                "deadline",
+                "exhausted",
+            }:
                 raise StateValidationError("invalid tunnel recovery claim")
+            _require_bool("exhausted", claim["exhausted"])
             owner = claim["owner"]
             if not isinstance(owner, dict) or set(owner) != {
                 "cluster",
@@ -408,13 +484,20 @@ class PeerHeartbeat:
             "observed_owner_id": self.observed_owner_id,
             "promotion_ready": self.promotion_ready,
             "route_ready": self.route_ready,
-            "schema": "nebius-vpngw/vm-ha-heartbeat-v5",
+            "schema": "nebius-vpngw/vm-ha-heartbeat-v7",
             "evidence": self.evidence.to_dict(),
             "tunnel_capability": self.tunnel_capability,
             "tunnel_recovery": self.tunnel_recovery,
             "sent_at": self.sent_at,
             "sequence": self.sequence,
             "service_healthy": self.service_healthy,
+            "data_plane_mode": self.data_plane_mode,
+            "origination_ready": self.origination_ready,
+            "fault_category": self.fault_category,
+            "authority_ready": self.authority_ready,
+            "coverage_state": self.coverage_state,
+            "required_destinations": list(self.required_destinations),
+            "covered_destinations": list(self.covered_destinations),
         }
 
     @classmethod
@@ -439,6 +522,13 @@ class PeerHeartbeat:
                 "certificate_fingerprint",
                 "digests",
                 "service_healthy",
+                "data_plane_mode",
+                "origination_ready",
+                "fault_category",
+                "authority_ready",
+                "coverage_state",
+                "required_destinations",
+                "covered_destinations",
                 "route_ready",
                 "promotion_ready",
                 "tunnel_capability",
@@ -447,7 +537,7 @@ class PeerHeartbeat:
             },
             "peer heartbeat",
         )
-        if value["schema"] != "nebius-vpngw/vm-ha-heartbeat-v5":
+        if value["schema"] != "nebius-vpngw/vm-ha-heartbeat-v7":
             raise StateValidationError("unsupported peer heartbeat schema")
         sequence = value["sequence"]
         if not isinstance(sequence, int) or isinstance(sequence, bool):
@@ -478,6 +568,13 @@ class PeerHeartbeat:
             ),
             tunnel_capability=_require_bool("tunnel_capability", value["tunnel_capability"]),
             tunnel_recovery=value["tunnel_recovery"],
+            data_plane_mode=value["data_plane_mode"],
+            origination_ready=value["origination_ready"],
+            fault_category=value["fault_category"],
+            authority_ready=value["authority_ready"],
+            coverage_state=value["coverage_state"],
+            required_destinations=tuple(value["required_destinations"]),
+            covered_destinations=tuple(value["covered_destinations"]),
             evidence=HeartbeatEvidence.from_mapping(value["evidence"]),
         )
 

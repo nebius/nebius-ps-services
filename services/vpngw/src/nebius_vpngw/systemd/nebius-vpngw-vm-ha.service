@@ -2,7 +2,7 @@
 Description=Nebius VPNGW VM-HA controller
 After=nebius-vpngw-vm-ha-guard.service
 Requires=nebius-vpngw-vm-ha-guard.service
-Before=strongswan-starter.service strongswan.service frr.service nebius-vpngw-agent.service
+Before=strongswan.service frr.service nebius-vpngw-agent.service
 ConditionPathExists=/etc/nebius-vpngw/vm-ha-enabled
 
 [Service]

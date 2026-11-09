@@ -208,9 +208,18 @@ def main(argv):
     try:
         env = native_environment(args.cwd, args.profile)
         validate_native_command(command, env["SKILLS_AGENT"])
+        import three_tier_lifecycle as lifecycle
+        import verification_catalog
+        root = args.profile.parent.parent.parent.parent.parent
+        _, state = lifecycle.load_active(root)
+        verification_catalog.require_native_installation(state, env["SKILLS_AGENT"])
+        # Record the process that exec will preserve; cleanup never signals an unowned PID.
+        import verification_workspace as workspace
+        workspace.register_native(root)
         os.chdir(args.cwd)
+        os.umask(0o077)
         os.execvpe(command[0], command, env)
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, RuntimeError) as error:
         print(str(error), file=sys.stderr)
         return 2
 

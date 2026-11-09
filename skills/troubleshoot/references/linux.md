@@ -1,9 +1,16 @@
 # Linux Host Troubleshooting Playbook
 
+## Applicability
+
 Use this playbook for bare-metal hosts, VMs, container nodes, and guest OS
 layers. Record distribution, kernel, architecture, boot ID, init and service
 manager, package or image identity, time source, cgroup generation, security
 controls, and whether the host is mutable or production.
+
+## Version Fingerprint
+
+Record distribution, kernel, architecture, boot ID, service manager, process and
+cgroup identity/version, container runtime, NUMA placement and device boundaries.
 
 ## Adaptive Decision Guide
 
@@ -20,8 +27,10 @@ Use only rows implicated by the failing path; record material unexamined boundar
 
 <!-- markdownlint-enable MD013 -->
 
-### Escalation Conditions
+### Diagnostic Effects
 
+Passive bounded inspection comes first. Active diagnostics remain coordinator-owned;
+workers may not launch tests, captures, debug containers, stress or repairs.
 Escalate only if the next observation can separate remaining explanations. Bound
 time, output, target and effects; preserve evidence and original settings. Treat
 production or unconfirmed targets as read-only without exact action authority.
@@ -32,6 +41,12 @@ Replay the original operation from the same relevant identity and workload, comp
 an unaffected control, and verify the implicated boundary independently. Invalidate
 pre-change observations and state material unverified scope. A passing status
 command cannot replace the workload oracle.
+
+For cgroup v2 memory, distinguish `high`, `max`, `oom` and `oom_kill` event
+changes. `memory.events` includes descendant events; `memory.events.local` is
+local. Correlate host and cgroup PSI with the workload window; averages and RSS
+alone cannot establish pressure, limits or a leak. CPU execution, runnable delay,
+I/O wait and lock/dependency wait require different evidence.
 
 ## Component And Resource Verification
 

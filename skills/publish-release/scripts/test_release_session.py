@@ -738,7 +738,10 @@ class CommandFlowTests(unittest.TestCase):
         commit = fixture.git_output(fixture.work, "rev-parse", "HEAD")
         fixture.git(fixture.work, "push", "origin", "HEAD:refs/heads/feature/demo")
         remote.pr.return_value = pr(headRefOid=commit)
-        call("bind-pr", "--tag", "demo-v1.2.3", "--pr", "12")
+        with patch("release_session.execution_proof", return_value={"head": commit}) as proof:
+            call("bind-pr", "--tag", "demo-v1.2.3", "--pr", "12", "--review-task", "/private/review/task.json")
+            self.assertEqual(proof.call_args.args[0]["scope"]["root"], str(fixture.work.resolve()))
+            self.assertEqual(proof.call_args.args[0]["pr"], 12)
         # Simulate a later canonical base synchronization and fresh local review.
         old_head = commit
         fixture.git(fixture.work, "switch", "main")
@@ -798,6 +801,9 @@ class CommandFlowTests(unittest.TestCase):
             },
         }[endpoint]
         remote.tag.return_value = (None, None)
+        execution_patch = patch("release_reconcile.execution_proof", return_value={"repo_root": str(fixture.work), "head": commit})
+        execution_patch.start()
+        self.addCleanup(execution_patch.stop)
         result = json.loads(
             call(
                 "reconcile-pr",
@@ -809,6 +815,8 @@ class CommandFlowTests(unittest.TestCase):
                 commit,
                 "--review-id",
                 "42",
+                "--review-task",
+                "/private/review/task.json",
             )
         )
         self.assertEqual(result["head"], commit)

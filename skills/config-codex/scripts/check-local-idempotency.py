@@ -573,6 +573,16 @@ def check_agents_md(codex_home: Path, strict: bool, failures: list[str]) -> None
     if begin != -1 and end != -1 and begin < end:
         managed_block = actual[begin + len(MANAGED_BEGIN) : end]
         managed_text = compact_markdown_text(managed_block)
+        memory_heading = "## Host Memory Safety"
+        memory_headings = [
+            source for heading_text, source in markdown_headings(actual)
+            if "host memory safety" in markdown_inline_search_text(heading_text).casefold()
+        ]
+        if (memory_headings != [memory_heading]
+                or compact_markdown_text(markdown_section(managed_block, memory_heading))
+                != compact_markdown_text(markdown_section(template, memory_heading))):
+            fail("AGENTS.md host memory policy is stale or incomplete", failures)
+            return
         live_heading = "## Live Product Validation"
         live_policy_headings = [
             source

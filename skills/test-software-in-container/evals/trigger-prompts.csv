@@ -1,0 +1,17 @@
+id,should_trigger,prompt
+install,true,Install our CLI in a disposable Ubuntu 24.04 container and exercise its smoke checks.
+image,true,Test the software already in our image without reinstalling it; run the API integration suite.
+upgrade,true,Use authentic containers to test upgrades from four stable historical releases.
+patch,true,Verify a same-version configuration hotfix in a disposable container and check preserved settings.
+migration,true,Test JSON-to-SQLite data migration in containers without installing any historical product package.
+all,true,"Run applicable installation, upgrade, patch and migration tests with cached baselines in containers."
+recovery,true,Check interrupted package upgrades and mutation-free repeats from verified predecessor images.
+functional,true,Run our named functional test suite live against software installed in a disposable image.
+production,false,Verify production traffic and failover after deploying this release.
+optimize,false,Profile pytest fixture and collection costs to make our unit suite faster.
+dockerfile,false,Harden our application Dockerfile and reduce the published image size.
+kernel,false,Upgrade the host kernel and certify its bootloader and GPU hardware after reboot.
+deploy,false,Deploy our container image to Kubernetes and configure its ingress and autoscaling.
+debug,false,Diagnose an unknown intermittent failure in our production database migration.
+source,true,Run the current project Linux integration suite in a disposable container.
+suite-discovery,true,List the container test suites available for this project without running them.

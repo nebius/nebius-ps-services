@@ -44,8 +44,10 @@ focused regression check passes after the fix; explain any unavailable negative
 control. Broaden checks only for affected behavior. Unsafe semantics, destructive
 effects, unresolved objections or unavailable essential proof block readiness.
 
-Create-pr's private preparation handoff owns intake, checkout, commits, base
-sync and publication under the original receipt/grant. Use its
+Create-pr's private preparation handoff owns intake, private checkout, commits,
+base sync and publication under the original receipt/grant. Use its
+[private execution contract](../../create-pr/references/private-review.md) for
+standalone and nested reviews; preserve the caller checkout throughout. Use its
 [PR publication contract](../../create-pr/references/pr-publication.md) for both
 same-repository and fork updates. Keep the original PR and contributor history;
 do not create a replacement branch/PR to bypass missing write permission.

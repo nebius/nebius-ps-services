@@ -11,7 +11,6 @@ import json
 import os
 from pathlib import Path
 import re
-import signal
 import subprocess
 import sys
 import tempfile
@@ -51,7 +50,7 @@ def target(run_dir, execution_id):
         selected = next((r for r in program["definition"]["slices"] if r["id"] == execution_id), None)
         require(selected is not None, "unknown delivery slice")
         coordinator = read(run_dir / "execution" / execution_id / "coordinator.json")
-        require(coordinator.get("schema") == "workflow/execution-coordinator-v2"
+        require(coordinator.get("schema") == "workflow/execution-coordinator-v3"
                 and coordinator.get("status") in {"promoted", "cleanup", "done"}
                 and coordinator.get("promoted_head"), "qualification requires a promoted candidate")
         from workflow_impact import verify_execution
@@ -127,9 +126,16 @@ def command(project, plan, action, criterion=None):
     if "SKILLS_GIT_PROFILE" in owned:
         for key in ("SKILLS_GIT_PROFILE", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_ATTR_NOSYSTEM", "GIT_TERMINAL_PROMPT"):
             environment[key] = owned[key]
+    from workflow_process import OwnedProcessGroup
     with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
-        process = subprocess.Popen(argv, cwd=project, env=environment, stdout=output,
-                                   stderr=errors, start_new_session=True)
+        owner = OwnedProcessGroup()
+        try:
+            process = subprocess.Popen(argv, cwd=project, env=environment, stdout=output,
+                                   stderr=errors, process_group=owner.id)
+        except BaseException:
+            owner.close(grace=0)
+            owner.verify_absent()
+            raise
         deadline = time.monotonic() + plan["timeout_seconds"]
         try:
             while process.poll() is None:
@@ -137,12 +143,9 @@ def command(project, plan, action, criterion=None):
                 require(output.tell() <= 1024 * 1024 and errors.tell() <= 1024 * 1024, "qualification output exceeded its bound")
                 time.sleep(0.05)
         finally:
-            # Also terminate background children before releasing the live resource.
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            owner.close(grace=.05)
             process.wait(timeout=10)
+            owner.verify_absent()
         output.seek(0)
         raw = output.read(1024 * 1024 + 1)
         errors.seek(0)

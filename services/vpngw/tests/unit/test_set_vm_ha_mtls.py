@@ -11,6 +11,18 @@ from typer.testing import CliRunner
 import nebius_vpngw.cli as cli
 from nebius_vpngw.agent import main as agent_main
 from nebius_vpngw.agent.vm_ha.mtls_actions import execute_mtls_action
+from nebius_vpngw.deploy import ha_composite
+
+
+@pytest.fixture
+def no_pending_rotation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ordinary rotation tests independent of prerequisite journals."""
+    monkeypatch.setattr(ha_composite, "pending", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        ha_composite,
+        "converge",
+        lambda *_args, **_kwargs: pytest.fail("unexpected prerequisite convergence"),
+    )
 
 
 def _member(node_id: str, role: str, target: str, root: Path) -> tuple[object, Path]:
@@ -217,6 +229,25 @@ def test_rotation_controller_capability_requires_running_process_evidence() -> N
         cli._require_vm_ha_mtls_rotation_controller_capability({})
 
     assert "nebius-vpngw apply" in str(failure.value)
+    assert not isinstance(failure.value, cli.MissingCapability)
+
+
+@pytest.mark.parametrize("capabilities", [[], ["unrelated-capability"]])
+def test_rotation_controller_missing_capability_selects_prerequisite_upgrade(capabilities) -> None:
+    with pytest.raises(cli.MissingCapability):
+        cli._require_vm_ha_mtls_rotation_controller_capability(
+            {"controller_capabilities": capabilities}
+        )
+
+
+@pytest.mark.parametrize("capabilities", [None, "unsupported", [None], [1]])
+def test_rotation_controller_malformed_capability_cannot_select_upgrade(capabilities) -> None:
+    with pytest.raises(RuntimeError, match="malformed") as failure:
+        cli._require_vm_ha_mtls_rotation_controller_capability(
+            {"controller_capabilities": capabilities}
+        )
+    assert not isinstance(failure.value, cli.MissingCapability)
+    assert "nebius-vpngw apply" in str(failure.value)
 
 
 @pytest.mark.parametrize(
@@ -260,7 +291,7 @@ def test_rotation_capability_preflight_rejects_installed_skew(
 
 
 def test_vm_ha_rotate_mtls_dry_run_has_no_writer_or_remote_effect(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, no_pending_rotation
 ) -> None:
     config_path = tmp_path / "gateway.yaml"
     config_path.write_text("project_id: project-a\n", encoding="utf-8")
@@ -268,6 +299,11 @@ def test_vm_ha_rotate_mtls_dry_run_has_no_writer_or_remote_effect(
     effects: list[str] = []
     monkeypatch.setattr(cli, "_inspect_vm_ha_mtls_rotation", lambda _path: plan)
     monkeypatch.setattr(cli, "_execute_vm_ha_mtls_rotation", lambda _plan: effects.append("run"))
+    monkeypatch.setattr(
+        cli,
+        "VMHAApplyLock",
+        lambda **_kwargs: pytest.fail("dry-run acquired the writer lock"),
+    )
 
     result = CliRunner().invoke(
         cli.app,
@@ -281,6 +317,41 @@ def test_vm_ha_rotate_mtls_dry_run_has_no_writer_or_remote_effect(
     assert "vm-ha-mtls-rotation-preview-v1" not in result.output
     assert "vm-ha-mtls-rotation-result-v1" not in result.output
     assert effects == []
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_rotation_prerequisite_path_does_not_claim_uninterrupted_traffic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pending: bool
+) -> None:
+    config_path = tmp_path / "gateway.yaml"
+    config_path.write_text("project_id: project-a\n", encoding="utf-8")
+    calls = []
+
+    def inspect(_path):
+        assert not pending, "pending composition must resume before ordinary inspection"
+        raise cli.MissingCapability("required controller upgrade")
+
+    def converge(_api, path, action, **kwargs):
+        calls.append((path, action, kwargs["dry_run"], kwargs["approve"]))
+        return cli.VMHACommandResult(
+            outcome=cli.VMHACommandOutcome.HEALTHY,
+            classification=cli.VMHACommandClassification.HEALTHY,
+            health=cli.VMHACommandHealth.HEALTHY,
+            effective_config_file=path,
+        )
+
+    monkeypatch.setattr(ha_composite, "pending", lambda *_args: pending)
+    monkeypatch.setattr(ha_composite, "converge", converge)
+    monkeypatch.setattr(cli, "_inspect_vm_ha_mtls_rotation", inspect)
+    result = CliRunner().invoke(
+        cli.app,
+        ["vm-ha", "--rotate-mtls", "--local-config-file", str(config_path), "--dry-run"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [(config_path, "rotate-mtls", True, None)]
+    assert "VPN traffic is expected to remain available" not in result.output
+    assert "failover and rearm are paused until completion" not in result.output
 
 
 @pytest.mark.parametrize(
@@ -393,7 +464,9 @@ def test_rotation_plan_labels_inhibition_only_recovery_as_resume(tmp_path: Path)
     assert summary.startswith("Plan: resume ")
 
 
-def test_vm_ha_rotate_mtls_rejects_plan_drift_after_lock(tmp_path: Path, monkeypatch) -> None:
+def test_vm_ha_rotate_mtls_rejects_plan_drift_after_lock(
+    tmp_path: Path, monkeypatch, no_pending_rotation
+) -> None:
     config_path = tmp_path / "gateway.yaml"
     config_path.write_text("project_id: project-a\n", encoding="utf-8")
     first = _preview_plan(tmp_path, digest="1" * 64)
@@ -433,7 +506,7 @@ def test_vm_ha_rotate_mtls_rejects_plan_drift_after_lock(tmp_path: Path, monkeyp
 
 
 def test_vm_ha_rotate_mtls_rejects_mismatched_approval_before_lock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_pending_rotation
 ) -> None:
     config_path = tmp_path / "gateway.yaml"
     config_path.write_text("project_id: project-a\n", encoding="utf-8")
@@ -471,6 +544,7 @@ def test_vm_ha_rotate_mtls_interactive_confirmation_boundary(
     should_execute: bool,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    no_pending_rotation,
 ) -> None:
     config_path = tmp_path / "gateway.yaml"
     config_path.write_text("project_id: project-a\n", encoding="utf-8")
@@ -500,6 +574,7 @@ def test_vm_ha_rotate_mtls_interactive_confirmation_boundary(
     )
 
     assert result.exit_code == expected_exit_code, result.output
+    assert "Execute this exact VM-HA mTLS rotation?" in result.output
     assert lock_entries == (["entered"] if should_execute else [])
     assert effects == (["run"] if should_execute else [])
 
@@ -724,7 +799,7 @@ def test_rotation_releases_preparation_free_inhibition_after_barrier_drift(
 
 
 def test_vm_ha_rotate_mtls_uses_human_output_and_rotation_progress(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, no_pending_rotation
 ) -> None:
     config_path = tmp_path / "gateway.yaml"
     config_path.write_text("project_id: project-a\n", encoding="utf-8")

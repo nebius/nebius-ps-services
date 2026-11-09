@@ -74,7 +74,7 @@ Only the coordinator can create or replace that binding. Session observation is
 read-only and never starts work. A new session uses explicit `continue` after
 writer quiescence. Obsolete schemas fail without conversion or deletion.
 
-Execution coordinators use `workflow/execution-coordinator-v2`, state version 1.
+Execution coordinators use `workflow/execution-coordinator-v3`, state version 1.
 Waves use ready, active and admitted task IDs with one frozen base and a full-wave
 integration barrier. Assignments and results bind immutable basis and plan
 identities. Termination permits slot reuse only after independent coordinator
@@ -89,7 +89,9 @@ checkpoint or dispatching any phase:
 
 - For a fresh accepted run, verify its current project/session ownership and
   absence of prior phase checkpoints or downstream phase, plan and execution
-  evidence. Initialize `current_phase: sdlc-start`, `status: running`, zero retry
+  evidence. Invoke private `scripts/initialize_phase.py --project-root
+  <selected-project>` from the bound native coordinator. Initialize
+  `current_phase: sdlc-start`, `status: running`, zero retry
   counters and no completed-phase evidence. Preserve accepted objective provenance.
   Use the actual registered project/run identities and the normal state schema.
   Follow the checkpoint write order below before observation or first dispatch.
@@ -103,6 +105,30 @@ checkpoint or dispatching any phase:
   artifacts and select a new checkpoint rather than overwriting earlier evidence.
 
 Intake helpers, hooks and verifier observers do not initialize or advance phases.
+
+The private initializer obtains identity from the selected native runtime; it
+accepts no session or run override. Under the project transition lock it checks
+the accepted run, project registration, session binding, active pointer and
+ownership lock. Managed intake must also retain its exact active outer lease;
+`execution/interop.json` alone is not proof of that lease. Initialization does
+not acquire missing ownership or advance a later phase.
+
+Preserve `history/hook-events.jsonl` and `history/continuation-state.json` as
+audit telemetry. They may precede phase initialization and never certify phase
+completion. Unknown history or downstream artifacts require reconciliation.
+The initial checkpoint has no execution, fingerprints or completed evidence.
+Its `initialization` member uses `agentic-sdlc/initial-phase-v1`, binding the
+accepted objective, source revision and native coordinator. `latest.json` uses
+the pointer shape below, not a second state snapshot.
+
+Exact repeated initialization returns `ALREADY_INITIALIZED` without writes.
+Interrupted publication can return `RECOVERED` only when retained snapshots
+match this initial contract and no later work exists. Preserve all prior
+snapshots, including a history record containing only a prefix of its expected
+initial entry, and publish a new checkpoint. Malformed snapshots, unsupported
+initialization records, unsafe files and non-initial content remain blocked;
+never convert them or overwrite their evidence. `BLOCKED` may follow partial
+writes, so inspect retained artifacts before any retry.
 
 ## Minimum current-state.json
 
@@ -151,7 +177,7 @@ Intake helpers, hooks and verifier observers do not initialize or advance phases
   },
   "repair": null,
   "execution": {
-    "schema": "workflow/execution-coordinator-v2",
+    "schema": "workflow/execution-coordinator-v3",
     "execution_id": "FEAT-001",
     "status": "not_prepared",
     "coordinator": "execution/FEAT-001/coordinator.json",
@@ -215,10 +241,10 @@ while the pending projection becomes empty. Other pending invalidations reject
 recovery. It preserves budgets. This exception cannot
 clear a code-repair cursor, a policy/human block, or a failed verifier trial.
 
-Shared `workflow/execution-coordinator-v2` binds the selected folder through
+Shared `workflow/execution-coordinator-v3` binds the selected folder through
 `git_root`, `selected_project_root`, `project_scope` and `scope_cwd`.
-`workflow/execution-wave-v2` owns ordered ready, active and admitted task IDs;
-there is no batch cursor. Shared task/assignment/result v1 records carry the
+`workflow/execution-wave-v3` owns ordered ready, active and admitted task IDs;
+there is no batch cursor. Shared task v3, assignment v2 and result v4 records carry the
 immutable basis digest, native session history, attempt, direct heartbeat,
 claims, structured evidence and specification gaps. The coordinator records
 exact termination before result admission or slot reuse. Recovery needs an
@@ -299,7 +325,7 @@ without conversation history.
 
 The `execution` member above is an informational checkpoint projection. The
 execution owner's authoritative state is `execution/<FEAT-ID>/coordinator.json`,
-using `workflow/execution-coordinator-v2` with `state_version: 1`. Retired
+using `workflow/execution-coordinator-v3` with `state_version: 1`. Retired
 `agentic-sdlc/execution-coordinator-v1` through
 `agentic-sdlc/execution-coordinator-v7` records stop with
 `WORKFLOW_UPGRADE_REQUIRED`; do not create a compatibility path or mutate their
@@ -511,3 +537,7 @@ active run it must still block secret-bearing payloads, dangerous shell
 patterns, and guarded Git or GitHub actions without valid short-lived
 authorization. Use the explicit hook installer option for deliberate runtime
 sync instead of editing installed hook artifacts directly.
+
+The shared [worker wave contract](../../worktree/references/worker-waves.md)
+freezes worker/wave/physical-worktree limits, admits independently verified
+no-change results, and requires producer-owned combined-wave validation receipts.

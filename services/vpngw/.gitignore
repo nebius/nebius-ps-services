@@ -84,6 +84,7 @@ config-resolved.yaml
 last-applied.json
 .nebius-vpngw-rollbacks/
 *.vm-ha-lifecycle.json
+*.vm-ha-lifecycle.json.history/
 *.vm-ha-lifecycle.json.write.lock
 *.destroy-lifecycle.json
 .*.destroy-lifecycle.json.write.lock

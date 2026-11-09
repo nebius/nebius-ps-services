@@ -7,7 +7,6 @@ import os
 import shlex
 import subprocess
 import zipfile
-from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -77,6 +76,7 @@ def _write_vm_ha_agent_wheel(
     dead_capability_handler: bool = False,
     include_module_entrypoint: bool = True,
     omit_service_asset: str | None = None,
+    metadata_description: bytes = b"",
 ) -> None:
     dist_info = "nebius_vpngw-1.2.3.dist-info"
     members = {
@@ -89,11 +89,19 @@ def _write_vm_ha_agent_wheel(
         f"{dist_info}/METADATA": b"Metadata-Version: 2.4\nName: nebius-vpngw\nVersion: 1.2.3\n",
         f"{dist_info}/WHEEL": (b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"),
     }
+    if metadata_description:
+        members[f"{dist_info}/METADATA"] += b"\n" + metadata_description
     source_root = Path(__file__).parents[2] / "src/nebius_vpngw"
     for source in (
         "ingress_policy.py",
         "boot_policy.py",
         "vm_ha_diagnostics.py",
+        "ha_activation.py",
+        "agent/local_commands.py",
+        "agent/routing_guard.py",
+        "agent/strongswan_renderer.py",
+        "agent/vm_ha/runtime.py",
+        "agent/vm_ha/models.py",
         "schema.py",
         "config_loader.py",
         "agent/firewall_manager.py",
@@ -507,7 +515,15 @@ def test_vm_ha_nebius_credential_rejects_noncanonical_installed_target() -> None
 class _CommandStream(BytesIO):
     def __init__(self, payload: bytes, return_code: int) -> None:
         super().__init__(payload)
-        self.channel = SimpleNamespace(recv_exit_status=lambda: return_code)
+        self.channel = SimpleNamespace(
+            recv_exit_status=lambda: return_code,
+            exit_status_ready=lambda: True,
+            recv_ready=lambda: self.tell() < len(payload),
+            recv=self.read,
+            recv_stderr_ready=lambda: False,
+            recv_stderr=lambda _size: b"",
+            close=lambda: None,
+        )
 
 
 class _Writable:
@@ -749,7 +765,7 @@ class _ManagedMTLSClient:
                         "managed-peer-ingress-v2",
                         "vm-ha-live-peer-replacement-v4",
                         "vm-ha-standby-restoration-v2",
-                        "independent-heartbeat-v5",
+                        "independent-heartbeat-v6",
                     ],
                     "schema": "nebius-vpngw.agent-capabilities.v1",
                 }
@@ -778,7 +794,8 @@ class _MaterializationClient:
 class _ActivationFailureClient:
     def exec_command(self, command: str, **kwargs):
         assert command == "sudo systemctl restart nebius-vpngw-vm-ha-guard.service"
-        assert kwargs == {"get_pty": True, "timeout": 20}
+        assert kwargs["get_pty"] is True
+        assert 90 < kwargs["timeout"] <= 120
         output = (
             b"Job for nebius-vpngw-vm-ha-guard.service failed because the control "
             b"process exited with error code. TOP_SECRET_REMOTE_DETAIL"
@@ -792,7 +809,8 @@ class _AutoHealingInitializationFailureClient:
             "sudo /usr/bin/python3 -m nebius_vpngw.agent.main "
             "--vm-ha-auto-healing-action initialize"
         )
-        assert kwargs == {"get_pty": True, "timeout": 20}
+        assert kwargs["get_pty"] is True
+        assert 90 < kwargs["timeout"] <= 120
         output = b"standby auto-healing policy action failed: TOP_SECRET_REMOTE_DETAIL"
         return BytesIO(), _CommandStream(output, 2), BytesIO()
 
@@ -875,6 +893,11 @@ def test_vm_ha_agent_activation_is_controller_owned() -> None:
 
 @pytest.fixture
 def selected_package_plan(monkeypatch):
+    from nebius_vpngw.deploy import ordinary_handoff
+
+    monkeypatch.setattr(
+        ordinary_handoff, "observe_guarded", lambda *args: {"state": "NOT_SUBMITTED"}
+    )
     from nebius_vpngw.deploy import checkpoint_conversion, ordinary_apply, vm_ha_package
 
     monkeypatch.setattr(checkpoint_conversion, "guard_package", lambda *args, **kwargs: None)
@@ -898,226 +921,132 @@ def selected_package_plan(monkeypatch):
     return plan
 
 
-@pytest.mark.parametrize(
-    ("command_fragment", "reason"),
-    [
-        ("mktemp -d", "staging directory creation failed"),
-        ("sha256sum --check --status", "bytes did not match the approved artifact"),
-        ("apt-get install -y nftables", "package installation failed (remote command failed)"),
-        ("--force-reinstall", "exact agent package installation failed"),
-        ("import cffi,cryptography", "package verification failed"),
-        ("--agent-capabilities", "capability verification failed"),
-        ("nebius_vpngw/systemd/", "service asset installation failed (remote command failed)"),
-    ],
-)
-def test_vm_ha_package_failures_keep_safe_reason_and_stop(
-    tmp_path, monkeypatch, command_fragment, reason, selected_package_plan
-) -> None:
+@pytest.mark.parametrize("failure", [None, "stage", "prepare", "capabilities"])
+def test_vm_ha_package_transaction_orders_staging_guard_and_verification(
+    tmp_path, monkeypatch, selected_package_plan, failure
+):
+    from nebius_vpngw.deploy import checkpoint_conversion, ordinary_handoff, vm_ha_package
+
     manifest, _binding = _vm_ha_manifest_and_binding()
     wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
     _write_vm_ha_agent_wheel(wheel)
-    client = _ManagedMTLSClient()
-    execute = client.exec_command
+    artifact = VMHAAgentArtifact.from_wheel(wheel, source="test")
+    calls = []
 
-    def fail_selected(command, **kwargs):
-        result = execute(command, **kwargs)
-        if command_fragment in command:
-            return BytesIO(), _CommandStream(b"TOP_SECRET_REMOTE_DETAIL", 1), BytesIO()
-        return result
+    def boundary(name):
+        calls.append(name)
+        if failure == name:
+            raise VMHAAgentPackageError("HA guarded package confirmation differs")
 
-    client.exec_command = fail_selected
-    push = SSHPush(ssh_policy=object())
-    push._paramiko = SimpleNamespace(SSHClient=lambda: client)
+    def stage(*args, **kwargs):
+        assert kwargs["artifact"] is artifact
+        boundary("stage")
+
+    def prepare(*args):
+        boundary("prepare")
+        return {
+            "artifact_sha256": artifact.sha256,
+            "capabilities": [] if failure == "capabilities" else list(artifact.capabilities),
+        }
+
+    monkeypatch.setattr(vm_ha_package, "stage", stage)
+    monkeypatch.setattr(ordinary_handoff, "prepare_guarded", prepare)
     monkeypatch.setattr(
-        "nebius_vpngw.deploy.ssh_push.configure_paramiko_host_verification",
-        lambda *args, **kwargs: None,
+        checkpoint_conversion,
+        "guard_package",
+        lambda *args, publish, **kwargs: boundary("publish" if publish else "preflight"),
     )
+    push = SSHPush(ssh_policy=object())
+    if failure:
+        with pytest.raises(VMHAAgentPackageError):
+            push.ensure_vm_ha_agent_package("203.0.113.10", manifest, {}, artifact=artifact)
+    else:
+        result = push.ensure_vm_ha_agent_package("203.0.113.10", manifest, {}, artifact=artifact)
+        assert result["artifact_sha256"] == artifact.sha256
+    assert calls == (
+        {"stage": ["preflight", "stage"], "prepare": ["preflight", "stage", "prepare"]}.get(failure)
+        or ["preflight", "stage", "prepare", "publish"]
+    )
+    assert selected_package_plan.closed
 
-    with pytest.raises(VMHAAgentPackageError) as failed:
-        push.ensure_vm_ha_agent_package(
+
+def test_vm_ha_package_predecessor_drift_stops_before_staging(
+    tmp_path, monkeypatch, selected_package_plan
+):
+    from nebius_vpngw.deploy import ordinary_apply, vm_ha_package
+
+    manifest, _binding = _vm_ha_manifest_and_binding()
+    wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
+    _write_vm_ha_agent_wheel(wheel)
+    monkeypatch.setattr(
+        ordinary_apply,
+        "remote",
+        lambda *args: {
+            "observation": dict(selected_package_plan.observation, boot_id="unexpected")
+        },
+    )
+    monkeypatch.setattr(
+        vm_ha_package, "stage", lambda *args, **kwargs: pytest.fail("staged drifted predecessor")
+    )
+    with pytest.raises(VMHAAgentPackageError, match="predecessor changed"):
+        SSHPush(ssh_policy=object()).ensure_vm_ha_agent_package(
             "203.0.113.10",
             manifest,
             {},
             artifact=VMHAAgentArtifact.from_wheel(wheel, source="test"),
         )
 
-    assert reason in str(failed.value)
-    assert "TOP_SECRET" not in str(failed.value)
-    failed_index = next(
-        i for i, command in enumerate(client.commands) if command_fragment in command
-    )
-    assert all(command.startswith("rm -f -- ") for command in client.commands[failed_index + 1 :])
-    assert client.closed
-    assert selected_package_plan.closed
 
+def test_vm_ha_durable_stage_holds_approved_inode_and_hashes_all_payloads(tmp_path, monkeypatch):
+    from contextlib import contextmanager
 
-def test_vm_ha_package_preparation_proves_cryptography_and_cffi(
-    tmp_path, monkeypatch, selected_package_plan
-) -> None:
-    manifest, _binding = _vm_ha_manifest_and_binding()
+    from nebius_vpngw.deploy import ordinary_apply, vm_ha_package
+
     wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
     _write_vm_ha_agent_wheel(wheel)
-    client = _ManagedMTLSClient()
-    push = SSHPush(ssh_policy=object())  # type: ignore[arg-type]
-    push._paramiko = SimpleNamespace(SSHClient=lambda: client)
+    approved = wheel.read_bytes()
     artifact = VMHAAgentArtifact.from_wheel(wheel, source="test")
-    monkeypatch.setattr(
-        push,
-        "_build_wheel",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("approved artifact rebuilt")),
-    )
-    monkeypatch.setattr(
-        "nebius_vpngw.deploy.ssh_push.configure_paramiko_host_verification",
-        lambda *args, **kwargs: None,
-    )
-
-    receipt = push.ensure_vm_ha_agent_package(
-        "203.0.113.10",
-        manifest,
-        {"gateway_group": {"vm_spec": {}}},
-        artifact=artifact,
-    )
-
-    assert receipt["package_version"] == "1.2.3"
-    assert receipt["cryptography_version"] == "45.0.0"
-    assert receipt["cffi_version"] == "1.17.0"
-    assert receipt["artifact_sha256"] == hashlib.sha256(wheel.read_bytes()).hexdigest()
-    assert receipt["capabilities"] == [
-        "managed-peer-ingress-v2",
-        "vm-ha-live-peer-replacement-v4",
-        "vm-ha-standby-restoration-v2",
-        "independent-heartbeat-v5",
-    ]
-    assert len(client.sftp.uploads) == 1
-    uploaded, remote_wheel = client.sftp.uploads[0]
-    assert uploaded == wheel.read_bytes()
-    assert remote_wheel == (
-        "/tmp/nebius-vpngw-agent.ABCDEFGHIJ/nebius_vpngw-1.2.3-py3-none-any.whl"
-    )
-    assert "sha256sum --check --status" in client.commands[1]
-    assert "--force-reinstall" not in client.commands[2]
-    assert "--ignore-installed" not in client.commands[2]
-    assert "--no-index --no-deps" in client.commands[2]
-    assert "--upgrade" not in client.commands[2]
-    assert remote_wheel in client.commands[2]
-    assert "--no-deps --force-reinstall" in client.commands[3]
-    assert "import cffi,cryptography" in client.commands[4]
-    assert "--agent-capabilities" in client.commands[5]
-    assert "nebius_vpngw/systemd/" in client.commands[6]
-    assert remote_wheel in client.commands[6]
-    assert client.commands[7] == (
-        f"rm -f -- {remote_wheel} && rmdir /tmp/nebius-vpngw-agent.ABCDEFGHIJ"
-    )
-    assert client.closed
-    assert selected_package_plan.wheel == artifact.path
-    assert selected_package_plan.closed
-
-
-@pytest.mark.parametrize("drift", [False, True])
-def test_vm_ha_frozen_dependencies_preserve_predecessor_and_distro_install_policy(
-    tmp_path, monkeypatch, drift
-):
-    from nebius_vpngw.deploy import checkpoint_conversion
-
-    monkeypatch.setattr(checkpoint_conversion, "guard_package", lambda *args, **kwargs: None)
-    from nebius_vpngw.deploy import ordinary_apply, ordinary_remote, vm_ha_package
-
-    manifest, _binding = _vm_ha_manifest_and_binding()
-    wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
-    _write_vm_ha_agent_wheel(wheel)
-    dependency = tmp_path / "fixture_dependency-2.0-py3-none-any.whl"
-    dependency.write_bytes(b"approved dependency")
-    plan = SimpleNamespace(
-        observation={
-            key: ("retained-boot" if key == "boot_id" else None)
-            for key in vm_ha_package.PACKAGE_FIELDS
-        },
-        manifest={
-            "dependency_wheels": {
-                dependency.name: hashlib.sha256(dependency.read_bytes()).hexdigest()
-            }
-        },
-        dependency_paths=[dependency],
-    )
-    artifact = replace(
-        VMHAAgentArtifact.from_wheel(wheel, source="test"),
-        dependency_plans=((manifest.hostname, plan),),
-    )
-    client = _ManagedMTLSClient()
-    client.sftp.put = lambda source, target: client.sftp.uploads.append(
-        (Path(source).read_bytes(), target)
-    )
-    push = SSHPush(ssh_policy=object())
-    push._paramiko = SimpleNamespace(SSHClient=lambda: client)
-    monkeypatch.setattr(
-        ordinary_apply,
-        "remote",
-        lambda *args: {
-            "observation": dict(
-                plan.observation, boot_id="unexpected-boot" if drift else "retained-boot"
-            )
-        },
-    )
-    monkeypatch.setattr(
-        "nebius_vpngw.deploy.ssh_push.configure_paramiko_host_verification",
-        lambda *args, **kwargs: None,
-    )
-    if drift:
-        with pytest.raises(RuntimeError, match="predecessor changed"):
-            push.ensure_vm_ha_agent_package("203.0.113.10", manifest, {}, artifact=artifact)
-        assert not client.commands and not client.sftp.uploads
-        return
-    push.ensure_vm_ha_agent_package("203.0.113.10", manifest, {}, artifact=artifact)
-    commands = [
-        item
-        for item in client.commands
-        if shlex.quote(ordinary_remote.DEPENDENCY_INSTALL_SCRIPT) in item
-    ]
-    assert len(commands) == 1
-    assert dependency.name in commands[0]
-    assert "&& sudo /usr/bin/python3 -m pip install --no-index --no-deps" in commands[0]
-    assert client.closed
-
-
-def test_vm_ha_package_upload_holds_approved_inode_across_path_replacement(
-    tmp_path,
-    monkeypatch,
-    selected_package_plan,
-) -> None:
-    from nebius_vpngw.deploy import checkpoint_conversion
-
-    monkeypatch.setattr(checkpoint_conversion, "guard_package", lambda *args, **kwargs: None)
-
-    manifest, _binding = _vm_ha_manifest_and_binding()
-    wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
     replacement = tmp_path / "replacement.whl"
-    _write_vm_ha_agent_wheel(wheel)
-    replacement.write_bytes(wheel.read_bytes())
-    approved_bytes = wheel.read_bytes()
-    artifact = VMHAAgentArtifact.from_wheel(wheel, source="test")
-    client = _ManagedMTLSClient()
-    client.sftp = _PutSFTP(before_read=lambda: os.replace(replacement, wheel))
-    push = SSHPush(ssh_policy=object())  # type: ignore[arg-type]
-    push._paramiko = SimpleNamespace(SSHClient=lambda: client)
-    monkeypatch.setattr(
-        "nebius_vpngw.deploy.ssh_push.configure_paramiko_host_verification",
-        lambda *args, **kwargs: None,
+    replacement.write_bytes(approved)
+    plan = vm_ha_package.VMHAPackagePlan(
+        target="203.0.113.10",
+        target_identity="compute-gateway",
+        instance=SimpleNamespace(hostname="gateway"),
+        wheel=wheel,
+        dependency_paths=[],
+        manifest={
+            "wheel_name": wheel.name,
+            "wheel_sha256": artifact.sha256,
+            "runtime_plan": {},
+            "dependency_wheels": {},
+        },
+        observation={"boot_id": "approved-boot"},
+        effects=[],
+        temporary=None,
     )
+    opened = VMHAAgentArtifact.open_verified
 
-    receipt = push.ensure_vm_ha_agent_package(
-        "203.0.113.10",
-        manifest,
-        {"gateway_group": {"vm_spec": {}}},
-        artifact=artifact,
-    )
+    @contextmanager
+    def replace_after_open(self):
+        with opened(self) as stream:
+            os.replace(replacement, wheel)
+            yield stream
 
-    assert receipt["artifact_sha256"] == hashlib.sha256(approved_bytes).hexdigest()
-    assert client.sftp.uploads == [
-        (
-            approved_bytes,
-            "/tmp/nebius-vpngw-agent.ABCDEFGHIJ/nebius_vpngw-1.2.3-py3-none-any.whl",
-        )
-    ]
+    monkeypatch.setattr(VMHAAgentArtifact, "open_verified", replace_after_open)
+
+    def remote(*args):
+        request = args[-1]
+        assert base64.b64decode(request["wheel"]) == approved
+        return {
+            "status": "staged",
+            "receipt": {
+                "manifest": ordinary_apply.digest(plan.manifest),
+                "runtime_plan": ordinary_apply.digest({}),
+            },
+        }
+
+    monkeypatch.setattr(ordinary_apply, "remote", remote)
+    vm_ha_package.stage(object(), plan, {}, artifact=artifact)
     with pytest.raises(VMHAAgentArtifactError) as changed:
         artifact.verify_current()
     assert changed.value.problem is VMHAAgentArtifactProblem.CHANGED
@@ -1159,6 +1088,26 @@ def test_vm_ha_agent_artifact_rejects_token_only_pseudo_wheel(tmp_path) -> None:
         match="missing required package content",
     ) as error:
         VMHAAgentArtifact.from_wheel(wheel, source="test")
+    assert error.value.problem is VMHAAgentArtifactProblem.INCOMPATIBLE
+
+
+def test_vm_ha_agent_artifact_accepts_large_package_description(tmp_path) -> None:
+    wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
+    _write_vm_ha_agent_wheel(wheel, metadata_description=b"x" * (512 * 1024))
+
+    artifact = VMHAAgentArtifact.from_wheel(wheel, source="test")
+
+    assert artifact.path == wheel
+    artifact.verify_current()
+
+
+def test_vm_ha_agent_artifact_retains_metadata_resource_bound(tmp_path) -> None:
+    wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
+    _write_vm_ha_agent_wheel(wheel, metadata_description=b"x" * (1024 * 1024))
+
+    with pytest.raises(VMHAAgentArtifactError, match="invalid required package content") as error:
+        VMHAAgentArtifact.from_wheel(wheel, source="test")
+
     assert error.value.problem is VMHAAgentArtifactProblem.INCOMPATIBLE
 
 
@@ -1385,25 +1334,100 @@ def test_vm_ha_materialization_waits_for_controller_convergence() -> None:
     SSHPush._wait_for_vm_ha_materialization(client, sleeper=sleeps.append)
 
     assert len(client.commands) == 3
-    assert sleeps == [5.0, 5.0]
+    assert sleeps == [1.0, 1.0]
     assert all("--vm-ha-materialized" in command for command, _ in client.commands)
-    assert all(kwargs == {"get_pty": True, "timeout": 20} for _, kwargs in client.commands)
+    assert all(kwargs["get_pty"] is True for _, kwargs in client.commands)
+    assert all(0 < kwargs["timeout"] <= 20 for _, kwargs in client.commands)
 
 
 def test_vm_ha_materialization_wait_is_bounded() -> None:
     client = _MaterializationClient([1, 1, 1])
     sleeps: list[float] = []
+    now = 0.0
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        sleeps.append(seconds)
+        now += seconds
 
     with pytest.raises(RuntimeError, match="bounded wait"):
         SSHPush._wait_for_vm_ha_materialization(
             client,
-            attempts=3,
+            timeout_seconds=0.6,
             interval_seconds=0.25,
-            sleeper=sleeps.append,
+            clock=lambda: now,
+            sleeper=sleep,
         )
 
     assert len(client.commands) == 3
-    assert sleeps == [0.25, 0.25]
+    assert sleeps == pytest.approx([0.25, 0.25, 0.1])
+    assert now == pytest.approx(0.6)
+    assert [kwargs["timeout"] for _, kwargs in client.commands] == pytest.approx([0.6, 0.35, 0.1])
+
+
+@pytest.mark.parametrize("return_code", [0, 1])
+def test_vm_ha_materialization_observation_time_consumes_deadline(return_code: int) -> None:
+    now = 0.0
+    sleeps: list[float] = []
+
+    class SlowClient(_MaterializationClient):
+        def exec_command(self, command: str, **kwargs):
+            nonlocal now
+            result = super().exec_command(command, **kwargs)
+            now += 2.0
+            return result
+
+    client = SlowClient([return_code])
+    with pytest.raises(RuntimeError, match="bounded wait"):
+        SSHPush._wait_for_vm_ha_materialization(
+            client, timeout_seconds=2, clock=lambda: now, sleeper=sleeps.append
+        )
+
+    assert len(client.commands) == 1
+    assert sleeps == []
+
+
+@pytest.mark.parametrize(
+    "timeout,interval",
+    [(0, 1), (-1, 1), (1, 0), (1, -1), (float("inf"), 1), (1, float("nan"))],
+)
+def test_vm_ha_materialization_invalid_deadline_does_not_observe(timeout, interval) -> None:
+    client = _MaterializationClient([])
+    with pytest.raises(ValueError, match="must be positive"):
+        SSHPush._wait_for_vm_ha_materialization(
+            client, timeout_seconds=timeout, interval_seconds=interval
+        )
+    assert client.commands == []
+
+
+def test_vm_ha_materialization_noisy_stalled_channel_is_closed_at_deadline() -> None:
+    now = 0.0
+    drained: list[str] = []
+    closed: list[bool] = []
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    channel = SimpleNamespace(
+        recv_ready=lambda: True,
+        recv_stderr_ready=lambda: True,
+        recv=lambda size: drained.append("stdout") or b"out",
+        recv_stderr=lambda size: drained.append("stderr") or b"err",
+        exit_status_ready=lambda: False,
+        recv_exit_status=lambda: pytest.fail("must not block waiting for exit status"),
+        close=lambda: closed.append(True),
+    )
+    client = SimpleNamespace(
+        exec_command=lambda *args, **kwargs: (None, SimpleNamespace(channel=channel), None)
+    )
+    with pytest.raises(RuntimeError, match="bounded wait"):
+        SSHPush._wait_for_vm_ha_materialization(
+            client, timeout_seconds=0.05, clock=lambda: now, sleeper=sleep
+        )
+    assert now == pytest.approx(0.05)
+    assert set(drained) == {"stdout", "stderr"}
+    assert closed == [True]
 
 
 def _credential_stage_fixture(tmp_path):
@@ -1492,7 +1516,8 @@ def test_vm_ha_apply_lock_is_exact_atomic_and_cleared_only_by_receipt(tmp_path) 
     assert install_client.closed and clear_client.closed
 
 
-def test_vm_ha_apply_owner_adoption_is_bound_to_the_exact_lock(tmp_path) -> None:
+@pytest.mark.parametrize("corrective", [False, True])
+def test_vm_ha_apply_owner_adoption_is_bound_to_the_exact_lock(tmp_path, corrective) -> None:
     manifest, binding, _sources = _credential_stage_fixture(tmp_path)
     client = _ApplyLockClient()
     push = SSHPush(ssh_policy=object())  # type: ignore[arg-type]
@@ -1512,6 +1537,7 @@ def test_vm_ha_apply_owner_adoption_is_bound_to_the_exact_lock(tmp_path) -> None
             {},
             runtime_binding=binding,
             lock_receipt=lock_receipt,
+            **({"predecessor_operation_id": "f" * 64} if corrective else {}),
         )
 
     payload = json.loads(client.writes[-1])
@@ -1540,6 +1566,12 @@ def test_vm_ha_apply_owner_adoption_is_bound_to_the_exact_lock(tmp_path) -> None
     assert action.index("apply.lock") < action.index("apply-owner-adoption.json.new")
     assert action.index("apply-owner-adoption.json.new") < action.index("sudo mv")
     assert action.count(receipt.record_sha256) == 2
+    if corrective:
+        from nebius_vpngw.apply_lock import encode
+
+        previous = {**payload, "operation_id": "f" * 64}
+        assert hashlib.sha256(encode(previous)).hexdigest() in action
+        assert "archive_apply_owner_adoption(*sys.argv[1:])" in action
     assert client.closed
 
 
@@ -1914,6 +1946,137 @@ def test_vm_ha_removal_inhibits_both_writers_before_deactivation() -> None:
         "vm-ha.service"
     )
     assert all(client.closed for client in issued)
+
+
+@pytest.mark.parametrize("noisy", [False, True])
+def test_vm_ha_stop_barrier_bounds_unfinished_remote_command(monkeypatch, noisy: bool) -> None:
+    """A channel I/O timeout does not bound Paramiko's exit-status wait."""
+    from nebius_vpngw.deploy import ssh_push
+
+    elapsed = [0.0]
+    closed = []
+
+    def sleep(seconds):
+        elapsed[0] += seconds
+
+    def premature_exit_wait():
+        pytest.fail("blocking exit-status wait before the remote command completed")
+
+    channel = SimpleNamespace(
+        recv_ready=lambda: False,
+        recv_stderr_ready=lambda: noisy,
+        recv_stderr=lambda _size: b"diagnostic bytes",
+        exit_status_ready=lambda: False,
+        recv_exit_status=premature_exit_wait,
+        close=lambda: closed.append(True),
+    )
+    client = _RemovalPhaseClient()
+    monkeypatch.setattr(
+        client,
+        "exec_command",
+        lambda *args, **kwargs: (None, SimpleNamespace(channel=channel), None),
+    )
+    monkeypatch.setattr(ssh_push.time, "monotonic", lambda: elapsed[0])
+    monkeypatch.setattr(ssh_push.time, "sleep", sleep)
+    push = SSHPush()
+    push._paramiko = SimpleNamespace(SSHClient=lambda: client, RejectPolicy=lambda: object())
+
+    with pytest.raises(RuntimeError, match="stop verification exceeded"):
+        push.stop_vm_ha_mutation_services("203.0.113.10", "gateway-0", {})
+
+    assert elapsed[0] == pytest.approx(90.0)
+    assert closed == [True]
+    assert client.closed
+
+
+def test_vm_ha_stop_barrier_bounds_real_paramiko_exec_acknowledgement(monkeypatch) -> None:
+    import socket
+    import threading
+
+    import paramiko
+
+    from nebius_vpngw.deploy import ssh_push
+
+    left, right = socket.socketpair()
+    transport = paramiko.Transport(left)
+    transport.active = True
+    channel = paramiko.Channel(1)
+    channel._set_transport(transport)
+    channel._set_remote_channel(2, 2097152, 32768)
+    transport._channels.put(1, channel)
+    dispatched = threading.Event()
+    # Keep the real exec/acknowledgement and transport-close implementations.
+    # The fixture accepts the outbound request but never acknowledges it.
+    monkeypatch.setattr(transport, "_send_user_message", lambda _message: dispatched.set())
+    monkeypatch.setattr(transport, "open_session", lambda **kwargs: channel)
+    client = paramiko.SSHClient()
+    client._transport = transport
+    real_timer = threading.Timer
+    watchdogs = []
+    rescued = threading.Event()
+
+    def timer(seconds, action):
+        assert seconds <= 90.0
+
+        def expire_after_dispatch():
+            # Do not let a slow runner pass by closing before exec dispatch.
+            # This wait remains bounded so failed setup cannot leak the timer.
+            dispatched.wait(0.5)
+            action()
+
+        result = real_timer(0.02, expire_after_dispatch)
+        watchdogs.append(result)
+        return result
+
+    def rescue():
+        rescued.set()
+        client.close()
+
+    cleanup = real_timer(2.0, rescue)
+    cleanup.daemon = True
+    cleanup.start()
+    monkeypatch.setattr(threading, "Timer", timer)
+    monkeypatch.setattr(paramiko, "SSHClient", lambda: client)
+    monkeypatch.setattr(ssh_push, "configure_paramiko_host_verification", lambda *a, **k: None)
+    push = SSHPush()
+    push._paramiko = paramiko
+    monkeypatch.setattr(push, "_connect_client", lambda *a, **k: None)
+    try:
+        with pytest.raises(RuntimeError, match="stop verification exceeded"):
+            push.stop_vm_ha_mutation_services("203.0.113.10", "gateway-0", {})
+        assert len(watchdogs) == 1 and not watchdogs[0].is_alive()
+        assert channel.closed
+        assert dispatched.is_set() and not channel.event_ready
+        assert not rescued.is_set()
+    finally:
+        cleanup.cancel()
+        cleanup.join()
+        client.close()
+        right.close()
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_vm_ha_stop_barrier_interrupts_watchdog_start_safely(monkeypatch, started: bool) -> None:
+    import threading
+
+    timers = []
+
+    class InterruptedTimer(threading.Timer):
+        def start(self):
+            timers.append(self)
+            if started:
+                super().start()
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(threading, "Timer", InterruptedTimer)
+    client = _RemovalPhaseClient()
+    push = SSHPush()
+    push._paramiko = SimpleNamespace(SSHClient=lambda: client, RejectPolicy=lambda: object())
+    with pytest.raises(KeyboardInterrupt):
+        push.stop_vm_ha_mutation_services("203.0.113.10", "gateway-0", {})
+    assert len(timers) == 1 and timers[0].finished.is_set() and not timers[0].is_alive()
+    assert not client.commands
+    assert client.closed
 
 
 @pytest.mark.parametrize(
@@ -2578,6 +2741,16 @@ def test_vm_ha_activation_reuses_approved_artifact_without_rebuild(
         nebius_credentials_sha256="d" * 64,
     )
     client = _ManagedMTLSClient()
+    original_exec = client.exec_command
+
+    def command_result(command, **kwargs):
+        result = original_exec(command, **kwargs)
+        if "show bgp summary json" in command:
+            summary = {"ipv4Unicast": {"peers": {"169.254.1.2": {"state": "Established"}}}}
+            return BytesIO(), _CommandStream(json.dumps(summary).encode(), 0), BytesIO()
+        return result
+
+    monkeypatch.setattr(client, "exec_command", command_result)
     push = SSHPush(ssh_policy=object())  # type: ignore[arg-type]
     push._paramiko = SimpleNamespace(SSHClient=lambda: client)
     monkeypatch.setattr("nebius_vpngw.agent.main.vm_ha_runtime_blockers", lambda: ())
@@ -2598,7 +2771,19 @@ def test_vm_ha_activation_reuses_approved_artifact_without_rebuild(
     push.push_config_and_reload(
         "203.0.113.10",
         manifest,
-        {"gateway_group": {"vm_spec": {}}},
+        {
+            "gateway_group": {"vm_spec": {}},
+            "connections": [
+                {
+                    "tunnels": [
+                        {
+                            "gateway_instance_index": manifest.instance_index,
+                            "inner_remote_ip": "169.254.1.2",
+                        }
+                    ]
+                }
+            ],
+        },
         staged_receipt=receipt,
         runtime_binding=binding,
         agent_artifact=artifact,
@@ -2630,7 +2815,11 @@ def test_vm_ha_activation_reuses_approved_artifact_without_rebuild(
     assert (
         "sudo systemd-tmpfiles --create /usr/lib/tmpfiles.d/nebius-vpngw-ufw-lock.conf"
     ) in client.commands
-    assert sleeps == [5.0, 5.0]
+    assert sleeps == []
+    assert not any(command.startswith("ping ") for command in client.commands)
+    assert not any("show bgp summary" in command for command in client.commands)
+    assert any("--vm-ha-materialized" in command for command in client.commands)
+    assert any("u.admit_activation(" in command for command in client.commands)
 
 
 def test_ha_to_non_ha_push_fails_closed_after_deactivation() -> None:
@@ -2655,6 +2844,7 @@ def test_ordinary_plan_installs_only_ordinary_assets() -> None:
     paths = [path for _name, path, _mode in ASSETS]
     assert "/etc/systemd/system/nebius-vpngw-agent.service" in paths
     assert "/usr/local/bin/setup-vpngw-firewall.sh" in paths
+    assert "/etc/systemd/system/nebius-vpngw-esp4-preflight.service" in paths
     assert all("vm-ha" not in path and "ufw-lock" not in path for path in paths)
 
 

@@ -1,9 +1,7 @@
-"""Real BGP path loss through owner readiness, route receipts and bounded repair.
+"""Real BGP path loss preserves the owner while native alternative paths converge.
 
 Cloud ownership/routes and service-unit discovery are fixture inputs.
-Native SA, XFRM, FRR, route selection, repair effects and receipts are real.
-Only post-repair policy observations inject elapsed reset time; no effects
-execute with a synthetic deadline.
+Native SA, XFRM, FRR, route selection and receipts are real.
 Run exclusively inside the disposable integration namespace.
 """
 
@@ -16,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import yaml
+from tests.systemd.ha_bgp_owner_observation import wait_for_owner_coverage
 from tests.unit.test_vm_ha_runtime_ports import (
     FakeRouteBackend,
     FakeSDK,
@@ -24,7 +23,6 @@ from tests.unit.test_vm_ha_runtime_ports import (
     _runtime_config,
 )
 
-from nebius_vpngw.agent.main import VMHACheckpointFileStore, VMHAEffectAdapter
 from nebius_vpngw.agent.routing_guard import require_vm_ha_current_boot_ready
 from nebius_vpngw.agent.vm_ha.models import DigestSet, PeerHeartbeat
 from nebius_vpngw.agent.vm_ha.runtime import (
@@ -37,7 +35,6 @@ from nebius_vpngw.agent.vm_ha.tunnel_observation import parse_sas
 from nebius_vpngw.agent.vm_ha.tunnel_runtime import ControllerTunnelRuntime, NativeTunnelEffects
 from nebius_vpngw.agent.vm_ha.tunnels import Authority, TunnelController
 from nebius_vpngw.agent.vm_ha_controller import (
-    ActionKind,
     CloudObservation,
     ComputeState,
     ConfiguredRole,
@@ -54,6 +51,7 @@ from nebius_vpngw.deploy.vm_ha_routes import (
     RouteReconciliationReceipt,
     RouteTransitionState,
 )
+from nebius_vpngw.faults import FaultCategory
 
 root = Path("/run/bgp-causal-probe")
 root.mkdir(exist_ok=True)
@@ -74,10 +72,12 @@ for kind, manifest in [
 
 def runner(argv, timeout):
     if Path(argv[0]).name == "systemctl":
-        assert argv[1] == "is-active", "scoped repair restarted an unrelated service"
+        assert argv[1] == "show" and argv[3:] == ("--property=ActiveState", "--value"), (
+            "native path recovery attempted a service mutation"
+        )
         # This namespace runs real daemons directly. Verify those processes instead
         # of consulting the outer container's unrelated service units.
-        daemon = "charon" if argv[-1].startswith("strongswan") else "bgpd"
+        daemon = "charon" if argv[2] == "strongswan" else "bgpd"
         pidfiles = list(Path("/run").glob("**/" + daemon + ".pid"))
         ok = any(
             p.read_text().strip().isdigit() and Path("/proc", p.read_text().strip()).exists()
@@ -85,7 +85,7 @@ def runner(argv, timeout):
         )
         if daemon == "charon":
             ok = Path("/run/charon.vici").exists()
-        return CommandResult(0 if ok else 1, "")
+        return CommandResult(0, "active\n" if ok else "failed\n")
     return _run_command(argv, timeout)
 
 
@@ -124,6 +124,9 @@ ports = build_runtime_ports(
     data_plane_factory=dataplane,
     monotonic_clock=time.monotonic,
 )
+# The declared active checkpoint includes the product's persistent protection,
+# established from real BGP route provenance before the path-loss trial starts.
+ports.data_plane.destination_protection.admit(frozenset({"10.200.2.1/32"}))
 cloud = CloudObservation(
     authoritative=True,
     allocation_id="allocation-a",
@@ -182,27 +185,12 @@ controller = VMHAController(peer_timeout_seconds=10, suspicion_seconds=5)
 checkpoint = ControllerCheckpoint()
 
 
-def forbidden(action):
-    raise AssertionError("unexpected VM effect " + action.kind.value)
-
-
-effects = VMHAEffectAdapter(
-    {
-        kind: ports.data_plane.repair_local
-        if kind is ActionKind.REPAIR_LOCAL_DATAPLANE
-        else forbidden
-        for kind in ActionKind
-    },
-    receipt_path=root / "effect-receipt.json",
-    event_sink=lambda event: None,
-)
-
-
-def observation(label, *, policy_time=None):
+def observation(label, *, readiness=None):
     global checkpoint
-    readiness = routes.readiness()
+    if readiness is None:
+        readiness = routes.readiness()
     receipt = routes.receipt_context()
-    now = time.monotonic() if policy_time is None else policy_time
+    now = time.monotonic()
     snap = ControllerSnapshot(
         now=now,
         boot_id="native-boot",
@@ -220,13 +208,12 @@ def observation(label, *, policy_time=None):
         cloud=cloud,
         guard_boot_id="native-boot",
         data_plane_mode=ports.data_plane.mode(),
-        completed_effect_operation_id=(effects._completed_operation() or (None, None))[0],
         routes_reconciled_context=receipt,
+        established_routes_context=routes.established_context(),
         route_runtime_id=b.route_runtime_id,
     )
     decision = controller.decide(snap, checkpoint)
-    if label == "baseline":
-        checkpoint = decision.checkpoint
+    checkpoint = decision.checkpoint
     current = routes._plan(routes._current_ownership(require_takeover_fence=False), transition)
     print(
         json.dumps(
@@ -247,50 +234,90 @@ def observation(label, *, policy_time=None):
 
 
 baseline, decision = observation("baseline")
-assert decision.action is None and baseline.readiness.promotion_ready
+assert decision.action is None and baseline.readiness.promotion_ready, (
+    baseline.readiness.blocked_reasons,
+    decision.reasons,
+)
+
+
+def sample_coverage():
+    readiness = routes.readiness()
+    print(
+        json.dumps(
+            {
+                "coverage_sample": {
+                    "monotonic": time.monotonic(),
+                    "sample_complete": readiness.sample_complete,
+                    "promotion_ready": readiness.promotion_ready,
+                    "fault_category": readiness.fault_category.value,
+                    "covered_destinations": readiness.covered_destinations,
+                    "blocked_reasons": readiness.blocked_reasons,
+                }
+            }
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
+    return readiness
+
+
 # Freeze only the failed peer's transport and terminate every rekey instance.
 blocked = False
 try:
+    # Close the transport before termination so native reconnect cannot win
+    # the gap between deleting the old SA and injecting the fault.
+    subprocess.run(["iptables", "-I", "OUTPUT", "-d", "192.0.2.2", "-j", "DROP"], check=True)
+    blocked = True
     sas = parse_sas(
         subprocess.check_output(
-            ["swanctl", "--list-sas", "--raw"], text=True, stderr=subprocess.DEVNULL
+            [sys.executable, "-m", "nebius_vpngw.ipsec_observation"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
         )
     )
     for name, sa in sas:
         if name == "preferred":
             subprocess.run(
-                ["swanctl", "--terminate", "--ike-id", sa["uniqueid"], "--timeout", "1"],
+                ["swanctl", "--terminate", "--ike-id", sa["uniqueid"], "--force"],
                 check=True,
                 capture_output=True,
             )
-    subprocess.run(["iptables", "-I", "OUTPUT", "-d", "192.0.2.2", "-j", "DROP"], check=True)
-    blocked = True
     failed, decision = observation("failed-preferred-sa")
     assert failed.routes_reconciled_context is not None, (
         "transient path loss invalidated unchanged cloud route receipt"
     )
-    assert decision.action.kind is ActionKind.REPAIR_LOCAL_DATAPLANE, decision.reasons
-    checkpoints = VMHACheckpointFileStore(root / "state" / "controller-checkpoint.json")
-    checkpoints.save(decision.checkpoint)
-    checkpoint = checkpoints.load()
-    effects.apply(decision.action)
+    assert decision.action is None, decision.reasons
+    assert decision.checkpoint.repair_attempt is None
     assert ports.data_plane.mode() is DataPlaneMode.ACTIVE
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-        if routes.readiness().promotion_ready:
-            break
-        time.sleep(0.1)
-    first, decision = observation("product-first-recovery")
-    assert first.readiness.promotion_ready and first.routes_reconciled_context is not None
-    assert decision.action is None and decision.state.value == "repairing"
-    assert decision.checkpoint.repair_attempt.healthy_observations == 1
-    checkpoint = decision.checkpoint
-    recovered, decision = observation("product-scoped-repair")
+    # Backup coverage is ready immediately; the failed BGP session remains
+    # established until its real three-second hold timer expires.
+    deadline = time.monotonic() + 10
+    expect_stale = len(sys.argv) > 2 and sys.argv[2] == "stale"
+    readiness = wait_for_owner_coverage(
+        sample_coverage,
+        retained_route=expect_stale,
+        required_prefix="10.200.2.1/32",
+        deadline=deadline,
+    )
+    if expect_stale:
+        stale, decision = observation("retained-route-not-coverage", readiness=readiness)
+        assert not stale.readiness.promotion_ready
+        assert stale.readiness.fault_category is FaultCategory.COVERAGE_LOSS
+        assert "10.200.2.1/32" not in stale.readiness.covered_destinations
+        assert decision.action is None and decision.checkpoint.repair_attempt is None
+        assert decision.forwarding_enabled and ports.data_plane.mode() is DataPlaneMode.ACTIVE
+        raise SystemExit(0)
+    recovered, decision = observation("native-alternative-recovery", readiness=readiness)
     assert recovered.readiness.promotion_ready and recovered.routes_reconciled_context is not None
-    assert decision.action is None
-    assert decision.state.value == "degraded-path" and decision.forwarding_enabled
-    # A successful repair triggers ordinary agent reconciliation. Its forwarding
-    # gate must consume the controller's ready degraded-path state consistently.
+    assert decision.action is None and decision.checkpoint.repair_attempt is None
+    assert decision.state.value == "degraded-path" and decision.forwarding_enabled, (
+        decision.state.value,
+        decision.reasons,
+        recovered.readiness.path_degraded,
+        recovered.readiness.degraded_reasons,
+    )
+    # Ordinary reconciliation must retain forwarding on verified backup coverage.
     boot = root / "writer-boot"
     status = root / "writer-status.json"
     guard = root / "writer-guard.json"
@@ -325,18 +352,20 @@ try:
             cfg, root, lambda authority: True, active_revalidate=lambda authority: True
         ),
     )
+    # FRR session expiry and zebra's kernel update are asynchronous. Observe
+    # the actual selected route within the original bounded convergence window.
+    policy = selector.policies["site"]
+    while time.monotonic() < deadline:
+        if selector.effects.verify(policy, None).value == "healthy":
+            break
+        time.sleep(0.1)
     selector.tick(Authority("native-fixture", "owner", "allocation", "1", 1, "a" * 64), time.time())
     assert selector.state["health"] == {"site": "healthy", "other": "healthy"}
     assert selector.state["selected"] == {}
-    checkpoint = decision.checkpoint
-    original_deadline = checkpoint.repair_attempt.deadline_at
-    _, decision = observation("backup-before-reset", policy_time=first.now + 59.999)
-    assert decision.action is None
-    assert decision.checkpoint.repair_attempt.deadline_at == original_deadline
-    checkpoint = decision.checkpoint
-    _, decision = observation("backup-health-reset", policy_time=first.now + 60.0)
+    _, decision = observation("backup-health-verification")
     assert decision.action is None and decision.forwarding_enabled
     assert decision.checkpoint.repair_attempt is None
+
 finally:
     if blocked:
         subprocess.run(["iptables", "-D", "OUTPUT", "-d", "192.0.2.2", "-j", "DROP"], check=True)

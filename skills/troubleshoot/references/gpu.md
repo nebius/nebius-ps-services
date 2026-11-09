@@ -1,9 +1,17 @@
 # GPU And Accelerator Troubleshooting Playbook
 
-Use this playbook for GPU allocation, initialization, execution, memory, reset,
+## Applicability
+
+Use this NVIDIA guide for GPU allocation, initialization, execution, memory,
+reset,
 collective communication, topology, performance, or hardware-health failures.
 Pin GPU model, firmware where visible, driver, CUDA, runtime, library, container
 toolkit, device plugin or operator, and workload image versions.
+
+## Version Fingerprint
+
+Pin exact NVIDIA GPU model, MIG mode, firmware, driver, CUDA/runtime, libraries,
+container toolkit, OS/kernel, topology, rank mapping and scheduler placement.
 
 ## Adaptive Decision Guide
 
@@ -17,8 +25,10 @@ Use only rows implicated by the failing path; record material unexamined boundar
 
 <!-- markdownlint-enable MD013 -->
 
-### Escalation Conditions
+### Diagnostic Effects
 
+Passive bounded inspection comes first. Active diagnostics remain coordinator-owned;
+workers may not launch tests, captures, debug containers, stress or repairs.
 Escalate only if the next observation can separate remaining explanations. Bound
 time, output, target and effects; preserve evidence and original settings. Treat
 production or unconfirmed targets as read-only without exact action authority.
@@ -29,6 +39,19 @@ Replay the original operation from the same relevant identity and workload, comp
 an unaffected control, and verify the implicated boundary independently. Invalidate
 pre-change observations and state material unverified scope. A passing status
 command cannot replace the workload oracle.
+
+Follow device allocation → driver/runtime compatibility → application execution
+→
+collectives/fabric. For AMD use [amd.md](amd.md). CUDA minor compatibility is
+conditional: PTX compilation, newer driver-dependent features and target architecture
+can matter. Check the exact support matrix, not version-number proximity. Fabric
+Manager/NVSwitch configuration is generation/platform-specific.
+
+DCGM does not provide comprehensive hardware diagnosis or automatic repair. Some
+levels include stress workloads; inventory visibility and a diagnostic pass have
+bounded proof scope. NCCL failures may originate in networking, runtime/shared
+memory, rank placement or host resources rather than the GPU. Compare scheduler
+allocation and actual fabric locality for distributed workloads.
 
 ## Failing Path And Component Identity
 
@@ -101,6 +124,10 @@ verify rollback. A full-resource diagnostic or ActiveCheck is a workload and
 capacity mutation, not passive observation.
 
 ## Official Sources
+
+- [CUDA compatibility limits](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html)
+- [Fabric Manager](https://docs.nvidia.com/datacenter/tesla/fabric-manager-user-guide/index.html)
+- [DCGM diagnostics and test levels](https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/dcgm-diagnostics.html)
 
 - [NVIDIA Xid errors](https://docs.nvidia.com/deploy/xid-errors/index.html)
 - [NVIDIA DCGM documentation](https://docs.nvidia.com/datacenter/dcgm/latest/)

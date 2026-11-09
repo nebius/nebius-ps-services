@@ -12,3 +12,6 @@ dependabot-docker-review,true,Use $review-pr to review and safely repair this De
 review-and-merge,true,$review-pr Review PR 42 and merge it when ready.
 plain-review-no-merge,true,$review-pr Review PR 42 and fix safe issues; stop at readiness.
 checkout-behavior-explanation,false,"Explain how review-pr handles the final local checkout; do not run it or change anything."
+review-concurrent-editing,true,"$review-pr Review PR 42 and fix safe issues while I keep editing this checkout; leave my branch and files untouched."
+review-private-fork,true,"$review-pr Review this fork PR in your private workspace and publish safe fixes to its existing branch."
+repair-review-skill,false,"Design a change to review-pr so it never switches my working branch; do not review any PR."

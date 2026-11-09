@@ -16,6 +16,7 @@ from enum import Enum
 from typing import Protocol
 
 from nebius_vpngw.agent.vm_ha.models import DigestSet, PeerHeartbeat
+from nebius_vpngw.faults import FaultCategory
 
 
 class HAState(str, Enum):
@@ -58,6 +59,7 @@ class ComputeState(str, Enum):
 class DataPlaneMode(str, Enum):
     BLOCKED = "blocked"
     PASSIVE = "passive"
+    ORIGINATING = "originating"
     ACTIVE = "active"
 
 
@@ -72,6 +74,7 @@ class ActionKind(str, Enum):
     ATTACH_CANDIDATE = "attach-candidate"
     CONFIRM_CANDIDATE_OWNERSHIP = "confirm-candidate-ownership"
     PREPARE_CANDIDATE_DATAPLANE = "prepare-candidate-dataplane"
+    PREPARE_OWNER_ORIGINATION = "prepare-owner-origination"
     RECONCILE_ROUTES = "reconcile-routes"
     ENABLE_ACTIVE = "enable-active"
 
@@ -117,6 +120,25 @@ class LocalReadiness:
     passive_policy_refresh_required: bool = False
     serving_ready: bool = False
     sample_complete: bool = True
+    protection_ready: bool = False
+    local_defects: tuple[str, ...] = ()
+    required_destinations: tuple[str, ...] = ()
+    covered_destinations: tuple[str, ...] = ()
+    origination_required: bool = False
+    origination_ready: bool = False
+    diagnostic_reasons: tuple[str, ...] = ()
+
+    @property
+    def fault_category(self) -> FaultCategory:
+        if not self.routing_hygiene_ready:
+            return FaultCategory.SAFETY
+        if self.local_defects:
+            return FaultCategory.LOCAL_DEFECT
+        if not self.sample_complete:
+            return FaultCategory.UNKNOWN
+        if not self.service_healthy:
+            return FaultCategory.UNKNOWN
+        return FaultCategory.NONE if self.promotion_ready else FaultCategory.COVERAGE_LOSS
 
     @property
     def promotion_ready(self) -> bool:
@@ -151,7 +173,15 @@ class LocalReadiness:
             (self.xfrm_ready, "xfrm-not-ready"),
             (self.routing_hygiene_ready, "routing-hygiene-not-ready"),
         )
-        return tuple(reason for ready, reason in checks if not ready)
+        return tuple(
+            dict.fromkeys(
+                (
+                    *tuple(reason for ready, reason in checks if not ready),
+                    *self.diagnostic_reasons,
+                    *self.local_defects,
+                )
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -191,6 +221,22 @@ class CloudObservation:
             self.local_attachment_exact(node_id)
             and self.former_owner_compute_state is ComputeState.STOPPED
             and self.former_attachment_absent
+        )
+
+    def passive_attachment_exact(self, local_node_id: str, peer_node_id: str) -> bool:
+        """Prove the running peer owns the allocation and this member has none."""
+        return bool(
+            local_node_id != peer_node_id
+            and self.authoritative
+            and self.allocation_id
+            and self.ownership_epoch
+            and self.observed_owner_node_id == self.former_owner_node_id == peer_node_id
+            and self.former_owner_compute_state is ComputeState.RUNNING
+            and self.former_attachment_exact
+            and not self.former_attachment_absent
+            and self.candidate_attachment_absent
+            and not self.candidate_attachment_exact
+            and not self.ownership_re_read_exact
         )
 
 
@@ -257,6 +303,7 @@ class ControllerSnapshot:
     standby_replacement_inhibited: bool = False
     tunnel_recovery_remaining: float | None = None
     wall_time: float | None = None
+    established_routes_context: RouteReconciliationContext | None = None
 
     def __post_init__(self) -> None:
         if not all(
@@ -307,8 +354,11 @@ class ControllerAction:
     takeover_fence_required: bool = False
     repair_deadline_at: float | None = None
     repair_reasons: tuple[str, ...] = ()
+    repair_mode: DataPlaneMode = DataPlaneMode.ACTIVE
 
     def __post_init__(self) -> None:
+        if self.repair_mode not in {DataPlaneMode.ACTIVE, DataPlaneMode.PASSIVE}:
+            raise ValueError("local repair mode is invalid")
         if self.kind is ActionKind.REPAIR_LOCAL_DATAPLANE:
             if (
                 self.repair_deadline_at is None
@@ -316,13 +366,17 @@ class ControllerAction:
                 or not self.repair_reasons
             ):
                 raise ValueError("local repair action requires a deadline and failure fingerprint")
-        elif self.repair_deadline_at is not None or self.repair_reasons:
+        elif (
+            self.repair_deadline_at is not None
+            or self.repair_reasons
+            or self.repair_mode is not DataPlaneMode.ACTIVE
+        ):
             raise ValueError("non-repair action cannot carry local repair authority")
 
 
 @dataclass(frozen=True)
 class RepairAttempt:
-    """One owner-bound repair budget; never cloud ownership authority."""
+    """One mode-bound local repair budget; never cloud ownership authority."""
 
     operation_id: str
     owner_node_id: str
@@ -336,8 +390,11 @@ class RepairAttempt:
     deadline_at: float
     healthy_since: float | None = None
     healthy_observations: int = 0
+    repair_mode: DataPlaneMode = DataPlaneMode.ACTIVE
 
     def __post_init__(self) -> None:
+        if self.repair_mode not in {DataPlaneMode.ACTIVE, DataPlaneMode.PASSIVE}:
+            raise ValueError("repair attempt mode is invalid")
         if not all(
             (
                 self.operation_id,
@@ -427,8 +484,16 @@ class ControllerCheckpoint:
     ownership_incarnation: int = 0
     transfer_continuity: TransferContinuity | None = None
     repair_attempt: RepairAttempt | None = None
+    path_transfer_destinations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        import ipaddress
+
+        if tuple(sorted(set(self.path_transfer_destinations))) != self.path_transfer_destinations:
+            raise ValueError("path transfer destinations must be canonical")
+        for prefix in self.path_transfer_destinations:
+            if str(ipaddress.IPv4Network(prefix, strict=True)) != prefix:
+                raise ValueError("path transfer destination is invalid")
         if self.sequence < 0:
             raise ValueError("checkpoint sequence must be non-negative")
         if self.ownership_incarnation < 0:
@@ -476,6 +541,7 @@ class ControllerCheckpoint:
                 and repair.boot_id == action.boot_id
                 and repair.deadline_at == action.repair_deadline_at
                 and repair.failure_fingerprint == action.repair_reasons
+                and repair.repair_mode is action.repair_mode
             ):
                 raise ValueError("pending repair action does not match its durable attempt")
 
@@ -567,7 +633,7 @@ class VMHAController:
                 and snapshot.guard_boot_id != snapshot.boot_id
             ):
                 guard_action = ActionKind.INSTALL_COLD_START_GUARD
-                if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+                if snapshot.data_plane_mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}:
                     guard_action = ActionKind.DISABLE_ACTIVE
                 return self._action(
                     HAState.BLOCKED,
@@ -609,10 +675,14 @@ class VMHAController:
             elif (
                 pending.kind in _PASSIVE_REPLAY_ACTIONS
                 and snapshot.data_plane_mode is not DataPlaneMode.PASSIVE
+                and not (
+                    pending.kind is ActionKind.RECONCILE_ROUTES
+                    and snapshot.data_plane_mode is DataPlaneMode.ORIGINATING
+                )
             ):
                 passive_action = (
                     ActionKind.DISABLE_ACTIVE
-                    if snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+                    if snapshot.data_plane_mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}
                     else ActionKind.ENTER_PASSIVE
                 )
                 return self._action(
@@ -647,6 +717,15 @@ class VMHAController:
                     replace(checkpoint, pending_action=None),
                     ActionKind.ENTER_PASSIVE,
                 )
+            elif (
+                pending.kind is ActionKind.REPAIR_LOCAL_DATAPLANE
+                and snapshot.readiness.fault_category is not FaultCategory.LOCAL_DEFECT
+                and self._pending_repair_authority(pending, snapshot, checkpoint)
+            ):
+                # Recovery may remove the defect before a deferred effect runs.
+                # Retire its mutation intent, retaining the consumed attempt and
+                # deadline. Unknown/path evidence is not lost VM authority.
+                checkpoint = replace(checkpoint, pending_action=None)
             elif not self._pending_action_safe(pending, snapshot, checkpoint):
                 retire_locked_repair = bool(
                     pending.kind is ActionKind.REPAIR_LOCAL_DATAPLANE and snapshot.apply_locked
@@ -666,7 +745,7 @@ class VMHAController:
                         ),
                     ),
                 )
-                if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+                if snapshot.data_plane_mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}:
                     return self._action(
                         HAState.BLOCKED,
                         ("checkpointed-action-prerequisites-changed",),
@@ -733,7 +812,7 @@ class VMHAController:
             )
         local_ownership_safe = self._local_ownership_safe(snapshot, checkpoint)
         if local_owns and not local_ownership_safe:
-            if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+            if snapshot.data_plane_mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}:
                 return self._action(
                     HAState.BLOCKED,
                     ("local-ownership-lacks-establishment-proof",),
@@ -748,7 +827,10 @@ class VMHAController:
                     snapshot,
                     replace(checkpoint, state=HAState.BLOCKED),
                 )
-        if snapshot.data_plane_mode is DataPlaneMode.ACTIVE and not local_owns:
+        if (
+            snapshot.data_plane_mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}
+            and not local_owns
+        ):
             return self._action(
                 HAState.BLOCKED,
                 ("active-node-lacks-exact-allocation-ownership",),
@@ -832,6 +914,9 @@ class VMHAController:
                     checkpoint, state=HAState.BLOCKED, suspect_since=None, suspicion_boot_id=None
                 ),
             )
+        checkpoint, standby_repair = self._standby_repair_decision(snapshot, checkpoint)
+        if standby_repair is not None:
+            return standby_repair
         if not snapshot.readiness.transfer_ready:
             return self._result(
                 HAState.BLOCKED,
@@ -871,7 +956,7 @@ class VMHAController:
                 suspect_since=None,
                 suspicion_boot_id=None,
             )
-            if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+            if snapshot.data_plane_mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}:
                 return self._action(
                     HAState.BLOCKED,
                     ("apply-lock-held",),
@@ -896,43 +981,65 @@ class VMHAController:
 
         reasons = (*parity_reasons, *snapshot.readiness.blocked_reasons)
         routes_current = self._routes_current(snapshot, checkpoint)
-        if (
-            snapshot.tunnel_recovery_remaining is not None
-            and not snapshot.readiness.promotion_ready
-            and (
-                snapshot.data_plane_mode is DataPlaneMode.ACTIVE
-                or snapshot.tunnel_recovery_remaining <= 1
-            )
-        ):
-            # This persisted episode subsumes local repair; never stack another
-            # generic repair window after a failed Static tunnel selection.
-            if snapshot.tunnel_recovery_remaining > 1 and not parity_reasons and routes_current:
-                return self._result(
-                    HAState.REPAIRING,
-                    ("static-tunnel-recovery-active",),
-                    snapshot,
-                    replace(checkpoint, state=HAState.REPAIRING),
-                )
-            if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+        category = snapshot.readiness.fault_category
+        retained_routes = self._retained_routes_current(snapshot, checkpoint)
+        if category is FaultCategory.NONE and not routes_current and retained_routes:
+            # Readiness and the live route receipt are sampled separately. A
+            # daemon can fail between them; verified retained publication proves
+            # authority, but the inconsistent native evidence proves no health.
+            category = FaultCategory.UNKNOWN
+        if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+            if not snapshot.readiness.protection_ready or category is FaultCategory.SAFETY:
                 return self._action(
-                    HAState.REPAIR_EXHAUSTED,
-                    ("static-tunnel-recovery-exhausted",),
+                    HAState.BLOCKED,
+                    ("destination-protection-or-routing-safety-unproven",),
                     snapshot,
                     checkpoint,
                     ActionKind.DISABLE_ACTIVE,
                 )
-            return self._result(
-                HAState.REPAIR_EXHAUSTED,
-                ("static-tunnel-recovery-exhausted",),
-                snapshot,
-                replace(checkpoint, state=HAState.REPAIR_EXHAUSTED),
-            )
+        if (
+            snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+            and not parity_reasons
+            and (routes_current or retained_routes)
+        ):
+            if (
+                category in {FaultCategory.UNKNOWN, FaultCategory.COVERAGE_LOSS}
+                and checkpoint.repair_attempt is not None
+            ):
+                checkpoint = replace(
+                    checkpoint,
+                    repair_attempt=replace(
+                        checkpoint.repair_attempt, healthy_since=None, healthy_observations=0
+                    ),
+                )
+            if category is FaultCategory.UNKNOWN:
+                return self._result(
+                    HAState.DEGRADED,
+                    ("local-evidence-unknown",),
+                    snapshot,
+                    replace(checkpoint, state=HAState.DEGRADED),
+                )
+            if category is FaultCategory.COVERAGE_LOSS:
+                state = (
+                    HAState.REPAIRING
+                    if (snapshot.tunnel_recovery_remaining or 0) > 0
+                    else HAState.DEGRADED_PATH
+                )
+                return self._result(
+                    state,
+                    ("native-path-recovery",),
+                    snapshot,
+                    replace(checkpoint, state=state),
+                )
         repair = checkpoint.repair_attempt
-        if repair is not None and not self._repair_attempt_matches(repair, snapshot, checkpoint):
+        if repair is not None and (
+            repair.repair_mode is not DataPlaneMode.ACTIVE
+            or not self._repair_attempt_matches(repair, snapshot, checkpoint)
+        ):
             checkpoint = replace(checkpoint, repair_attempt=None)
             repair = None
 
-        if not parity_reasons and routes_current:
+        if not parity_reasons and (routes_current or retained_routes):
             if snapshot.readiness.promotion_ready:
                 # Complete usable coverage is healthy even when a redundant
                 # peer is down. Count it toward the existing recovery/reset
@@ -948,7 +1055,10 @@ class VMHAController:
                     )
             elif repair is not None:
                 return self._existing_repair_decision(snapshot, checkpoint, repair)
-            elif snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+            elif (
+                snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+                and category is FaultCategory.LOCAL_DEFECT
+            ):
                 return self._repair_action(snapshot, checkpoint)
 
         repair = checkpoint.repair_attempt
@@ -986,6 +1096,7 @@ class VMHAController:
                     suspect_since=None,
                     suspicion_boot_id=None,
                     established_ownership_context=snapshot.ownership_context,
+                    path_transfer_destinations=(),
                     # Receipt publication may wait for the rearm writer. Until
                     # its durable intent is retired, every active tick must
                     # still prove the exact fenced transfer, including restart.
@@ -1001,7 +1112,7 @@ class VMHAController:
         # passive mode.  That transition authorizes only node-local tunnel
         # materialization; promotion readiness and owner-only effects are
         # evaluated on a later observation.
-        if snapshot.data_plane_mode is not DataPlaneMode.PASSIVE:
+        if snapshot.data_plane_mode not in {DataPlaneMode.PASSIVE, DataPlaneMode.ORIGINATING}:
             return self._action(
                 HAState.NORMAL,
                 ("owner-must-materialize-passive-dataplane",),
@@ -1018,6 +1129,8 @@ class VMHAController:
         elif parity_reasons:
             promotion_blockers = parity_reasons
         if promotion_blockers:
+            if snapshot.data_plane_mode is DataPlaneMode.ORIGINATING:
+                return self._block_or_disable(promotion_blockers, snapshot, checkpoint)
             return self._result(
                 HAState.BLOCKED,
                 promotion_blockers,
@@ -1035,6 +1148,41 @@ class VMHAController:
                 checkpoint,
                 ActionKind.ENTER_PASSIVE,
             )
+
+        if snapshot.readiness.origination_required:
+            if snapshot.transfer_inhibited:
+                return self._block_or_disable("origination-inhibited", snapshot, checkpoint)
+            if snapshot.data_plane_mode is DataPlaneMode.PASSIVE:
+                # The fenced preparation action installs and verifies protection
+                # before advertising. Requiring it here would deadlock a fresh
+                # gateway or an upgrade without the destination-protection table.
+                if not (
+                    snapshot.readiness.service_healthy
+                    and snapshot.readiness.sample_complete
+                    and snapshot.readiness.routing_hygiene_ready
+                    and not snapshot.readiness.local_defects
+                ):
+                    return self._result(
+                        HAState.BLOCKED,
+                        ("origination-preparation-unready", *reasons),
+                        snapshot,
+                        replace(checkpoint, state=HAState.BLOCKED),
+                    )
+                return self._action(
+                    HAState.PROMOTING,
+                    ("owner-local-prefix-origination-required",),
+                    snapshot,
+                    checkpoint,
+                    ActionKind.PREPARE_OWNER_ORIGINATION,
+                )
+            if not snapshot.readiness.origination_ready:
+                return self._action(
+                    HAState.BLOCKED,
+                    ("origination-policy-unproven",),
+                    snapshot,
+                    checkpoint,
+                    ActionKind.DISABLE_ACTIVE,
+                )
 
         if snapshot.readiness.candidate_preparation_required:
             return self._action(
@@ -1082,6 +1230,68 @@ class VMHAController:
             ActionKind.ENABLE_ACTIVE,
         )
 
+    def _standby_repair_authorized(self, snapshot: ControllerSnapshot) -> bool:
+        peer = snapshot.peer_heartbeat
+        return bool(
+            snapshot.data_plane_mode is DataPlaneMode.PASSIVE
+            and snapshot.guard_boot_id == snapshot.boot_id
+            and snapshot.cloud.passive_attachment_exact(
+                snapshot.local_node_id, snapshot.peer_node_id
+            )
+            and not snapshot.apply_locked
+            and not snapshot.transfer_inhibited
+            and not snapshot.emergency_active_only
+            and snapshot.transfer_intent is None
+            and not snapshot.transfer_effect_started
+            and not self._parity_reasons(snapshot)
+            and peer is not None
+            and peer.node_id == peer.observed_owner_id == snapshot.peer_node_id
+            and peer.authority_fresh(snapshot.now)
+            and peer.local_service_fresh(snapshot.now)
+            and snapshot.peer_received_at is not None
+            and 0 <= snapshot.now - snapshot.peer_received_at < self.peer_timeout_seconds
+        )
+
+    def _standby_repair_decision(
+        self, snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
+    ) -> tuple[ControllerCheckpoint, ControllerResult | None]:
+        repair = checkpoint.repair_attempt
+        if repair is not None and (
+            repair.repair_mode is not DataPlaneMode.PASSIVE
+            or not self._repair_attempt_matches(repair, snapshot, checkpoint)
+        ):
+            checkpoint = replace(checkpoint, repair_attempt=None)
+            repair = None
+        if not self._standby_repair_authorized(snapshot):
+            return checkpoint, None
+        missing = (
+            snapshot.readiness.local_defects == ("daemon-configuration-missing:strongswan",)
+            and snapshot.readiness.sample_complete
+        )
+        if repair is None:
+            return checkpoint, self._repair_action(snapshot, checkpoint) if missing else None
+        if snapshot.readiness.promotion_ready:
+            checkpoint, waiting = self._record_repair_health(snapshot, checkpoint)
+            if not waiting:
+                return checkpoint, None
+            state, reason = HAState.REPAIRING, "standby-repair-health-verification"
+        else:
+            checkpoint = self._reset_repair_health(checkpoint)
+            state = (
+                HAState.REPAIRING if snapshot.now < repair.deadline_at else HAState.REPAIR_EXHAUSTED
+            )
+            reason = (
+                "standby-repair-verification"
+                if state is HAState.REPAIRING
+                else ("standby-repair-exhausted-forwarding-fenced")
+            )
+        return checkpoint, self._result(
+            state,
+            (reason,),
+            snapshot,
+            replace(checkpoint, state=state),
+        )
+
     def _repair_action(
         self, snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
     ) -> ControllerResult:
@@ -1103,6 +1313,7 @@ class VMHAController:
             failure_fingerprint=reasons,
             started_at=snapshot.now,
             deadline_at=deadline,
+            repair_mode=snapshot.data_plane_mode,
         )
         action = ControllerAction(
             kind=ActionKind.REPAIR_LOCAL_DATAPLANE,
@@ -1116,6 +1327,7 @@ class VMHAController:
             ownership_incarnation=checkpoint.ownership_incarnation,
             repair_deadline_at=deadline,
             repair_reasons=reasons,
+            repair_mode=snapshot.data_plane_mode,
         )
         next_checkpoint = replace(
             checkpoint,
@@ -1126,7 +1338,12 @@ class VMHAController:
         )
         return self._result(
             HAState.REPAIRING,
-            ("owner-local-repair-started", *reasons),
+            (
+                "standby-local-repair-started"
+                if snapshot.data_plane_mode is DataPlaneMode.PASSIVE
+                else "owner-local-repair-started",
+                *reasons,
+            ),
             snapshot,
             next_checkpoint,
             action,
@@ -1138,6 +1355,13 @@ class VMHAController:
         checkpoint: ControllerCheckpoint,
         repair: RepairAttempt,
     ) -> ControllerResult:
+        if snapshot.readiness.fault_category is not FaultCategory.LOCAL_DEFECT:
+            return self._result(
+                HAState.DEGRADED_PATH,
+                ("local-defect-no-longer-proven",),
+                snapshot,
+                replace(checkpoint, state=HAState.DEGRADED_PATH),
+            )
         checkpoint = self._reset_repair_health(checkpoint)
         repair = checkpoint.repair_attempt or repair
         fence_at = repair.deadline_at - _REPAIR_FENCE_RESERVE_SECONDS
@@ -1218,6 +1442,13 @@ class VMHAController:
         self, snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
     ) -> ControllerResult:
         cloud = snapshot.cloud
+        if not self._path_obligation_ready(snapshot, checkpoint):
+            return self._result(
+                HAState.BLOCKED,
+                ("path-transfer-coverage-unproven",),
+                snapshot,
+                replace(checkpoint, state=HAState.BLOCKED),
+            )
         suspect_since = checkpoint.suspect_since
         if not self._planned_transfer_requested(snapshot):
             if suspect_since is None:
@@ -1309,50 +1540,64 @@ class VMHAController:
     def _peer_fresh(self, snapshot: ControllerSnapshot) -> bool:
         heartbeat = snapshot.peer_heartbeat
         received_at = snapshot.peer_received_at
-        return bool(
-            heartbeat is not None
-            and received_at is not None
-            and 0 <= snapshot.now - received_at < self.peer_timeout_seconds
-            and heartbeat.service_healthy
-            and (
-                (
-                    heartbeat.local_health_fresh(snapshot.now)
-                    and (
-                        (heartbeat.route_ready and heartbeat.promotion_ready)
-                        or (
-                            heartbeat.evidence.serving
-                            and snapshot.cloud.authoritative
-                            and snapshot.cloud.observed_owner_node_id == snapshot.peer_node_id
-                            and snapshot.cloud.former_owner_node_id == snapshot.peer_node_id
-                            and snapshot.cloud.former_attachment_exact
-                            and snapshot.cloud.candidate_attachment_absent
-                        )
-                    )
-                )
-                or self._peer_tunnel_recovery(snapshot)
-            )
-        )
-
-    @staticmethod
-    def _peer_tunnel_recovery(snapshot: ControllerSnapshot) -> bool:
-        heartbeat = snapshot.peer_heartbeat
-        claim = heartbeat.tunnel_recovery if heartbeat is not None else None
-        if claim is None or snapshot.wall_time is None:
+        if (
+            heartbeat is None
+            or received_at is None
+            or not 0 <= snapshot.now - received_at < self.peer_timeout_seconds
+        ):
             return False
-        owner = claim["owner"]
-        return bool(
-            heartbeat is not None
+        owner_present = bool(
+            heartbeat.authority_fresh(snapshot.now)
             and heartbeat.local_service_fresh(snapshot.now)
             and snapshot.cloud.authoritative
-            and heartbeat.tunnel_capability
             and heartbeat.observed_owner_id
             == heartbeat.node_id
             == snapshot.cloud.observed_owner_node_id
-            and owner["owner"] == heartbeat.node_id
+            and snapshot.cloud.former_attachment_exact
+            and snapshot.cloud.candidate_attachment_absent
+        )
+        if owner_present:
+            return not self._path_transfer_eligible(snapshot)
+        return bool(
+            heartbeat.local_health_fresh(snapshot.now)
+            and heartbeat.service_healthy
+            and heartbeat.route_ready
+            and heartbeat.promotion_ready
+        )
+
+    @staticmethod
+    def _path_transfer_eligible(snapshot: ControllerSnapshot) -> bool:
+        from ..ha_tunnel_policy import covers
+
+        peer = snapshot.peer_heartbeat
+        if (
+            peer is None
+            or not peer.authority_fresh(snapshot.now)
+            or not peer.local_service_fresh(snapshot.now)
+        ):
+            return False
+        claim = peer.tunnel_recovery
+        if (
+            claim is None
+            or not claim["exhausted"]
+            or peer.coverage_state != "unhealthy"
+            or peer.fault_category != FaultCategory.COVERAGE_LOSS.value
+        ):
+            return False
+        owner = claim["owner"]
+        return bool(
+            owner["owner"] == peer.node_id == snapshot.cloud.observed_owner_node_id
             and owner["cluster"] == snapshot.cluster_id
             and owner["allocation"] == snapshot.cloud.allocation_id
             and owner["epoch"] == snapshot.cloud.observed_owner_epoch
-            and claim["started"] <= snapshot.wall_time < claim["deadline"] - 1
+            and snapshot.readiness.sample_complete
+            and snapshot.readiness.promotion_ready
+            and not snapshot.readiness.cold_standby_ready
+            and peer.required_destinations
+            and covers(
+                frozenset(snapshot.readiness.covered_destinations),
+                frozenset(peer.required_destinations),
+            )
         )
 
     def _peer_recent(self, snapshot: ControllerSnapshot) -> bool:
@@ -1434,7 +1679,7 @@ class VMHAController:
         checkpoint: ControllerCheckpoint,
     ) -> ControllerResult:
         reasons = (reason,) if isinstance(reason, str) else reason
-        if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+        if snapshot.data_plane_mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}:
             return self._action(
                 HAState.BLOCKED,
                 reasons,
@@ -1449,6 +1694,20 @@ class VMHAController:
             replace(checkpoint, state=HAState.BLOCKED, suspect_since=None, suspicion_boot_id=None),
         )
 
+    @staticmethod
+    def _path_obligation_ready(
+        snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
+    ) -> bool:
+        from ..ha_tunnel_policy import covers
+
+        required = checkpoint.path_transfer_destinations
+        return not required or bool(
+            snapshot.readiness.sample_complete
+            and snapshot.readiness.promotion_ready
+            and not snapshot.readiness.cold_standby_ready
+            and covers(frozenset(snapshot.readiness.covered_destinations), frozenset(required))
+        )
+
     def _action(
         self,
         state: HAState,
@@ -1457,6 +1716,16 @@ class VMHAController:
         checkpoint: ControllerCheckpoint,
         kind: ActionKind,
     ) -> ControllerResult:
+        if kind is ActionKind.STOP_FORMER_OWNER and not snapshot.transfer_effect_started:
+            peer = snapshot.peer_heartbeat
+            checkpoint = replace(
+                checkpoint,
+                path_transfer_destinations=(
+                    peer.required_destinations
+                    if peer is not None and self._path_transfer_eligible(snapshot)
+                    else ()
+                ),
+            )
         sequence = checkpoint.sequence + 1
         target = (
             snapshot.cloud.former_owner_node_id
@@ -1477,6 +1746,7 @@ class VMHAController:
                 kind
                 in {
                     ActionKind.PREPARE_CANDIDATE_DATAPLANE,
+                    ActionKind.PREPARE_OWNER_ORIGINATION,
                     ActionKind.RECONCILE_ROUTES,
                 }
                 and self._transfer_in_progress(snapshot, checkpoint)
@@ -1512,7 +1782,11 @@ class VMHAController:
             ActionKind.INSTALL_COLD_START_GUARD: snapshot.guard_boot_id == snapshot.boot_id
             and snapshot.data_plane_mode is DataPlaneMode.BLOCKED,
             ActionKind.ENTER_PASSIVE: snapshot.data_plane_mode is DataPlaneMode.PASSIVE,
-            ActionKind.DISABLE_ACTIVE: snapshot.data_plane_mode is not DataPlaneMode.ACTIVE,
+            ActionKind.DISABLE_ACTIVE: snapshot.data_plane_mode
+            in {DataPlaneMode.BLOCKED, DataPlaneMode.PASSIVE},
+            ActionKind.PREPARE_OWNER_ORIGINATION: snapshot.data_plane_mode
+            is DataPlaneMode.ORIGINATING
+            and snapshot.readiness.origination_ready,
             ActionKind.REPAIR_LOCAL_DATAPLANE: (
                 snapshot.completed_effect_operation_id == action.operation_id
             ),
@@ -1583,17 +1857,41 @@ class VMHAController:
             return True
         if not self._pending_action_context_matches(action, snapshot, checkpoint):
             return False
-        if kind is ActionKind.REPAIR_LOCAL_DATAPLANE:
-            repair = checkpoint.repair_attempt
+        if kind is ActionKind.PREPARE_OWNER_ORIGINATION:
             return bool(
-                repair is not None
-                and repair.operation_id == action.operation_id
-                and self._repair_attempt_matches(repair, snapshot, checkpoint)
-                and cloud.local_attachment_exact(snapshot.local_node_id)
-                and snapshot.guard_boot_id == snapshot.boot_id
-                and snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+                cloud.authoritative
+                and self._local_ownership_safe(snapshot, checkpoint)
+                and snapshot.data_plane_mode in {DataPlaneMode.PASSIVE, DataPlaneMode.ORIGINATING}
                 and not snapshot.apply_locked
-                and self._routes_current(snapshot, checkpoint)
+                and not snapshot.transfer_inhibited
+                and not snapshot.emergency_active_only
+                and not self._parity_reasons(snapshot)
+                and snapshot.readiness.service_healthy
+                and snapshot.readiness.sample_complete
+                and snapshot.readiness.routing_hygiene_ready
+                and not snapshot.readiness.local_defects
+                and (
+                    not action.takeover_fence_required
+                    or (
+                        cloud.transfer_complete(snapshot.local_node_id)
+                        and self._transfer_intent_valid(snapshot, checkpoint)
+                    )
+                )
+            )
+        if not self._path_obligation_ready(snapshot, checkpoint):
+            return False
+        if kind is ActionKind.REPAIR_LOCAL_DATAPLANE:
+            return bool(
+                snapshot.readiness.fault_category is FaultCategory.LOCAL_DEFECT
+                and self._pending_repair_authority(action, snapshot, checkpoint)
+                and (
+                    action.repair_mode is DataPlaneMode.ACTIVE
+                    or (
+                        snapshot.readiness.local_defects
+                        == ("daemon-configuration-missing:strongswan",)
+                        and snapshot.readiness.sample_complete
+                    )
+                )
             )
         if kind is ActionKind.PREPARE_CANDIDATE_DATAPLANE:
             return bool(
@@ -1620,6 +1918,10 @@ class VMHAController:
             return False
         if kind in _PASSIVE_REPLAY_ACTIONS and (
             snapshot.data_plane_mode is not DataPlaneMode.PASSIVE
+            and not (
+                kind is ActionKind.RECONCILE_ROUTES
+                and snapshot.data_plane_mode is DataPlaneMode.ORIGINATING
+            )
         ):
             return False
         if kind is ActionKind.ENABLE_ACTIVE:
@@ -1651,7 +1953,17 @@ class VMHAController:
             ActionKind.CONFIRM_CANDIDATE_OWNERSHIP,
         } and not self._transfer_intent_valid(snapshot, checkpoint):
             return False
+        if checkpoint.path_transfer_destinations and not self._path_obligation_ready(
+            snapshot, checkpoint
+        ):
+            return False
         if kind is ActionKind.STOP_FORMER_OWNER:
+            if (
+                checkpoint.path_transfer_destinations
+                and not snapshot.transfer_effect_started
+                and not self._path_transfer_eligible(snapshot)
+            ):
+                return False
             return cloud.observed_owner_node_id == cloud.former_owner_node_id
         if kind is ActionKind.DETACH_FORMER_ATTACHMENT:
             return bool(
@@ -1702,6 +2014,41 @@ class VMHAController:
             and snapshot.cloud.authoritative
             and snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
             and self._local_ownership_safe(snapshot, checkpoint)
+        )
+
+    def _pending_repair_authority(
+        self,
+        action: ControllerAction,
+        snapshot: ControllerSnapshot,
+        checkpoint: ControllerCheckpoint,
+    ) -> bool:
+        """Reprove repair ownership independently of the native defect being repaired."""
+        repair = checkpoint.repair_attempt
+        if not (
+            repair is not None
+            and repair.operation_id == action.operation_id
+            and self._repair_attempt_matches(repair, snapshot, checkpoint)
+            and self._pending_action_context_matches(action, snapshot, checkpoint)
+            and self._path_obligation_ready(snapshot, checkpoint)
+            and snapshot.guard_boot_id == snapshot.boot_id
+            and snapshot.data_plane_mode is action.repair_mode
+            and not snapshot.apply_locked
+            and not snapshot.transfer_inhibited
+            and not snapshot.emergency_active_only
+            and snapshot.transfer_intent is None
+            and snapshot.readiness.routing_hygiene_ready
+        ):
+            return False
+        if action.repair_mode is DataPlaneMode.PASSIVE:
+            return self._standby_repair_authorized(snapshot)
+        return bool(
+            snapshot.readiness.protection_ready
+            and snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
+            and self._local_ownership_safe(snapshot, checkpoint)
+            and (
+                self._routes_current(snapshot, checkpoint)
+                or self._retained_routes_current(snapshot, checkpoint)
+            )
         )
 
     @staticmethod
@@ -1864,12 +2211,21 @@ class VMHAController:
             # the durable attach proof while continuing to treat the node as a
             # non-owner until confirmation succeeds.
             return checkpoint
+        passive_repair = checkpoint.repair_attempt
+        if not (
+            passive_repair is not None
+            and passive_repair.repair_mode is DataPlaneMode.PASSIVE
+            and snapshot.data_plane_mode is DataPlaneMode.PASSIVE
+            and checkpoint.ownership_continuity_invalidated
+            and VMHAController._repair_attempt_matches(passive_repair, snapshot, checkpoint)
+        ):
+            passive_repair = None
         return replace(
             checkpoint,
             established_ownership_context=None,
             ownership_continuity_invalidated=True,
             transfer_continuity=None,
-            repair_attempt=None,
+            repair_attempt=passive_repair,
             ownership_incarnation=(
                 checkpoint.ownership_incarnation
                 if checkpoint.ownership_continuity_invalidated
@@ -1897,6 +2253,17 @@ class VMHAController:
             and replace(reconciled, operation_id="") == self._route_context(snapshot, checkpoint)
         )
 
+    def _retained_routes_current(
+        self, snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
+    ) -> bool:
+        retained = snapshot.established_routes_context
+        return bool(
+            not checkpoint.ownership_continuity_invalidated
+            and retained is not None
+            and retained.operation_id
+            and replace(retained, operation_id="") == self._route_context(snapshot, checkpoint)
+        )
+
     @staticmethod
     def _result(
         state: HAState,
@@ -1910,7 +2277,8 @@ class VMHAController:
             reasons=reasons,
             forwarding_enabled=bool(
                 action is None
-                and state in {HAState.ACTIVE, HAState.DEGRADED, HAState.DEGRADED_PATH}
+                and state
+                in {HAState.ACTIVE, HAState.DEGRADED, HAState.DEGRADED_PATH, HAState.REPAIRING}
                 and snapshot.data_plane_mode is DataPlaneMode.ACTIVE
                 and snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
             ),

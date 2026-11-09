@@ -1,9 +1,16 @@
 # Code Debugging Playbook
 
+## Applicability
+
 Use this playbook whenever application, service, script, controller, plugin, or
 client code remains a plausible owner. Passing tests, lint, or static analysis
 does not prove code is bug-free; it proves only the exercised checks reported no
 finding.
+
+## Version Fingerprint
+
+Pin executed build/image and source revision separately, language/runtime, compiler,
+dependencies/lockfile, entry point, effective configuration and concurrency model.
 
 ## Adaptive Decision Guide
 
@@ -20,8 +27,10 @@ Use only rows implicated by the failing path; record material unexamined boundar
 
 <!-- markdownlint-enable MD013 -->
 
-### Escalation Conditions
+### Diagnostic Effects
 
+Passive bounded inspection comes first. Active diagnostics remain coordinator-owned;
+workers may not launch tests, captures, debug containers, stress or repairs.
 Escalate only if the next observation can separate remaining explanations. Bound
 time, output, target and effects; preserve evidence and original settings. Treat
 production or unconfirmed targets as read-only without exact action authority.

@@ -55,6 +55,11 @@ REPLAYS = [
 ]
 
 
+# Frozen before trials, never selected from observed speedups. These cases have
+# separable application/dependency or concurrency/configuration questions.
+PARALLEL_ELIGIBLE = {"code-concurrency", "compute-wait", "compound"}
+
+
 def case(case_id: str) -> dict:
     if case_id in REPLAYS:
         return {"id": case_id, "domain": "supplemental", "kind": "replay"}

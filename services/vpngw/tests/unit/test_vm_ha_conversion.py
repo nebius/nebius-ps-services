@@ -489,9 +489,17 @@ def test_declining_passive_reservation_never_authenticates(
 
 def test_command_publishes_mode_0600_and_rerun_is_noop(
     sample_config: dict,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     ordinary_handoff_preview,
 ) -> None:
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.security_group_apply.inspect_plan",
+        lambda *_: {"desired_ids": [], "members": {}},
+    )
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.security_group_apply.AttachmentJournal.pending", lambda _self: None
+    )
     sample_config["region_id"] = "eu-east1"
     sample_config["gateway_group"]["region"] = "eu-north1"
     source = tmp_path / "ordinary.config.yaml"
@@ -551,6 +559,21 @@ def test_command_publishes_mode_0600_and_rerun_is_noop(
             calls.append("discover")
             return {"nebius-vpn-gw-0": "203.0.113.10"}
 
+        def observe_vm_ha_migration_state(self, spec, local_prefixes=None, **kwargs):
+            return {
+                "members": [
+                    {
+                        "instance_name": "nebius-vpn-gw-0",
+                        "present": True,
+                        "compute_id": "retained-compute",
+                        "boot_disk_id": "retained-disk",
+                    }
+                ],
+                "routes": [],
+                "route_targets": [],
+                "shared_allocation": {"present": False},
+            }
+
         def verify_vm_ha_existing_identities(self, existing, **kwargs) -> None:
             calls.append("verify-existing")
 
@@ -567,6 +590,9 @@ def test_command_publishes_mode_0600_and_rerun_is_noop(
             "nebius_vpngw.cli.inspect_managed_vm_ha_credentials",
             return_value=Mock(
                 action="create",
+                command_action="create",
+                project_id=sample_config["project_id"],
+                gateway_name=sample_config["gateway_group"]["name"],
                 credentials=None,
                 approval_record=Mock(
                     return_value={

@@ -111,3 +111,15 @@ verification of decisive claims in original sources. A job count is not an
 enforced cost or service-internal work limit. See
 [research routing](references/research-routing.md) for selected-scope refresh
 and separate static, native and quality evidence.
+
+### Host memory headroom
+
+The global policy warns at **4 GiB or less** and continues the task and new
+launches while headroom exceeds **2 GiB**. At **2 GiB or less**, the agent stops
+its owned work safely and tells the user the host is running out of memory.
+Unknown visibility pauses heavy work separately. A focused request patches
+only this policy, preserving partial homes, permissions, hooks and settings.
+The shared [host memory helper](../global-context-management/references/host-memory.md)
+samples available/reclaimable RAM and supervises explicitly launched foreground
+jobs. Policy checks, installed parity and fresh-session behavior are separate
+proofs; the setup skill does not add an always-running daemon.

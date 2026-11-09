@@ -109,6 +109,10 @@ Seal and promote one completed feature locally without pushing.
    `FEAT-*`/`REQ-*` message. It creates at most one final integration commit and
    records the new exact tip. Do not squash, amend, or rewrite worker/merge
    history.
+   TDD and final seal owners use explicit Git whitespace cleanup and verify the
+   full committed message against recorded intent before publication. Hooks
+   remain enabled; a substantive message rewrite blocks publication while
+   retaining the commit and intent for diagnosis. Do not amend or reset it.
 4. Verify the original project checkout still has the recorded named base
    branch, exact base HEAD, and a clean status. In unmanaged mode, re-resolve
    the symbolic remote default and require its branch and HEAD to equal the
@@ -140,6 +144,9 @@ the private transition helper and action-scoped execution state.
 
 - If the feature is already sealed or promoted at the recorded SHA, verify and
   resume without creating another commit or promotion.
+- If Git committed before coordinator publication, recover only the exact
+  journaled intent, full normalized message and direct-parent commit, retaining
+  cleanliness and scope checks. Preserve indentation, Unicode and comment lines.
 - If new fixes are required after sealing, route back to the responsible phase
   and require a new plan/execution decision; do not amend or widen the sealed tip.
 - Do not amend previous commits.

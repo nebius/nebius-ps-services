@@ -7,9 +7,9 @@ import json
 import os
 import stat
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 VM_HA_IDENTITY_AUTH_TIMEOUT_SECONDS = 15.0
 VM_HA_IDENTITY_REQUEST_TIMEOUT_SECONDS = 10.0
@@ -20,6 +20,28 @@ VM_HA_CREDENTIAL_FILE_NAME = "nebius-credentials.json"
 VM_HA_CREDENTIAL_DISPLAY_ROOT = "~/.config/nebius-vpngw/credentials"
 
 
+CredentialPurpose = Literal["ha-controller", "ordinary-route-writer"]
+
+
+def credential_nodes(node_ids: Iterable[str], purpose: CredentialPurpose) -> tuple[str, ...]:
+    expected = {"ha-controller": 2, "ordinary-route-writer": 1}.get(purpose)
+    raw = tuple(node_ids)
+    if any(not isinstance(node, str) for node in raw):
+        raise VMHACredentialIdentityError("incomplete")
+    nodes = tuple(sorted(raw))
+    if (
+        expected is None
+        or len(nodes) != expected
+        or len(set(nodes)) != expected
+        or any(
+            not isinstance(node, str) or _credential_path_segment(node, label="node") != node
+            for node in nodes
+        )
+    ):
+        raise VMHACredentialIdentityError("incomplete")
+    return nodes
+
+
 def _credential_path_segment(value: str, *, label: str) -> str:
     normalized = value.strip()
     if not normalized or normalized in {".", ".."} or "/" in normalized or "\\" in normalized:
@@ -28,7 +50,11 @@ def _credential_path_segment(value: str, *, label: str) -> str:
 
 
 def managed_vm_ha_credential_path(
-    *, project_id: str, gateway_name: str, home: Path | None = None
+    *,
+    project_id: str,
+    gateway_name: str,
+    home: Path | None = None,
+    purpose: CredentialPurpose = "ha-controller",
 ) -> Path:
     """Return the absolute operator-owned credential path without creating it."""
 
@@ -37,6 +63,9 @@ def managed_vm_ha_credential_path(
     root = Path.home() if home is None else home
     if not root.is_absolute():
         raise VMHACredentialIdentityError("home-invalid")
+    if purpose not in {"ha-controller", "ordinary-route-writer"}:
+        raise VMHACredentialIdentityError("purpose-invalid")
+    purpose_path = "" if purpose == "ha-controller" else purpose
     return (
         root
         / ".config"
@@ -44,16 +73,22 @@ def managed_vm_ha_credential_path(
         / "credentials"
         / project
         / gateway
+        / purpose_path
         / VM_HA_CREDENTIAL_FILE_NAME
     )
 
 
-def display_vm_ha_credential_path(*, project_id: str, gateway_name: str) -> str:
+def display_vm_ha_credential_path(
+    *, project_id: str, gateway_name: str, purpose: CredentialPurpose = "ha-controller"
+) -> str:
     """Return the stable user-facing path with a literal home shorthand."""
 
     project = _credential_path_segment(project_id, label="project")
     gateway = _credential_path_segment(gateway_name, label="gateway")
-    return f"{VM_HA_CREDENTIAL_DISPLAY_ROOT}/{project}/{gateway}/{VM_HA_CREDENTIAL_FILE_NAME}"
+    path = managed_vm_ha_credential_path(
+        project_id=project, gateway_name=gateway, home=Path("/"), purpose=purpose
+    )
+    return "~/" + path.relative_to("/").as_posix()
 
 
 class VMHACredentialIdentityError(RuntimeError):
@@ -88,13 +123,13 @@ class VMHACredentialIdentity:
 
 @dataclass(frozen=True)
 class VMHACredentialSet:
-    """The exact two-node runtime identity accepted by one apply."""
+    """Exact runtime identities for the approved credential purpose."""
 
-    nodes: tuple[VMHACredentialIdentity, VMHACredentialIdentity]
+    nodes: tuple[VMHACredentialIdentity, ...]
+    purpose: CredentialPurpose = "ha-controller"
 
     def __post_init__(self) -> None:
-        if len({node.node_id for node in self.nodes}) != 2:
-            raise VMHACredentialIdentityError("incomplete")
+        credential_nodes((node.node_id for node in self.nodes), self.purpose)
         if self.nodes != tuple(sorted(self.nodes, key=lambda node: node.node_id)):
             raise VMHACredentialIdentityError("non-canonical")
         if len({node.service_account_id for node in self.nodes}) != 1:
@@ -373,14 +408,13 @@ def preflight_vm_ha_credentials(
     expected_uid: int | None = None,
     reader_factory: Callable[[Path], Any] = _default_reader,
     sdk_factory: Callable[..., Any] = _default_sdk_factory,
+    purpose: CredentialPurpose = "ha-controller",
 ) -> VMHACredentialSet:
     """Authenticate one managed source and project it onto both VM-HA nodes."""
 
     if not project_id:
         raise VMHACredentialIdentityError("project-unavailable")
-    normalized = tuple(sorted(node_ids))
-    if len(normalized) != 2 or len(set(normalized)) != 2:
-        raise VMHACredentialIdentityError("incomplete")
+    normalized = credential_nodes(node_ids, purpose)
     uid = os.getuid() if expected_uid is None else expected_uid
     path = Path(source_path)
     identity = _preflight_one(
@@ -392,17 +426,9 @@ def preflight_vm_ha_credentials(
         reader_factory=reader_factory,
         sdk_factory=sdk_factory,
     )
-    peer_identity = VMHACredentialIdentity(
-        node_id=normalized[1],
-        source_path=identity.source_path,
-        credential_sha256=identity.credential_sha256,
-        service_account_id=identity.service_account_id,
-        authorized_key_id=identity.authorized_key_id,
-        project_id=identity.project_id,
-        service_account_name=identity.service_account_name,
-    )
     return VMHACredentialSet(
-        nodes=(identity, peer_identity),
+        nodes=tuple(replace(identity, node_id=node) for node in normalized),
+        purpose=purpose,
     )
 
 

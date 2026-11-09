@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
-import importlib.util
 import hashlib
 from io import StringIO
 import json
@@ -22,11 +21,7 @@ import zlib
 
 MODULE_PATH = Path(__file__).with_name("three_tier_lifecycle.py")
 sys.path.insert(0, str(MODULE_PATH.parent))
-SPEC = importlib.util.spec_from_file_location("three_tier_lifecycle", MODULE_PATH)
-assert SPEC and SPEC.loader
-lifecycle = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = lifecycle
-SPEC.loader.exec_module(lifecycle)
+import three_tier_lifecycle as lifecycle  # noqa: E402
 
 
 def png_bytes(red: int) -> bytes:
@@ -222,7 +217,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         self.root = Path(self.temporary.name) / "verification"
         # Synthetic identities for offline lifecycle tests; real registration is
         # exercised separately by test_three_tier_target with actual Git state.
-        self.phase_identity = mock.patch.object(lifecycle, "phase_identity", side_effect=lambda state, phase:
+        self.phase_identity = mock.patch.object(lifecycle, "phase_identity", side_effect=lambda state, phase, *, coordinator_session=None:
             ("a"*64, "d"*64 if phase in lifecycle.EXECUTION_PHASES else None))
         self.phase_identity.start()
         self.addCleanup(self.phase_identity.stop)
@@ -297,21 +292,27 @@ class ThreeTierLifecycleTests(unittest.TestCase):
 
     def write_startup_fixture(self, state):
         """Synthetic receipt for semantic unit tests; real startup is tested separately."""
+        from contextlib import nullcontext
+        # These Docker/receipt tests have no native product execution. The
+        # workspace suite tests admission against real product ownership.
+        self.enterContext(mock.patch.object(lifecycle.workspace, "product_quiescence", side_effect=lambda *_: nullcontext()))
         relative = "evidence/workflow-startup.json"
         artifact = Path(state["run_root"]) / relative
         lifecycle.private_json(artifact, {
-            "schema": "agentic-sdlc/workflow-startup-v2",
+            "schema": "agentic-sdlc/workflow-startup-v3",
             "objective_sha256": "a" * 64,
             "verification_id": state["verification_id"],
             "baseline_sha": state["git"]["baseline_sha"],
             "project_id": "test-project", "run_id": "run-test", "agent": "codex",
-            "current_phase": "sdlc-start", "hook_discovery": "MATCH",
-            "owner_session_hash": "c" * 64, "lock_sha256": "d" * 64,
+            "current_phase": "sdlc-start", "source_state_discovery": "MATCH",
+            "owner_session_hash": hashlib.sha256(b"native-fixture-session").hexdigest(), "lock_sha256": "d" * 64,
             "observed_at": lifecycle.utc_now(),
         })
         state["workflow_startup"] = {
             "path": relative, "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()
         }
+        from native_activation_fixture import seed
+        seed(state, json.loads(artifact.read_text()), Path(__file__).resolve().parents[2])
 
     def write_valid_results(self, state: dict[str, object]) -> None:
         run_root = Path(state["run_root"])
@@ -885,7 +886,28 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         copied = self.root / "collected-source.json"
         copied.write_bytes(canonical.read_bytes())
         copied.chmod(0o600)
-        ctx = verifier.setup_context(verifier.parse_args(["--verification-root", str(self.root)]))
+        lifecycle.record_validation(self.root, "product acceptance", "PASS", "Fixture validation passed.")
+        _, state = lifecycle.load_active(self.root)
+        catalog = Path(__file__).resolve().parents[2]
+        ctx = verifier.setup_context(verifier.parse_args([
+            "--verification-root", str(self.root), "--global-skills-dir", str(catalog),
+        ]))
+
+        # This fixture has synthetic phase identities. Keep those semantic
+        # controls in this test while exercising the subprocess handoff contract;
+        # test_verification_catalog uses real isolated owners in both catalogs.
+        def owner_call(arguments, **kwargs):
+            self.assertEqual(arguments[:3], [sys.executable, "-B", str(catalog / "sdlc-workflow-test/scripts/three_tier_lifecycle.py")])
+            self.assertEqual(arguments[3:], ["--verification-root", str(self.root),
+                                            "--expected-verification-id", state["verification_id"], "validate-results"])
+            try:
+                value = lifecycle.validate_results(self.root, state["verification_id"])
+            except (lifecycle.LifecycleError, lifecycle.SemanticEvidenceError,
+                    lifecycle.owned_git_origin.OriginError, OSError, ValueError):
+                return subprocess.CompletedProcess(arguments, 2, "", "Rejected synthetic evidence")
+            return subprocess.CompletedProcess(arguments, 0, json.dumps(value), "")
+
+        self.enterContext(mock.patch.object(verifier, "run", side_effect=owner_call))
 
         def claims(identity=state["verification_id"]):
             return verifier.validated_profile_claims(
@@ -894,6 +916,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             )
 
         self.assertIsNotNone(claims())
+        self.assertEqual(lifecycle.validate_results(self.root, state["verification_id"])["canonical_sha256"], hashlib.sha256(canonical.read_bytes()).hexdigest())
         original_attempts = json.loads(json.dumps(state["browser_stages"]))
         for stage in ("capability-discovery", "evaluate", "uat-before-restart", "uat-after-restart"):
             with self.subTest(failed_readiness=stage):
@@ -941,10 +964,95 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         active.unlink()
         self.assertIsNone(claims())
 
+    def test_catalog_binding_missing_tampered_and_wrong_native_installation_rejected(self):
+        state = self.prepare()
+        owner = lifecycle.runtime_catalog
+        receipt = Path(state["run_root"]) / owner.RELATIVE
+        raw = receipt.read_bytes()
+        receipt.write_bytes(raw + b"\n")
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "binding changed"):
+            lifecycle.load_active(self.root)
+        receipt.write_bytes(raw)
+        missing = dict(state)
+        missing.pop("runtime_catalog")
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "binding is missing"):
+            lifecycle.validate_state(self.root, missing)
+        with mock.patch("agent_runtime.installed_skills_dir", return_value=self.root / "foreign-catalog"):
+            with self.assertRaisesRegex(owner.CatalogError, "installed catalog"):
+                owner.require_native_installation(state, "codex")
+        with self.assertRaisesRegex(owner.CatalogError, "Claude catalog binding remains unqualified"):
+            owner.require_native_installation(state, "claude")
+        self.assertFalse((self.root / lifecycle.workspace.NATIVE).exists())
+        self.assertEqual(receipt.read_bytes(), raw)
+
+    def test_catalog_failure_precedes_new_run_effects_and_replacement_cleanup(self):
+        with mock.patch.object(lifecycle.runtime_catalog, "snapshot", side_effect=lifecycle.runtime_catalog.CatalogError("catalog unavailable")):
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "catalog unavailable"):
+                lifecycle.prepare(self.root)
+        self.assertFalse(lifecycle.paths(self.root)["active"].exists())
+        self.assertFalse(lifecycle.paths(self.root)["runs"].exists())
+        self.reset_prepare_preflight()
+        state = self.prepare()
+        before = lifecycle.paths(self.root)["active"].read_bytes()
+        self.reset_prepare_preflight()
+        with mock.patch.object(lifecycle.runtime_catalog, "snapshot", side_effect=lifecycle.runtime_catalog.CatalogError("catalog unavailable")):
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "catalog unavailable"):
+                lifecycle.prepare(self.root)
+        self.assertEqual(lifecycle.paths(self.root)["active"].read_bytes(), before)
+        self.assertEqual(list(lifecycle.paths(self.root)["runs"].iterdir()), [Path(state["run_root"])])
+
+    def test_validate_results_is_read_only_and_rejects_failed_validations(self):
+        state = self.prepare()
+        self.write_valid_results(state)
+        lifecycle.record_validation(self.root, "product acceptance", "PASS", "Executed fixture acceptance.")
+        _, state = lifecycle.load_active(self.root)
+        paths = [lifecycle.paths(self.root)["active"], Path(state["run_root"]) / "evidence/three-tier-results.json",
+                 Path(state["project_root"]) / ".git/index"]
+        before = {path: path.read_bytes() for path in paths}
+        result = lifecycle.validate_results(self.root, state["verification_id"])
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["catalog_root"], str(lifecycle.runtime_catalog.anchor()))
+        self.assertEqual(before, {path: path.read_bytes() for path in paths})
+        original = lifecycle.validate_semantic_results
+
+        def concurrent_writer(value, *, keep):
+            result = original(value, keep=keep)
+            lifecycle.record_validation(self.root, "concurrent acceptance", "PASS", "Concurrent fixture writer.")
+            return result
+
+        with mock.patch.object(lifecycle, "validate_semantic_results", side_effect=concurrent_writer):
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "Lifecycle changed"):
+                lifecycle.validate_results(self.root, state["verification_id"])
+        lifecycle.record_validation(self.root, "another acceptance", "FAIL", "Retained fixture failure.")
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "every recorded validation"):
+            lifecycle.validate_results(self.root, state["verification_id"])
+
+    def test_result_validation_subprocess_reads_under_parent_workspace_lock(self):
+        state = self.prepare()
+        before = lifecycle.paths(self.root)["active"].read_bytes()
+        with lifecycle.workspace.operation(self.root):
+            result = subprocess.run([
+                sys.executable, "-B", str(MODULE_PATH), "--verification-root", str(self.root),
+                "--expected-verification-id", state["verification_id"], "validate-results",
+            ], text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Headless readiness is not passing", result.stderr)
+        self.assertNotIn("WORKSPACE_BUSY", result.stderr)
+        self.assertEqual(lifecycle.paths(self.root)["active"].read_bytes(), before)
+        with lifecycle.workspace.operation(self.root):
+            result = subprocess.run([
+                sys.executable, "-B", str(MODULE_PATH), "--verification-root", str(self.root),
+                "--expected-verification-id", "f" * 32, "validate-results",
+            ], text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("STALE_THREE_TIER_GENERATION", result.stderr)
+        self.assertEqual(lifecycle.paths(self.root)["active"].read_bytes(), before)
+
     def test_prepare_creates_one_owned_private_run_and_report(self) -> None:
         state = self.prepare()
         self.assertEqual(state["status"], "PREPARED")
         self.assertEqual(state["scenario"], lifecycle.SCENARIO)
+        lifecycle.runtime_catalog.validate(state)
         self.assertTrue((self.root / lifecycle.ROOT_MARKER).is_file())
         self.assertTrue(
             Path(state["run_root"]).joinpath(lifecycle.RUN_MARKER).is_file()
@@ -1145,7 +1253,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
     def test_existing_unowned_root_fails_closed(self) -> None:
         self.root.mkdir()
         (self.root / "preserve.txt").write_text("keep\n", encoding="utf-8")
-        with self.assertRaisesRegex(lifecycle.LifecycleError, "not owned"):
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "private directory|not owned|invalid or unsafe"):
             lifecycle.destroy(self.root)
         self.assertTrue((self.root / "preserve.txt").is_file())
 
@@ -1408,6 +1516,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
 
         def partial_delete(path):
             receipt.unlink()
+            (Path(state["run_root"]) / lifecycle.runtime_catalog.RELATIVE).unlink()
             raise OSError("simulated interrupted deletion")
 
         with mock.patch.object(lifecycle.shutil, "rmtree", side_effect=partial_delete):
@@ -2252,6 +2361,48 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         self.assertEqual(current["verification_id"], second["verification_id"])
         self.assertEqual(current["validations"], [])
 
+    def test_active_native_coordinator_can_validate_its_generation(self):
+        state = lifecycle.prepare(self.root)
+        lifecycle.workspace.register_native(self.root)
+        lifecycle.assert_active_generation(self.root, state["verification_id"])
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "WORKSPACE_BUSY"):
+            lifecycle.destroy(self.root)
+
+    def test_native_receipt_retry_revalidates_orphan_before_admission(self):
+        state = lifecycle.prepare(self.root)
+        self.write_startup_fixture(state)
+        expected = state.pop("native_activation")
+        lifecycle.update_state(self.root, state)
+        lifecycle.record_native_activation(self.root)
+        _, admitted = lifecycle.load_active(self.root)
+        self.assertEqual(admitted["native_activation"], expected)
+
+    def test_unsafe_native_orphan_is_rejected_before_unbounded_read(self):
+        state = lifecycle.prepare(self.root)
+        self.write_startup_fixture(state)
+        state.pop("native_activation")
+        lifecycle.update_state(self.root, state)
+        artifact = Path(state["run_root"]) / lifecycle.native_evidence.RELATIVE
+        outside = self.root.parent / "unrelated.txt"
+        outside.write_text("unrelated fixture data")
+        original = Path.read_bytes
+        def guarded_read(path):
+            if path == artifact:
+                self.fail("Orphan receipt reached an unbounded read")
+            return original(path)
+        for kind in ("symlink", "oversized"):
+            with self.subTest(kind=kind):
+                artifact.unlink()
+                if kind == "symlink":
+                    artifact.symlink_to(outside)
+                else:
+                    with artifact.open("wb") as stream:
+                        stream.truncate(lifecycle.native_evidence.MAX_PREFIX + 1)
+                    artifact.chmod(0o600)
+                with mock.patch.object(Path, "read_bytes", guarded_read):
+                    with self.assertRaises(lifecycle.LifecycleError):
+                        lifecycle.record_native_activation(self.root)
+
     def test_current_cli_generation_can_assert_active(self) -> None:
         state = self.prepare()
         with redirect_stdout(StringIO()):
@@ -2513,7 +2664,7 @@ class ClassifierPhaseIdentityTests(unittest.TestCase):
         self.prepare()
         self.assertEqual(lifecycle.phase_identity(self.state, "sdlc-classify-failure"), ("a" * 64, "b" * 64))
         self.target.assert_called_once_with(
-            self.state, require_clean=False, classifier_observation=True
+            self.state, require_clean=False, phase_observation="sdlc-classify-failure"
         )
 
     def test_classifier_invalid_execution_does_not_fall_back_to_null_basis(self):

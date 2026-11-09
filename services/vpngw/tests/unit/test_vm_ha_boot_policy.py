@@ -103,7 +103,7 @@ def test_bootstrap_persistent_forwarding_is_topology_aware(ha):
     )
     document = yaml.safe_load(raw)
     files = {entry["path"]: entry for entry in document["write_files"]}
-    assert f"net.ipv4.ip_forward = {0 if ha else 1}" in files["/" + boot_policy.OWNED[0]]["content"]
+    assert "net.ipv4.ip_forward = 0" in files["/" + boot_policy.OWNED[0]]["content"]
     command = ["/usr/bin/python3", str(boot_policy.EXECUTABLE)]
     if ha:
         assert document["runcmd"].index(command) < document["runcmd"].index(["sysctl", "--system"])
@@ -138,10 +138,10 @@ def test_ordinary_reentry_requires_ha_deactivation_and_preserves_other_settings(
         boot_policy.restore_ordinary_bootstrap_policy(root=tmp_path)
     marker.unlink()
     boot_policy.restore_ordinary_bootstrap_policy(root=tmp_path)
-    assert file.read_text() == "net.ipv4.conf.all.rp_filter = 0\nnet.ipv4.ip_forward = 1\n"
+    assert file.read_text() == "net.ipv4.conf.all.rp_filter = 0\nnet.ipv4.ip_forward = 0\n"
     assert (tmp_path / "proc/sys/net/ipv4/ip_forward").read_text() == "0"
     boot_policy.restore_ordinary_bootstrap_policy(root=tmp_path)
-    assert file.read_text() == "net.ipv4.conf.all.rp_filter = 0\nnet.ipv4.ip_forward = 1\n"
+    assert file.read_text() == "net.ipv4.conf.all.rp_filter = 0\nnet.ipv4.ip_forward = 0\n"
 
 
 def test_idempotent_policy_install_repairs_unsafe_file_mode(tmp_path):
@@ -151,3 +151,38 @@ def test_idempotent_policy_install_repairs_unsafe_file_mode(tmp_path):
     path.chmod(0o666)
     boot_policy.install_ha_policy(root=tmp_path)
     assert path.stat().st_mode & 0o777 == 0o644
+
+
+def test_ordinary_boot_fence_replaces_owned_forwarding_without_touching_live_kernel(tmp_path):
+    write(tmp_path, "proc/sys/net/ipv4/ip_forward", "1")
+    for name in boot_policy.OWNED:
+        write(tmp_path, name, "net.ipv4.ip_forward = 1\nnet.ipv4.conf.all.rp_filter = 0\n")
+    boot_policy.restore_ordinary_bootstrap_policy(root=tmp_path)
+    assert (tmp_path / "proc/sys/net/ipv4/ip_forward").read_text() == "1"
+    for name in boot_policy.OWNED:
+        assert (
+            tmp_path / name
+        ).read_text() == "net.ipv4.conf.all.rp_filter = 0\nnet.ipv4.ip_forward = 0\n"
+
+
+def test_ordinary_boot_fence_rejects_unmanaged_forwarding_before_mutation(tmp_path):
+    owned = write(tmp_path, boot_policy.OWNED[0], "net.ipv4.ip_forward = 1\n")
+    write(tmp_path, "etc/sysctl.d/10-admin.conf", "net.ipv4.conf.all.forwarding = 1\n")
+    with pytest.raises(boot_policy.BootPolicyError, match="unmanaged-forwarding-conflict"):
+        boot_policy.restore_ordinary_bootstrap_policy(root=tmp_path)
+    assert owned.read_text() == "net.ipv4.ip_forward = 1\n"
+
+
+def test_ordinary_runtime_cannot_enable_forwarding_without_destination_proof(monkeypatch):
+    from nebius_vpngw.agent import ordinary, routing_guard
+
+    class Protection:
+        def verify(self):
+            raise RuntimeError("destination protection is missing")
+
+    monkeypatch.setattr(ordinary, "destination_protection", lambda cfg: Protection())
+    monkeypatch.setattr(
+        routing_guard, "_enforce_routing_sysctls", lambda: pytest.fail("forwarding enabled")
+    )
+    with pytest.raises(RuntimeError, match="destination protection is missing"):
+        routing_guard._enforce_routing_invariants_locked({"connections": []})

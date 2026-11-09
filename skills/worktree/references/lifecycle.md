@@ -87,7 +87,8 @@ The durable reservation binds:
 - managed child name, branch, worktree, and exact child SHA;
 - source branch/ref and exact source-start SHA;
 - private integration branch/path and token;
-- state `planned -> present -> ready` and exact candidate SHA.
+- schema v4 state `planned -> present -> committing -> ready`, exact merge
+  tree/message intent before committing, and the sealed candidate SHA.
 
 One source ref may have only one active reservation. A transient file lock
 protects individual transitions; the durable reservation protects the
@@ -107,7 +108,7 @@ child-head.
 Validation is external to the Python helper. The first helper call returns the
 candidate path/SHA. `$align`, tests, and applicable Agentic SDLC UAT must not
 change that candidate. The promotion call supplies the exact validated SHA;
-the helper requires the candidate checkout and private ref to remain at that
+the helper requires the registered candidate checkout, its attached branch and private ref to remain at that
 SHA, rechecks parents, refs, cleanliness, and source/child stability, and
 passes the immutable SHA—not the mutable private ref—to `git merge --ff-only`
 inside the primary checkout.
@@ -117,7 +118,11 @@ inside the primary checkout.
 - `planned` plus exact branch/worktree resources resumes preparation.
 - `present` plus `MERGE_HEAD` resumes conflict resolution. The developer edits
   and stages only the resolution; the helper seals the merge on retry.
+- `committing` recovers only a commit matching the recorded parents, tree and
+  message, or commits that exact pending intent. Preserve any mismatch for recovery.
 - `ready` returns the same candidate until its exact SHA is validated.
+- Schema v3 reservations are rejected and retained; no compatibility path adopts
+  an unrecorded merge intent.
 - Dirt in the source or child after any reservation blocks all automatic
   commits. Preserve the attempt; clean without moving its frozen heads to
   resume, or explicitly commit reviewed repairs and use `--restart` when a head

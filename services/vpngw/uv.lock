@@ -796,6 +796,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "rich" },
     { name = "typer" },
+    { name = "vici" },
 ]
 
 [package.optional-dependencies]
@@ -836,6 +837,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.20.0,<0.26.0" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12,<7.0.0" },
     { name = "vcs-versioning", marker = "extra == 'dev'", specifier = ">=2.2.2,<3.0.0" },
+    { name = "vici", specifier = "==6.0.3" },
 ]
 provides-extras = ["dev"]
 
@@ -1427,6 +1429,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/09/95/c95bb74950763a163defcf4cedf6c5edfca1d623fd5031b76516ece85076/vcs_versioning-2.2.2.tar.gz", hash = "sha256:4ac4ded78720cdb4d0291ae58ace87e1e9201912e1023f3029c6cce5c9152cfb", size = 143135, upload-time = "2026-06-29T13:26:06.901Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/85/9e/1f06f4ddc3a74ccfe0877490caaf4a5233e65401160afc8cb13207815f5e/vcs_versioning-2.2.2-py3-none-any.whl", hash = "sha256:fe7fb216f8780a5516e7864a9333aacb1b70015b087a9be3918da76ef2760808", size = 108014, upload-time = "2026-06-29T13:26:05.367Z" },
+]
+
+[[package]]
+name = "vici"
+version = "6.0.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/83/88b626e3f62dc986cd7ce2fa9fb37d9b3259fbc7a3864a51b98e5c516ec7/vici-6.0.3.tar.gz", hash = "sha256:ec926e7a29b6ea9112fe406d1851c3c46143ac625e28089e3d4efce4eac88e56", size = 13092, upload-time = "2025-10-27T13:44:05.858Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/89/241f45ca169e43bc0104a3696f020c11eebcb195c2c9631b798c026de469/vici-6.0.3-py3-none-any.whl", hash = "sha256:734f52b57e329fbd58f3bffd1305d6546be174aeb35bc4a2ef45c257e95ad924", size = 11183, upload-time = "2025-10-27T13:44:04.474Z" },
 ]
 
 [[package]]

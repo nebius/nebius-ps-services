@@ -1402,10 +1402,14 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
         else:
             return deny(
                 f"Nebius auth required, but {selector_error}. Start the Bash command "
-                f"exactly with '{PROJECT_ID_ENV}=<project-id> <command>'. Run "
-                "$agent-nebius-auth-diagnose to discover or verify the current-session "
-                "project. Correct the command and retry; no setup or user confirmation "
-                "is required."
+                f"exactly with '{PROJECT_ID_ENV}=<project-id> <command>'. "
+                "Split mixed local/Nebius payloads into separate Bash calls; leave "
+                "local-only calls unprefixed. If an authoritative task project is "
+                "already selected, reuse it; do not rediscover or run verify. "
+                "Resolve absent or conflicting task project evidence with "
+                "$agent-nebius-auth-diagnose before retrying. Correct the command "
+                "and retry the corrected payload once; no setup or additional "
+                "confirmation is required for this command-format correction."
             )
 
     profile = f"{AGENT_PROFILE_PREFIX}{project_id}"

@@ -93,7 +93,7 @@ def _resolve(run_dir: Path, selected: Path, execution_id: str | None, strict: bo
     value = records[execution_id]
     if value.get("schema") in {f"agentic-sdlc/execution-coordinator-v{n}" for n in range(1, 8)}:
         _fail("legacy execution coordinator schema is unsupported", "WORKFLOW_UPGRADE_REQUIRED")
-    if (value.get("schema") != "workflow/execution-coordinator-v2"
+    if (value.get("schema") != "workflow/execution-coordinator-v3"
             or value.get("state_version") != 1
             or value.get("run_id") != run_dir.name
             or value.get("execution_id") != execution_id
