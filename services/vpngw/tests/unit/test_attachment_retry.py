@@ -1,5 +1,6 @@
 """Reviewed request recovery retains command and guest inhibition authority."""
 
+import ast
 import json
 from copy import deepcopy
 from types import SimpleNamespace as NS
@@ -172,8 +173,9 @@ def test_apply_requires_successor_approval_and_preserves_original_resume_authori
 
 
 @pytest.mark.parametrize("unknown_quiescence", [False, True])
+@pytest.mark.parametrize("revision_drift", [False, True])
 def test_ha_rejected_owner_request_preserves_both_locks_and_settled_standby(
-    request, tmp_path, monkeypatch, unknown_quiescence
+    request, tmp_path, monkeypatch, unknown_quiescence, revision_drift
 ):
     from test_vm_ha_rearm import _binding
 
@@ -201,7 +203,8 @@ def test_ha_rejected_owner_request_preserves_both_locks_and_settled_standby(
         assert value.metadata.resource_version == instance.metadata.resource_version
         if value.metadata.id == "compute-a" and not rejected_once:
             rejected_once = True
-            instance.metadata.resource_version += 1
+            if revision_drift:
+                instance.metadata.resource_version += 1
             raise request_error(StatusCode.ABORTED)
         mutations.append(value.metadata.id)
         instance.spec = clone(value.spec)
@@ -239,9 +242,70 @@ def test_ha_rejected_owner_request_preserves_both_locks_and_settled_standby(
     )
     monkeypatch.setattr(sg, "refresh_guest_trust", lambda *a: None)
 
-    # This command test supplies synthetic healthy HA admission. The installed
-    # continuity tests separately reject a changed, unprepared owner revision.
-    monkeypatch.setattr(sg, "prepare_owner_continuity", lambda *a, **k: None)
+    from test_vm_ha_attachment_continuity import _publish_inhibited_status
+
+    from nebius_vpngw.agent.vm_ha import attachment_continuity as continuity
+    from nebius_vpngw.agent.vm_ha.inhibition import (
+        STANDBY_REPLACEMENT_INHIBITION_FILENAME,
+        STANDBY_REPLACEMENT_INHIBITION_SCHEMA,
+    )
+
+    guest_paths = {}
+
+    def observe(_ssh, _target, cfg, _local, script):
+        calls = [
+            node
+            for node in ast.walk(ast.parse(script))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "loads"
+        ]
+        proposal = json.loads(ast.literal_eval(calls[0].args[0]))
+        assert child.read_transaction()["owner_continuity"] == proposal
+        path = tmp_path / cfg.hostname
+        if cfg.hostname not in guest_paths:
+            path.mkdir()
+            guest_paths[cfg.hostname] = path
+            operation = proposal["operation_id"]
+            _publish_inhibited_status(
+                path,
+                binding,
+                node_id=cfg.vm_ha_node.node_id,
+                operation=operation,
+                boot="boot",
+                epoch=proposal["before_revision"],
+            )
+            if cfg.vm_ha_node.node_id == "node-a":
+                (path / STANDBY_REPLACEMENT_INHIBITION_FILENAME).write_text(
+                    json.dumps(
+                        {
+                            "schema": STANDBY_REPLACEMENT_INHIBITION_SCHEMA,
+                            "cluster_id": binding.cluster_id,
+                            "generation_id": binding.generation_id,
+                            "node_id": "node-a",
+                            "operation_id": operation,
+                        }
+                    )
+                )
+            else:
+                lock, _ = SSHPush._vm_ha_apply_lock_payload(
+                    cluster_id=binding.cluster_id,
+                    node_id="node-b",
+                    generation_id=binding.generation_id,
+                    operation_id=operation,
+                )
+                (path / "apply.lock").write_bytes(lock)
+        return continuity.prepare(
+            proposal,
+            config={
+                "runtime_binding": binding.model_dump(mode="json"),
+                "node": {"node_id": cfg.vm_ha_node.node_id},
+            },
+            state_dir=path,
+            boot_id="boot",
+        )
+
+    monkeypatch.setattr(sg, "_guest_observation", observe)
 
     def install(_target, cfg, _local, **kwargs):
         operation = kwargs["operation_id"]
@@ -299,6 +363,22 @@ def test_ha_rejected_owner_request_preserves_both_locks_and_settled_standby(
     settled = {
         k: deepcopy(v) for k, v in previous["operations"].items() if v["status"] == "settled"
     }
+    if revision_drift:
+        parent_before, child_before = parent.path.read_bytes(), child.path.read_bytes()
+        guests_before = {
+            str(p): p.read_bytes() for path in guest_paths.values() for p in path.iterdir()
+        }
+        with pytest.raises(RuntimeError, match="prepared revision and spec"):
+            attachment_retry.plan(manager, parent, previous)
+        assert parent.path.read_bytes() == parent_before
+        assert child.path.read_bytes() == child_before
+        assert {
+            str(p): p.read_bytes() for path in guest_paths.values() for p in path.iterdir()
+        } == guests_before
+        assert len(locks) == 2 and mutations == ["compute-b"]
+        assert all(child.pending()["operations"][key] == value for key, value in settled.items())
+        assert "request_successors" not in child.pending()
+        return
     proposal = attachment_retry.plan(manager, parent, previous)
     if unknown_quiescence:
         ssh.verify_vm_ha_apply_inhibition_quiescent = lambda *a, **k: (_ for _ in ()).throw(

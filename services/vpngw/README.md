@@ -381,8 +381,17 @@ can propose a new request for the same desired attachments. Review its new diges
 with `--approve-disruption`. The original command, guest inhibition and settled
 member operations remain in force; the rejected request is archived. This path
 requires a single recorded submission and fresh full Compute request parity except
-for the resource revision. Timeouts, uncertain replays, failed accepted operations
-and unrelated resource changes remain blocked for their existing recovery owner.
+for the resource revision. An HA owner additionally requires the exact revision
+and before/after specifications already prepared on both guests. An unexplained
+owner revision change is refused during planning; preserve the command, guest
+inhibition and continuity receipts for guarded recovery. Timeouts, uncertain
+replays, failed accepted operations and unrelated resource changes remain blocked
+for their existing recovery owner.
+
+Paired HA readiness reconstructs the installed configuration with the runtime
+binding validated against both guests and the retained lifecycle and credential
+identities. Exact rendered hashes must match before native encrypted-route
+verification; the unresolved local YAML alone is not the installed generation.
 
 For automation, add `--output-format json` to `apply`. Stdout contains one
 `nebius-vpngw.apply-result.v1` result; progress and diagnostics go to stderr.

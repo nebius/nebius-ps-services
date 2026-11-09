@@ -16,6 +16,13 @@ All notable changes to this project are tracked here. This changelog follows
 
 ### Fixed
 
+- Verify paired HA readiness against the exact installed configuration rendered
+  with validated lifecycle and credential bindings. Keep both-member identity,
+  ownership and encrypted-route checks mandatory.
+- Refuse a rejected HA owner attachment retry during planning when its prepared
+  revision or specification changed. Preserve existing inhibition and receipts;
+  unchanged-owner and nonowner request recovery remain available.
+
 - Bind Python package checkpoints to the complete admitted manifest, including
   HA parent and command approval. A new operation no longer reuses a stale
   completed checkpoint after an intervening same-wheel installation changes

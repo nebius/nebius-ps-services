@@ -7,6 +7,7 @@ import ipaddress
 import json
 import shlex
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import yaml
@@ -85,6 +86,40 @@ def _native(context, instance, target, required):
     if result.returncode or len(result.stdout) > 65536 or json.loads(result.stdout) != expected:
         raise RuntimeError("Paired encrypted route observation is incomplete")
     return expected
+
+
+def _ha_instance(context, state, instances, targets, local, owner):
+    """Join the desired manifests to independently validated installed authority."""
+    from .deploy.ssh_push import SSHPush
+    from .deploy.vm_ha_prehost import validate_prehost_hosts
+    from .schema import VMHARuntimeBinding
+
+    if state.record_version != 4 or state.transaction is None:
+        raise RuntimeError("Paired HA lifecycle authority is incomplete")
+    hosts = {
+        member.instance_name: SSHPush(
+            ssh_policy=context.policies[member.instance_name]
+        ).inspect_vm_ha_prehost(targets[member.instance_name], member.instance_name, local)
+        for member in state.members
+    }
+    validate_prehost_hosts(state, hosts)
+    bindings = {
+        name: VMHARuntimeBinding.model_validate(host["runtime_binding"])
+        for name, host in hosts.items()
+    }
+    binding = bindings[owner]
+    if any(value != binding for value in bindings.values()):
+        raise RuntimeError("Paired HA installed runtime bindings disagree")
+    configs = {instance.hostname: instance for instance in instances}
+    if set(configs) != set(hosts):
+        raise RuntimeError("Paired HA desired members differ from lifecycle authority")
+    rendered = {}
+    for name, instance in configs.items():
+        raw = SSHPush._render_vm_ha_config(instance, binding)
+        if hashlib.sha256(raw.encode()).hexdigest() != hosts[name]["config_sha256"]:
+            raise RuntimeError("Paired HA installed configuration differs from desired generation")
+        rendered[name] = replace(instance, config_yaml=raw)
+    return rendered[owner]
 
 
 def cloud_coverage(observed: dict, required: list[str]) -> None:
@@ -203,7 +238,17 @@ def _observe(path: Path) -> dict:
             ),
             required,
         )
-        instance = next(item for item in plan.iter_instance_configs() if item.hostname == name)
+        instance = checked(
+            "pair-native",
+            "installed-generation-unverified",
+            _ha_instance,
+            inspected.ssh_context,
+            snapshot.lifecycle_state,
+            tuple(plan.iter_instance_configs()),
+            inspected.targets,
+            local,
+            name,
+        )
         native_proof = checked(
             "pair-native",
             "encrypted-forwarding-unverified",

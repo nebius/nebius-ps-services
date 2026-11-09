@@ -8761,7 +8761,7 @@ Sources: [Debian maintainer-script retry contract](https://www.debian.org/doc/de
 <!-- /FEATURE: FEAT-034 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-035 reqs=REQ-035 status=ready delivery=implemented priority=P0 version=38 -->
+<!-- FEATURE: FEAT-035 reqs=REQ-035 status=ready delivery=implemented priority=P0 version=39 -->
 ### FEAT-035: Composed apply planning, authority and results
 
 #### Requirements Covered
@@ -9005,6 +9005,13 @@ fresh exact Compute/NIC and full request equality apart from a positive resource
 revision. Disable hidden transport retries for journaled mutations and persist
 submission counts before dispatch; a rejection after an uncertain replay cannot
 prove no effects. A completed failed operation remains outside this path.
+For the HA owner, the current revision and specification must still equal the
+prepared continuity before-image, and the desired specification must equal its
+after-image. Refuse an unexplained owner revision during read-only planning,
+before exposing an approval or archiving history. Identical current specs alone
+cannot authorize rebasing the established ownership epoch. Preserve inhibition
+and receipts for guarded recovery; nonowner and unchanged-owner successors retain
+the existing exact-request path.
 
 The existing attachment owner archives the exact predecessor, binds a new cloud
 request key to the separately approved successor and rechecks the frozen request
@@ -9484,7 +9491,7 @@ failed trials remain retained, and no release-qualified claim follows.
 
 <!-- /FEATURE: FEAT-035 -->
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-036 reqs=REQ-036 status=ready delivery=implemented priority=P1 version=11 -->
+<!-- FEATURE: FEAT-036 reqs=REQ-036 status=ready delivery=implemented priority=P1 version=12 -->
 ### FEAT-036: Paired regional configuration and resumable deployment
 
 #### Requirements Covered
@@ -9614,6 +9621,13 @@ owner unlock, origination and forwarding verification, then prove fencing or exa
 relocking and resume under the original execution. Pair observation discards racing
 atomic progress reads and verifies terminal receipts after process exit. Readiness
 retries retain the first phase/predicate without copying raw remote exceptions.
+Paired HA native readiness reconstructs both desired manifests using the full
+installed runtime binding. The existing pinned prehost observer and validator
+prove lifecycle members, allocation, route scope, credentials and quiescent
+operation evidence; both bindings must agree. The staging renderer then proves
+the desired generation and exact installed file hashes before the existing native
+probe. Current cloud and ownership checks still bracket verification. This repairs
+a raw-local-YAML hash mismatch without weakening the guest generation comparison.
 Source review is complete; frozen-artifact qualification remains open.
 
 A paired cold-start regression exposed a consumer mismatch: the CLI read a

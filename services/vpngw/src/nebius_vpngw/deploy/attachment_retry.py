@@ -118,6 +118,17 @@ def plan(manager: Any, parent: CommandJournal, transaction: dict | None) -> dict
     attachments.require_plan(manager, transaction["plan"], allow_desired=True)
     instance = manager.get_ha_instance(member["compute_id"])
     request = attachments.member_request(instance, member, manager._get_client())
+    continuity = transaction.get("owner_continuity")
+    if continuity is not None and continuity["compute_id"] == member["compute_id"]:
+        if not (
+            str(instance.metadata.resource_version) == continuity["before_revision"]
+            and message_digest(instance.spec) == continuity["before_spec"]
+            and message_digest(request.spec) == continuity["after_spec"]
+        ):
+            raise RuntimeError(
+                "HA attachment owner no longer matches its prepared revision and spec; "
+                "retain the command, guest inhibition and continuity receipts for guarded recovery"
+            )
     signature = message_digest(request)
     previous = clone_nebius_sdk_message(request)
     previous.metadata.resource_version = int(

@@ -110,3 +110,132 @@ def test_native_readiness_reuses_encryption_and_protection_without_repair(tmp_pa
         readiness.native(hashlib.sha256(raw).hexdigest(), ["10.20.0.0/16"])
     with pytest.raises(RuntimeError, match="generation changed"):
         readiness.native("0" * 64, ["10.20.0.0/16"])
+
+
+@pytest.fixture
+def installed_ha(monkeypatch):
+    from dataclasses import replace
+
+    from test_ssh_push import _vm_ha_manifest_and_binding
+    from test_vm_ha_prehost import fixture
+
+    from nebius_vpngw.deploy.ssh_push import SSHPush
+    from nebius_vpngw.deploy.vm_ha_lifecycle import VMHALifecycleStatus
+    from nebius_vpngw.schema import VMHARuntimeBinding
+
+    state, observation, _, hosts = fixture()
+    state = replace(state, status=VMHALifecycleStatus.ACTIVE)
+    template, _ = _vm_ha_manifest_and_binding()
+    generation = template.vm_ha_generation
+    binding = VMHARuntimeBinding.model_validate(hosts["gateway-0"]["runtime_binding"])
+    binding = binding.model_copy(
+        update={
+            "static_routes_digest": generation.digests.static_routes,
+            "bgp_policy_digest": generation.digests.bgp_policy,
+        }
+    )
+    instances = []
+    for member in state.members:
+        node = replace(
+            template.vm_ha_node,
+            node_id=member.node_id,
+            instance_index=member.instance_index,
+            role=type(template.vm_ha_node.role)(member.role),
+        )
+        ready = replace(template.vm_ha_readiness, required_node_ids=("node-0", "node-1"))
+        payload = yaml.safe_load(template.config_yaml)
+        payload["vm_ha"]["cluster_id"] = state.cluster_id
+        payload["vm_ha"]["node"] = hosts[member.instance_name]["node"]
+        instance = replace(
+            template,
+            hostname=member.instance_name,
+            instance_index=member.instance_index,
+            vm_ha_node=node,
+            vm_ha_readiness=ready,
+            config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        )
+        raw = SSHPush._render_vm_ha_config(instance, binding)
+        host = hosts[member.instance_name]
+        host["runtime_binding"] = binding.model_dump(mode="json")
+        host["generation"]["digests"] = generation.digests.__dict__
+        host["readiness"]["digests"] = generation.digests.__dict__
+        host["config_sha256"] = hashlib.sha256(raw.encode()).hexdigest()
+        instances.append(instance)
+    monkeypatch.setattr(
+        SSHPush, "inspect_vm_ha_prehost", lambda self, target, name, local: hosts[name]
+    )
+    context = NS(policies={name: object() for name in hosts})
+    targets = {name: "target-" + name for name in hosts}
+    return state, observation, hosts, tuple(instances), context, targets
+
+
+def test_paired_ha_observation_hashes_actual_installed_renderer(
+    installed_ha, monkeypatch, tmp_path
+):
+    import json
+
+    from nebius_vpngw import cli, config_loader
+
+    state, observation, hosts, instances, context, targets = installed_ha
+    local = {
+        "project_id": state.project_id,
+        "gateway": {"local_prefixes": ["10.0.0.0/24"]},
+        "connections": [{"remote_prefixes": ["10.20.0.0/16"]}],
+    }
+    plan = NS(vm_ha=object(), gateway_group=object(), iter_instance_configs=lambda: instances)
+    observation["routes"][0].update(prefix="10.20.0.0/16", allocation_id=state.allocation_id)
+    manager = NS(observe_vm_ha_migration_state=lambda *a: observation)
+    inspected = NS(
+        snapshot=NS(
+            view=NS(overall="HEALTHY"),
+            lifecycle_state=state,
+            authority=NS(owner_name="gateway-0", ownership_digest="a" * 64),
+        ),
+        targets=targets,
+        ssh_context=context,
+    )
+    monkeypatch.setattr(config_loader, "load_local_config", lambda path: local)
+    monkeypatch.setattr(config_loader, "merge_with_peer_configs", lambda *a: plan)
+    monkeypatch.setattr(readiness, "_manager", lambda *a: (manager, None))
+    monkeypatch.setattr(cli, "_inspect_vm_ha_command_status", lambda *a, **kw: inspected)
+    monkeypatch.setattr(cli, "_vm_ha_cloud_authority", lambda *a: NS(condition="exact"))
+    monkeypatch.setattr(cli, "_status_ssh_target_command", lambda *a, **kw: ["ssh", "fixture"])
+    requests = []
+
+    def remote(argv, **kwargs):
+        request = json.loads(kwargs["input"])
+        requests.append(request)
+        assert request["generation"] == hosts["gateway-0"]["config_sha256"]
+        assert (
+            request["generation"] != hashlib.sha256(instances[0].config_yaml.encode()).hexdigest()
+        )
+        return NS(returncode=0, stdout=kwargs["input"])
+
+    monkeypatch.setattr(readiness.subprocess, "run", remote)
+    assert readiness._observe(tmp_path / "config.yaml")["connection"] == "ready"
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize(
+    "drift", ["credential", "allocation", "member", "generation", "config", "peer"]
+)
+def test_paired_ha_render_refuses_foreign_or_inconsistent_authority(installed_ha, drift):
+    state, _, hosts, instances, context, targets = installed_ha
+    host = hosts["gateway-0"]
+    if drift == "credential":
+        host["credential_sha256"] = "f" * 64
+    elif drift == "allocation":
+        host["runtime_binding"]["shared_allocation_id"] = "foreign"
+    elif drift == "member":
+        host["runtime_binding"]["nodes"][0]["compute_id"] = "foreign"
+    elif drift == "generation":
+        for item in hosts.values():
+            item["runtime_binding"]["generation_id"] = "f" * 64
+            item["generation"]["generation_id"] = "f" * 64
+            item["readiness"]["generation_id"] = "f" * 64
+    elif drift == "config":
+        host["config_sha256"] = "f" * 64
+    else:
+        hosts["gateway-1"]["runtime_binding"]["nodes"][0]["peer_endpoint"] = "192.0.2.99:9443"
+    with pytest.raises((ValueError, RuntimeError)):
+        readiness._ha_instance(context, state, instances, targets, {}, "gateway-0")
