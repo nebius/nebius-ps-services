@@ -14,6 +14,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.6.4] - 2026-11-09
+
 ### Fixed
 
 - Preserve bounded, value-free package-staging diagnostics in historical upgrade
