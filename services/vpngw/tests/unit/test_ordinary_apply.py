@@ -831,6 +831,8 @@ def test_final_settlement_preserves_deadline_ownership_and_read_failures(
 def test_final_confirmation_bounds_guarded_routing_lock_contention(
     transaction, monkeypatch, releases
 ):
+    from nebius_vpngw import ordinary_operations as ops
+
     tx = transaction
     clock = SimpleNamespace(now=time.monotonic(), sleeps=0)
     held = []
@@ -841,9 +843,9 @@ def test_final_confirmation_bounds_guarded_routing_lock_contention(
         if releases and held:
             os.close(held.pop())
 
-    monkeypatch.setattr(
-        ordinary_remote, "time", SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep)
-    )
+    fake_time = SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep)
+    monkeypatch.setattr(ordinary_remote, "time", fake_time)
+    monkeypatch.setattr(ops, "time", fake_time)
 
     def receipt(*args, **kwargs):
         value = tx.receipt(*args, **kwargs)
