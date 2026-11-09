@@ -136,11 +136,23 @@ def test_real_apply_and_repeat_use_each_profile(tmp_path, monkeypatch):
     assert repeat["previous"] == first["run"]
 
 
-def test_public_create_config_persists_regional_profiles(tmp_path):
+def test_public_create_config_persists_regional_profiles(tmp_path, monkeypatch):
     import yaml
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+    public_key = (
+        Ed25519PrivateKey.generate()
+        .public_key()
+        .public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH)
+        .decode()
+    )
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     for side in pair_config.SIDES:
-        (tmp_path / f"{side}.yaml").write_text(yaml.safe_dump(seed(side, True)))
+        config = seed(side, True)
+        config["gateway_group"]["vm_spec"].pop("ssh_public_key_path")
+        config["gateway_group"]["vm_spec"]["ssh_public_key"] = public_key
+        (tmp_path / f"{side}.yaml").write_text(yaml.safe_dump(config))
     result = CliRunner().invoke(
         app,
         [

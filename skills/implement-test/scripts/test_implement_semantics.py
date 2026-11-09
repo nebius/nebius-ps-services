@@ -78,7 +78,7 @@ class SemanticsTests(unittest.TestCase):
                 fixture.finish(assignment)
             pending = execution.refill_wave(fixture.run_dir, "FEAT-001", "WAVE-001")
         execution.integrate_wave(fixture.run_dir, "FEAT-001", "WAVE-001")
-        complete_wave(fixture.run_dir, "FEAT-001", "WAVE-001", "fixture checks passed")
+        complete_wave(fixture.run_dir, "FEAT-001", "WAVE-001", "fixture checks passed", session=fixture.session)
         integration = Path(coordinator["integration_worktree"])
         objective = objectives.validate_run(fixture.run_dir)[1]["revisions"][-1]["sha256"]
         fixture.publication(integration, objective=objective, basis=_basis(fixture.run_dir, "FEAT-001"))

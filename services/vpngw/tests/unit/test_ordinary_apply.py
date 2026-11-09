@@ -791,14 +791,12 @@ def test_final_settlement_preserves_deadline_ownership_and_read_failures(
     tx = transaction
     observations = []
     clock = SimpleNamespace(now=time.monotonic())
-    monkeypatch.setattr(
-        ordinary_remote,
-        "time",
-        SimpleNamespace(
-            monotonic=lambda: clock.now,
-            sleep=lambda seconds: setattr(clock, "now", clock.now + seconds),
-        ),
+    fake_time = SimpleNamespace(
+        monotonic=lambda: clock.now,
+        sleep=lambda seconds: setattr(clock, "now", clock.now + seconds),
     )
+    monkeypatch.setattr(ordinary_remote, "time", fake_time)
+    monkeypatch.setattr(ops, "time", fake_time)
 
     def quiet(self, names):
         value = ops.Journal().read()

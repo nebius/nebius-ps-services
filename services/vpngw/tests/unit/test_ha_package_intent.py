@@ -233,7 +233,7 @@ def test_package_restore_never_substitutes_a_wheel(packages, monkeypatch, tmp_pa
 
     def changed(url, **kwargs):
         response = download(url, **kwargs)
-        if "pypi.org" in url:
+        if url == "https://pypi.org/pypi/example-dep/1.2/json":
             metadata = json.load(response)
             if change == "missing":
                 metadata["urls"] = []
