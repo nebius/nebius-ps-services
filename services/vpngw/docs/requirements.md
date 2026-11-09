@@ -5,7 +5,7 @@
 
 #### User Story
 
-Maintain the existing Python package, CLI, test, build, and release contracts while applying conservative project hardening for current users. Constraints: Preserve supported public import paths, console scripts, CLI syntax and exit behavior, Python 3.10 through 3.12 support, configuration schemas and defaults, persisted formats, packaged systemd assets, SCM-derived versions, release tags, and upgrade paths, except for the explicitly approved VM-HA clean break in REQ-008 and the explicitly approved region-terminology and pre-adoption VM-HA command cleanup in REQ-015, customer-owned SSH filtering in REQ-024, and the approved operator, replacement and review repairs in REQ-030 through REQ-035. Keep one canonical implementation rather than adding compatibility shims. Non-goals: Replacing the established project scaffold, changing runtime cloud or networking behavior, raising the Python floor, adopting a new framework or build backend, or performing broad dependency upgrades.
+Maintain the existing Python package, CLI, test, build, and release contracts while applying conservative project hardening for current users. Constraints: Preserve supported public import paths, console scripts, CLI syntax and exit behavior, Python 3.10 through 3.12 support, configuration schemas and defaults, persisted formats, packaged systemd assets, SCM-derived versions, release tags, and upgrade paths, except for the explicitly approved VM-HA clean break in REQ-008 and the explicitly approved region-terminology and pre-adoption VM-HA command cleanup in REQ-015, customer-owned SSH filtering in REQ-024, and the approved operator, replacement and review repairs in REQ-030 through REQ-036 and the shared path selection amendment in REQ-025. Keep one canonical implementation rather than adding compatibility shims. Non-goals: Replacing the established project scaffold, changing runtime cloud or networking behavior, raising the Python floor, adopting a new framework or build backend, or performing broad dependency upgrades.
 
 #### Acceptance Criteria
 
@@ -470,7 +470,7 @@ Evaluate the acceptance criteria using the recorded verification method.
 
 #### User Story
 
-Prevent a non-forwarding VM-HA member from exporting locally learned remote routes, make active/passive BGP export and routing-hygiene parity part of authoritative readiness, complete and periodically re-enforce passive routing hygiene after materialization, and make `list-routes-local` strictly observational. Constraints: Preserve established BGP sessions and imported remote routes on a warm passive member; preserve `gateway.local_prefixes`, connection-level `advertise_local_prefixes`, tunnel MED ordering, optional `remote_prefixes`, existing CLI arguments, route-table display columns, exit behavior, the four-column VM-HA status table, non-HA behavior, configuration schema, logical manifest format, and persisted runtime records. Only an explicit mutating workflow may upload configuration or reload a gateway. Gateway-level role labels must use authoritative current VM-HA ownership and remain distinct from configured per-tunnel active/passive preference. Non-goals: Requiring an inbound prefix whitelist, adding a list-command repair flag or compatibility alias, changing cloud ownership or VPC route semantics, enabling active-active forwarding, introducing a second BGP configuration owner, or treating configured active/passive preference as current ownership.
+Prevent unauthorized VM-HA origination and all export of peer-learned routes, make active/passive BGP export and routing-hygiene parity part of authoritative readiness, complete and periodically re-enforce passive routing hygiene after materialization, and make `list-routes-local` strictly observational. Constraints: Preserve established BGP sessions and imported remote routes on a warm passive member; preserve `gateway.local_prefixes`, connection-level `advertise_local_prefixes`, tunnel MED ordering, optional `remote_prefixes`, existing CLI arguments, route-table display columns, exit behavior, the four-column VM-HA status table, non-HA behavior, configuration schema, logical manifest format, and persisted runtime records. Only an explicit mutating workflow may upload configuration or reload a gateway. Gateway-level role labels must use authoritative current VM-HA ownership and remain distinct from configured per-tunnel active/passive preference. Non-goals: Requiring an inbound prefix whitelist, adding a list-command repair flag or compatibility alias, changing cloud ownership or VPC route semantics, enabling active-active forwarding, introducing a second BGP configuration owner, or treating configured active/passive preference as current ownership.
 
 #### Acceptance Criteria
 
@@ -485,6 +485,21 @@ Prevent a non-forwarding VM-HA member from exporting locally learned remote rout
 - Ordinary VM-HA `status` retains its exact table shape and redaction contract. Proven active-owner export drift is unsafe and blocks readiness; standby-only export or local routing-hygiene drift degrades an otherwise safe owner; unavailable owner/standby evidence follows the existing conservative `UNKNOWN`/`DEGRADED` precedence. Its routing table detects both a table-220 policy rule and route-only table-220 contents without performing repair.
 - `list-routes-local` performs no remote write, upload, service start/reload, or reconciliation wait. It preserves its route tables and exit semantics while reporting owner-aware advertisement `MATCH`, `DRIFT`, or `UNKNOWN` and directing repair to an explicit mutating workflow. Repair operates only on proven drift under one stable common owner, allocation, and generation plus each target member's stable local Compute ownership epoch. It reconciles only the already-installed configuration while holding the apply/rearm, mTLS-writer, and routing locks from the on-node authority recheck through rendering and persistence; forces a render even when the configuration hash is unchanged; and requires exact authority and advertisement rechecks after reconciliation. Configuration installation remains owned by `apply`.
 - For explicit VM HA, `list-routes-local` derives every gateway heading from the same exact authority snapshot that survives the advertisement audit's post-read recheck: the owner is labeled `active` and rendered green, the other configured member is labeled `standby`, and both are labeled `unknown` when authority is absent or changes. It never infers ownership from route presence, BGP state, or tunnel `ha_role`; non-VM-HA gateway headings remain unchanged.
+
+- An explicit owner-authorized origination phase may advertise permitted local
+  prefixes while forwarding stays fenced. It is distinct from PASSIVE and ACTIVE.
+  Require exact current owner incarnation, configuration generation, allocation
+  attachment, writer exclusion and, on transfer, former-owner Compute Stopped
+  evidence before preparation. Loss of authority or inhibition revokes preparation.
+- Prepare local encrypted routing and origination before waiting for required
+  remote prefixes. Verify required encrypted routes, reconcile and independently
+  read back cloud routes, then enable forwarding. Keep PASSIVE/non-owner exports
+  denied and preserve all required-prefix checks.
+- Activation diagnostics preserve the first failing phase and predicate across
+  unlock and lock reinstatement. Report apply-lock-held as a consequence when
+  appropriate; distinguish unavailable reciprocal-policy evidence from malformed
+  configuration. Established IPsec/BGP alone is not forwarding or route readiness.
+  Historical customer causality remains unproven without a causal reproduction.
 
 #### Negative Criteria
 
@@ -555,7 +570,9 @@ Evaluate the acceptance criteria using the recorded verification method.
 <!-- REQUIREMENT: REQ-012 status=active priority=P1 type=feature -->
 ### REQ-012: Align every public command with topology and routing mode
 
-REQ-025 supersedes the HA tunnel failover/failback rejection below with controller-owned Static/BGP switching. All other applicability boundaries remain in force.
+REQ-025 defines shared connection-scoped tunnel selection for Single-VM and VM-HA
+in both Static and BGP modes. VM ownership transfer remains a separate operation.
+Historical validation entries below describe their dated baseline only.
 
 #### User Story
 
@@ -563,8 +580,8 @@ Give every public `nebius-vpngw` command, subcommand, and flag one explicit, tes
 
 #### Acceptance Criteria
 
-- One centralized applicability policy covers all 16 executable leaves and the action-specific `vm-ha --rotate-mtls` constraints before authentication, prompts, SSH, cloud mutation, or agent requests. VM-only operations reject ordinary configurations; `destroy` is topology-aware and accepts ordinary or explicit VM-HA configurations through one canonical workflow. Tunnel restart rejects every explicit VM-HA configuration with one topology-first message that identifies the gateway as VM-HA-enabled, states that tunnel recovery is controller-owned, directs health inspection to `status`, and limits `apply` guidance to configuration convergence. Tunnel failover/failback retain their corresponding topology-first `failover vm`/`failback vm` ownership-only guidance. Ordinary Static routing remains a distinct failover/failback rejection; ordinary tunnel restart remains supported for both Static and BGP.
-- `add-routes-local` retains direct VPC route management for ordinary static and BGP configurations. For explicit VM HA, it never derives next hops from member primary allocations or mutates controller-owned VPC routes. Static-only mode may wait for the autonomous controller to reconcile only the already-installed exact generation, while BGP-only mode may repair only exact proven advertisement drift under the existing VM-HA authority contract; mixed VM-HA routing remains unsupported by this command.
+- One centralized applicability policy covers every executable leaf and the action-specific `vm-ha --rotate-mtls` constraints before authentication, prompts, SSH, cloud mutation, or agent requests. VM-only operations reject ordinary configurations; `destroy` is topology-aware and accepts ordinary or explicit VM-HA configurations through one canonical workflow. Tunnel restart rejects every explicit VM-HA configuration with one topology-first message that identifies the gateway as VM-HA-enabled, states that tunnel recovery is controller-owned, directs health inspection to `status`, and limits `apply` guidance to configuration convergence. Tunnel failover/failback support Static and BGP on both topologies through the shared selector and exact authority adapter. Ordinary tunnel restart remains supported for Static and BGP. Tunnel selection never changes VM ownership.
+- `add-routes-local` uses the ordinary route owner for Static and BGP. When a Single-VM runtime binding exists, apply and manual route commands use its durable guest reservation and handoff; workstation locking alone is insufficient. For explicit VM HA, it never derives next hops from member primary allocations or mutates controller-owned VPC routes. Static-only mode may wait for the autonomous controller to reconcile only the already-installed exact generation, while BGP-only mode may repair only exact proven advertisement drift under the existing VM-HA authority contract; mixed VM-HA routing remains unsupported by this command.
 - `--summarize`, `--swap-route-table`, and `--yes` are rejected for VM-HA route repair; `--yes` is also rejected when no route-table swap was requested. Rejection is parse- or plan-time and precedes every external effect.
 - Any workflow that depends on a private installed-agent behavior or can invoke a private installed-agent action first performs a bounded read-only capability handshake on every affected gateway. Missing, malformed, or incomplete capability evidence reports installed/source skew, directs the operator to the supported apply workflow, and prevents all route or agent mutation.
 - Every VM-HA route audit or repair freezes the exact immutable per-member SSH host-pin policy before authentication and uses the lifecycle hostname as the host-key alias for capability, status, FRR, and private repair requests. Missing, changed, or mismatched trust evidence fails before the first gateway request.
@@ -573,8 +590,13 @@ Give every public `nebius-vpngw` command, subcommand, and flag one explicit, tes
 - Mutating route helpers return typed success or raise typed failure. Prerequisite, SDK, route-table, SSH, authority, repair, and postcondition failures propagate to a nonzero CLI result; success is rendered only after the complete requested workflow converges.
 - VM-HA static convergence requires an `ACTIVE` lifecycle with no pending lifecycle effect, exact two-member installed-generation and policy-digest parity with the local plan, one stable owner and shared allocation, no writer inhibition, and an installed controller capability on both members. Route drift may temporarily remove active forwarding under the controller's existing fail-closed transition; the CLI neither requests a second writer nor promises disruption-free repair.
 - VM-HA static convergence succeeds immediately when a fresh agent receipt and independent cloud observation already prove the installed static manifest. Otherwise it polls the unchanged authority for at most 120 seconds while the existing controller converges. Every expected static prefix must exist exactly once per declared target through the shared allocation, current-cluster managed static extras must be absent, an exact-prefix foreign occupancy blocks, and unequal foreign overlaps such as a more-specific `/32` remain untouched.
-- Rendered help identifies `restart-tunnel`, `failover tunnel`, and `failback tunnel` as commands for regular gateways (non-HA). It keeps the routing distinction explicit: restart supports regular Static and BGP gateways, while tunnel failover and failback support only regular gateways using BGP and continue to exclude Static routing.
-- Matrix tests cover every executable leaf and relevant flag across ordinary-static, ordinary-BGP, VM-HA-static, and VM-HA-BGP plans, including exact topology-first one-line VM-HA tunnel restart and transfer rejection output, exact ordinary-Static transfer rejection output, exit `1`, empty stdout, absence of loading/usage/generic-error/traceback noise, ordinary-Static IPsec-only restart, valid tunnel-only static prefixes, installed-agent skew, zero-effect rejection, and no false-success output.
+- Rendered help identifies ordinary Static/BGP restart and shared Single-VM/VM-HA
+  Static/BGP tunnel failover/failback. Selection eligibility, complete destination
+  coverage and owner authority remain explicit; VM ownership commands are separate.
+- Matrix tests cover every executable leaf and relevant flag across ordinary-static,
+  ordinary-BGP, VM-HA-static and VM-HA-BGP, including shared selector dispatch,
+  exact VM-HA restart rejection, ordinary Static IPsec-only restart, invalid
+  selection coverage, installed-agent skew, zero-effect rejection and no false success.
 
 #### Negative Criteria
 
@@ -1176,7 +1198,7 @@ Evaluate the acceptance criteria using the recorded verification method.
 
 #### User Story
 
-Implement one explicit controller for heartbeat evaluation, readiness, suspicion, fencing, ownership transfer, promotion, degradation, recovery, and manual failback. Constraints: Persist immutable revisions and transition checkpoints atomically; authenticate peer traffic; reject stale boot identities and heartbeat sequences; install a cold-start data-plane guard before strongSwan, FRR, or the gateway agent can use stale HA state; permit only deterministic node-local rendering and validation while that guard is blocked so clean members can establish readiness without enabling forwarding, tunnel initiation, firewall, route, allocation, or VPC effects; use bounded timers and injected clocks. Non-goals: Automatic failback, distributed consensus storage, Object Storage as a correctness dependency, or the append-only journal as ownership authority.
+Implement one explicit controller for heartbeat evaluation, readiness, suspicion, fencing, ownership transfer, promotion, degradation, recovery, and manual failback. Constraints: Persist immutable revisions and transition checkpoints atomically; authenticate peer traffic; reject stale boot identities and heartbeat sequences; install a cold-start data-plane guard before strongSwan, FRR, or the gateway agent can use stale HA state; permit only deterministic node-local rendering and validation while that guard is blocked so clean members can establish readiness without enabling forwarding, tunnel initiation, firewall, route, allocation, or VPC effects; use bounded timers and injected clocks. Non-goals: Automatic VM ownership failback, distributed consensus storage, Object Storage as a correctness dependency, or the append-only journal as ownership authority.
 
 #### Acceptance Criteria
 
@@ -1212,7 +1234,7 @@ Evaluate the acceptance criteria using the recorded verification method.
 
 #### User Story
 
-Expose generation parity, observed owner, promotion readiness, fencing progress, degraded reasons, safe operator guidance, and manual failback through the existing operator workflow when VM HA is enabled. Constraints: Use the narrowest current Nebius permission boundary that covers the required Compute ownership and VPC allocation/route mutations, keep secrets out of manifests, journals, status, and logs, package all required services, and perform no live cloud mutation without a separately approved non-production trial. Every operator-command and staging SSH path must use one exact operator-configured or REQ-013 product-managed host-key trust source that is validated before any cloud mutation; trust-on-first-use, disabled host authentication, and permissive fallback are unsupported. Non-goals: Renaming or silently changing existing non-HA commands, proactive preference-based automatic failback, production validation, or claiming live readiness from offline tests alone.
+Expose generation parity, observed owner, promotion readiness, fencing progress, degraded reasons, safe operator guidance, and manual failback through the existing operator workflow when VM HA is enabled. Constraints: Use the narrowest current Nebius permission boundary that covers the required Compute ownership and VPC allocation/route mutations, keep secrets out of manifests, journals, status, and logs, package all required services, and perform no live cloud mutation without a separately approved non-production trial. Every operator-command and staging SSH path must use one exact operator-configured or REQ-013 product-managed host-key trust source that is validated before any cloud mutation; trust-on-first-use, disabled host authentication, and permissive fallback are unsupported. Non-goals: Renaming or silently changing existing non-HA commands, proactive preference-based automatic VM ownership failback, production validation, or claiming live readiness from offline tests alone.
 
 #### Acceptance Criteria
 
@@ -1300,7 +1322,7 @@ Evaluate the acceptance criteria using the recorded verification method.
 
 #### User Story
 
-Exercise the explicit two-node VM-HA product path against the authorized non-production GCP and Nebius projects, repair causal product defects, and independently prove steady state, automatic failover, and manual failback without creating a Nebius VPC ECMP data plane. Constraints: Freeze the candidate artifact and declaration before each trial; keep GCP fixture setup, environment recovery, product execution, and independent verification separate; retain one regional GCP HA VPN gateway and one Cloud Router for the target topology; preserve supported legacy single-peer helper behavior; and never expose tunnel secrets or credential material in commands, files, logs, status, or evidence. Non-goals: Production validation, active-active Nebius forwarding, proactive preference-based automatic failback, treating fixture repair as product proof, deleting an unclassified GCP peer resource, or claiming a clean trial from a run whose product-owned transition was pre-satisfied externally.
+Exercise the explicit two-node VM-HA product path against the authorized non-production GCP and Nebius projects, repair causal product defects, and independently prove steady state, automatic failover, and manual failback without creating a Nebius VPC ECMP data plane. Constraints: Freeze the candidate artifact and declaration before each trial; keep GCP fixture setup, environment recovery, product execution, and independent verification separate; retain one regional GCP HA VPN gateway and one Cloud Router for the target topology; preserve supported legacy single-peer helper behavior; and never expose tunnel secrets or credential material in commands, files, logs, status, or evidence. Non-goals: Production validation, active-active Nebius forwarding, proactive preference-based automatic VM ownership failback, treating fixture repair as product proof, deleting an unclassified GCP peer resource, or claiming a clean trial from a run whose product-owned transition was pre-satisfied externally.
 
 #### Acceptance Criteria
 
@@ -1672,7 +1694,7 @@ Evaluate the acceptance criteria using the recorded verification method.
 
 #### User Story
 
-Support and independently validate a static-only two-node VM-HA deployment against an isolated GCP Classic VPN fixture without sharing gateway members, cluster identity, peer resources, routes, or configuration with the BGP deployment. Constraints: Preserve existing non-HA static behavior, BGP VM-HA warm-tunnel behavior, supported mixed-connection configuration, public commands, and record formats. The static-only VM-HA standby is Compute-warm but tunnel-cold because GCP considers a Classic tunnel usable whenever its IKE SA is established. Only the exact forwarding owner may keep the Classic IKE SA established. Every static promotion must retain former-Compute-`Stopped`, shared-allocation transfer and reread, route, and forwarding gates; candidate tunnel activation occurs only after exact ownership confirmation and while forwarding remains fenced. Do not place GCP credentials or a GCP route writer on gateway VMs. Keep PSKs and cloud identities out of committed files and public evidence; an ignored, regular, non-symlink, mode-`0600` operator config may hold literal PSKs for an explicitly requested rotation. Non-goals: Hybrid BGP/static live validation, changing the validity of existing mixed-mode configs, GCP route mutation from a Nebius gateway, proactive preference-based automatic failback, active-active or ECMP forwarding, treating fixture recovery as product proof, production validation, deleting the retained gateway/address/forwarding-rule fixture, or rotating tunnels implicitly during ordinary idempotent apply.
+Support and independently validate a static-only two-node VM-HA deployment against an isolated GCP Classic VPN fixture without sharing gateway members, cluster identity, peer resources, routes, or configuration with the BGP deployment. Constraints: Preserve existing non-HA static behavior, BGP VM-HA warm-tunnel behavior, supported mixed-connection configuration, public commands, and record formats. The static-only VM-HA standby is Compute-warm but tunnel-cold because GCP considers a Classic tunnel usable whenever its IKE SA is established. Only the exact forwarding owner may keep the Classic IKE SA established. Every static promotion must retain former-Compute-`Stopped`, shared-allocation transfer and reread, route, and forwarding gates; candidate tunnel activation occurs only after exact ownership confirmation and while forwarding remains fenced. Do not place GCP credentials or a GCP route writer on gateway VMs. Keep PSKs and cloud identities out of committed files and public evidence; an ignored, regular, non-symlink, mode-`0600` operator config may hold literal PSKs for an explicitly requested rotation. Non-goals: Hybrid BGP/static live validation, changing the validity of existing mixed-mode configs, GCP route mutation from a Nebius gateway, proactive preference-based automatic VM ownership failback, active-active or ECMP forwarding, treating fixture recovery as product proof, production validation, deleting the retained gateway/address/forwarding-rule fixture, or rotating tunnels implicitly during ordinary idempotent apply.
 
 #### Acceptance Criteria
 
@@ -2925,6 +2947,25 @@ packet loss without a mandatory ten-minute observation period.
   with the original criteria and verdict preserved. Unrun, truncated or intervened
   operations remain unverified; a loss-only pass does not qualify them.
 
+- The full release campaign declares 600 probes at 5 Hz in each direction,
+  strictly less than 1% steady-state loss, separate transition interruption, and
+  encrypted-path plus MTU-sensitive ICMP/TCP/UDP evidence. Normal-upgrade traffic
+  interruption has a 120-second soft target. Report measured interruption, target
+  overruns and total upgrade duration separately; an overrun alone does not fail
+  qualification or cancel admitted work.
+- Qualify all SingleVM/HA Static/BGP behavior in this campaign. Run the complete
+  native lane with exact collected-case accounting, 20 historical package cases
+  plus 20 saved-request repeats, the retained 27 HA and 15 SingleVM/migration live
+  cases, both topologies' Static/BGP Security Group cases, and customer activation
+  cases. Cover both migration directions and ordinary runtime-writer exclusion,
+  restart, interrupted resume, route additions and stable withdrawals.
+- Qualify Single-Single, both orientations of Single-HA, and HA-HA regional pairs
+  in Static/BGP across every configured owner combination, with cold startup,
+  recovery, pair resume and mutation-free repeat apply. Keep the original Static
+  HA upgrade reproducer separate. Full release qualification remains open until
+  all declared evidence passes against the intended artifact; a selected HA run
+  cannot claim completion of the full native lane.
+
 #### Negative Criteria
 
 - No acceptance from an empty sample, rounded percentages, combined directions,
@@ -3019,33 +3060,47 @@ runtime checks are limitations, never passing qualification.
 
 <!-- /REQUIREMENT: REQ-024 -->
 <!-- REQUIREMENT: REQ-025 status=active priority=P0 type=reliability -->
-### REQ-025: HA connection tunnel selection and safe ordinary upgrades
+### REQ-025: Shared connection tunnel selection and safe upgrades
 
 #### User Story
 
-Provide automatic Static and manual Static/BGP tunnel failover on the current HA
-owner without changing VM ownership, allocations, VPC routes or configured roles.
-SingleVM Static remains without tunnel switching; SingleVM BGP retains automatic
-and manual switching. Existing VM failover and strict fencing remain unchanged.
+Provide automatic and manual Static/BGP tunnel selection on SingleVM and the
+authoritative HA owner without changing VM ownership, allocations or configured
+roles. VM ownership failback remains separate from tunnel failback.
 
 #### Acceptance Criteria
 
-- Selection belongs to the HA controller and all render, repair and reconciliation
-  paths consume one effective policy. Serialize with apply and VM transfers; bind
-  operations to configuration, owner incarnation, allocation, connection and target.
+- One shared policy drives strongSwan, XFRM routes, status, route retirement,
+  unchanged apply, restart recovery and manual commands. Ordinary authority binds
+  configuration, boot identity and its operation lock; HA authority retains owner
+  incarnation, allocation, generation and writer exclusion. Serialize all writers.
   Revalidate before effects and after restart; persist progress before effects.
 - Switch whole connections only between same-owner alternatives covering every
   required destination. Preserve disjoint required paths; reject incomplete coverage,
   conflicting route ownership, ambiguous targets and unsafe shared IKE termination.
 - Eligible Static connections start on the configured preferred tunnel and select
-  alternatives in configuration order automatically. Keep unused alternatives cold,
-  suspend only the affected connection, activate, reconcile and verify; bounded
-  restoration follows failed activation. Successful automatic recovery is sticky.
+  alternatives in configuration order automatically. Keep unselected owner-side
+  alternatives responder-ready with start_action=none and no selected workload
+  routes. Standby members remain fenced. Suspend only the affected connection,
+  activate, reconcile and verify within the existing bounded recovery episode.
+- Initiate and probe the preferred encrypted path with bounded work while backup
+  workload routes remain selected. Return automatically only after 60 seconds of
+  continuous preferred health under the existing healthy-observation rules. Unknown
+  observations or gaps reset stability. Manual overrides take precedence. Probe
+  attempts and failed returns cannot renew the existing recovery budget.
 - Observe exact IKE/CHILD SAs, XFRM policy/interface and destination routes, tolerate
   healthy rekey overlap, and distinguish down from unknown. Optional per-tunnel
-  probes under gateway_group.vm_ha.tunnel_probes require explicit source and target
+  probes under gateway.tunnel_probes apply to SingleVM and HA and require source and target
   IPs, assigned source and selector coverage, and tunnel binding. Defaults are 5s
-  interval, 1s timeout, three failures and two recovery successes.
+  interval, 1s timeout, three failures and two recovery successes. Preferred-path
+  recovery uses the configured probe when present; otherwise it probes the inner
+  peer address. Never require an additional synthetic-inner response from a peer
+  with an explicit probe target. Keep backup workload routes selected.
+- Retain admitted BGP destinations in plaintext-drop protection after withdrawal,
+  but derive current path and readiness obligations from explicitly required
+  destinations and complete current learned-route evidence. Historical protection
+  alone cannot make a withdrawn optional prefix a permanent readiness obligation.
+  Unknown observations cannot establish absence or authorize route withdrawal.
 - Confirmed Static coverage loss gets one persisted episode of at most 30s with
   its last second reserved for local fencing. Admit confirmed loss through the
   tunnel controller before committing a competing generic VM repair action.
@@ -3073,8 +3128,8 @@ and manual switching. Existing VM failover and strict fencing remain unchanged.
   resets selection. Idempotent retries and CLI timeouts expose outstanding operation.
   Tunnel status exposes configured/selected path, reason, health, override, recovery
   and result without changing the VM status contract.
-- Omitted/disabled HA creates no selector state/service/capability requirement.
-  SingleVM in-place apply preserves route ordering, BGP preference, tunnel identities,
+- Ordinary selection uses the existing agent and ordinary lock without requiring
+  HA capabilities. SingleVM in-place apply preserves BGP preference, tunnel identities,
   credentials and resources; retains the customer-owned SSH filtering boundary in REQ-024.
   Retain disruption approval, writer quiescence, startup exclusion, receipts and
   deadlines; unchanged healthy reapply remains non-disruptive. HA upgrade is
@@ -3088,9 +3143,13 @@ and manual switching. Existing VM failover and strict fencing remain unchanged.
 #### Negative Criteria
 
 - No whole-gateway suspension for local switching, interface-only health proof,
-proactive automatic failback, renewed recovery budget or VM recreation for upgrade.
-One tunnel per HA member provides VM redundancy only; peer return routing and
-same-owner redundant coverage are prerequisites.
+renewed recovery budget, plaintext fallback or VM recreation for upgrade.
+One public VPN endpoint per member remains supported. A blocked sole path may
+remain safely degraded; it does not promise independent same-owner redundancy.
+Redundant alternatives belong to one connection and cover its complete destination
+set. Reject ambiguous overlapping routes across separate connections before
+mutation; preserve disjoint destinations and destination protection with no usable
+path. Peer return routing remains an independent acceptance condition.
 
 #### Validation Method
 
@@ -3275,6 +3334,8 @@ understand a safely interrupted operation without losing its durable authority.
 - Preserve allowlisted failure phase/reason and same-observation readiness evidence
   across agent, SSH and CLI wrappers. Retain public flags, successful schemas,
   lifecycle formats and exit codes; use existing reasons/next_action for reporting.
+  Package preparation retains its first guarded step and closed error category
+  through CLI wrappers, JSON reports and the existing apply failure journal.
   Missing diagnostics never authorize progress. Never return raw exception output,
   secrets, addresses or resource identifiers.
 - Keep accepted operations, immutable identities and completed effects through
@@ -3344,8 +3405,9 @@ interrupted two-member upgrade using the same command and a reviewed repair.
 - Prove authentic supported prior-release ordinary upgrade behavior and retained
   HA upgrade behavior, before/after workload traffic, and unchanged resource and
   route identities. Measure traffic interruption independently of CLI duration.
-  Require at most 120 seconds of independently measured traffic interruption
-  for normal customer `apply` upgrades, as explicitly accepted by the user.
+  Use 120 seconds as a soft target for independently measured traffic interruption
+  during normal customer `apply` upgrades. Report overruns explicitly; elapsed
+  time alone neither fails qualification nor cancels admitted work.
   Already-failed recovery duration is reported separately. Do not claim zero downtime.
 
 #### Negative Criteria
@@ -3404,6 +3466,8 @@ operator while retaining local-only private keys and replacement-safe public gra
   selector for ssh-agent across commands, outside shared deployment digests. Existing
   configuration remains the default when no override is supplied. Encrypted keys
   use an exact agent identity for later unattended operations.
+  Network readiness, bootstrap health, and existing-member preflight must select
+  that identity alone even when the configuration has no bootstrap public key.
 - Persist public roster and effective-authorization projections on gateways.
   Replacement preserves all verified enrolled keys and customer entries; it never
   resurrects a removed YAML bootstrap key. Block conflicting managed revisions.
@@ -3733,8 +3797,9 @@ Live upgrade qualification starts only from the latest published stable release
 installations in all four modes, migration, bounded repair, command, forwarding
 and recovery trials. This accepted split supersedes earlier all-predecessor live
 qualification clauses; supported upgrade behavior remains unchanged. Measure
-bidirectional workload traffic throughout all four live modes, require at most
-120s normal-upgrade interruption, unchanged identities and mutation-free reapply.
+bidirectional workload traffic throughout all four live modes. Use a 120-second
+soft target for normal-upgrade interruption and report overruns separately.
+Require unchanged identities and mutation-free reapply.
 Already-failed recovery is reported separately; missing live evidence blocks
 release qualification, not implementation work.
 
@@ -3797,8 +3862,9 @@ resource identities except effects explicitly included in an approved plan.
   Existing matching routes can satisfy coverage without becoming product-owned;
   names alone never authorize adoption, modification or deletion. New route
   ownership requires exact creation receipts and a durable ownership ledger.
-  Retire only exact owned routes after authoritative intent retirement, never on
-  BGP withdrawal or incomplete observation. Retain add-routes-local as a consumer
+  Retire only exact owned routes after authoritative intent retirement or three
+  complete consistent BGP absence observations within the admitted runtime policy.
+  Unknown observations retain routes and never authorize withdrawal. Retain add-routes-local as a consumer
   of the same canonical ordinary route implementation.
 - AC-007: For BGP, approval binds configured peers, destination policy, exact
   infrastructure scope and route limits. Fresh post-activation evidence may select
@@ -3816,6 +3882,19 @@ resource identities except effects explicitly included in an approved plan.
   reapply, authentic supported upgrades, migration, bounded repair, combinations
   of guest/cloud changes, reboot, lost replies and every durable interruption
   boundary. Retain REQ-034 final-artifact traffic and identity gates.
+
+- AC-011: Extend the existing ordinary agent with bounded periodic BGP route
+  reconciliation, preserving initial deployment publication. A generated binding
+  pins project/network, workload targets, Compute/NIC/allocation identities,
+  configuration generation and a protected credential reference. Extend existing
+  enrollment/recovery ownership to this responsibility without exposing secrets.
+- AC-012: Deployment publication durably hands off to the runtime writer. Apply
+  and manual route commands coordinate with that writer under the ordinary
+  operation boundary; workstation locks alone are insufficient. Reuse destination
+  admission, ownership and independent cloud readback. Preserve foreign routes,
+  prefix limits, local-network exclusions and destination protection.
+- AC-013: Fresh provisioning propagates connectivity=unknown when evidence is
+  incomplete. Deployment completion never implies verified workload connectivity.
 
 #### Negative Criteria
 
@@ -3843,6 +3922,147 @@ The command must converge or give a precise safe blocked result without extendin
 approved effects. A successful process exit alone never proves working VPN traffic.
 
 <!-- /REQUIREMENT: REQ-035 -->
+
+<!-- REQUIREMENT: REQ-036 status=active priority=P1 type=feature -->
+### REQ-036: Resumable paired regional gateway deployment
+
+#### User Story
+
+Operators generate and deploy reciprocal regional VPNs through ordinary gateway
+configurations and existing deployment owners, without a new runtime daemon.
+
+#### Acceptance Criteria
+
+- Add pair create-config, pair apply and observational pair status. Generate two
+  ordinary deployment files plus a pair manifest for Single-Single, Single-HA and
+  HA-HA. Validate reciprocal prefixes, distinct private regional ASNs, mirrored
+  inside addresses, matching crypto and every configured owner combination.
+- Persist stable path/assignment identities and protected shared credentials;
+  repeats reuse them without regeneration or exposing secrets. Preserve supplied
+  configurations and unrelated infrastructure.
+- Preview both child scopes together. Persist and resume exact child deployment
+  phases; prepare both regions and release their authorized origination phases
+  before either waits for remote convergence. Verify both through existing owners.
+- Persist optional per-region operator CLI profile names with the pair intent.
+  Use the selected regional profile for network preparation, preview, deployment,
+  resume and status; an inherited access token cannot override explicit selection.
+  Omitted profiles retain ordinary inherited authentication. Never broaden IAM
+  grants or regenerate assignments to compensate for unavailable credentials.
+- Keep FRR responsible for BGP. Explain LOCAL_PREF and MED by traffic direction
+  and peer-provider behavior; do not promise universally symmetric routing.
+
+#### Negative Criteria
+
+- No sequential full-ready wait before the peer is prepared, implicit VM-HA,
+  secret-bearing manifest, duplicated deployment owner or runtime daemon.
+
+#### Validation Method
+
+Use deterministic configuration, resume and fault regressions across all supported
+pairings, then Single-Single, both Single-HA orientations and HA-HA Static/BGP
+trials in every configured owner combination. All pairings and the migration
+coverage in REQ-023 are required for this release campaign.
+
+#### Test Method
+
+Cover repeat generation, incomplete manifests, rejected overlaps, interrupted
+prepare/unlock/verification, cold startup, opposite endpoint selections, failures,
+restart, automatic/manual failback, BGP route changes and MTU-sensitive traffic.
+
+#### Evaluation Method
+
+Judge exact identity/ownership/fencing, encrypted routing and independent
+bidirectional workload evidence, never process exit or Established sessions alone.
+
+<!-- /REQUIREMENT: REQ-036 -->
+
+<!-- REQUIREMENT: REQ-037 status=active priority=P0 type=reliability -->
+### REQ-037: Safe automatic HA activation recovery
+
+#### User Story
+
+An explicit apply or vm-ha operation repairs proven local activation faults in
+Static and BGP deployments and continues within its reviewed authority, including
+prerequisite upgrades for rotation and standby-policy enablement.
+
+#### Acceptance Criteria
+
+- Allow at most three evidence-selected command repair attempts shared across
+  both members. Treat 120 seconds as a soft progress and interruption target,
+  never an installation cancellation deadline. Persist reservations, effects and
+  outcomes; elapsed time, reconnect and restart cannot replenish the allowance.
+- Admitted package work survives SSH loss and Ctrl-C under its existing guest
+  owner. Finish the admitted package phase while retaining startup inhibition;
+  a reconnected coordinator must reprove authority before admitting activation.
+- Observe owned live work even without progress; never kill it solely because
+  time elapsed or launch overlapping effects. Resume only after authoritative
+  process, cgroup, native-job and package-lock settlement.
+- Diagnose native package subphases and Python installation inventory. Use exact
+  staged archives and protected prospective checkpoints for owned Python repair;
+  unknown ownership, pre-existing missing metadata and foreign changes block
+  automatic file restoration. Completed distributions are not reinstalled.
+  An already checkpoint-owned Python cache may have a regenerated timestamp
+  only when its source, compiled code, interpreter, size and permissions remain
+  exact. Never refresh the saved before-image or relax target verification.
+- Diagnose required failed/inactive services, incomplete approved configuration
+  and package installation separately from remote outage, unknown evidence,
+  maintenance and authority conflict. Only confirmed local faults select repair.
+- Preserve exact artifact, configuration, policy, identities, current-boot fences,
+  ownership and route proofs. Complete an approved package closure; never select
+  an arbitrary newer artifact, replace credentials or override disabled policy.
+- Recover classified transient authority reads within the same operation before
+  SSH or guest effects. Waiting for fresh evidence consumes no corrective attempt;
+  denied access, invalid credentials after bounded refresh, malformed evidence and
+  confirmed identity drift grant no authority. Preserve the original operation,
+  artifact, receipts and repair history when waiting ends or the caller detaches.
+- Carry one cumulative observation deadline across dispatch, authentication,
+  Compute, SSH and guest inspection. Bound read attempts with backoff and jitter,
+  account for SDK retries, and reject late evidence. These bounds never cancel
+  accepted package work or replenish the separate three-repair allowance.
+- Resolve exact SSH client identities and approve both package plans before
+  concurrent package workers start. Workers must not discover local keys, build
+  artifacts or plan dependencies while the command owner services cloud reads;
+  changed authentication inputs or incomplete plans block before worker effects.
+- Preserve completion as complete, positively incomplete, unknown or blocked.
+  Unknown observations cannot select a service, configuration or package repair.
+  Keep the first failure distinct from the latest invocation failure and report
+  pending authority without attributing a historical timeout to a later resume.
+- Deferred work never creates a completed effect receipt. Bounded observation
+  uses actual operation progress; repeated coarse status alone is not a stall.
+- Complete prerequisite convergence before mTLS inhibition/prepare. A composite
+  approval binds prerequisite and final intent; receipt-proven continuation
+  preserves identities and rejects unrelated drift. Mid-rotation repair retains
+  exact operation, epoch, trust and inhibition and never invokes generic apply.
+- Keep command syntax, existing background repair budgets and mutation-free
+  unchanged apply. Report first failure, attempted recovery and terminal proof;
+  configuration convergence does not imply verified workload connectivity.
+- Retain the normal-upgrade interruption target in REQ-029. Additional recovery
+  windows are measured separately; exhausted or uncertain work remains safely
+  fenced without claiming restored traffic.
+
+#### Negative Criteria
+
+- No blind retries, repeated completion effects, lock deletion, inferred owner,
+  autonomous background upgrade, permanent recovery daemon or recursive public
+  CLI calls. Transient operation owners grant no independent activation authority.
+
+#### Validation Method
+
+Focused real-lock and journal fault tests, native Linux service checks, followed
+by authorized two-member Static/BGP trials with independent workload measurement.
+
+#### Test Method
+
+Cover contention, slow/noisy SSH, lost replies, stopped services, stale policy
+propagation, interrupted package work, three-attempt exhaustion, reboot, composite
+rotation/policy continuation, unrelated drift, maintenance and remote-only loss.
+
+#### Evaluation Method
+
+Separate source/unit, native service and live workload evidence. Missing live
+qualification remains explicit; historical failures are never erased by recovery.
+
+<!-- /REQUIREMENT: REQ-037 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->

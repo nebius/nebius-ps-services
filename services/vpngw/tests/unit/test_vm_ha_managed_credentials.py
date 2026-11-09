@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from nebius_vpngw import vm_ha_managed_credentials as managed
 from nebius_vpngw.vm_ha_credentials import (
     VMHACredentialIdentity,
+    VMHACredentialIdentityError,
     VMHACredentialSet,
     display_vm_ha_credential_path,
     managed_vm_ha_credential_path,
@@ -369,7 +370,7 @@ def test_inspection_reuses_one_authenticated_source_for_both_nodes(tmp_path: Pat
 
     assert plan.action == "reuse"
     assert plan.credentials is credentials
-    assert calls == [(("node-b", "node-a"), source)]
+    assert calls == [(("node-a", "node-b"), source)]
     assert plan.approval_record()["action"] == "reuse"
 
 
@@ -752,3 +753,54 @@ def test_filesystem_failure_is_normalized_without_operator_path(tmp_path: Path) 
         managed._atomic_private_write(destination, b"payload", replace=False)
 
     assert str(tmp_path) not in str(captured.value)
+
+
+def test_route_writer_credentials_are_separate_and_exactly_one_real_node(tmp_path):
+    from nebius_vpngw.vm_ha_credentials import credential_nodes
+
+    purpose = "ordinary-route-writer"
+    assert credential_nodes(("gateway-0",), purpose) == ("gateway-0",)
+    with pytest.raises(VMHACredentialIdentityError, match="incomplete"):
+        credential_nodes(("gateway-0", "synthetic-peer"), purpose)
+    with pytest.raises(VMHACredentialIdentityError, match="incomplete"):
+        credential_nodes(("gateway-0",), "ha-controller")
+    ordinary = managed_vm_ha_credential_path(
+        project_id="project-a", gateway_name="gateway-a", home=tmp_path, purpose=purpose
+    )
+    ha = managed_vm_ha_credential_path(
+        project_id="project-a", gateway_name="gateway-a", home=tmp_path
+    )
+    assert ordinary != ha and ordinary.parent.name == purpose
+    assert vm_ha_service_account_name("gateway-a", purpose=purpose) == "gateway-a-routes"
+    assert vm_ha_ownership_labels(
+        project_id="project-a", gateway_name="gateway-a", purpose=purpose
+    ) != vm_ha_ownership_labels(project_id="project-a", gateway_name="gateway-a")
+
+
+def test_route_enrollment_review_binds_one_node_and_distinct_iam_purpose(tmp_path):
+    from nebius_vpngw.deploy.credential_enrollment_schema import _validate_intent
+
+    plan = inspect_managed_vm_ha_credentials(
+        project_id="project-a",
+        gateway_name="gateway-a",
+        node_ids=("gateway-0",),
+        purpose="ordinary-route-writer",
+        home=tmp_path,
+        iam_inspector=_iam_inspector,
+    )
+    intent = plan.approval_record()
+    assert intent["node_ids"] == ["gateway-0"]
+    assert intent["purpose"] == "ordinary-route-writer"
+    assert intent["service_account_name"] == "gateway-a-routes"
+    assert intent["iam_resources"]["project_editor_permit"] == {
+        "action": "create",
+        "resource_id": "project-a",
+        "role": "editor",
+    }
+    _validate_intent(intent, "project-a", "gateway-a")
+    with pytest.raises(ValueError, match="intent"):
+        _validate_intent(
+            {**intent, "service_account_name": "gateway-a-vm-ha"}, "project-a", "gateway-a"
+        )
+    with pytest.raises(VMHACredentialIdentityError):
+        _validate_intent({**intent, "node_ids": ["gateway-0", "foreign"]}, "project-a", "gateway-a")

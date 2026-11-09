@@ -258,6 +258,7 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
     assert "nebius_vpngw/ordinary_operations.py" in archive.stdout
     for source in (
         "checkpoint_upgrade.py",
+        "deploy/stopped_upgrade.py",
         "ipsec_observation.py",
         "tunnel_restart.py",
         "agent/tunnel_iterator.py",
@@ -275,6 +276,7 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
         *ingress_policy.INGRESS_SOURCES,
         "packet_health.py",
         "checkpoint_upgrade.py",
+        "deploy/stopped_upgrade.py",
         "ipsec_observation.py",
         "tunnel_restart.py",
         "agent/tunnel_iterator.py",
@@ -302,7 +304,10 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
         "ingress_policy.py",
         "ordinary_operations.py",
         "runtime_migration.py",
+        "package_worker.py",
+        "python_package_recovery.py",
         "ordinary_routes.py",
+        "ha_tunnel_policy.py",
         "tunnel_state.py",
         "deploy/ordinary_remote.py",
     ):

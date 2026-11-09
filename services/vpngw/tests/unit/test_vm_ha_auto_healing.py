@@ -1085,7 +1085,8 @@ def test_status_reader_admits_exact_missing_owner_policy_for_enabled_bootstrap(
             "promotion_receipt_id": "receipt-a",
         },
         "recovery_phase": None,
-        "schema": "nebius-vpngw/vm-ha-auto-healing-policy-status-v2",
+        "schema": "nebius-vpngw/vm-ha-auto-healing-policy-status-v3",
+        "evidence_reason": None,
     }
     calls: list[frozenset[str] | None] = []
 

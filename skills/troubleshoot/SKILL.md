@@ -62,6 +62,8 @@ requested. Domain skills own known platform implementation.
 
 - Read applicable project instructions, current changes, and the narrow execution
   path. Preserve unrelated work. Read nearby tests and configuration as implicated.
+- Read [triage-and-routing.md](references/triage-and-routing.md) at intake. Read
+  [parallel-investigation.md](references/parallel-investigation.md) before delegation.
 - Read [investigation-protocol.md](references/investigation-protocol.md) for
   evidence provenance, adaptive coverage, experiment records, and proof.
 - Read [code-debugging.md](references/code-debugging.md) when the path reaches code;
@@ -70,6 +72,7 @@ requested. Domain skills own known platform implementation.
 - Read [infrastructure-failure-playbooks.md](references/infrastructure-failure-playbooks.md)
   for infrastructure boundaries, then only implicated guides:
   [linux.md](references/linux.md), [gpu.md](references/gpu.md),
+  [amd.md](references/amd.md), [provider-routing.md](references/provider-routing.md),
   [storage.md](references/storage.md), [network.md](references/network.md),
   [kubernetes.md](references/kubernetes.md), [slurm.md](references/slurm.md),
   [soperator.md](references/soperator.md), [nebius.md](references/nebius.md).
@@ -111,68 +114,68 @@ INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
        -> LOCALIZED -> PROVEN -> REMEDIATED -> VERIFIED -> REPORTED
 ```
 
-1. **INTAKE — define the failure.** Record expected versus actual behavior,
-   exact target, authority, success oracle, incident window and previous changes.
-   Preserve volatile evidence before intervention. Separate stabilization from
-   diagnosis; an urgent mitigation does not establish the cause.
-2. **DISCOVERY — map the implicated boundary.** Start with the component, its
-   effective configuration, and immediate dependencies. Trace the failing request,
-   job, operation, or state transition. Compare one affected and one unaffected
-   case where available. Bound health claims to the exercised path and window.
-3. **BASELINE — reproduce or characterize.** Use the smallest safe reproducer.
-   Record artifact identity, input, seed, exit/status, duration and stable signature.
-   When reproduction is unsafe, use bounded incident evidence and explain limits.
-4. **MODEL — explain the path.** Connect execution, data, configuration authority,
-   identity, ownership, dependencies, retries, caches and lifecycle where relevant.
-   Separate initiating faults, contributing conditions, downstream symptoms and
-   independent blockers. A green control plane does not prove workload success.
-5. **HYPOTHESES — retain plausible alternatives.** Separate facts, inferences and
-   unknowns. Give each supported explanation a distinguishing prediction and a
-   falsifier. Do not invent alternatives to meet a minimum count. Keep contradictions.
-6. **EXPERIMENTS — choose the next decision.** Rank observations by discriminatory
-   value, safety, execution cost and availability; never fabricate probabilities.
-   Before a consequential experiment, record its question, competing predictions,
-   timeout/output bounds, effects and next branch. Change one relevant variable
-   at a time unless a designed experiment requires otherwise.
-   - Prefer cheap local evidence and comparisons before invasive diagnostics.
-     Configured application logs, service journals and kernel evidence do not
-     require Grafana admission. Scope every source by target and time.
-   - Expand when evidence crosses a boundary, contradicts the model, reveals an
-     unknown dependency, or cannot explain intermittency. Record examined and
-     material unexamined boundaries with reasons. Unexamined means unknown,
-     never healthy or not applicable. No mandatory global inventory or log rows.
-   - Track query failures, unavailable access, truncation, stale sources and clock
-     uncertainty. Missing signals cannot prove absence of a fault.
+1. **Define and classify — INTAKE, DISCOVERY.** Record expected versus actual
+   behavior, target, time window, impact, prior interventions, authority and success
+   oracle. Preserve volatile evidence; distinguish stabilization from diagnosis.
+   Provisionally route as code, infrastructure, mixed or undetermined. Configuration,
+   compatibility, permissions and resources are possible causes across all routes.
+   Start at the implicated component and immediate dependencies, then revise the
+   route when evidence crosses boundaries. Exit: failure contract and initial boundary.
+2. **Establish the baseline — BASELINE.** Identify the executed artifact and
+   effective configuration. Use the smallest safe reproducer or characterize incident
+   evidence when replay is unsafe. Record input, seed, status, duration and signature;
+   compare an unaffected case where available. Exit: signature and evidence limits.
+3. **Map and prioritize — MODEL, HYPOTHESES.** Trace the failing request, job or
+   state transition through relevant inputs, ownership, dependencies, retries and
+   lifecycle. Separate facts, inferences and unknowns. Each material hypothesis has
+   support, contradiction, a distinguishing prediction, falsifier and status; no
+   minimum count. Exit: a next observation that separates meaningful alternatives.
+4. **Investigate and narrow — EXPERIMENTS, LOCALIZED.** Choose the cheapest useful
+   observation by discriminatory value, safety, cost and availability. Record its
+   question, competing predictions, bounds, effects and next branch. Change one
+   relevant variable unless a designed experiment requires otherwise. Compare
+   boundary inputs/outputs; narrow component, time, input, environment or sequence.
+   - Prefer local evidence. Configured logs, service journals and kernel evidence
+     do not require Grafana admission; every source needs a target and window.
+   - Use one coordinator and conditional independent read-only investigators under
+     the parallel reference: normally two, ceiling three; five-minute deadlines
+     shortened by remaining shared budget; no recursive delegation. Preserve host
+     authorization; unavailable tools or read-only enforcement mean serial work.
+   - Expand for boundary-crossing evidence, contradictions, unknown dependencies or
+     unexplained intermittency. Record examined and material unexamined boundaries
+     with reasons. Unexamined means unknown, never healthy or not applicable.
+   - Exclusions bind target, path, configuration and observation window. Failed
+     queries, missing logs/access, truncation and stale counters stay unknown.
+     Relevant change or contradictory evidence reopens affected exclusions.
    - After three consecutive completed observations that neither distinguish
-     hypotheses nor narrow a boundary, rebuild the model or change localization
-     technique. This does not reset or extend the remediation budget.
-7. **LOCALIZED — find the first divergence.** Narrow time, component, input,
-   environment or state sequence to the earliest incorrect transition. Follow
-   upstream causes instead of repairing downstream symptoms.
-8. **PROVEN — test the causal chain.** Connect trigger, violated invariant and
-   symptom; establish a counterfactual and eliminate material alternatives.
-   Reintroduce a fault only when safe and authorized. Use `proven`, `high confidence`,
-   `probable` or `unknown`; contradictions lower confidence.
-   - Keep repairs inside an existing private boundary in `troubleshoot`.
-     Outside SDLC, use `design` after causal proof and before implementation only
-     for changed topology, responsibilities, public interfaces, data ownership or
-     lifecycle, migrations, or cross-component workflows. Size alone is not a
-     design change. If that owner is unavailable, report the exact handoff.
-   - In Agentic SDLC diagnostic mode, stop at the causal handoff: return one
-     `diagnosis-v3` to `sdlc-classify-failure`, remove temporary instrumentation,
-     and let classifier/coordinator select the next owner. Do not commit fixes,
-     change acceptance or specs, or route directly to design or implementation.
-9. **REMEDIATED — restore the invariant.** Apply the smallest durable owner-correct
-   repair and a meaningful regression oracle. Record effects and rollback.
-10. **VERIFIED — challenge the result.** Replay the original failure and affected
-    boundaries; compare controls and regression outcomes. For live verification,
-    freeze the declared product workflow, quiesce previous writers, and replay
-    from a known-good checkpoint before the first divergence or contamination.
-    Independently verify authoritative postconditions. Recovery is not proof.
-11. **REPORTED — state the supported outcome.** Report cause, change, verified
-    scope, material gaps and exact next action. Respect the classifications below.
-    At budget exhaustion record the exact marker, stop all other tool use and
-    return the marker-derived report before any user-authorized continuation.
+     hypotheses nor narrow a boundary, rebuild the model or change technique.
+     This never resets or extends the remediation budget.
+   Exit: earliest observed divergence localized or decisive evidence gap identified.
+   Cancel unnecessary workers; reconcile outstanding evidence before concluding.
+5. **Establish causality — PROVEN.** Explain trigger → violated invariant → symptom;
+   challenge material alternatives and establish a safe authorized counterfactual.
+   One fault does not exclude contributors or independent faults. Use `proven`,
+   `high confidence`, `probable` or `unknown`; retain all contradictions.
+   Exit: justified confidence and no concealed contradictions.
+   - Keep repairs within an existing private boundary in `troubleshoot`. Outside
+     SDLC, use `design` after proof and before contract-changing remedies: topology,
+     responsibilities, public interfaces, data ownership/lifecycle, migrations or
+     cross-component workflows. Size alone is not a design change.
+   - In SDLC diagnostic mode, return one `diagnosis-v3` to `sdlc-classify-failure`,
+     remove temporary instrumentation and stop at the causal handoff. Do not commit,
+     change acceptance/specs or route directly to design or implementation.
+6. **Repair the owner — REMEDIATED.** Apply the smallest authorized durable
+   correction at the demonstrated causal owner. Record effects and rollback.
+   Exit: owner-correct repair and meaningful regression oracle address the mechanism.
+7. **Verify and report — VERIFIED, REPORTED.** Replay the original failure and
+   affected boundaries, compare controls and independently verify postconditions.
+   For live work, freeze the product workflow, quiesce prior writers and replay from
+   a known-good checkpoint before the first divergence or contamination. Preserve
+   intervention history; recovery is not proof. Reconcile all investigators.
+   Exit: supported outcome, verified scope, remaining uncertainty and next action.
+   At budget exhaustion record the exact marker, stop all other tool use and return
+   the marker-derived report before any user-authorized continuation. Arrange worker
+   deadlines/cancellation before exhaustion; unresolved work stays explicit.
 
 ## Authority And Safety
 

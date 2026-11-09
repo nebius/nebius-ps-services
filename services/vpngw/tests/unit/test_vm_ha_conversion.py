@@ -591,6 +591,8 @@ def test_command_publishes_mode_0600_and_rerun_is_noop(
             return_value=Mock(
                 action="create",
                 command_action="create",
+                project_id=sample_config["project_id"],
+                gateway_name=sample_config["gateway_group"]["name"],
                 credentials=None,
                 approval_record=Mock(
                     return_value={

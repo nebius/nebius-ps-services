@@ -1727,7 +1727,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-008 -->
 
-<!-- FEATURE: FEAT-009 reqs=REQ-010 status=ready delivery=implemented priority=P0 version=5 -->
+<!-- FEATURE: FEAT-009 reqs=REQ-010 status=ready delivery=implemented priority=P0 version=6 -->
 ### FEAT-009: Adaptive troubleshooting with bounded helpers and measured qualification
 
 #### Requirements Covered
@@ -1743,7 +1743,8 @@ investigation breadth and measurement, not the standard for a causal claim.
 
 #### Design Details
 
-Use one diagnostic agent and deterministic helpers. The compact core defines
+Use one coordinator, conditional native read-only investigators and existing
+deterministic helpers. The compact core defines
 failure contract, evidence preservation, failing-path model, plausible alternatives,
 discriminating experiments, earliest divergence, proof, repair and independent
 verification. Detailed budget lifecycle, reporting and SDLC handoffs have explicit
@@ -1754,8 +1755,8 @@ relevant changes invalidate affected observations. After three consecutive compl
 low-information observations, change the model or technique without extending
 remediation budgets. Preserve contradictions and multi-cause structure.
 
-Domain guides use symptom, alternatives, cheapest evidence, interpretation, next
-branch, escalation and verification. Combine resource utilization/saturation/errors
+Domain guides use applicability, version fingerprint, symptom, alternatives,
+cheapest evidence, interpretation, next branch, diagnostic effects and verification. Combine resource utilization/saturation/errors
 with service latency/traffic/errors/saturation and workload-specific comparisons.
 Provider admission remains adapter-owned. Shared Stop and trusted-loader ownership
 are unchanged; hooks cannot mechanically prove causality or semantic novelty.
@@ -1768,9 +1769,43 @@ separate launch errors and interruptions from completed executions; timeouts cou
 as completed failures, empty completion rates are null, and timing/clusters retain
 outcomes. No independence assumption or compatibility output mode.
 
+Seven phases group the unchanged states: define/classify (INTAKE, DISCOVERY),
+baseline (BASELINE), map/prioritize (MODEL, HYPOTHESES), narrow (EXPERIMENTS,
+LOCALIZED), causality (PROVEN), owner repair (REMEDIATED), verify/report (VERIFIED,
+REPORTED). Each has an explicit exit. Routes are provisional code, infrastructure,
+mixed or undetermined, with cross-cutting causes. A hypothesis ledger records
+support, contradiction, distinguishing prediction, falsifier and status; exclusions
+bind target/path/configuration/window and reopen on relevant change or contradiction.
+
+Parallelism is a measured starting policy, not a performance claim. Normally two
+investigators (ceiling three) answer independent evidence questions under a single
+shared task budget. Each assignment states one question, scope, target/artifact,
+window, existing evidence, permitted reads, prohibitions, deadline and required
+counterevidence/uncertainty/next observation. Default deadline is five minutes or
+remaining budget, whichever is shorter; extensions require a new justified task.
+No recursive delegation or independent active tests, captures, debug containers,
+stress, restarts or repair. Verify native read-only enforcement and host authority;
+otherwise investigate serially. Coordinator reconciles conflicts with targeted
+checks, de-duplicates common sources, cancels unnecessary work after localization
+and reconciles every worker before completion. No framework or scheduler is added.
+
+Linux guides distinguish host from workload cgroups; storage includes request shape
+and queueing; network preserves source namespace and return path; Kubernetes selects
+commands only after distribution/runtime/CNI/CSI/service-routing identity. NVIDIA
+and bounded AMD guidance use exact compatibility matrices and topology, with Slurm,
+Soperator and Nebius overlays retained. Tool limitations and diagnostic effects are
+explicit. Unsupported combinations remain gaps, never universal configurations.
+
+Evaluator accounting uses native agent/event identities, explicit usage scope and
+complete descendant evidence; duplicate delivery is counted once and conflicting
+records invalidate accounting. Root usage that includes children must not be added
+to child usage. Coordination actions/available usage are reported separately.
+Missing lineage, child completion or usage cannot pass efficiency qualification.
+
 #### Selected Option
 
-Adaptive coverage with unchanged causal proof and conditional domain detail.
+Layered evidence-driven narrowing and bounded conditional parallel investigation,
+with unchanged causal proof and conditional technology profiles.
 
 #### Alternatives Considered
 
@@ -1816,11 +1851,15 @@ Freeze payload/fixture hashes, host/model, tools, permissions and 600-second lim
 run three alternating paired baseline/candidate trials per case and host. Separate
 fixture/auth failures. Measure causal accuracy/abstention, unsupported claims,
 unsafe effects, time/actions to decisive evidence, total time/actions, duplicates
-and available tokens. Independent review resolves explanation quality only.
+and aggregate available tokens including every investigator; separate coordination
+overhead and disclose incomplete descendant accounting. Independent review resolves explanation quality only.
 Promotion requires all deterministic checks, zero safety/false verified-fix events,
-90% correct outcomes and no core-domain regression. Target 20% lower median actions
-on jointly successful focused pairs; report all-case outcomes and latency/tokens
-separately without general statistical claims.
+90% correct outcomes, no core-domain regression and no overall accuracy decline.
+Target 20% lower median aggregate actions on jointly successful core pairs, 20%
+lower median elapsed time on predeclared parallel-eligible successful pairs, no
+overall median latency increase and at most 25% median aggregate token growth on
+those pairs. Report unsuccessful trials and variability. Missing usage/child traces
+leave efficiency incomplete; no statistical generalization from this small set.
 
 #### Rollout And Rollback
 
@@ -1837,6 +1876,28 @@ satisfy promotion criteria.
 
 #### Implementation Evidence
 
+Revision 6 implements seven operational phases in a 291-line core, provisional
+classification, scoped hypothesis exclusions and conditional native read-only
+investigators. Triage/parallel references preserve shared authority and budgets;
+technology guides share a common decision format, add AMD/provider routing and
+retain platform overlays. Updated README/catalog prose, process rubric, 46 trigger
+cases and twelve structured quality cases. The original twelve diagnostic cases
+and four platform replays remain intact.
+
+Target-owned accounting normalizes native action identities, participant outcomes
+and disjoint or inclusive usage, separates coordination overhead and rejects
+incomplete/contradictory/late traces. Claude foreground tasks use documented child
+stream and inclusive model usage; background/resumed streams remain incomplete.
+Codex CLI descendant coverage is not documented and remains explicitly incomplete.
+The scorer enforces aggregate action, parallel latency/token, all-case latency,
+overall accuracy and core-domain gates. Existing public interfaces, schema-2
+helpers, diagnosis-v3, provider budgets, hook assets and Stop ownership are unchanged.
+The shared native adapter and CI entry points already dispatch the target-owned
+suite and needed no source changes. No new orchestration engine or dependency.
+
+Earlier implementation evidence below belongs to the prior serial workflow and
+does not qualify conditional parallel behavior.
+
 Implemented a 288-line adaptive core with scoped evidence and conditional
 lifecycle/SDLC/report references; decision guides cover code, compute, storage,
 network and existing platform overlays. Selective collection and repeated trials
@@ -1849,6 +1910,27 @@ Direct helper, hook and harness tests run in skills CI. Actual user installation
 and runtime activation were not performed.
 
 #### Verification Evidence
+
+Revision 6 local source validation (2026-11-08): 58 helper/contract, 97 hook,
+19 diagnostic accounting/harness and 11 shared-adapter tests pass (185 total).
+Negative controls caught conflicting/late worker events, malformed/trailing stream
+records and ambiguous terminal usage; regression checks pass after their repairs.
+Independent report-only code/security review covered instruction authority,
+accounting completeness, scorer gates and external effects. Agent Skills core,
+Codex/stateful and Claude structure checks, scoped Python/Markdown checks and
+paired canonical validation pass. Protected interface and hook bytes match the
+captured working baseline. Disposable skills CLI 1.5.26 discovery, copied payload
+parity, repeat installation and isolation pass for both hosts; hooks are not activated.
+
+Native trigger/quality/paired qualification is not run: the clean native runner has
+no supplied authentication and no reviewed authenticated isolated image is established.
+Codex complete descendant accounting additionally remains unavailable. Static
+scenario and synthetic trace checks do not prove native permission enforcement,
+worker cancellation, diagnostic accuracy, speed, token gains or live vendor coverage.
+REQ-010 remains active, FEAT-009 implemented rather than verified. Rollout and
+rollback retain one frozen previous payload; no real user installation occurred.
+
+Historical serial-workflow evidence follows:
 
 Baseline: 149 helper/hook tests passed and the pre-edit payload was frozen.
 Candidate source checks (2026-10-17): 58 helper/contract tests, 97 hook tests,

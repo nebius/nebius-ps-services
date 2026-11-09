@@ -13,6 +13,95 @@ from nebius_vpngw.deploy.ordinary_handoff import Handoff
 pytestmark = pytest.mark.usefixtures("runtime_migration_guest")
 
 
+@pytest.fixture(autouse=True)
+def route_runtime_guest(tmp_path, monkeypatch):
+    from nebius_vpngw.agent import ordinary_route_authority
+
+    owner = ordinary_route_authority.RouteAuthority(tmp_path / "runtime-routes")
+    monkeypatch.setattr(ordinary_route_authority, "RouteAuthority", lambda: owner)
+    return owner
+
+
+def test_migration_reserves_runtime_through_disconnect_and_never_releases_it(route_runtime_guest):
+    from tests.unit.test_ordinary_route_runtime import bound
+
+    from nebius_vpngw.apply_approval import digest
+    from nebius_vpngw.deploy import handoff_remote as guest
+
+    owner = route_runtime_guest
+    owner.reserve("1" * 64, digest(owner.snapshot()))
+    owner.release("1" * 64, bound(), None)
+    request = {"binding": "2" * 64, "observed": {"route_runtime": owner.snapshot()}}
+    guest.reserve_runtime_routes(request)
+    guest.verify_runtime_routes(request)
+    with pytest.raises(RuntimeError, match="does not own"):
+        owner.require_runtime(bound())
+    # Crash immediately after reservation, before the ordinary handoff journal
+    # exists: the same HA target can resume; another target cannot take over.
+    request["observed"]["route_runtime"] = owner.snapshot()
+    before = owner.path.read_bytes()
+    guest.reserve_runtime_routes(request)
+    assert owner.path.read_bytes() == before
+    with pytest.raises(RuntimeError, match="Another command"):
+        guest.reserve_runtime_routes({**request, "binding": "3" * 64})
+
+
+def test_migration_rejects_new_writer_after_review(route_runtime_guest):
+    from tests.unit.test_ordinary_route_runtime import bound
+
+    from nebius_vpngw.apply_approval import digest
+    from nebius_vpngw.deploy import handoff_remote as guest
+
+    request = {"binding": "2" * 64, "observed": {"route_runtime": route_runtime_guest.snapshot()}}
+    route_runtime_guest.reserve("1" * 64, digest(route_runtime_guest.snapshot()))
+    route_runtime_guest.release("1" * 64, bound(), None)
+    with pytest.raises(RuntimeError, match="appeared"):
+        guest.reserve_runtime_routes(request)
+
+
+def test_completed_migration_transfers_the_reservation_to_deployment(
+    route_runtime_guest, tmp_path, monkeypatch
+):
+    from tests.unit.test_ordinary_route_runtime import bound
+
+    from nebius_vpngw.apply_approval import digest
+    from nebius_vpngw.deploy import handoff_remote as guest
+
+    owner = route_runtime_guest
+    owner.reserve("1" * 64, digest(owner.snapshot()))
+    owner.release("1" * 64, bound(), None)
+    request = {"binding": "2" * 64, "observed": {"route_runtime": owner.snapshot()}}
+    config = tmp_path / "installed.yaml"
+    config.write_bytes(b"verified HA configuration")
+    monkeypatch.setattr(guest.remote, "CONFIG", config)
+    guest.reserve_runtime_routes(request)
+    guest.retire_runtime_routes(request)
+    assert owner.read()["writer"] == "deployment"
+    assert owner.read()["binding"] == bound()
+    with pytest.raises(RuntimeError, match="does not own"):
+        owner.require_runtime(bound())
+    # A later ordinary apply can acquire a newly reviewed reservation. It must
+    # still publish a verified binding before the runtime regains any authority.
+    owner.reserve("4" * 64, digest(owner.snapshot()))
+    assert owner.read()["holder"] == "4" * 64
+
+
+def test_migration_unknown_cloud_operation_blocks_before_guest_effects(monkeypatch):
+    from nebius_vpngw.deploy import handoff_remote as guest
+
+    monkeypatch.setattr(guest.ops, "Journal", lambda: Mock(read=lambda: None))
+    manager = Mock()
+    monkeypatch.setattr(guest.ops, "Manager", lambda _: manager)
+    monkeypatch.setattr(
+        guest,
+        "runtime_routes",
+        lambda: {"authority": {}, "journal": {"transaction": {"phase": "pending"}}},
+    )
+    with pytest.raises(guest.ops.OperationBlocked, match="runtime_route_operation_unresolved"):
+        guest.inspect({})
+    assert not manager.mock_calls
+
+
 def test_handoff_release_requires_exact_locked_passive_status():
     expected = {"cluster_id": "cluster", "node_id": "node", "generation_id": "generation"}
     status = dict(
@@ -26,23 +115,26 @@ def test_handoff_release_requires_exact_locked_passive_status():
         ("apply_operation_id", "2" * 64),
     ]:
         stdin = Mock()
-        handoff = Handoff(stdin, io.StringIO('{"complete": true}\n'), ha=expected)
+        handoff = Handoff(stdin, ha=expected)
         with pytest.raises(RuntimeError, match="locked-passive"):
             handoff.complete(dict(status, **{field: wrong}), operation_id="1" * 64)
-        stdin.write.assert_not_called()
+        stdin.submit.assert_not_called()
         assert not handoff.finished
-    stdin = io.StringIO()
-    handoff = Handoff(stdin, io.StringIO('{"complete": true}\n'), ha=expected)
+    stdin = Mock()
+    stdin.submit.return_value = {"complete": True}
+    handoff = Handoff(stdin, ha=expected)
     handoff.activated_config_sha256 = "a" * 64
     handoff.fresh_verifier = Mock()
     handoff.complete(status, operation_id="1" * 64)
-    assert json.loads(stdin.getvalue()) == {"action": "complete", "operation": "1" * 64}
+    stdin.submit.assert_called_once_with({"action": "complete", "operation": "1" * 64})
     assert handoff.finished
 
 
 def test_lost_handoff_retirement_reply_is_not_success():
     expected = {"node_id": "node", "cluster_id": "cluster", "generation_id": "generation"}
-    handoff = Handoff(io.StringIO(), io.StringIO(""), ha=expected)
+    job = Mock()
+    job.submit.side_effect = ValueError("lost receipt")
+    handoff = Handoff(job, ha=expected)
     handoff.activated_config_sha256 = "a" * 64
     handoff.fresh_verifier = Mock()
     with pytest.raises(ValueError):
@@ -106,7 +198,7 @@ def test_repair_admission_works_before_new_package_is_installed(monkeypatch, tmp
         ingress_policy={},
     )
     monkeypatch.setattr(guest, "receive", lambda: request)
-    monkeypatch.setattr(guest, "inspect", lambda _: observed)
+    monkeypatch.setattr(guest, "inspect", lambda _, **kw: observed)
     monkeypatch.setattr(guest.signal, "signal", Mock())
     monkeypatch.setattr(guest.signal, "alarm", Mock())
     monkeypatch.setattr(guest.remote, "LOCK", tmp_path / "lock")
@@ -146,7 +238,7 @@ def test_repair_admission_works_before_new_package_is_installed(monkeypatch, tmp
 
 @pytest.mark.parametrize("repairing", [False, True])
 def test_package_install_is_journal_bound_after_admission(
-    monkeypatch, ordinary_operation_guest, repairing
+    monkeypatch, ordinary_operation_guest, repairing, tmp_path
 ):
     from nebius_vpngw import ordinary_operations as ops
     from nebius_vpngw.deploy import handoff_remote as guest
@@ -171,6 +263,9 @@ def test_package_install_is_journal_bound_after_admission(
         network=manager.network(),
         purpose="ha-handoff",
     )
+    monkeypatch.setattr(guest, "STAGING", tmp_path)
+    (tmp_path / (operation.value["id"] + ".json")).write_text("{}")
+    (tmp_path / (operation.value["id"] + ".json")).chmod(0o600)
     holder = guest.Holder(
         {
             "package": plan,

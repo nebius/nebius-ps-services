@@ -177,12 +177,18 @@ def test_ha_asset_installer_checks_ufw_before_writing_any_asset(
 @pytest.mark.parametrize(
     ("path", "released"),
     [
-        (ordinary_apply.UFW_ORDERING_PATH,
-         b"[Unit]\nAfter=network-online.target cloud-init.service\nWants=network-online.target\n"),
-        ("/etc/systemd/system/nebius-vpngw-agent.service.d/override.conf",
-         b"[Unit]\nAfter=strongswan-starter.service frr.service\n"),
-        ("/etc/systemd/system/nebius-vpngw-agent.service.d/override.conf",
-         b"[Unit]\nAfter=strongswan-starter.service frr.service\nWants=strongswan-starter.service frr.service\n"),
+        (
+            ordinary_apply.UFW_ORDERING_PATH,
+            b"[Unit]\nAfter=network-online.target cloud-init.service\nWants=network-online.target\n",
+        ),
+        (
+            "/etc/systemd/system/nebius-vpngw-agent.service.d/override.conf",
+            b"[Unit]\nAfter=strongswan-starter.service frr.service\n",
+        ),
+        (
+            "/etc/systemd/system/nebius-vpngw-agent.service.d/override.conf",
+            b"[Unit]\nAfter=strongswan-starter.service frr.service\nWants=strongswan-starter.service frr.service\n",
+        ),
     ],
 )
 def test_ordering_upgrade_admits_only_product_owned_override(
@@ -482,8 +488,9 @@ def test_ha_package_plans_bind_only_retained_compute(
         target_identity,
         resume_parent=None,
         resume_manifest=None,
+        reservation=None,
     ):
-        assert resume_parent is None and resume_manifest is None
+        assert resume_parent is None and resume_manifest is None and reservation is None
         assert instance.hostname not in enrollment, "retired guest must not be inspected"
         assert target_identity == instance.hostname
         inspected.append(instance.hostname)
@@ -1195,11 +1202,14 @@ def test_preview_cannot_invoke_route_or_service_effects(monkeypatch):
         "bgp-learned",
     ],
 )
-def test_local_observation_checks_invariants_without_peer_liveness(tmp_path, monkeypatch, fault):
+def test_local_observation_checks_invariants_without_peer_liveness(
+    tmp_path, monkeypatch, fault, ordinary_protection_guest
+):
     cfg = {
         "gateway": {"local_prefixes": ["10.0.0.0/24"]},
         "connections": [
             {
+                "name": "site",
                 "tunnels": [
                     {
                         "name": "tunnel-a",
@@ -1208,7 +1218,7 @@ def test_local_observation_checks_invariants_without_peer_liveness(tmp_path, mon
                         "inner_remote_ip": "169.254.1.2",
                         "inner_cidr": "169.254.1.0/30",
                     }
-                ]
+                ],
             }
         ],
     }
@@ -1417,7 +1427,9 @@ def test_saved_hash_cannot_hide_runtime_drift(guest, monkeypatch):
 
 
 @pytest.mark.parametrize("stage", ["firewall", "strongswan", "xfrm", "frr", "routing", "verify"])
-def test_required_local_failure_never_persists_success(guest, monkeypatch, stage):
+def test_required_local_failure_never_persists_success(
+    guest, monkeypatch, stage, ordinary_protection_guest
+):
     calls = []
 
     def effect(name, result=None):
@@ -1459,7 +1471,7 @@ def test_command_failure_survives_a_renderer_swallowing_it(monkeypatch):
     token = CURRENT.set(budget)
     try:
         run([sys.executable, "-c", "raise SystemExit(1)"])
-        with pytest.raises(RuntimeError, match="local command failed"):
+        with pytest.raises(RuntimeError, match="local reconciliation command failed"):
             budget.require_success()
     finally:
         CURRENT.reset(token)
@@ -1588,7 +1600,20 @@ def test_real_060_nonempty_state_and_tunnel_identity_remain_compatible(tmp_path,
     assert len(plan.per_instance) == 1
     resolved = yaml.safe_load(plan.per_instance[0].config_yaml)
     assert resolved.get("vm_ha") is None
-    assert collect_tunnel_state(resolved, log=lambda _: None)[2] == fixture["interfaces"]
+    current = collect_tunnel_state(resolved, log=lambda _: None)[2]
+    assert [
+        {k: v for k, v in endpoint.items() if k != "remote_prefixes"} for endpoint in current
+    ] == [
+        {k: v for k, v in endpoint.items() if k != "remote_prefixes"}
+        for endpoint in fixture["interfaces"]
+    ]
+    # Historical identity is stable; the accepted Static selection change puts
+    # workload routes on the preferred path and leaves the alternative responding.
+    if mode == "static":
+        assert current[0]["remote_prefixes"] == fixture["interfaces"][0]["remote_prefixes"]
+        assert current[1]["remote_prefixes"] == []
+    else:
+        assert current == fixture["interfaces"]
 
 
 def test_replacement_preparation_never_starts_dataplane_or_commits_routes(

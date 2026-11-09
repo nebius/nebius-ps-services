@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 
 from .apply_command import CommandJournal
+from .apply_diagnostics import Failure, first_failure, latest_failure, unavailable_observation
 from .apply_plan import Evidence, Outcome, Progress, Result
 
 
@@ -27,6 +28,9 @@ class ApplyReport:
     prior_execution: str | None = None
     prior_pending: bool = False
     projection_failed: bool = False
+    failure: Failure | None = None
+    latest: Failure | None = None
+    pending_reason: str | None = None
     result: Result = field(
         default_factory=lambda: Result(
             Outcome.BLOCKED, Evidence.UNKNOWN, Evidence.UNKNOWN, Evidence.UNKNOWN, Evidence.UNKNOWN
@@ -39,6 +43,12 @@ class ApplyReport:
         transaction = snapshot["transaction"] if snapshot else None
         self.prior_execution = transaction["execution_id"] if transaction else None
         self.prior_pending = bool(transaction and transaction["phase"] == "pending")
+        if resumed and self.prior_pending and self.prior_execution:
+            try:
+                self.failure = journal.failure_for(self.prior_execution)
+                self.latest = journal.failure_for(self.prior_execution, latest=True)
+            except (OSError, RuntimeError, ValueError, TypeError):
+                self.projection_failed = True
 
     def plan(self, effects: tuple[str, ...], *, approval: str | None = None) -> None:
         self.planned, self.approval = effects, approval
@@ -73,12 +83,25 @@ class ApplyReport:
             connectivity,
             inhibition_retained=inhibition_retained,
         )
+        self.pending_reason = None
 
-    def failed(self) -> None:
+    def failed(self, error: BaseException | None = None) -> None:
+        self.failure = self.failure or first_failure(error)
+        self.latest = latest_failure(error) or Failure("apply", "operation-failed")
+        unavailable = unavailable_observation(error)
+        pending = unavailable is not None and getattr(unavailable, "retryable", True)
+        self.pending_reason = "waiting-for-authority" if pending else None
+        if self.journal is not None and self.started:
+            try:
+                if self.failure is not None:
+                    self.journal.record_failure(self.failure.mapping())
+                self.journal.record_failure(self.latest.mapping(), latest=True)
+            except (OSError, RuntimeError, ValueError):
+                self.projection_failed = True
         # Failure invalidates terminal readiness. A retained journal only proves
         # progress; it cannot prove a remote lock remains held after a disconnect.
         self.result = Result(
-            Outcome.FAILED if self.started else Outcome.BLOCKED,
+            Outcome.PENDING if pending else Outcome.FAILED if self.started else Outcome.BLOCKED,
             Evidence.UNKNOWN,
             Evidence.UNKNOWN,
             Evidence.UNKNOWN,
@@ -101,6 +124,10 @@ class ApplyReport:
                     ).mapping(),
                     "dry_run": self.dry_run,
                     "approval": self.review_approval or self.approval,
+                    **({"failure": self.failure.mapping()} if self.failure is not None else {}),
+                    **(
+                        {"latest_failure": self.latest.mapping()} if self.latest is not None else {}
+                    ),
                 }
             transaction = snapshot["transaction"] if snapshot else None
             # A historical completed command is not evidence for this invocation.
@@ -124,4 +151,7 @@ class ApplyReport:
             **result.mapping(),
             "dry_run": self.dry_run,
             "approval": self.review_approval or self.approval,
+            **({"failure": self.failure.mapping()} if self.failure is not None else {}),
+            **({"latest_failure": self.latest.mapping()} if self.latest is not None else {}),
+            **({"pending_reason": self.pending_reason} if self.pending_reason is not None else {}),
         }

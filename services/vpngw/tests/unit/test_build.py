@@ -87,6 +87,26 @@ def test_build_binary_invokes_pyinstaller_with_systemd_assets(tmp_path, monkeypa
     assert (systemd_dir / "nebius-vpngw-vm-ha-peer-firewall.sh").exists()
     assert (systemd_dir / "nebius-vpngw-vm-ha-rearm.service").exists()
     assert (systemd_dir / "nebius-vpngw-vm-ha.service").exists()
+    from nebius_vpngw.handoff_bootstrap import SOURCES
+
+    data = {cmd[index + 1] for index, arg in enumerate(cmd) if arg == "--add-data"}
+    for _module, relative in SOURCES:
+        source = Path(build.__file__).parent / relative
+        destination = str(Path("nebius_vpngw") / Path(relative).parent)
+        assert f"{source}{build.os.pathsep}{destination}" in data
+
+    for relative in (
+        "ha_activation.py",
+        "deploy/stopped_upgrade.py",
+        "agent/main.py",
+        "agent/local_commands.py",
+        "agent/routing_guard.py",
+        "agent/strongswan_renderer.py",
+        "agent/vm_ha/runtime.py",
+    ):
+        source = Path(build.__file__).parent / relative
+        destination = str(Path("nebius_vpngw") / Path(relative).parent)
+        assert f"{source}{build.os.pathsep}{destination}" in data
 
 
 def test_pull_request_ci_selects_vm_ha_safety_regressions_exactly_once() -> None:

@@ -14,6 +14,225 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Bind Python package checkpoints to the complete admitted manifest, including
+  HA parent and command approval. A new operation no longer reuses a stale
+  completed checkpoint after an intervening same-wheel installation changes
+  pip provenance. Preserve exact metadata checks, same-operation continuation,
+  immutable previous checkpoints and existing repair limits. Focused Static/BGP
+  recovery and restoration trials plus native package checks cover this repair.
+  Final traffic uses an explicitly authorized campaign-only UDP allowance;
+  Static's original strict failure is preserved and normal criteria are unchanged.
+
+- Preserve uncertain HA activation outcomes when SSH returns an empty, truncated
+  or invalid reply, EOF, or no exit status. Read back exact completion before any
+  correction; classify unreadable inspections as pending without spending a
+  repair attempt. Preserve guest refusals and separate first/latest diagnostics.
+  Persist verified initial completion after exact readback, retaining fresh
+  checks on resume and unchanged corrective-attempt accounting.
+
+- Prepare exact SSH client authentication and both approved package plans before
+  parallel HA package workers start. This removes a captured macOS deadlock
+  between worker-side key-validation subprocess creation and command-owned gRPC
+  reads. Reject changed prepared identities without lazy key discovery; retain
+  fresh cloud evidence, host-key pins, fencing and package repair accounting.
+
+- Allow a guarded repaired-artifact preview to plan its new package closure
+  without reusing the failed artifact's reservation or lifecycle resume parent.
+  Preserve the prior command
+  history, exact same-artifact resume, native pending-work checks and separate
+  disruption approval before any successor effects.
+
+- Recover classified transient HA Compute authority reads within the same
+  operation and a cumulative authentication, dispatch, Compute and SSH deadline.
+  Preserve mandatory identity and fencing checks, command-thread SDK ownership,
+  existing cloud receipts and the separate three-repair allowance. Report missing
+  authority as pending in `apply` and `vm-ha`; distinguish unknown completion
+  from a proven local fault and retain first and latest diagnostics separately.
+  Accepted package work remains supervised beyond observation deadlines.
+  Preserve interrupted owner-unlock continuation from exact current-boot fencing
+  and healthy native state without restarting services or rewriting configuration.
+
+- Honor the exact operator SSH override in network readiness, bootstrap health,
+  and existing HA member preflight when no bootstrap public key is configured.
+  Do not combine the selected identity with the original local private-key path.
+
+- Allow exact owned Python caches to refresh their timestamp headers between
+  package staging and installation. Preserve source/code/permission checks and
+  immutable recovery checkpoints so safe HA activation is not blocked by a
+  normal cache regeneration.
+- Recognize completed Python package checkpoints after verified owned caches
+  regenerate from unchanged target source. Validate executable code even for
+  exact recorded cache bytes; preserve foreign-file refusal and avoid reinstalling
+  completed distributions or refreshing their checkpoints.
+
+- Retire obsolete pending HA apply admission after verified destruction, including
+  exact absent targets from an earlier incarnation. Preserve command, reservation,
+  diagnostic, and recovery history so same-config recreation cannot inherit an old
+  package worker; unresolved child effects remain blocked.
+
+- Continue an approved HA package phase that authoritative observation proves
+  was never submitted, including interrupted apply and partial pair preparation.
+  Preserve exact admission, peer fencing, writer exclusion and the shared repair
+  allowance; unknown state and unchanged failed repairs remain blocked.
+
+- Make projected and installed Python package permissions independent of the
+  observer's file-creation mask. Use the same child-only mask for pip staging
+  and installation while preserving exact verification and protected state.
+
+- Treat both HA activation progress and normal-upgrade traffic interruption as
+  120-second soft targets. Report measured overruns separately; elapsed time
+  alone does not fail qualification or cancel admitted work. Preserve earlier
+  trial outcomes under their original criteria and retain correctness, fencing,
+  steady-state loss and workload evidence requirements.
+
+- Bind historical product-wheel interruption to the canonical offline installation
+  of the exact product wheel. Exclude dependency and projection installs, and
+  report expected versus observed process exits when injection is missed.
+
+- Retire obsolete Python distribution metadata directories during exact package
+  installation and restoration. Reject foreign directory contents before mutation,
+  preserve shared import directories, and require obsolete metadata absence before
+  accepting a completed installation. Persist recreated directory entries during
+  interrupted-install recovery.
+
+- Repair unit regressions after activation recovery and prerequisite composition:
+  align capability and artifact checks, isolate ordinary rotation fixtures, and
+  prove cancellation reaches confirmation. Restore actionable controller-evidence
+  diagnostics and the ordinary rotation availability note without extending that
+  assurance to prerequisite upgrades.
+
+- Continue safely recoverable HA package failures through the existing exact
+  transaction: supervise admitted phases independently of SSH, retain inhibition
+  on disconnect, and reattach before any later activation. Use phase-aware offline
+  native package continuation and prospective Python file checkpoints, including
+  verified generated bytecode. Unknown/shared files and changed authority block.
+- Share three corrective attempts across both members, conversion and composed
+  recovery entrypoints. Treat 120 seconds as a soft progress target; never cancel
+  or overlap accepted package work because of elapsed time. Retain current-boot
+  fencing, independent prepared-state verification and native observation bounds.
+- Preserve artifact-recovery admission after its owner capability changes and
+  resume conversion after publication or a lost completion reply. Unsupported
+  recovery policy versions fail explicitly before effects.
+- Compose capability prerequisite upgrades with `vm-ha --rotate-mtls` and
+  `--standby-auto-healing enabled` under one approval and writer lock. Bind
+  continuation to the completed prerequisite, exact rotation intent and policy
+  predecessor. Generic apply remains blocked inside an inhibited rotation.
+
+- Allow exact VM-HA destruction after a corrective upgrade. Retained corrective
+  authority history no longer causes the lifecycle validator to reject a valid
+  destroy transaction; predecessor and resource identity checks remain enforced.
+
+- Make native BGP coverage qualification assert the same complete readiness
+  sample that satisfied its expected route condition. Ignore unknown and
+  unrelated transitional evidence, retain full owner-driver diagnostics, and
+  preserve the original observation and subprocess deadlines.
+
+- Show later activation observations alongside the preserved first failure in
+  text diagnostics, so an initial lock observation does not hide the later blocker.
+  Distinguish well-formed status awaiting convergence from malformed evidence.
+
+- Resume a completed same-operation HA writer stop through fresh fenced native
+  readback instead of waiting for the stopped controller's status acknowledgement.
+  Preserve exact configuration, boot, locks and pending controller intent; an
+  uncertain stop or conflicting writer still blocks package continuation.
+- Retain an initial activation failure when a later observation is unavailable.
+  Report package timeout boundaries and preserve typed pending or blocked
+  authority errors through command diagnostics without replaying package work.
+
+- Let the owner-authorized BGP origination phase install missing destination
+  protection while forwarding is fenced. Preserve initial and replay authority
+  checks and require successful protection installation before advertisements.
+
+- Distinguish unavailable Compute authority observations from confirmed identity
+  drift during HA SSH preflight. Preserve the first typed read failure through
+  package and apply diagnostics while retaining fresh identity checks and fencing.
+
+- Read the controller's nested origination readiness evidence at the paired
+  BGP startup barrier. Accept an authorized originating owner before remote
+  routes converge; reject missing, malformed or false readiness evidence.
+
+- Preserve the first guarded HA package step and a safe error category through
+  CLI wrappers, JSON reports and apply journals. Retain member identification
+  without exposing remote exception text or changing execution, deadlines,
+  retries, fencing or activation authority.
+
+- Verify effective VM-HA workload route-table attachments, including inherited
+  default tables with exact network identity and exclusive subnet consumption.
+  Reject stale effective attachments even when the configured table still matches;
+  missing cloud evidence cannot authorize routing.
+
+- Add `pair create-config`, `pair apply` and `pair status` over the existing
+  deployment owners, with private persistent credentials, reciprocal Static/BGP
+  paths for every owner combination, and distinct regional ASNs. Prepare both
+  regional networks before endpoint binding, and coordinate both child preparation
+  and owner-unlock phases before convergence waits. Bind interrupted work to its
+  original artifact and preserve workload connectivity as unknown until measured.
+  Reuse the exact composed credential approval for unattended regional children;
+  preserve the first readiness failure and tolerate atomic progress updates.
+  Discard seed probes tied to replaced tunnel names when generating new paths.
+  Persist optional `--profile-a` and `--profile-b` operator profiles with pair
+  intent and select each for every regional command. Explicit profiles exclude
+  inherited access tokens; missing credentials fail through ordinary auth owners.
+
+- Share health-based Static selection across Single-VM and VM-HA, retain
+  responder-ready owner alternatives, reject ambiguous destination ownership,
+  and require 60 seconds of continuous preferred-path health for automatic
+  tunnel failback. Preserve manual overrides, recovery budgets and protected
+  destinations when evidence is unknown or no usable path remains.
+  During fenced activation, temporarily unload unselected paths to remove stale
+  kernel objects before restoring responder readiness. Loaded responder
+  configuration alone does not prove that kernel SAs belong to the current daemon.
+  Honor configured encrypted probe targets during preferred-path recovery;
+  managed peers need not answer a synthetic inner tunnel address. Preserve
+  probe hysteresis, authority checks and backup workload routes. Move the
+  pre-adoption HA probe field to shared `gateway.tunnel_probes`, with one
+  validator and runtime path for Single-VM and HA.
+  Align the operator matrix and routing reference with shared Static/BGP
+  selection; remove obsolete cold-owner, neighbor-shutdown and symmetric-routing
+  guarantees while retaining historical verification records.
+
+- Add an explicit owner-authorized, forwarding-fenced BGP origination phase.
+  Preserve ownership, required-prefix, encrypted-route and independent cloud
+  readback gates. Retain the first activation failure and distinguish unavailable
+  policy evidence from malformed configuration. The historical customer cause
+  remains unproven.
+  Unavailable passive import-policy evidence blocks origination preparation.
+  Reconcile failed saved BGP selections during fenced origination, then revoke
+  and prepare changed policy through the controller before forwarding resumes.
+  Preserve the operation identity and original recovery deadline.
+
+- Extend the existing Single-VM agent with bounded BGP route reconciliation and
+  three complete absence observations before owned-route withdrawal. Publish an
+  exact runtime binding, recover existing credentials through pinned authenticated
+  access, and coordinate apply, manual routes and replacement through durable
+  guest reservations. Replacement also enrolls a first runtime writer for older
+  Single-VM BGP sources and preserves exact credential recovery after enrollment.
+  Fresh provisioning reports workload connectivity as unknown. Retain withdrawn
+  BGP destinations in plaintext-drop protection while ending their optional
+  routing obligations; explicit required prefixes and unknown-evidence gates
+  remain enforced.
+
+- Reserve an installed ordinary route writer before ordinary-to-HA package
+  handoff and reject unsettled cloud operations before conversion. Carry exact
+  creation receipts into the HA approval so hashed ordinary route names retain
+  ownership only while their full cloud snapshot matches. Keep migration
+  and Single-VM qualification separate from installed-writer replacement
+  regression coverage. Complete the writer retirement under the HA activation
+  lock, and compose ordinary route publication after verified HA removal.
+  Cardinality changes also retire runtime ownership durably while retaining
+  credentials and route receipts for a later reviewed Single-VM handoff.
+
+- Select native and historical package qualification with `--topology
+  ha|ordinary|all`, defaulting to `all`, and account explicitly for expected cases.
+  Retain full transition diagnostics for passed and failed restart trials without
+  enlarging the original recovery window; retrieve reports through the running container because `docker cp`
+  cannot read the fixture's tmpfs. Complete HA, Single-VM, mixed-topology and
+  migration qualification as separate gates in the full release campaign. Enforce the selected container
+  platform, bounded CPU/memory/process use and private, non-overwritten evidence.
+  Record immutable image, dependency and collected-case identities before trials.
+
 - Accept release wheels whose packaged README exceeds 256 KiB while retaining
   a bounded metadata read and exact content-record checks. Exercise the built
   wheel through the same VM-HA artifact validator used by `apply`.
@@ -339,6 +558,8 @@ All notable changes to this project are tracked here. This changelog follows
 - Stage exact OS/Python artifacts before disruption and retain durable startup
   inhibition across interrupted package work. Resume the same approved apply
   operation, preserving identities, startup policies and existing HA fences.
+  Re-publishing inhibition preserves an interrupted native package subphase;
+  other phases return to inhibited state and lose activation authority.
   Final-artifact live upgrade, traffic and historical-version qualification remain
   release gates; local/native fixture results do not establish the 120-second claim.
 - Preserve completed checkpoint-conversion and standby-replacement receipts

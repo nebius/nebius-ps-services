@@ -94,6 +94,14 @@ from nebius_vpngw.vm_ha_command import (
 from nebius_vpngw.vm_ha_credentials import VMHACredentialIdentityError
 
 
+@pytest.fixture(autouse=True)
+def isolated_package_recovery_root(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.package_recovery.lifecycle_root",
+        lambda _state: tmp_path / "package-command",
+    )
+
+
 class _ContextManagedFake:
     def __enter__(self):
         return self
@@ -286,7 +294,8 @@ def _completed_recovery_statuses(
             "promotion_receipt_id": "receipt-current",
         },
         "recovery_phase": recovery.phase.value,
-        "schema": "nebius-vpngw/vm-ha-auto-healing-policy-status-v2",
+        "schema": "nebius-vpngw/vm-ha-auto-healing-policy-status-v3",
+        "evidence_reason": None,
     }
     peer_status: dict[str, object] = {
         **owner_status,
@@ -378,7 +387,8 @@ def _terminal_enabled_recovery_statuses(
             "recovery_phase": (
                 None if completed_recovery is None else completed_recovery.phase.value
             ),
-            "schema": "nebius-vpngw/vm-ha-auto-healing-policy-status-v2",
+            "schema": "nebius-vpngw/vm-ha-auto-healing-policy-status-v3",
+            "evidence_reason": None,
         }
 
     return (
@@ -1322,6 +1332,7 @@ def test_artifact_recovery_admits_only_exact_pre_v2_policy_deadlocks() -> None:
         "rearm_phase": "inhibited",
         "rearm_reason": "standby-auto-healing-peer-policy-unavailable",
         "auto_healing": {
+            "evidence_reason": None,
             "state": "blocked",
             "peer_agrees": False,
             "accepted_start": False,
@@ -1366,6 +1377,7 @@ def test_artifact_recovery_admits_only_writer_owned_restoration_progress() -> No
         "rearm_phase": "starting",
         "rearm_reason": None,
         "auto_healing": {
+            "evidence_reason": None,
             "state": "transitioning",
             "peer_agrees": False,
             "accepted_start": True,
@@ -1387,7 +1399,15 @@ def test_artifact_recovery_admits_only_writer_owned_restoration_progress() -> No
 
 
 @pytest.mark.parametrize(
-    "failed_target", (None, "owner-target", "standby-target", "wire-break", "standby-wire-break")
+    "failed_target",
+    (
+        None,
+        "owner-target",
+        "standby-target",
+        "wire-break",
+        "standby-wire-break",
+        "owner-refresh-disconnect",
+    ),
 )
 def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
     monkeypatch,
@@ -1422,7 +1442,7 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
     context = _VMHAArtifactRecoveryContext(
         local_config={"gateway_group": {"vm_spec": {}}},
         plan=SimpleNamespace(),  # type: ignore[arg-type]
-        lifecycle=SimpleNamespace(),  # type: ignore[arg-type]
+        lifecycle=SimpleNamespace(record_sha256="f" * 64),  # type: ignore[arg-type]
         owner_instance=owner,
         standby_instance=standby,
         owner_role="active",
@@ -1435,6 +1455,19 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
             if failed_target == "wire-break"
             else ["independent-heartbeat-v6"]
         },
+    )
+    object.__setattr__(
+        context,
+        "recovery_record",
+        {
+            "schema": "nebius-vpngw.artifact-standby-recovery.v1",
+            "binding": {"lifecycle": "f" * 64},
+            "report": {"digest": report.digest},
+            "phase": "owner",
+        },
+    )
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.package_recovery.lifecycle_root", lambda _s: tmp_path / "command"
     )
     canonical = _VMHAApplyPlanReport(
         kind="apply-convergence",
@@ -1480,6 +1513,7 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
         "rearm_phase": "starting",
         "rearm_reason": None,
         "auto_healing": {
+            "evidence_reason": None,
             "state": "transitioning",
             "peer_agrees": False,
             "accepted_start": True,
@@ -1503,6 +1537,8 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
     )
 
     def wait_for_owner(*, predicate, **_kwargs):
+        if failed_target == "owner-refresh-disconnect":
+            raise RuntimeError("observer disconnected after owner refresh")
         order.append("reprove-owner")
         assert predicate(safe_owner)
         return safe_owner
@@ -1524,6 +1560,19 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
         "nebius_vpngw.cli._execute_vm_ha_apply_convergence",
         lambda *_a, **_k: order.append("canonical-apply"),
     )
+
+    if failed_target == "owner-refresh-disconnect":
+        from nebius_vpngw.deploy import artifact_standby_recovery as receipts
+
+        with pytest.raises(RuntimeError, match="observer disconnected"):
+            _execute_vm_ha_artifact_standby_recovery(
+                config_path, report, region=None, progress_sink=None
+            )
+        saved = receipts.read(tmp_path / "command")
+        assert saved["phase"] == "owner-ready"
+        object.__setattr__(context, "recovery_record", saved)
+        context.owner_record["controller_capabilities"].append("vm-ha-standby-restoration-v2")
+        failed_target = None
 
     if failed_target == "standby-wire-break":
         with pytest.raises(RuntimeError, match="coordinated two-member apply"):
@@ -2425,7 +2474,8 @@ def test_vm_ha_missing_owner_policy_dry_run_plans_exact_bootstrap_recovery(
             "promotion_receipt_id": "receipt-a",
         },
         "recovery_phase": None,
-        "schema": "nebius-vpngw/vm-ha-auto-healing-policy-status-v2",
+        "schema": "nebius-vpngw/vm-ha-auto-healing-policy-status-v3",
+        "evidence_reason": None,
     }
     lock = Mock(side_effect=AssertionError("dry-run acquired the writer lock"))
     effect = Mock(side_effect=AssertionError("dry-run changed the policy"))
@@ -4208,7 +4258,7 @@ def test_vm_ha_transition_is_action_required_and_never_calls_legacy_handlers(
     )
     assert result.stderr.count("observing controller-owned recovery") == 1
     assert "✗ observing controller-owned recovery" in result.stderr
-    assert inspect.call_count == 2
+    assert inspect.call_count == 121
 
 
 def test_vm_ha_observes_controller_progress_then_confirms_health(
@@ -4909,6 +4959,11 @@ def test_vm_ha_artifact_change_after_execution_starts_reports_partial_resume(
             "resume idempotently",
         ),
         (
+            _VMHAApplyConvergenceFailed("PRIVATE_APPLY_DETAIL", pending=True),
+            "waiting-for-authority",
+            "resume the retained operation",
+        ),
+        (
             _VMHAApplyConvergenceFailed(
                 "PRIVATE_APPLY_DETAIL",
                 reason="standby-replacement-inhibition-not-ready",
@@ -4991,7 +5046,8 @@ def test_vm_ha_apply_exit_reports_checkpoint_resume_not_authentication(
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["health"] == "blocked"
+    assert payload["health"] == ("unknown" if failure.pending else "blocked")
+    assert payload["outcome"] == ("pending" if failure.pending else "failed")
     assert payload["actions"] == ["convergence-effects-may-have-started"]
     assert payload["reasons"] == [expected_reason]
     assert expected_next_fragment in payload["next_action"]

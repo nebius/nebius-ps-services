@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import json
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -116,6 +118,143 @@ def test_inhibited_missing_archive_never_refreshes_or_downloads(monkeypatch, tmp
     (tmp_path / "inhibited").touch()
     with pytest.raises(RuntimeError, match="lost its staged archive"):
         migration.stage({"archives": {"missing.deb": {"package": "charon-systemd"}}})
+
+
+@pytest.fixture
+def checkpoint_files(monkeypatch, tmp_path):
+    monkeypatch.setattr(migration, "ROOT", tmp_path)
+    monkeypatch.setattr(migration, "STATE", tmp_path / "operation.json")
+    monkeypatch.setattr(migration, "POLICY", tmp_path / "policy-rc.d")
+    monkeypatch.setattr(migration, "UNITS", ())
+    monkeypatch.setattr(migration, "validate_plan", lambda _: None)
+    monkeypatch.setattr(migration, "TOKEN", tmp_path / "activation.json")
+
+    def write(path, data, mode=0o600):
+        # These tests exercise real checkpoint decoding, independently of the
+        # root-owned ancestor checks covered by native package qualification.
+        assert path.is_relative_to(tmp_path)
+        path.write_bytes(data)
+        path.chmod(mode)
+
+    monkeypatch.setattr(migration, "write", write)
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    ("step", "interrupted"),
+    [
+        ("remove", False),
+        ("unpack", False),
+        ("configure", False),
+        ("verify", False),
+        ("unpack", True),
+    ],
+)
+def test_reinhibition_preserves_readable_package_checkpoint(
+    monkeypatch, checkpoint_files, step, interrupted
+):
+    tmp_path = checkpoint_files
+    approved = {"fixture": "unchanged approved package closure"}
+    value = {
+        "schema": migration.SCHEMA,
+        "operation": "a" * 32,
+        "plan": approved,
+        "plan_digest": migration.digest(approved),
+        "manifest": {"artifact": "same saved request"},
+        "phase": "packages",
+        "package_step": step,
+        "policy": {"content": None, "mode": None},
+    }
+    migration.save(value)
+    monkeypatch.setattr(migration, "policy_snapshot", lambda: value["policy"])
+    checked = []
+    monkeypatch.setattr(migration, "CHECK", lambda: checked.append(migration.state()))
+    reloaded = []
+    monkeypatch.setattr(migration, "run", lambda args: reloaded.append(args))
+
+    if interrupted:
+        writer = migration.write
+
+        def fail_after_intent(path, data, mode=0o600):
+            if path == tmp_path / "startup.py":
+                raise OSError("fixture interruption after durable intent")
+            writer(path, data, mode)
+
+        monkeypatch.setattr(migration, "write", fail_after_intent)
+        with pytest.raises(OSError, match="fixture interruption"):
+            migration.inhibit()
+        assert migration.state() == value
+        monkeypatch.setattr(migration, "write", writer)
+
+    for _ in range(2):
+        migration.inhibit()
+        assert migration.state() == value
+        assert (tmp_path / "inhibited").read_bytes() == b"inhibited\n"
+        assert migration.POLICY.read_bytes() == migration.POLICY_BYTES
+        assert not migration.startup_allowed()
+
+    assert checked == [value] * (3 if interrupted else 2)
+    assert reloaded == [["systemctl", "daemon-reload"]] * 2
+
+
+@pytest.mark.parametrize("phase", ["prepared", "activating"])
+def test_inhibition_outside_package_resume_reestablishes_inhibited_phase(
+    monkeypatch, checkpoint_files, phase
+):
+    tmp_path = checkpoint_files
+    approved = {"fixture": "unchanged approved package closure"}
+    value = {
+        "schema": migration.SCHEMA,
+        "operation": "b" * 32,
+        "plan": approved,
+        "plan_digest": migration.digest(approved),
+        "manifest": {},
+        "phase": phase,
+        "policy": {"content": None, "mode": None},
+    }
+    migration.save(value)
+    monkeypatch.setattr(migration, "policy_snapshot", lambda: value["policy"])
+    monkeypatch.setattr(migration, "CHECK", lambda: None)
+    monkeypatch.setattr(migration, "run", lambda _: None)
+    (tmp_path / "inhibited").touch()
+    boot = tmp_path / "boot-id"
+    boot.write_text("fixture-boot\n")
+    process = tmp_path / "process-stat"
+    process.write_text("123 (fixture) " + " ".join(["0"] * 19 + ["321"]))
+    migration.TOKEN.write_text(
+        json.dumps(
+            {
+                "operation": value["operation"],
+                "boot": "fixture-boot",
+                "pid": 123,
+                "start": "321",
+            }
+        )
+    )
+    paths = {"/proc/sys/kernel/random/boot_id": boot, "/proc/123/stat": process}
+    monkeypatch.setattr(migration, "Path", lambda name: paths.get(str(name), Path(name)))
+    assert migration.startup_allowed() is (phase == "activating")
+
+    migration.inhibit()
+
+    assert migration.state() == {**value, "phase": "inhibited"}
+    assert not migration.startup_allowed()
+
+
+def test_package_step_outside_package_phase_remains_invalid(monkeypatch, checkpoint_files):
+    approved = {"fixture": "unchanged approved package closure"}
+    migration.save(
+        {
+            "schema": migration.SCHEMA,
+            "operation": "c" * 32,
+            "plan": approved,
+            "plan_digest": migration.digest(approved),
+            "phase": "inhibited",
+            "package_step": "unpack",
+        }
+    )
+    with pytest.raises(RuntimeError, match="runtime transaction identity is invalid"):
+        migration.state()
 
 
 def test_staged_archive_resume_never_refreshes_repository_metadata(monkeypatch, tmp_path):

@@ -8,7 +8,12 @@ import pytest
 from test_vm_ha_upgrade_recovery import ARTIFACT, checkpoint, evidence_fixture
 
 from nebius_vpngw.deploy import vm_ha_corrective as corrective
-from nebius_vpngw.deploy.vm_ha_lifecycle import VMHALifecycleStore, _validate_successor
+from nebius_vpngw.deploy.vm_ha_lifecycle import (
+    VMHALifecycleState,
+    VMHALifecycleStatus,
+    VMHALifecycleStore,
+    _validate_successor,
+)
 
 
 def failed_release():
@@ -70,6 +75,62 @@ def test_corrective_cycle_retains_identity_and_archives_failed_release(tmp_path)
     assert new.transaction.operation_id != state.transaction.operation_id
     store.write_verified(new, predecessor_sha256=state.record_sha256)
     corrective.archive(state, store.path)
+
+
+@pytest.mark.parametrize("completed", [False, True])
+def test_destroy_after_corrective_release_retains_history_and_exact_authority(tmp_path, completed):
+    failed = failed_release()
+    corrected = corrective.successor(failed, record(failed), bindings={})
+    state = replace(
+        corrected,
+        status=VMHALifecycleStatus.ACTIVE if completed else VMHALifecycleStatus.ACTIVATING,
+        transaction=replace(
+            corrected.transaction,
+            checkpoint="activation-complete" if completed else "owner-release-pending",
+            pending_effect=None if completed else "verify-active-forwarding-and-routes",
+            completed_effects=("activate-node-0", "activate-node-1"),
+        ),
+    )
+    store = VMHALifecycleStore(tmp_path / "gateway.yaml")
+    store.path.write_text(json.dumps(state.to_dict()))
+    store.path.chmod(0o600)
+    destruction = VMHALifecycleState.start_destruction(
+        state,
+        operation_id="destroy-exact-pair",
+        approval_digest="1" * 64,
+        desired_state_digest="2" * 64,
+        current_state_digest="3" * 64,
+        destroy_plan_json='{"fixture":"exact-destroy-plan"}',
+        current_observation={},
+    )
+
+    store.write_verified(destruction, predecessor_sha256=state.record_sha256)
+    observed = store.read_hardened(
+        expected_project_id=state.project_id, expected_gateway_name=state.gateway_name
+    ).state
+    assert observed == destruction and observed.has_same_identity(state)
+    assert observed.transaction.approval_kind == "destruction"
+    assert observed.status is VMHALifecycleStatus.REMOVAL_IN_PROGRESS
+    before = dict(state.transaction.resource_bindings)
+    after = dict(observed.transaction.resource_bindings)
+    assert all(after[key] == value for key, value in before.items())
+    assert after[corrective.AUTHORITY_KEY] == before[corrective.AUTHORITY_KEY]
+    if not completed:
+        assert after["destroy-superseded-host-effect"] == state.transaction.pending_effect
+
+    # Retaining corrective history grants no authority to rebind or drop it.
+    for resources in (
+        {key: value for key, value in after.items() if key != corrective.AUTHORITY_KEY},
+        {**after, corrective.AUTHORITY_KEY: "{}"},
+    ):
+        invalid = replace(
+            destruction,
+            transaction=replace(
+                destruction.transaction, resource_bindings=tuple(sorted(resources.items()))
+            ),
+        )
+        with pytest.raises(ValueError, match="destruction successor is not exact"):
+            _validate_successor(state, invalid)
 
 
 @pytest.mark.parametrize(

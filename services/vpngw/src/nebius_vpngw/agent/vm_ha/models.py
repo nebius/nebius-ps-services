@@ -12,11 +12,19 @@ import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$")
 _ROLES = frozenset({"active", "passive"})
+
+
+class RepairDisposition(str, Enum):
+    """Dispatch evidence, never a substitute for independently observed health."""
+
+    DEFERRED = "deferred"
+    ATTEMPTED = "attempted"
 
 
 class StateValidationError(ValueError):
@@ -303,6 +311,8 @@ class PeerHeartbeat:
     promotion_ready: bool
     auto_healing_policy_state: str
     auto_healing_policy_digest: str
+    data_plane_mode: str = "blocked"
+    origination_ready: bool = False
     fault_category: str = "unknown"
     authority_ready: bool = False
     coverage_state: str = "unknown"
@@ -382,6 +392,15 @@ class PeerHeartbeat:
             raise StateValidationError(
                 "generation_id must equal the canonical configuration digest"
             )
+        if self.data_plane_mode not in {"blocked", "passive", "originating", "active"}:
+            raise StateValidationError("invalid data plane mode")
+        _require_bool("origination_ready", self.origination_ready)
+        if self.origination_ready and (
+            self.data_plane_mode != "originating"
+            or self.observed_owner_id != self.node_id
+            or self.authority_ready
+        ):
+            raise StateValidationError("invalid owner origination evidence")
         _require_bool("service_healthy", self.service_healthy)
         _require_bool("route_ready", self.route_ready)
         _require_bool("promotion_ready", self.promotion_ready)
@@ -465,13 +484,15 @@ class PeerHeartbeat:
             "observed_owner_id": self.observed_owner_id,
             "promotion_ready": self.promotion_ready,
             "route_ready": self.route_ready,
-            "schema": "nebius-vpngw/vm-ha-heartbeat-v6",
+            "schema": "nebius-vpngw/vm-ha-heartbeat-v7",
             "evidence": self.evidence.to_dict(),
             "tunnel_capability": self.tunnel_capability,
             "tunnel_recovery": self.tunnel_recovery,
             "sent_at": self.sent_at,
             "sequence": self.sequence,
             "service_healthy": self.service_healthy,
+            "data_plane_mode": self.data_plane_mode,
+            "origination_ready": self.origination_ready,
             "fault_category": self.fault_category,
             "authority_ready": self.authority_ready,
             "coverage_state": self.coverage_state,
@@ -501,6 +522,8 @@ class PeerHeartbeat:
                 "certificate_fingerprint",
                 "digests",
                 "service_healthy",
+                "data_plane_mode",
+                "origination_ready",
                 "fault_category",
                 "authority_ready",
                 "coverage_state",
@@ -514,7 +537,7 @@ class PeerHeartbeat:
             },
             "peer heartbeat",
         )
-        if value["schema"] != "nebius-vpngw/vm-ha-heartbeat-v6":
+        if value["schema"] != "nebius-vpngw/vm-ha-heartbeat-v7":
             raise StateValidationError("unsupported peer heartbeat schema")
         sequence = value["sequence"]
         if not isinstance(sequence, int) or isinstance(sequence, bool):
@@ -545,6 +568,8 @@ class PeerHeartbeat:
             ),
             tunnel_capability=_require_bool("tunnel_capability", value["tunnel_capability"]),
             tunnel_recovery=value["tunnel_recovery"],
+            data_plane_mode=value["data_plane_mode"],
+            origination_ready=value["origination_ready"],
             fault_category=value["fault_category"],
             authority_ready=value["authority_ready"],
             coverage_state=value["coverage_state"],

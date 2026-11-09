@@ -77,6 +77,7 @@ def digest(value: Any) -> str:
 # Mutation execution belongs to the existing ordinary/HA operation journal.
 COMMAND = None
 CHECK = None
+PYTHON_PREPARE = None
 
 
 def run(args: list[str], *, timeout: int = 60, cwd: Path | None = None) -> str:
@@ -286,6 +287,13 @@ def state() -> dict | None:
             "releasing",
             "complete",
         }
+        or (
+            "package_step" in value
+            and (
+                value["phase"] != "packages"
+                or value["package_step"] not in {"remove", "unpack", "configure", "verify"}
+            )
+        )
         or value.get("plan_digest") != digest(value.get("plan"))
         or not re.fullmatch(r"[a-f0-9]{32}", value.get("operation", ""))
     ):
@@ -580,6 +588,10 @@ def stage_payload(manifest: dict, payload: dict) -> dict:
         if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
             raise RuntimeError("staged product artifact is missing or changed")
     write(directory / "manifest.json", json.dumps(manifest, sort_keys=True).encode())
+    if "ordinary_assets" in manifest:
+        if PYTHON_PREPARE is None:
+            raise RuntimeError("HA package checkpoint owner is unavailable")
+        PYTHON_PREPARE(manifest, directory)
     return {"manifest": digest(manifest), "runtime_plan": digest(manifest["runtime_plan"])}
 
 
@@ -647,7 +659,10 @@ def inhibit() -> None:
     if current_policy not in (value["policy"], transaction_policy):
         raise RuntimeError("package startup policy changed")
     # Persist intent first. A crash while publishing any subset remains resumable.
-    value["phase"] = "inhibited"
+    # Re-publishing the fence must retain an interrupted package subphase.
+    # Other phases lose activation authority before startup policy is changed.
+    if value["phase"] != "packages":
+        value["phase"] = "inhibited"
     save(value)
     source = Path(__file__).read_bytes() if "_SOURCE" not in globals() else globals()["_SOURCE"]
     write(
@@ -740,32 +755,79 @@ def install() -> None:
     CHECK()
     verify_inhibited()
     directory = verify_staged(approved)
-    value["phase"] = "packages"
-    save(value)
     current = packages()
+    # The database, not the last stdout or a lost SSH reply, selects remaining
+    # work. A half-installed archive must be unpacked again; an unpacked exact
+    # version only needs configuration. Never resolve a new closure here.
+    for name in set(approved["desired"]) | set(approved["remove"]):
+        observed = current.get(name)
+        versions = {
+            item[0]
+            for item in (approved["before"].get(name), approved["desired"].get(name))
+            if item is not None
+        }
+        if observed is not None and (
+            observed[0] not in versions
+            or observed[1]
+            not in {
+                "not-installed",
+                "config-files",
+                "half-installed",
+                "unpacked",
+                "half-configured",
+                "triggers-awaited",
+                "triggers-pending",
+                "installed",
+            }
+        ):
+            raise RuntimeError("runtime package changed outside the approved closure")
+
+    def phase(name: str) -> None:
+        CHECK()
+        value["phase"] = "packages"
+        value["package_step"] = name
+        save(value)
+
     remove = [
         name
         for name in approved["remove"]
         if current.get(name, [None, None])[1] not in {None, "not-installed", "config-files"}
     ]
     if remove:
+        phase("remove")
         run(["dpkg", "--remove", *remove], timeout=120)
-    if approved["archives"]:
+    unpack = [
+        name
+        for name, item in approved["archives"].items()
+        if current.get(item["package"], [None, None])[0] != item["version"]
+        or current.get(item["package"], [None, None])[1]
+        not in {"installed", "unpacked", "half-configured", "triggers-awaited", "triggers-pending"}
+    ]
+    if unpack:
+        phase("unpack")
         run(
             [
                 "dpkg",
                 "--unpack",
                 "--force-confold",
-                *(str(directory / name) for name in approved["archives"]),
+                *(str(directory / name) for name in unpack),
             ],
             timeout=120,
         )
-        run(["dpkg", "--configure", "--force-confold", *approved["install"]], timeout=120)
+    current = packages()
+    configure = [
+        name for name, desired in approved["desired"].items() if current.get(name) != desired
+    ]
+    if configure:
+        phase("configure")
+        run(["dpkg", "--configure", "--force-confold", *configure], timeout=120)
+    phase("verify")
     verify_packages(approved)
     run(["systemctl", "daemon-reload"])
     verify_inhibited()
     preserve_unit_policy(approved)
     value["phase"] = "installed"
+    value.pop("package_step", None)
     save(value)
 
 

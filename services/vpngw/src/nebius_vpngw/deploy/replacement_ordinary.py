@@ -14,7 +14,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from . import operator_guest, ordinary_apply, replacement_guard, replacement_routes, security_groups
+from . import (
+    operator_guest,
+    ordinary_apply,
+    replacement_guard,
+    replacement_routes,
+    replacement_runtime_routes,
+    security_groups,
+)
 from .operator_access import OperatorEnrollment, OperatorTarget
 from .replacement import Journal, Member, Plan, digest
 from .replacement_cloud import Cloud, resource_id, single_nic_status, source_spec_digest
@@ -214,11 +221,13 @@ class OrdinaryReplacement:
         rosters = [item["projection"]["operators"] for item in self.snapshots.values()]
         if any(value != rosters[0] for value in rosters[1:]):
             raise RuntimeError("Managed operator rosters differ across gateway members")
+        runtime, runtime_journal = replacement_runtime_routes.inspect(self, members)
         routes = replacement_routes.inventory(
             self.sdk,
             self.manager.project_id,
             {identifier for member in members for identifier in member.primary_allocations},
             gateway=self.deployment.gateway_group.name,
+            journal=runtime_journal,
         )
         configuration = configuration_digest(tuple(self.instances.values()))
         artifact = ordinary_apply.sha(self.wheel.read_bytes())
@@ -231,6 +240,7 @@ class OrdinaryReplacement:
                 artifact,
                 [asdict(member) for member in members],
                 routes,
+                runtime,
             ]
         )
         from dataclasses import replace
@@ -253,6 +263,7 @@ class OrdinaryReplacement:
             artifact,
             tuple(members),
             routes,
+            route_runtime=runtime,
         )
         self.validate_candidate_cloud_init(plan)
         return plan
@@ -268,6 +279,7 @@ class OrdinaryReplacement:
             )
 
     def settle(self, journal: Journal) -> None:
+        replacement_runtime_routes.before_settle(self, journal)
         cloud = Cloud(self.sdk, journal)
         replacement_routes.admit_replay(
             cloud, tuple(journal.state["transaction"]["plan"]["routes"])
@@ -338,6 +350,7 @@ class OrdinaryReplacement:
                 if configured != {"sha256": member["configured_policy_sha256"]}:
                     raise RuntimeError("Source VPN policy changed before replacement cutover")
                 self.snapshots[member["logical_name"]] = snapshot
+                replacement_runtime_routes.verify_source(self, journal, step=step)
         elif step == "retire" and cloud.get_instance(member["compute_id"], absent_ok=True) is None:
             if cloud.completed("retire-compute") is None:
                 raise RuntimeError("Source disappeared without the approved retirement receipt")
@@ -414,6 +427,7 @@ class OrdinaryReplacement:
             prepared.close()
         if receipt["receipt"]["boot_id"] != snapshot["context"]["boot"]:
             raise RuntimeError("Candidate rebooted during preparation")
+        replacement_runtime_routes.prepare_candidate(self, journal, target)
         return {"compute_id": target.compute_id, **receipt["receipt"]}
 
     def execute(self, journal: Journal, *, step: str, effect_id: str) -> dict:
@@ -431,6 +445,7 @@ class OrdinaryReplacement:
                 authorization=snapshot["projection"],
             )
             access, target = self.access(member["compute_id"], logical, cloud=cloud)
+            replacement_runtime_routes.reserve_source(self, journal)
             cloud.rename(
                 member["compute_id"], logical, logical=logical, role="source", label="mark-source"
             )
@@ -529,6 +544,7 @@ class OrdinaryReplacement:
             journal.save()
             return journal.state["bindings"][logical]
         if step == "activate":
+            replacement_runtime_routes.before_routes(self, journal)
             self._verify_allocations(journal)
             access, target, snapshot = self._verify_access(journal)
             self.request(
@@ -647,13 +663,15 @@ class OrdinaryReplacement:
         primary = str(
             single_nic_status(cloud.get_instance(target.compute_id)).ip_address.allocation_id
         )
-        replacement_routes.rebind(
-            cloud,
-            tuple(journal.state["transaction"]["plan"]["routes"]),
-            member["primary_allocations"][0],
-            primary,
-            verify_only=True,
-        )
+        if not replacement_runtime_routes.released(self, journal, target):
+            replacement_runtime_routes.before_routes(self, journal)
+            replacement_routes.rebind(
+                cloud,
+                tuple(journal.state["transaction"]["plan"]["routes"]),
+                member["primary_allocations"][0],
+                primary,
+                verify_only=True,
+            )
         return {
             "compute_id": target.compute_id,
             "boot_id": snapshot["context"]["boot"],
@@ -718,6 +736,7 @@ class OrdinaryReplacement:
                 role="active",
                 label="complete-candidate",
             )
+            replacement_runtime_routes.finish(self, journal, target)
 
     def terminal_receipt(self, journal: Journal) -> dict:
         """Independent terminal readback for the enclosing apply command."""

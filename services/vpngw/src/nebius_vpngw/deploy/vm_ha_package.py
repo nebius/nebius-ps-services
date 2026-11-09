@@ -4,24 +4,71 @@ from __future__ import annotations
 
 import tempfile
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from email.parser import BytesParser
 from pathlib import Path
 from typing import Any
 
 from packaging.utils import parse_wheel_filename
+from paramiko import AuthenticationException, SSHException  # type: ignore[import-untyped]
 
 from ..config_loader import InstanceResolvedConfig
 from ..ordinary_operations import digest
 from . import ordinary_apply
+from .apply_diagnostics import DiagnosticFailure, Failure, first_failure
 
 
-class VMHAAgentPackageError(RuntimeError):
+class VMHAAgentPackageError(DiagnosticFailure):
     """Package rejection composed only of fixed text and closed failure categories.
 
     Never construct this exception from raw SSH output, paths, or another
     exception's text: its message is safe for the operator-facing CLI.
     """
+
+
+@contextmanager
+def package_step(step: str) -> Iterator[None]:
+    """Preserve the first package boundary; never project arbitrary remote text."""
+    if step not in {
+        "package-admission",
+        "inspect-predecessor",
+        "checkpoint-admission",
+        "stage-payload",
+        "guarded-install",
+        "checkpoint-publication",
+        "handoff-package",
+    }:
+        raise ValueError("invalid package diagnostic step")
+    try:
+        yield
+    except Exception as error:
+        if first_failure(error) is not None:
+            raise
+        cause = next(
+            (
+                reason
+                for kind, reason in (
+                    (TimeoutError, "timeout"),
+                    (PermissionError, "permission"),
+                    (AuthenticationException, "authentication"),
+                    (SSHException, "ssh-transport"),
+                    (EOFError, "connection-closed"),
+                    (OSError, "io"),
+                    (ValueError, "invalid-data"),
+                    (RuntimeError, "runtime"),
+                )
+                if isinstance(error, kind)
+            ),
+            "unclassified",
+        )
+        detail = f"VM-HA package preparation failed at {step} ({cause})"
+        if isinstance(error, VMHAAgentPackageError):
+            detail += f": {error}"
+        failure = VMHAAgentPackageError(detail)
+        failure.first = Failure("prepare-packages", step + "-failed", ("cause-" + cause,))
+        raise failure from error
 
 
 # Deliberately owned here, rather than weakening the ordinary approval contract.
@@ -53,6 +100,14 @@ def artifact(wheel: Path, config: str) -> dict[str, Any]:
     manifest = ordinary_apply.artifact(wheel, config)
     manifest["ordinary_assets"] = manifest["assets"]
     with zipfile.ZipFile(wheel) as archive:
+        from ..handoff_bootstrap import SOURCES
+
+        for _module, relative in SOURCES:
+            if (
+                archive.read("nebius_vpngw/" + relative)
+                != (Path(__file__).parents[1] / relative).read_bytes()
+            ):
+                raise VMHAAgentPackageError("HA wheel must contain this CLI's exact package owner")
         codec = "agent/vm_ha_checkpoint.py"
         if (
             archive.read("nebius_vpngw/" + codec)
@@ -96,6 +151,7 @@ class VMHAPackagePlan:
     target_identity: str
     temporary: Any = field(repr=False)
     uploaded_payload_identity: str | None = field(default=None, repr=False)
+    reservation: dict | None = field(default=None, repr=False)
 
     @property
     def digest(self) -> str:
@@ -123,6 +179,7 @@ def verify_prepared(
     *,
     checkpoint_conversion: dict[str, str] | None = None,
     convert: bool = True,
+    allow_new_boot: bool = False,
 ) -> None:
     """Prove the approved installed package without replaying its old predecessor."""
 
@@ -135,7 +192,7 @@ def verify_prepared(
     )["observation"]
     manifest = plan.manifest
     if not (
-        current["boot_id"] == plan.observation["boot_id"]
+        (allow_new_boot or current["boot_id"] == plan.observation["boot_id"])
         and current["config_sha256"] == plan.observation["config_sha256"]
         and current["ha_config_digest"] == plan.observation["ha_config_digest"]
         and current["files"] == manifest["files"]
@@ -155,7 +212,7 @@ def verify_prepared(
         plan.instance,
         local,
         artifact=manifest["wheel_sha256"],
-        boot_id=plan.observation["boot_id"],
+        boot_id=current["boot_id"],
         # Read-only verification still needs the exact authority for an already
         # converted checkpoint whose activation receipt remains pending.
         expected=checkpoint_conversion,
@@ -173,6 +230,7 @@ def inspect_plan(
     wheel: Path | None = None,
     resume_parent: str | None = None,
     resume_manifest: dict | None = None,
+    reservation: dict | None = None,
 ) -> VMHAPackagePlan:
     if wheel is None:
         wheel = ssh._build_wheel(allow_installed_fallback=False)
@@ -180,7 +238,7 @@ def inspect_plan(
         raise RuntimeError("HA deployment requires a deployable agent wheel")
     manifest = artifact(wheel, instance.config_yaml)
     if resume_manifest is not None:
-        if resume_parent is None or any(
+        if (resume_parent is None and reservation is None) or any(
             resume_manifest[key] != manifest[key]
             for key in ("wheel_sha256", "config_sha256", "files", "assets")
         ):
@@ -188,6 +246,37 @@ def inspect_plan(
         manifest = dict(resume_manifest)
     if resume_parent is not None:
         manifest["ha_parent"] = resume_parent
+    if reservation is not None:
+        from .ordinary_handoff import inspect_reservation
+
+        envelope = reservation["request"]["package"]
+        if (
+            envelope["target"] != target_identity
+            or envelope["transport"] != target
+            or envelope["host"] != instance.hostname
+            or any(
+                envelope["desired"][key] != manifest[key]
+                for key in ("wheel_sha256", "config_sha256", "files", "assets")
+            )
+            or envelope["desired"].get("ha_parent") != resume_parent
+        ):
+            raise VMHAAgentPackageError("Saved package reservation differs from approved target")
+        observed = inspect_reservation(ssh, target, instance, local, reservation)
+        if observed["state"] == "BLOCKED":
+            raise VMHAAgentPackageError("Saved package owner authority is blocked")
+        if observed["state"] != "NOT_SUBMITTED":
+            return VMHAPackagePlan(
+                target,
+                instance,
+                wheel,
+                dict(envelope["desired"]),
+                dict(envelope["predecessor"]),
+                [],
+                list(envelope["effects"]),
+                target_identity,
+                tempfile.TemporaryDirectory(prefix="vpngw-ha-dependency-plan-"),
+                reservation=reservation,
+            )
     full_observation = ordinary_apply.remote(
         ssh, target, instance, local, {"action": "inspect-package", "manifest": manifest}
     )["observation"]
@@ -298,7 +387,7 @@ def stage(ssh: Any, plan: VMHAPackagePlan, local: dict, *, artifact: Any) -> dic
         }
     )
     request = {"action": "stage-package", "manifest": plan.manifest}
-    if plan.uploaded_payload_identity != payload_identity:
+    if plan.uploaded_payload_identity != payload_identity and plan.reservation is None:
         request.update(
             wheel=base64.b64encode(wheel).decode(),
             dependency_wheels={

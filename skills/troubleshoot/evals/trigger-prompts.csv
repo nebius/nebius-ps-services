@@ -40,3 +40,8 @@ feature-only,false,"Add a new storage selector to this configuration form."
 review-only,false,"Review this patch for regressions without diagnosing a current incident."
 troubleshoot-diagnosis-v3-positive,true,The active SDLC classifier requires diagnosis after a failed first validation repair before execution preparation; inspect its candidate evidence and return the causal handoff.
 troubleshoot-diagnosis-v3-negative,false,A first-time candidate formatting error already has a proven mechanical owner; apply its direct counted repair without another investigation.
+reclassify-resource-01,true,The service looks like a code regression but container throttling disagrees with host averages. Isolate the cause with read-only evidence.
+mixed-independent-01,true,Investigate this cross-boundary request failure with independent bounded read-only questions only where they help.
+gpu-stack-mismatch-01,true,This distributed GPU job fails only with one driver and runtime combination. Distinguish compatibility from fabric or application causes.
+known-driver-edit-01,false,The compatibility defect is proven and the exact dependency pin is approved. Make this one mechanical version edit.
+parallel-agent-design-01,false,Design a new general multi-agent orchestration platform; there is no failing workload to diagnose.

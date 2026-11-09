@@ -313,7 +313,7 @@ def native_paths(tmp_path, request):
             )
         gateway["connections"].append(connection)
     if request.param == "static-probes":
-        gateway["vm_ha"]["tunnel_probes"] = {
+        gateway["gateway"]["tunnel_probes"] = {
             name: {"source_ip": "10.200.1.1", "target_ip": "10.200.2.1"}
             for name in ("preferred", "backup")
         }
@@ -753,7 +753,7 @@ def test_static_switch_removes_orphans_after_real_daemon_crash(native_paths, ope
 
 
 @pytest.mark.parametrize("native_paths", ["bgp"], indirect=True)
-def test_unspecified_bgp_coverage_preserves_native_paths_and_rejects_selection(native_paths):
+def test_unspecified_bgp_coverage_preserves_native_paths_and_selects_learned_route(native_paths):
     gateway, peer, _ = native_paths[0]
     cfg = yaml.safe_load(gateway.config.read_text())
     connection = next(c for c in cfg["connections"] if c["name"] == "site")
@@ -764,13 +764,85 @@ def test_unspecified_bgp_coverage_preserves_native_paths_and_rejects_selection(n
     assert {"preferred", "backup", "unrelated"}.issubset(before)
     assert json.loads(drive(gateway, "tick")) == {}
     assert json.loads(drive(gateway, "reconcile")) == {}
-    with pytest.raises(AssertionError, match="selection is unavailable"):
-        drive(gateway, "failover")
+    outcome = json.loads(drive(gateway, "failover"))
+    assert outcome["phase"] == "succeeded"
+    assert outcome["selected"] == {"site": "backup"}
+    routes = json.loads(gateway.command("ip", "-j", "-4", "route", "show", "table", "main").stdout)
+    learned = [route for route in routes if route.get("dst") == "10.200.2.1"]
+    assert len(learned) == 1
+    assert learned[0]["dev"] == "xfrm1" and learned[0]["gateway"] == "169.254.2.2"
+    assert learned[0]["protocol"] == "bgp" and not learned[0].get("nexthops")
     assert identities(gateway) == before
     summary = json.loads(gateway.command("vtysh", "-c", "show bgp summary json").stdout)
     assert all(p["state"] == "Established" for p in summary["ipv4Unicast"]["peers"].values())
     for source, target in [(gateway, peer), (peer, gateway)]:
         source.command("ping", "-n", "-c", "3", "-W", "1", "-I", source.address, target.address)
+
+
+@pytest.mark.parametrize("native_paths", ["bgp"], indirect=True)
+def test_withdrawn_optional_bgp_prefix_retains_guard_without_blocking_health(native_paths):
+    gateway, peer, _ = native_paths[0]
+    cfg = yaml.safe_load(gateway.config.read_text())
+    cfg["connections"][0]["remote_prefixes"] = []
+    gateway.config.write_text(yaml.safe_dump(cfg))
+    assert drive(gateway, "protect-learned") == "learned-destination-protected"
+    assert drive(gateway, "health") == "healthy"
+    before = gateway.command("nft", "-j", "list", "table", "inet", "nebius_vpngw_forward").stdout
+    peer.command(
+        "vtysh",
+        "-c",
+        "configure terminal",
+        "-c",
+        "router bgp 65002",
+        "-c",
+        "address-family ipv4 unicast",
+        "-c",
+        "no network 10.200.2.1/32",
+    )
+
+    def withdrawn():
+        routes = json.loads(
+            gateway.command("ip", "-j", "-4", "route", "show", "table", "main").stdout
+        )
+        return not any(route.get("dst") in {"10.200.2.1", "10.200.2.1/32"} for route in routes)
+
+    wait_until(withdrawn)
+    assert drive(gateway, "health") == "healthy"
+    after = gateway.command("nft", "-j", "list", "table", "inet", "nebius_vpngw_forward").stdout
+    assert after == before
+    # A configured required destination remains mandatory despite the same withdrawal.
+    cfg["connections"][0]["remote_prefixes"] = ["10.200.2.1/32"]
+    gateway.config.write_text(yaml.safe_dump(cfg))
+    assert drive(gateway, "health") == "down"
+
+
+@pytest.mark.parametrize("native_paths", ["static-probes"], indirect=True)
+@pytest.mark.parametrize("ordinary", [False, True])
+def test_preferred_probe_uses_workload_target_while_backup_remains_selected(native_paths, ordinary):
+    gateway, peer, _ = native_paths[0]
+    if ordinary:
+        cfg = yaml.safe_load(gateway.config.read_text())
+        del cfg["vm_ha"]
+        gateway.config.write_text(yaml.safe_dump(cfg))
+    outcome = json.loads(drive(gateway, "failover"))
+    assert outcome["phase"] == "succeeded"
+    assert outcome["selected"] == {"site": "backup"}
+    # Managed Static VPN peers may not answer the synthetic inner address.
+    # Preserve the reachable, explicitly configured workload target instead.
+    peer.command("iptables", "-I", "INPUT", "-d", "169.254.1.2", "-p", "icmp", "-j", "DROP")
+    before = json.loads(gateway.command("ip", "-j", "-4", "route", "show", "table", "main").stdout)
+    end = time.monotonic() + 20
+    observed = []
+    while time.monotonic() < end:
+        observed.append(drive(gateway, "probe-preferred"))
+        if observed[-1] == "healthy":
+            break
+        time.sleep(1)
+    assert observed[-1] == "healthy", observed
+    after = json.loads(gateway.command("ip", "-j", "-4", "route", "show", "table", "main").stdout)
+    assert after == before
+    assert json.loads(drive(gateway, "tick")) == {"site": "backup"}
+    assert drive(gateway, "health") == "healthy"
 
 
 @pytest.mark.parametrize("native_paths", ["static-single"], indirect=True)
@@ -925,7 +997,7 @@ def test_native_path_failure_recovers_without_disturbing_other_connection(native
                 )
     finally:
         isolate_path(gateway, failed, enabled=False)
-    # Recovery does not automatically fail back a working Static selection.
+    # One recovery observation cannot satisfy the 60-second failback stability gate.
     if mode == "static":
         assert json.loads(drive(gateway, "tick")) == {"site": "backup"}
 
@@ -984,8 +1056,12 @@ def test_static_probe_loss_switches_with_live_ike_and_persisted_debounce(native_
 
 
 @pytest.mark.parametrize("native_paths", ["bgp", "bgp-no-advertise"], indirect=True)
-@pytest.mark.parametrize("scenario", ["activate", "verify", "release", "failed-selected"])
-def test_owner_bgp_restart_replays_only_after_fenced_activation(native_paths, scenario):
+@pytest.mark.parametrize(
+    "scenario", ["activate", "verify", "release", "failed-selected", "missing-protection"]
+)
+def test_owner_bgp_restart_replays_only_after_fenced_activation(
+    native_paths, scenario, record_property
+):
     gateway, _, _ = native_paths[0]
     try:
         result = subprocess.run(
@@ -1008,29 +1084,62 @@ def test_owner_bgp_restart_replays_only_after_fenced_activation(native_paths, sc
             check=True,
             timeout=60,
         )
-    except subprocess.CalledProcessError as error:
-        pytest.fail(f"Restart driver failed:\n{error.stdout[-3500:]}\n{error.stderr[-3500:]}")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        # The harness retains the full stream. Truncation loses the transition
+        # that distinguishes slow effects from a stalled controller.
+        for stream in ("stdout", "stderr"):
+            value = getattr(error, stream) or ""
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", errors="replace")
+            record_property(f"restart_driver.{stream}", value)
+        pytest.fail(f"Restart driver {type(error).__name__}:\n{error.stdout}\n{error.stderr}")
+    record_property("restart_driver.stdout", result.stdout)
+    record_property("restart_driver.stderr", result.stderr)
     row = json.loads(result.stdout.strip().splitlines()[-1])
     assert row["active"]
     assert row["phase"] == ("failed" if scenario in {"release", "failed-selected"} else "succeeded")
 
 
+def owner_coverage_driver(gateway, record_property, *scenario):
+    assert gateway.process.poll() is None, "fixture charon exited"
+    try:
+        result = subprocess.run(
+            [
+                "nsenter",
+                "-t",
+                str(gateway.process.pid),
+                "-m",
+                "-n",
+                "--",
+                "env",
+                "PYTHONPATH=/workspace/src:/workspace",
+                sys.executable,
+                "/workspace/tests/systemd/ha_bgp_owner_driver.py",
+                str(gateway.config),
+                *scenario,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=20,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        for stream in ("stdout", "stderr"):
+            value = getattr(error, stream) or ""
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", errors="replace")
+            record_property(f"owner_driver.{stream}", value)
+        pytest.fail(f"Owner coverage driver {type(error).__name__}:\n{error.stdout}\n{error.stderr}")
+    record_property("owner_driver.stdout", result.stdout)
+    record_property("owner_driver.stderr", result.stderr)
+    return result
+
+
 @pytest.mark.parametrize("native_paths", ["bgp", "bgp-no-advertise"], indirect=True)
-def test_owner_bgp_sa_loss_retains_native_alternative_coverage(native_paths):
+def test_owner_bgp_sa_loss_retains_native_alternative_coverage(native_paths, record_property):
     gateway, peer, _ = native_paths[0]
     before = identities(gateway)
-    try:
-        result = gateway.command(
-            "env",
-            "PYTHONPATH=/workspace/src:/workspace",
-            sys.executable,
-            "/workspace/tests/systemd/ha_bgp_owner_driver.py",
-            str(gateway.config),
-        )
-    except subprocess.CalledProcessError as error:
-        pytest.fail(
-            f"Owner coverage driver failed:\n{error.stdout[-4000:]}\n{error.stderr[-4000:]}"
-        )
+    result = owner_coverage_driver(gateway, record_property)
     rows = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
     assert [row["label"] for row in rows] == [
         "baseline",
@@ -1047,17 +1156,10 @@ def test_owner_bgp_sa_loss_retains_native_alternative_coverage(native_paths):
 
 
 @pytest.mark.parametrize("native_paths", ["bgp-graceful"], indirect=True)
-def test_retained_graceful_bgp_route_does_not_prove_coverage(native_paths):
+def test_retained_graceful_bgp_route_does_not_prove_coverage(native_paths, record_property):
     gateway, _, _ = native_paths[0]
     before = identities(gateway)
-    result = gateway.command(
-        "env",
-        "PYTHONPATH=/workspace/src:/workspace",
-        sys.executable,
-        "/workspace/tests/systemd/ha_bgp_owner_driver.py",
-        str(gateway.config),
-        "stale",
-    )
+    result = owner_coverage_driver(gateway, record_property, "stale")
     rows = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
     assert rows[-1]["label"] == "retained-route-not-coverage"
     assert "bgp-not-ready" in rows[-1]["readiness"]

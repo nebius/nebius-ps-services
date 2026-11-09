@@ -141,6 +141,7 @@ def endpoints(tmp_path, request):
                 },
                 "connections": [
                     {
+                        "name": "fixture",
                         "routing_mode": "static",
                         "tunnels": [
                             {

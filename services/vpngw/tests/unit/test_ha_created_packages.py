@@ -20,7 +20,7 @@ class Artifact:
 
 
 @pytest.fixture
-def trial(monkeypatch):
+def trial(monkeypatch, tmp_path):
     members = tuple(
         NS(
             instance_name=f"gw-{i}",
@@ -86,6 +86,7 @@ def trial(monkeypatch):
     monkeypatch.setattr(subject.vm_ha_package, "inspect_plan", inspect)
     monkeypatch.setattr(subject.vm_ha_package, "stage", stage)
     command = NS(
+        journal=NS(root=tmp_path),
         execution_id="e" * 32,
         intent={
             "packages": {"parent": "operation"},

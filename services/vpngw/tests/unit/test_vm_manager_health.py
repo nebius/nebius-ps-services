@@ -499,6 +499,17 @@ def test_vm_ha_migration_recovers_the_retained_ordinary_host_identity(
     assert recovered["gateway-0"].private_key == b"private-host-key"
     assert recovered["gateway-0"].assert_current is assertions["gateway-0"]
 
+    # A successful Compute reread with changed identity is still rejected as drift.
+    monkeypatch.setattr(
+        manager,
+        "_vm_ha_ssh_member_signature",
+        lambda instance: (
+            signature if instance is retained else (*signature[:3], "8", *signature[4:])
+        ),
+    )
+    with pytest.raises(RuntimeError, match="SSH recovery evidence changed"):
+        assertions["gateway-0"]()
+
 
 @pytest.mark.parametrize(
     "lifecycle_status",

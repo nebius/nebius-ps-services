@@ -15,7 +15,7 @@ from nebius_vpngw.agent.vm_ha.tunnels import Authority, Health, TunnelController
 from nebius_vpngw.agent.vm_ha_controller import DataPlaneMode
 
 
-def restart_runtime(tmp_path):
+def restart_runtime(tmp_path, mode=DataPlaneMode.PASSIVE):
     cfg = config("bgp")
     cfg["vm_ha"].update(
         node={"node_id": "node-b"},
@@ -28,7 +28,7 @@ def restart_runtime(tmp_path):
     authority = Authority("cluster", "node-b", "allocation", "42", 0, "a" * 64)
     snapshot = _snapshot(
         cloud=_owned_cloud(),
-        data_plane_mode=DataPlaneMode.PASSIVE,
+        data_plane_mode=mode,
         peer_heartbeat=replace(_peer(), tunnel_capability=True),
         peer_received_at=100.0,
     )
@@ -56,8 +56,9 @@ def restart_runtime(tmp_path):
 
 
 @pytest.mark.parametrize("phase", ["activate", "verify"])
-def test_pending_bgp_cannot_advance_while_passive(tmp_path, phase):
-    runtime, selector, effects, _ = restart_runtime(tmp_path)
+@pytest.mark.parametrize("mode", [DataPlaneMode.PASSIVE, DataPlaneMode.ORIGINATING])
+def test_pending_bgp_cannot_advance_while_fenced(tmp_path, phase, mode):
+    runtime, selector, effects, _ = restart_runtime(tmp_path, mode)
     selector.state["selected"] = {"site": "backup"}
     selector.state["operation"].update(phase=phase, successes=1)
     selector._save()
@@ -68,6 +69,50 @@ def test_pending_bgp_cannot_advance_while_passive(tmp_path, phase):
     assert state["operation"]["phase"] == phase
     assert state["operation"]["successes"] == 0
     assert state["operation"]["deadline"] == deadline
+
+
+@pytest.mark.parametrize("health", [Health.DOWN, Health.UNKNOWN, Health.HEALTHY])
+def test_origination_reconsiders_failed_selection_without_native_effects(tmp_path, health):
+    runtime, selector, effects, _ = restart_runtime(tmp_path, DataPlaneMode.ORIGINATING)
+    selector.state["selected"] = {"site": "backup"}
+    selector._save()
+    before = deepcopy(selector.state["operation"])
+    effects.health["backup"] = health
+    runtime.step()
+    state = read_state(selector.path)
+    assert state["selected"] == ({} if health is Health.DOWN else {"site": "backup"})
+    assert state["operation"]["verb"] == ("release" if health is Health.DOWN else "failover")
+    assert all(
+        state["operation"][key] == before[key] for key in ("id", "deadline", "attempt_deadline")
+    )
+    assert effects.calls == []
+    assert runtime.authority() is None
+
+
+@pytest.mark.parametrize(
+    "condition",
+    ["apply-lock", "inhibited", "attachment", "unknown-cloud", "stale-peer", "generation", "boot"],
+)
+def test_origination_intent_recovery_requires_current_authority(tmp_path, condition):
+    runtime, selector, effects, _ = restart_runtime(tmp_path, DataPlaneMode.ORIGINATING)
+    selector.state["selected"] = {"site": "backup"}
+    selector._save()
+    effects.health["backup"] = Health.DOWN
+    snapshot = runtime.controller.snapshots.last_snapshot
+    changes = {
+        "apply-lock": {"apply_locked": True},
+        "inhibited": {"transfer_inhibited": True},
+        "attachment": {"cloud": replace(snapshot.cloud, candidate_attachment_exact=False)},
+        "unknown-cloud": {"cloud": replace(snapshot.cloud, authoritative=False)},
+        "stale-peer": {"peer_received_at": 1.0},
+        "generation": {"local_generation_id": "b" * 64},
+        "boot": {"guard_boot_id": "old-boot"},
+    }
+    runtime.controller.snapshots.observe = lambda: replace(snapshot, **changes[condition])
+    before = selector.path.read_bytes()
+    runtime.step()
+    assert selector.path.read_bytes() == before
+    assert effects.calls == []
 
 
 @pytest.mark.parametrize("phase", ["activate", "verify", "succeeded"])

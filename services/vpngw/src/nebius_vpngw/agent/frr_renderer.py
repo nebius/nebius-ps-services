@@ -260,7 +260,8 @@ class FRRRenderer:
         # Passive-role tunnels:
         #   - local-preference 100 (inbound, LOCAL only) = standby for outbound
         #   - MED 100/1100 (outbound, TRANSMITTED to peer) = peer deprioritizes this tunnel
-        # This prevents ECMP on both sides and ensures symmetric routing
+        # These preferences order local paths. Return-path selection depends
+        # on the remote peer's policy and treatment of MED.
         if tunnels_by_localpref[200]:
             lines.append("!")
             lines.append("! Active/Passive HA: Active tunnel route-map")

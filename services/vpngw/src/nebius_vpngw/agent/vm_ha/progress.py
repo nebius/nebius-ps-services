@@ -21,6 +21,7 @@ TRANSFER_PROGRESS_ACTIONS = frozenset(
         "attach-candidate",
         "confirm-candidate-ownership",
         "prepare-candidate-dataplane",
+        "prepare-owner-origination",
         "reconcile-routes",
         "enable-active",
     }

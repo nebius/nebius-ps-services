@@ -46,6 +46,7 @@ from .vm_ha.auto_healing import (
     AutoHealingPolicyPhase,
     AutoHealingPolicyRecord,
     AutoHealingPolicyStore,
+    AutoHealingPolicyUnavailable,
     AutoHealingRecoveryPhase,
     AutoHealingRecoveryRecord,
     AutoHealingRecoveryStore,
@@ -53,6 +54,7 @@ from .vm_ha.auto_healing import (
     decode_policy_request,
     load_peer_policy_heartbeat,
     peer_policy_agrees,
+    peer_policy_evidence_reason,
     require_auto_healing_transactions_quiescent,
     require_auto_healing_writer_quiescent,
 )
@@ -69,6 +71,7 @@ from .vm_ha.inhibition import (
 from .vm_ha.models import (
     DigestSet,
     PeerHeartbeat,
+    RepairDisposition,
     StalePeerStateError,
     StateValidationError,
 )
@@ -1101,6 +1104,7 @@ _TRANSFER_EFFECT_ACTIONS = frozenset(
         ActionKind.ATTACH_CANDIDATE,
         ActionKind.CONFIRM_CANDIDATE_OWNERSHIP,
         ActionKind.PREPARE_CANDIDATE_DATAPLANE,
+        ActionKind.PREPARE_OWNER_ORIGINATION,
         ActionKind.RECONCILE_ROUTES,
         ActionKind.ENABLE_ACTIVE,
     }
@@ -1109,6 +1113,7 @@ _TRANSFER_EFFECT_ACTIONS = frozenset(
 _INITIAL_OWNER_RECONCILIATION_ACTIONS = frozenset(
     {
         ActionKind.PREPARE_CANDIDATE_DATAPLANE,
+        ActionKind.PREPARE_OWNER_ORIGINATION,
         ActionKind.RECONCILE_ROUTES,
         ActionKind.ENABLE_ACTIVE,
     }
@@ -1893,7 +1898,7 @@ class VMHAEffectAdapter:
 
     def __init__(
         self,
-        handlers: Mapping[ActionKind, Callable[[ControllerAction], None]],
+        handlers: Mapping[ActionKind, Callable[[ControllerAction], None | RepairDisposition]],
         *,
         receipt_path: Path = VM_HA_EFFECT_RECEIPT_PATH,
         clock: Callable[[], float] = time.monotonic,
@@ -1958,6 +1963,7 @@ class VMHAEffectAdapter:
                     ActionKind.DISABLE_ACTIVE,
                     ActionKind.REPAIR_LOCAL_DATAPLANE,
                     ActionKind.PREPARE_CANDIDATE_DATAPLANE,
+                    ActionKind.PREPARE_OWNER_ORIGINATION,
                     ActionKind.ENABLE_ACTIVE,
                 },
             )
@@ -1978,7 +1984,10 @@ class VMHAEffectAdapter:
             # controller has independently re-proved replay safety, so the
             # idempotent handler must re-establish the postcondition.
         try:
-            self.handlers[action.kind](action)
+            disposition = self.handlers[action.kind](action)
+            if disposition is RepairDisposition.DEFERRED:
+                self._event(action, event="deferred", started_at=started_at)
+                return
             _atomic_write_json(
                 self.receipt_path,
                 {
@@ -2349,6 +2358,10 @@ class VMHAControllerRuntime:
                     peer is not None and peer.local_health_fresh(snapshot.now)
                 ),
             },
+            "origination": {
+                "required": snapshot.readiness.origination_required,
+                "ready": snapshot.readiness.origination_ready,
+            },
             "reasons": list(result.reasons),
             "recovery_action": None,
             "controller_ready_boot_id": snapshot.boot_id if ready else None,
@@ -2603,7 +2616,7 @@ class DefaultVMHAControllerRuntime:
             isinstance(guard, dict)
             and guard.get("schema") == _STATUS_SCHEMA
             and guard.get("guard_boot_id") == self.boot_id
-            and guard.get("data_plane_mode") in {"active", "passive"}
+            and guard.get("data_plane_mode") in {"active", "passive", "originating"}
             and isinstance(data_plane, dict)
             and data_plane.get("schema") == "nebius-vpngw/vm-ha-data-plane-v1"
             and data_plane.get("boot_id") == self.boot_id
@@ -2845,6 +2858,32 @@ def _prepare_vm_ha_active_data_plane(config_path: Path) -> None:
     )
 
 
+def _vm_ha_origination_policy_ready(config_path: Path) -> bool:
+    from .frr_renderer import FRR_CONF
+    from .ordinary import frr_policy_rows
+
+    try:
+        resolved = _resolved_vm_ha_data_plane_config(config_path)
+        files: dict[Path, str | None] = {}
+        FRRRenderer().render_and_apply(
+            resolved, advertise_local_prefixes=True, rendered_files=files
+        )
+        observed = subprocess.run(
+            ["vtysh", "-c", "show running-config"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        return bool(
+            observed.returncode == 0
+            and files.get(FRR_CONF)
+            and frr_policy_rows(files[FRR_CONF] or "") == frr_policy_rows(observed.stdout)
+        )
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        return False
+
+
 def _prepare_vm_ha_static_tunnels(config_path: Path) -> None:
     """Materialize the effective owner policy while forwarding remains fenced."""
     from .strongswan_renderer import SWANCTL_CONF, _write_secret_file
@@ -2910,6 +2949,7 @@ def build_default_vm_ha_controller_runtime(
         identity_proof_mode=identity_proof_mode,
         systemd_invocation_id=systemd_invocation_id,
         active_preparer=lambda: _prepare_vm_ha_active_data_plane(config_path),
+        origination_verifier=lambda: _vm_ha_origination_policy_ready(config_path),
         blocked_preparer=lambda: _prepare_vm_ha_blocked_bgp(config_path),
         candidate_preparer=lambda: _prepare_vm_ha_static_tunnels(config_path),
     )
@@ -2992,7 +3032,7 @@ def build_vm_ha_controller_runtime(
     *,
     config_path: Path,
     providers: VMHASnapshotProviders,
-    handlers: Mapping[ActionKind, Callable[[ControllerAction], None]],
+    handlers: Mapping[ActionKind, Callable[[ControllerAction], None | RepairDisposition]],
     state_dir: Path = VM_HA_STATE_DIR,
     clock: Callable[[], float] = time.time,
     boot_id: Callable[[], str] = _boot_id,
@@ -3750,6 +3790,7 @@ def vm_ha_auto_healing_policy(
     store = AutoHealingPolicyStore(state_dir)
     recovery_store = AutoHealingRecoveryStore(state_dir)
 
+    policy_reason: str | None = None
     descriptor: int | None = None
     if action != "status":
         from .vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
@@ -4082,8 +4123,12 @@ def vm_ha_auto_healing_policy(
                     peer_node_id=peer.node_id,
                     generation_id=binding.generation_id,
                 )
+            except AutoHealingPolicyUnavailable:
+                record = None
+                policy_reason = "standby-auto-healing-policy-unavailable"
             except AutoHealingPolicyError:
                 record = None
+                policy_reason = "standby-auto-healing-policy-invalid"
     finally:
         if descriptor is not None:
             os.close(descriptor)
@@ -4120,7 +4165,10 @@ def vm_ha_auto_healing_policy(
             )
         )
     )
+    if record is not None and not peer_agrees:
+        policy_reason = peer_policy_evidence_reason(record, peer_heartbeat, now=clock())
     return {
+        "evidence_reason": policy_reason,
         "schema": AUTO_HEALING_STATUS_SCHEMA,
         "cluster_id": binding.cluster_id,
         "node_id": local.node_id,
@@ -4200,12 +4248,23 @@ def _project_auto_healing_status(
         else:
             state = desired
         projected["auto_healing"] = {
+            "evidence_reason": (
+                "standby-auto-healing-policy-invalid"
+                if state == "blocked"
+                and restoration is not None
+                and restoration.phase is not RestorationPhase.COMPLETED
+                and not restoration_matches_policy
+                else status.get("evidence_reason")
+            ),
             "state": state,
             "peer_agrees": bool(peer_agrees),
             "accepted_start": bool(status["accepted_start"]),
         }
-    except (AutoHealingPolicyError, StandbyRestorationError, OSError, ValueError):
+    except (AutoHealingPolicyError, StandbyRestorationError, OSError, ValueError) as error:
         projected["auto_healing"] = {
+            "evidence_reason": "standby-auto-healing-policy-unavailable"
+            if isinstance(error, (AutoHealingPolicyUnavailable, OSError))
+            else "standby-auto-healing-policy-invalid",
             "state": "blocked",
             "peer_agrees": False,
             "accepted_start": (state_dir / "rearm-cloud-operation.json").exists(),
@@ -5195,6 +5254,15 @@ class Agent:
         ):
             raise RuntimeError("force-reconcile authority is incomplete")
 
+        from ..ha_activation import command_deadline
+        from .local_commands import CURRENT, CommandBudget
+
+        activation_deadline = (
+            command_deadline(state_dir=VM_HA_STATE_DIR)
+            if CONFIG_PATH.exists() and _read_vm_ha_config(CONFIG_PATH) is not None
+            else None
+        )
+        activation_token = None
         rearm_lock_fd = None
         mtls_lock_fd = None
         if CONFIG_PATH.exists():
@@ -5208,7 +5276,13 @@ class Agent:
 
                 rearm_lock_fd = _acquire_rearm_lock(
                     VM_HA_STATE_DIR / REARM_LOCK_PATH.name,
-                    timeout_seconds=0.0 if force_reconcile else 10.0,
+                    timeout_seconds=0.0
+                    if force_reconcile
+                    else (
+                        min(10.0, max(0.0, activation_deadline - time.monotonic()))
+                        if activation_deadline is not None
+                        else 10.0
+                    ),
                 )
                 if rearm_lock_fd is None:
                     if force_reconcile:
@@ -5234,6 +5308,8 @@ class Agent:
 
         lock_fd = None
         try:
+            if activation_deadline is not None:
+                activation_token = CURRENT.set(CommandBudget(activation_deadline))
             try:
                 lock_fd = acquire_routing_lock(blocking=True)
             except Exception as e:
@@ -5283,7 +5359,27 @@ class Agent:
                             guard = json.loads(VM_HA_GUARD_PATH.read_text(encoding="utf-8"))
                         except (OSError, json.JSONDecodeError):
                             guard = {}
-                        if isinstance(guard, dict) and guard.get("data_plane_mode") == "active":
+                        if (
+                            isinstance(guard, dict)
+                            and guard.get("data_plane_mode") == "originating"
+                        ):
+                            generation = vm_ha_config.get("generation") or {}
+                            node = vm_ha_config.get("node") or {}
+                            if (
+                                guard.get("guard_boot_id") == _boot_id()
+                                and guard.get("generation_id") == generation.get("generation_id")
+                                and guard.get("digests") == generation.get("digests")
+                                and guard.get("node_id") == node.get("node_id")
+                                and not force_reconcile
+                            ):
+                                print(
+                                    "[Agent] Owner origination is controlled by the fenced HA phase"
+                                )
+                                return
+                        if isinstance(guard, dict) and guard.get("data_plane_mode") in {
+                            "active",
+                            "originating",
+                        }:
                             if lock_fd is not None:
                                 _install_vm_ha_cold_start_guard_locked(
                                     state_dir=VM_HA_STATE_DIR, boot_id=_boot_id()
@@ -5304,6 +5400,8 @@ class Agent:
                     raise RuntimeError("passive materialization requires the routing lock")
                 if vm_ha_config is None:
                     raise RuntimeError("passive materialization lost VM-HA configuration")
+                if CURRENT.get() is None:
+                    activation_token = CURRENT.set(CommandBudget(time.monotonic() + 120))
                 update_firewall_from_config(cfg, require_reload=True)
                 cfg = {**cfg, "_ha_static_passive": True}
                 interface_endpoints = self.ss.render_and_apply(cfg)
@@ -5316,6 +5414,9 @@ class Agent:
                     prepare_vm_ha_controller_access=True,
                 )
                 enforce_vm_ha_passive_routing_hygiene_locked(cfg)
+                budget = CURRENT.get()
+                if budget is not None:
+                    budget.require_success()
                 self.state.save_last_applied(configured)
                 _atomic_write_json(
                     VM_HA_MATERIALIZATION_PATH,
@@ -5390,6 +5491,8 @@ class Agent:
             else:
                 enforce_routing_invariants(cfg)
         finally:
+            if activation_token is not None:
+                CURRENT.reset(activation_token)
             if lock_fd is not None:
                 try:
                     os.close(lock_fd)
@@ -5408,7 +5511,14 @@ class Agent:
 
 
 def _run_agent() -> None:
+    from .ordinary_cloud_routes import PERIOD_SECONDS, OrdinaryCloudRoutes
+    from .ordinary_selection import OrdinarySelectionRuntime, PendingSelection
+
     agent = Agent()
+    selection = OrdinarySelectionRuntime()
+    cloud_routes = OrdinaryCloudRoutes()
+    next_routes = 0.0
+    next_selection = 0.0
     reload_requested = True
 
     def handle_reload(signum, frame):
@@ -5417,17 +5527,40 @@ def _run_agent() -> None:
 
     signal.signal(signal.SIGHUP, handle_reload)
     print("[Agent] Running; await SIGHUP for reload")
-    while True:
-        try:
-            if reload_requested:
-                reload_requested = False
-                agent.reload()
-            # Keep signal handlers free of locks and I/O. A bounded wait avoids
-            # losing a signal between checking the flag and entering pause().
-            time.sleep(0.1)
-        except KeyboardInterrupt:
-            print("[Agent] Received interrupt, exiting")
-            break
+    try:
+        while True:
+            try:
+                if reload_requested:
+                    reload_requested = False
+                    try:
+                        agent.reload()
+                    except PendingSelection:
+                        reload_requested = True
+                if time.monotonic() >= next_selection:
+                    try:
+                        selection.step()
+                    except (OSError, RuntimeError, ValueError):
+                        print(
+                            "[Agent] Ordinary selection deferred; authority or observation unavailable"
+                        )
+                    next_selection = time.monotonic() + 1
+                if time.monotonic() >= next_routes:
+                    try:
+                        cloud_routes.step()
+                    except Exception:
+                        cloud_routes.absence.unknown()
+                        print(
+                            "[Agent] Ordinary cloud routes deferred; authority or observation unavailable"
+                        )
+                    next_routes = time.monotonic() + PERIOD_SECONDS
+                # Keep signal handlers free of locks and I/O. A bounded wait avoids
+                # losing a signal between checking the flag and entering pause().
+                time.sleep(0.1)
+            except KeyboardInterrupt:
+                print("[Agent] Received interrupt, exiting")
+                break
+    finally:
+        cloud_routes.close()
 
 
 def main() -> None:
@@ -5436,11 +5569,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(add_help=True)
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--ordinary-apply", metavar="BASE64_JSON", help=argparse.SUPPRESS)
+    group.add_argument("--ordinary-tunnel-request", metavar="BASE64_JSON", help=argparse.SUPPRESS)
+    group.add_argument("--ordinary-tunnel-status", action="store_true", help=argparse.SUPPRESS)
     group.add_argument("--vm-ha-guard", action="store_true")
     group.add_argument("--vm-ha-controller", action="store_true")
     group.add_argument("--vm-ha-preflight", action="store_true")
     group.add_argument("--vm-ha-status", action="store_true")
     group.add_argument("--vm-ha-tunnel-status", action="store_true")
+    group.add_argument("--ordinary-route-status", action="store_true", help=argparse.SUPPRESS)
     group.add_argument("--vm-ha-tunnel-request", metavar="BASE64_JSON")
     group.add_argument("--vm-ha-ready", action="store_true")
     group.add_argument("--vm-ha-route-maintenance-ready", action="store_true")
@@ -5497,6 +5633,15 @@ def main() -> None:
             "Replacement candidate is passive; complete the approved cutover before agent activation"
         )
 
+    if args.ordinary_route_status:
+        from .ordinary_cloud_routes import status as route_status
+
+        print(json.dumps(route_status(), sort_keys=True))
+        raise SystemExit(0)
+    if args.ordinary_tunnel_request or args.ordinary_tunnel_status:
+        from .ordinary_selection import action as selection_action
+
+        raise SystemExit(selection_action(args.ordinary_tunnel_request))
     if args.ordinary_apply:
         from .ordinary import action
 
@@ -5521,6 +5666,7 @@ def main() -> None:
                 {
                     "features": [
                         "independent-heartbeat-v6",
+                        "bounded-ha-activation-v1",
                         "connection-tunnel-selection-v1",
                         "ordinary-apply-v1",
                         "managed-peer-ingress-v2",

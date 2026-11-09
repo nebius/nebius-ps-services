@@ -51,7 +51,7 @@ def test_shipped_shared_static_example_passes_real_verifier(monkeypatch, ordinar
     state = ordinary_static_observer(cfg)
     state.routes = write_routes(monkeypatch, cfg)
     assert state.routes == [
-        {"dst": "192.168.0.0/16", "dev": "xfrm1", "protocol": "boot", "scope": "link"}
+        {"dst": "192.168.0.0/16", "dev": "xfrm0", "protocol": "boot", "scope": "link"}
     ]
     assert len(ordinary.observe_local(cfg)) == 64
 
@@ -66,9 +66,9 @@ def test_shared_destination_requires_only_the_selected_owner(
     if fault == "missing":
         state.routes.clear()
     elif fault == "wrong":
-        state.routes[0]["dev"] = "xfrm0"
+        state.routes[0]["dev"] = "xfrm1"
     elif fault == "loser":
-        state.routes.append(dict(state.routes[0], dev="xfrm0", metric=50))
+        state.routes.append(dict(state.routes[0], dev="xfrm1", metric=50))
     else:
         state.routes.append(
             {"dst": "192.168.0.0/16", "nexthops": [{"dev": "xfrm0"}, {"dev": "xfrm1"}]}
@@ -83,11 +83,11 @@ def test_connected_subnet_cannot_disguise_a_losing_static_route(
 ):
     cfg = shared_config()
     cfg["connections"][0]["remote_prefixes"] = ["169.254.10.0/30"]
-    tunnel = cfg["connections"][0]["tunnels"][0]
+    tunnel = cfg["connections"][0]["tunnels"][1]
     tunnel.update(inner_cidr="169.254.10.0/30", inner_local_ip="169.254.10.1")
     state = ordinary_static_observer(cfg)
     state.routes = write_routes(monkeypatch, cfg)
-    connected = {"dst": "169.254.10.0/30", "dev": "xfrm0", "protocol": "kernel", "scope": "link"}
+    connected = {"dst": "169.254.10.0/30", "dev": "xfrm1", "protocol": "kernel", "scope": "link"}
     if kind == "numeric-kernel":
         connected.update(protocol=2, scope=253)
     elif kind == "boot":
@@ -123,7 +123,7 @@ def test_effective_selection_matches_existing_writer_without_changing_claims(
     projection = routes.projection(cfg)
     before = copy.deepcopy(projection)
     actual = {row["dst"]: row["dev"] for row in write_routes(monkeypatch, cfg)}
-    assert routes.effective_static_routes(projection) == actual
+    assert routes.effective_static_routes(routes.projection(cfg, effective=True)) == actual
     assert projection == before
     if transition in {"same", "reorder"}:
         assert routes.keys(projection, static_only=True) == {

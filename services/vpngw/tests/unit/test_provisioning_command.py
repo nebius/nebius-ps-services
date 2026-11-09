@@ -353,6 +353,7 @@ def test_public_apply_runs_fresh_owners_in_order_without_legacy_ensure(
         events.append("routes")
         command.journal.started("routes")
         command.journal.verified("routes", {"fixture": "route-owner-receipt"})
+        return {"connectivity": "unknown"}
 
     monkeypatch.setattr(owner.ProvisioningCommand, "bind_routes", routes)
     monkeypatch.setattr(owner.ProvisioningCommand, "finish_routes", finish)

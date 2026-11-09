@@ -24,6 +24,7 @@ class Outcome(str, Enum):
     APPLIED = "applied"
     RESUMED = "resumed"
     BLOCKED = "blocked"
+    PENDING = "pending"
     FAILED = "failed"
 
 

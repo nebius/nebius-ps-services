@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Generic
 
 import yaml
 
@@ -55,6 +55,7 @@ from .tunnel_observation import (
 from .tunnels import (
     STATE_NAME,
     Authority,
+    AuthorityT,
     Health,
     TunnelController,
     TunnelScopeError,
@@ -133,14 +134,15 @@ def reconcile_inactive_static(
     effective = load_effective_config(cfg, state_dir)
     if not candidate:
         effective = {**effective, "_ha_static_passive": True}
-    expected = authorized_configuration(effective)
+    current = effective
+    expected = authorized_configuration(current)
     deadline = time.monotonic() + 30.0
 
     def revalidate(_authority: Authority) -> bool:
         return (
             time.monotonic() < deadline
             and permitted(deadline)
-            and authorized_configuration(effective) == expected
+            and authorized_configuration(current) == expected
             and time.monotonic() < deadline
         )
 
@@ -155,62 +157,224 @@ def reconcile_inactive_static(
         command_runner=runner,
     )
     effects.effect_deadline = deadline
+
+    def install(configuration: dict[str, Any]) -> None:
+        nonlocal current, expected
+        if not revalidate(authority):
+            raise RuntimeError("inactive Static teardown lost its fenced authority")
+        effects._write_swan_config(configuration)
+        current = configuration
+        expected = authorized_configuration(current)
+        if not revalidate(authority):
+            raise RuntimeError("inactive Static teardown lost its fenced authority")
+        effects.run(("swanctl", "--load-all", "--noprompt"))
+        if not revalidate(authority):
+            raise RuntimeError("inactive Static teardown lost its fenced authority")
+
+    selected = selections(effective)
     for policy in connection_policies(cfg):
         if policy.mode != "static":
             continue
-        inactive = tuple(path for path in policy.paths if path.name not in expected.connections)
+        inactive = tuple(
+            path
+            for path in policy.paths
+            if path.name not in expected.connections
+            or candidate
+            and policy.name in selected
+            and path.name != selected[policy.name]
+        )
         if inactive:
-            effects._remove_orphan_kernel_objects(replace(policy, paths=inactive), authority)
+            scope = replace(policy, paths=inactive)
+            if candidate:
+                # Loaded responder configurations are not evidence that their
+                # kernel objects belong to the current daemon. Fence just these
+                # paths before exact teardown, preserving the selected path and
+                # unrelated connections, then restore responder readiness.
+                names = {path.name for path in inactive}
+                scoped_ike_ids(effects.run(ipsec_observation.command()), names)
+                effects._kernel_deletions(scope)
+                install({**effective, "_ha_suspended_tunnels": sorted(names)})
+                effects._terminate_unloaded(scope, authority)
+            effects._remove_orphan_kernel_objects(scope, authority)
+            if candidate:
+                install(effective)
     if not revalidate(authority):
         raise RuntimeError("inactive Static teardown lost its fenced authority")
 
 
-class NativeTunnelEffects:
+class NativeTunnelEffects(Generic[AuthorityT]):
     def __init__(
         self,
         cfg: dict[str, Any],
         state_dir: Path,
-        revalidate: Callable[[Authority], bool],
+        revalidate: Callable[[AuthorityT], bool],
         *,
-        active_revalidate: Callable[[Authority], bool],
+        active_revalidate: Callable[[AuthorityT], bool],
         routing_lock: Path = Path("/run/nebius-vpngw/fix-routes.lock"),
         clock: Callable[[], float] = time.time,
         command_runner: CommandRunner | None = None,
+        routing_lock_held: bool = False,
     ) -> None:
         self.cfg, self.state_dir = cfg, state_dir
-        self.revalidate = revalidate
-        self.active_revalidate = active_revalidate
+        self.revalidate: Callable[[AuthorityT], bool] = revalidate
+        self.active_revalidate: Callable[[AuthorityT], bool] = active_revalidate
         self.routing_lock = routing_lock
         self.clock = clock
         self.command_runner = command_runner
+        self.routing_lock_held = routing_lock_held
         self.observer = NativeTunnelObserver(self.run)
         self.effect_deadline: float | None = None
 
-    def active(self, authority: Authority) -> bool:
+    def active(self, authority: AuthorityT) -> bool:
         return self.revalidate(authority) and self.active_revalidate(authority)
+
+    def _observed_policy(self, policy: ConnectionPolicy) -> ConnectionPolicy:
+        """Protection history requires routes only while currently learned or configured."""
+        if policy.mode != "bgp":
+            return policy
+        from .forwarding import DestinationProtection
+
+        protection = DestinationProtection(
+            self.state_dir / "destination-protection.json",
+            cluster=(self.cfg.get("vm_ha") or {}).get("cluster_id", "ordinary"),
+            policies=connection_policies(self.cfg),
+            local_prefixes=tuple(
+                str(ipaddress.ip_network(prefix, strict=False))
+                for prefix in self.cfg.get("gateway", {}).get("local_prefixes", ())
+            ),
+        )
+        admitted = frozenset(
+            prefix for prefix, owner in protection._ledger().items() if owner == policy.name
+        )
+        if not admitted:
+            return policy
+        summary = json.loads(self.run(("vtysh", "-c", "show bgp summary json")))
+        configured = _configured_bgp_summary_sessions(summary)
+        established = _established_bgp_sessions(summary)
+        down = _confirmed_down_bgp_sessions(summary)
+        peers = {path.peer for path in policy.paths}
+        if (
+            configured is None
+            or not peers.issubset(configured)
+            or not peers.issubset(established | down)
+        ):
+            raise RuntimeError("Current BGP destination evidence is unavailable")
+        received: set[str] = set()
+        for peer in sorted(peers & established):
+            received.update(self._received_prefixes(peer))
+        return replace(policy, destinations=policy.destinations | (admitted & received))
+
+    def _received_prefixes(self, peer: str) -> frozenset[str]:
+        value = json.loads(
+            self.run(("vtysh", "-c", f"show bgp ipv4 unicast neighbors {peer} routes json"))
+        )
+        if not isinstance(value, dict) or not isinstance(value.get("routes"), dict):
+            raise ValueError("Current BGP routes are unavailable")
+        received: set[str] = set()
+        for prefix, paths in value["routes"].items():
+            network = ipaddress.ip_network(prefix, strict=False)
+            if network.version != 4 or not isinstance(paths, list) or not paths:
+                raise ValueError("Current BGP routes are malformed")
+            if any(not isinstance(p, dict) or type(p.get("valid")) is not bool for p in paths):
+                raise ValueError("Current BGP route validity is unavailable")
+            if any(p["valid"] for p in paths):
+                received.add(str(network))
+        return frozenset(received)
+
+    def _path_health(self, policy: ConnectionPolicy, target: str, *, selected: bool) -> Health:
+        try:
+            return self.observer.observe(self._observed_policy(policy), target, selected=selected)
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError):
+            return Health.UNKNOWN
+
+    def probe_preferred(
+        self, policy: ConnectionPolicy, target: str, authority: AuthorityT
+    ) -> Health:
+        """Bounded owner-only initiation/probe; never change workload route selection."""
+        if policy.mode != "static" or not self.active(authority):
+            return Health.UNKNOWN
+        descriptor = (
+            None
+            if self.routing_lock_held
+            else os.open(self.routing_lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        )
+        try:
+            if descriptor is not None:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if not self.active(authority):
+                return Health.UNKNOWN
+            cfg = self._effective(authority)
+            inventory = authorized_configuration(cfg)
+            if target not in inventory.connections:
+                return Health.UNKNOWN
+            tunnel = next(
+                tunnel
+                for conn in cfg["connections"]
+                for tunnel in conn["tunnels"]
+                if tunnel["name"] == target
+            )
+            probe = self.cfg.get("gateway", {}).get("tunnel_probes", {}).get(target)
+            source, peer = tunnel.get("inner_local_ip"), tunnel.get("inner_remote_ip")
+            if probe is None:
+                if not source or not peer or not tunnel.get("inner_cidr"):
+                    return Health.UNKNOWN
+                network = ipaddress.ip_network(tunnel["inner_cidr"], strict=False)
+                if (
+                    ipaddress.ip_address(source) not in network
+                    or ipaddress.ip_address(peer) not in network
+                ):
+                    return Health.UNKNOWN
+            self.effect_deadline = self.clock() + 5
+            health = self._path_health(policy, target, selected=False)
+            if health is Health.DOWN:
+                if not self.active(authority):
+                    return Health.UNKNOWN
+                # keyingtries=1 and start_action=none bound the explicit attempt;
+                # no trap or native autonomous restart is enabled for this path.
+                self.run(("swanctl", "--initiate", "--child", target, "--timeout", "1"))
+                health = self._path_health(policy, target, selected=False)
+            if health is not Health.HEALTHY:
+                return health
+            if probe is not None:
+                # Managed VPN peers need not answer their synthetic inner IP.
+                # The configured probe already enforces assigned source, exact
+                # XFRM interface, timeout and existing health hysteresis.
+                health = self.observe(policy, target, selected=False)
+                return health if self.active(authority) else Health.UNKNOWN
+            path = next(path for path in policy.paths if path.name == target)
+            addresses = json.loads(
+                self.run(("ip", "-j", "-4", "address", "show", "dev", path.interface))
+            )
+            if not any(
+                a.get("local") == source for row in addresses for a in row.get("addr_info", [])
+            ):
+                return Health.UNKNOWN
+            self.run(("ping", "-n", "-c", "1", "-I", path.interface, "-I", source, "-W", "1", peer))
+            return (
+                self.observe(policy, target, selected=False)
+                if self.active(authority)
+                else Health.UNKNOWN
+            )
+        except (RuntimeError, OSError, ValueError, TypeError, KeyError, StopIteration):
+            return Health.UNKNOWN
+        finally:
+            self.effect_deadline = None
+            if descriptor is not None:
+                os.close(descriptor)
 
     def candidate(self, policy: ConnectionPolicy, target: str) -> Health:
         """Prove usable received coverage without requiring active exports/routes."""
-        health = self.observer.observe(policy, target, selected=False)
+        health = self._path_health(policy, target, selected=False)
         if health is not Health.HEALTHY:
             return health
         peer = next(p.peer for p in policy.paths if p.name == target)
         try:
-            value = json.loads(
-                self.run(("vtysh", "-c", f"show bgp ipv4 unicast neighbors {peer} routes json"))
+            received = self._received_prefixes(peer)
+            return (
+                Health.HEALTHY
+                if self._observed_policy(policy).destinations.issubset(received)
+                else Health.DOWN
             )
-            if not isinstance(value, dict) or not isinstance(value.get("routes"), dict):
-                return Health.UNKNOWN
-            received: set[str] = set()
-            for prefix, paths in value["routes"].items():
-                network = ipaddress.ip_network(prefix, strict=False)
-                if network.version != 4 or not isinstance(paths, list) or not paths:
-                    return Health.UNKNOWN
-                if any(not isinstance(p, dict) or type(p.get("valid")) is not bool for p in paths):
-                    return Health.UNKNOWN
-                if any(p["valid"] for p in paths):
-                    received.add(str(network))
-            return Health.HEALTHY if policy.destinations.issubset(received) else Health.DOWN
         except (RuntimeError, ValueError, TypeError, KeyError):
             return Health.UNKNOWN
 
@@ -229,11 +393,16 @@ class NativeTunnelEffects:
         return result.stdout
 
     @contextlib.contextmanager
-    def locked(self, authority: Authority) -> Iterator[None]:
-        descriptor = os.open(self.routing_lock, os.O_CREAT | os.O_RDWR, 0o600)
+    def locked(self, authority: AuthorityT) -> Iterator[None]:
+        descriptor = (
+            None
+            if self.routing_lock_held
+            else os.open(self.routing_lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        )
         try:
             try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if descriptor is not None:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as error:
                 raise RuntimeError("HA routing writer is busy") from error
             if not self.revalidate(authority):
@@ -256,11 +425,12 @@ class NativeTunnelEffects:
             yield
         finally:
             self.effect_deadline = None
-            os.close(descriptor)
+            if descriptor is not None:
+                os.close(descriptor)
 
     def observe(self, policy: ConnectionPolicy, target: str, *, selected: bool) -> Health:
-        health = self.observer.observe(policy, target, selected=selected)
-        probe = self.cfg["vm_ha"].get("tunnel_probes", {}).get(target)
+        health = self._path_health(policy, target, selected=selected)
+        probe = self.cfg.get("gateway", {}).get("tunnel_probes", {}).get(target)
         if health is not Health.HEALTHY or probe is None:
             return health
         path = next(p for p in policy.paths if p.name == target)
@@ -289,7 +459,12 @@ class NativeTunnelEffects:
                 for a in link.get("addr_info", [])
             ):
                 return Health.UNKNOWN
-            result = _run_command(
+            limit = float(probe.get("timeout_seconds", 1)) + 0.2
+            if self.effect_deadline is not None:
+                limit = min(limit, self.effect_deadline - self.clock())
+                if limit <= 0:
+                    return Health.UNKNOWN
+            result = (self.command_runner or _run_command)(
                 (
                     "ping",
                     "-n",
@@ -303,8 +478,10 @@ class NativeTunnelEffects:
                     str(probe.get("timeout_seconds", 1)),
                     probe["target_ip"],
                 ),
-                float(probe.get("timeout_seconds", 1)) + 0.2,
+                limit,
             )
+            if self.effect_deadline is not None and self.clock() >= self.effect_deadline:
+                return Health.UNKNOWN
             if result.returncode not in {0, 1}:
                 return Health.UNKNOWN
             success = result.returncode == 0
@@ -334,8 +511,8 @@ class NativeTunnelEffects:
 
     def observe_readonly(self, policy: ConnectionPolicy, target: str, *, selected: bool) -> Health:
         """Sample native state and probe the path without updating product state."""
-        health = self.observer.observe(policy, target, selected=selected)
-        probe = self.cfg["vm_ha"].get("tunnel_probes", {}).get(target)
+        health = self._path_health(policy, target, selected=selected)
+        probe = self.cfg.get("gateway", {}).get("tunnel_probes", {}).get(target)
         if health is not Health.HEALTHY or probe is None:
             return health
         try:
@@ -371,10 +548,10 @@ class NativeTunnelEffects:
         except (RuntimeError, OSError, ValueError, TypeError, KeyError):
             return Health.UNKNOWN
 
-    def _effective(self, authority: Authority) -> dict[str, Any]:
+    def _effective(self, authority: AuthorityT) -> dict[str, Any]:
         return effective_config(self.cfg, read_state(self.state_dir / STATE_NAME), authority)
 
-    def _swan_config(self, cfg: dict[str, Any]) -> None:
+    def _write_swan_config(self, cfg: dict[str, Any]) -> None:
         rendered: dict[Path, str | None] = {}
         with contextlib.redirect_stdout(io.StringIO()):
             StrongSwanRenderer().render_and_apply(cfg, rendered_files=rendered)
@@ -382,11 +559,14 @@ class NativeTunnelEffects:
         if content is None:
             raise RuntimeError("HA tunnel configuration was not rendered")
         _write_secret_file(SWANCTL_CONF, content)
+
+    def _swan_config(self, cfg: dict[str, Any]) -> None:
+        self._write_swan_config(cfg)
         # Upstream loads credentials before connections on the same VICI
         # session; a daemon restart cannot split those loads across processes.
         self.run(("swanctl", "--load-all", "--noprompt"))
 
-    def suspend(self, policy: ConnectionPolicy, authority: Authority) -> None:
+    def suspend(self, policy: ConnectionPolicy, authority: AuthorityT) -> None:
         with self.locked(authority):
             names = {p.name for p in policy.paths}
             # Prove the complete termination scope before unloading or terminating.
@@ -401,36 +581,37 @@ class NativeTunnelEffects:
             cfg = self._effective(authority)
             cfg["_ha_suspended_connections"] = [policy.name]
             self._swan_config(cfg)
-            try:
-                ids = scoped_ike_ids(self.run(ipsec_observation.command()), names)
-            except ValueError:
-                raise RuntimeError("HA connection suspension scope changed") from None
-            for uniqueid in ids:
-                if not self.revalidate(authority):
-                    raise RuntimeError("HA tunnel authority changed before termination")
-                # A failed peer cannot acknowledge DELETE. After proving the
-                # exact IKE/CHILD scope, destroy local state without waiting
-                # for retransmission; verify absence below before activation.
-                try:
-                    self.run(("swanctl", "--terminate", "--ike-id", uniqueid, "--force"))
-                except RuntimeError:
-                    # Unloading a start_action connection can already delete
-                    # its SA while the authoritative owner is rechecked. A
-                    # failed terminate is harmless only after a fresh, complete
-                    # scoped observation proves that exact SA is absent.
-                    try:
-                        remaining = scoped_ike_ids(self.run(ipsec_observation.command()), names)
-                    except (ValueError, RuntimeError):
-                        raise RuntimeError("HA termination outcome is unproven") from None
-                    if uniqueid in remaining:
-                        raise
-            try:
-                remaining = scoped_ike_ids(self.run(ipsec_observation.command()), names)
-            except ValueError:
-                raise RuntimeError("HA connection suspension cannot be verified") from None
-            if remaining:
-                raise RuntimeError("HA connection suspension did not converge")
+            self._terminate_unloaded(policy, authority)
             self._remove_orphan_kernel_objects(policy, authority)
+
+    def _terminate_unloaded(self, policy: ConnectionPolicy, authority: AuthorityT) -> None:
+        names = {path.name for path in policy.paths}
+        try:
+            ids = scoped_ike_ids(self.run(ipsec_observation.command()), names)
+        except ValueError:
+            raise RuntimeError("HA connection suspension scope changed") from None
+        for uniqueid in ids:
+            if not self.revalidate(authority):
+                raise RuntimeError("HA tunnel authority changed before termination")
+            # A failed peer cannot acknowledge DELETE. Destroy only proven local
+            # IKE/CHILD state without waiting for retransmission.
+            try:
+                self.run(("swanctl", "--terminate", "--ike-id", uniqueid, "--force"))
+            except RuntimeError:
+                # Unloading can already delete the SA. A failed terminate is
+                # harmless only when fresh complete evidence proves its absence.
+                try:
+                    remaining = scoped_ike_ids(self.run(ipsec_observation.command()), names)
+                except (ValueError, RuntimeError):
+                    raise RuntimeError("HA termination outcome is unproven") from None
+                if uniqueid in remaining:
+                    raise
+        try:
+            remaining = scoped_ike_ids(self.run(ipsec_observation.command()), names)
+        except ValueError:
+            raise RuntimeError("HA connection suspension cannot be verified") from None
+        if remaining:
+            raise RuntimeError("HA connection suspension did not converge")
 
     def _kernel_deletions(self, policy: ConnectionPolicy) -> tuple[tuple[str, ...], ...]:
         try:
@@ -449,7 +630,9 @@ class NativeTunnelEffects:
         except (ValueError, TypeError, KeyError, AttributeError):
             raise RuntimeError("HA kernel suspension scope is unproven") from None
 
-    def _remove_orphan_kernel_objects(self, policy: ConnectionPolicy, authority: Authority) -> None:
+    def _remove_orphan_kernel_objects(
+        self, policy: ConnectionPolicy, authority: AuthorityT
+    ) -> None:
         # A killed daemon forgets kernel SAs. VICI absence alone cannot prove
         # teardown. Native initiation/traps have already been unloaded above.
         names = {p.name for p in policy.paths}
@@ -480,7 +663,7 @@ class NativeTunnelEffects:
             raise RuntimeError("HA native authority returned during kernel teardown")
 
     def authority_restored(
-        self, policy: ConnectionPolicy, target: str, authority: Authority
+        self, policy: ConnectionPolicy, target: str, authority: AuthorityT
     ) -> bool:
         """Verify persisted policy and daemon/route authority without requiring an SA."""
         try:
@@ -496,9 +679,7 @@ class NativeTunnelEffects:
                 if not isinstance(loaded, list) or any(not isinstance(n, str) for n in loaded):
                     return False
                 names = {p.name for p in policy.paths}
-                if set(loaded) & names != {target}:
-                    return False
-                if scoped_ike_ids(self.run(ipsec_observation.command()), names - {target}):
+                if set(loaded) & names != names:
                     return False
                 path = next(p for p in policy.paths if p.name == target)
                 routes = json.loads(self.run(("ip", "-j", "-4", "route", "show", "table", "main")))
@@ -512,7 +693,7 @@ class NativeTunnelEffects:
         except (RuntimeError, OSError, ValueError, KeyError, TypeError, StopIteration):
             return False
 
-    def activate(self, policy: ConnectionPolicy, target: str | None, authority: Authority) -> None:
+    def activate(self, policy: ConnectionPolicy, target: str | None, authority: AuthorityT) -> None:
         if policy.mode == "static":
             # Also handles replay and restoration: no stale responder survives.
             self.suspend(policy, authority)
@@ -559,6 +740,7 @@ class NativeTunnelEffects:
         if policy.mode == "static":
             return self.observe(policy, target or policy.preferred, selected=True)
         try:
+            policy = self._observed_policy(policy)
             summary = json.loads(self.run(("vtysh", "-c", "show bgp summary json")))
             configured = _configured_bgp_summary_sessions(summary)
             established = _established_bgp_sessions(summary)
@@ -690,13 +872,16 @@ class ControllerTunnelRuntime:
         ports.data_plane.ipsec_configuration_observer = self.observe_ipsec_configuration
 
         self.restart_pending = True
+        self.preferred_observations: dict[str, Any] = {}
 
     def current_ipsec_configuration(self) -> ipsec_observation.ConfigurationInventory | None:
         """Read-only policy proof; pending selection never authorizes a reload."""
         mode = self.ports.data_plane.mode()
-        if mode not in {DataPlaneMode.ACTIVE, DataPlaneMode.PASSIVE} or tunnel_operation_pending(
-            self.cfg, self.state_dir
-        ):
+        if mode not in {
+            DataPlaneMode.ACTIVE,
+            DataPlaneMode.PASSIVE,
+            DataPlaneMode.ORIGINATING,
+        } or tunnel_operation_pending(self.cfg, self.state_dir):
             return None
         effective = load_effective_config(self.cfg, self.state_dir)
         if mode is DataPlaneMode.PASSIVE:
@@ -916,7 +1101,12 @@ class ControllerTunnelRuntime:
             and pending.digests == snapshot.local_digests
         )
         preparing = preparation and (
-            snapshot.data_plane_mode is DataPlaneMode.PASSIVE
+            # Saved BGP intent can become unusable after passive preparation,
+            # while the owner waits for remote routes in ORIGINATING. Permit
+            # only the same fenced intent reconciliation here. Changed policy
+            # invalidates origination proof; the controller revokes exports and
+            # rematerializes it before any forwarding or native tunnel action.
+            snapshot.data_plane_mode in {DataPlaneMode.PASSIVE, DataPlaneMode.ORIGINATING}
             or (snapshot.data_plane_mode is DataPlaneMode.BLOCKED and activation_retry)
         )
         if (
@@ -1032,7 +1222,13 @@ class ControllerTunnelRuntime:
             # cached status or bypass the snapshot's retirement checks.
             if self.controller.snapshots.providers.apply_lock_operation_id() is not None:
                 return
-            selector = TunnelController(self.cfg, self.state_dir / STATE_NAME, self.effects)
+            selector = TunnelController(
+                self.cfg,
+                self.state_dir / STATE_NAME,
+                self.effects,
+                preferred_probe=self.effects.probe_preferred,
+                preferred_observations=self.preferred_observations,
+            )
             prepare_bgp = any(
                 policy.mode == "bgp"
                 and (

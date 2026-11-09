@@ -32,6 +32,7 @@ def _actions(intent: dict) -> dict:
 
 
 def _validate_intent(intent: dict, project: str, gateway: str) -> None:
+    from ..vm_ha_credentials import credential_nodes
     from ..vm_ha_managed_credentials import vm_ha_authorized_key_name, vm_ha_service_account_name
 
     fields = {
@@ -43,17 +44,41 @@ def _validate_intent(intent: dict, project: str, gateway: str) -> None:
         "key_size_bits",
         "local_source_expected_absent",
         "project_id",
+        "purpose",
+        "node_ids",
         "service_account_name",
         "iam_resources",
     }
     if "runtime_credentials" in intent:
         fields.add("runtime_credentials")
+    if "recovery" in intent:
+        from ..ordinary_route_binding import validate as validate_binding
+
+        fields.add("recovery")
+        recovered = validate_binding(intent["recovery"])
+        if intent["purpose"] != "ordinary-route-writer" or (
+            recovered["project"],
+            recovered["gateway"],
+            [recovered["node"]],
+        ) != (project, gateway, intent["node_ids"]):
+            raise ValueError("Credential recovery crossed runtime authority")
+    if intent.get("purpose") not in {"ha-controller", "ordinary-route-writer"}:
+        raise ValueError("Invalid managed credential purpose")
+    if (
+        not isinstance(intent.get("node_ids"), list)
+        or list(credential_nodes(intent["node_ids"], intent["purpose"])) != intent["node_ids"]
+    ):
+        raise ValueError("Invalid managed credential target nodes")
     if (
         set(intent) != fields
-        or intent["action"] not in {"create", "reuse", "resume"}
+        or intent["action"] not in {"create", "reuse", "resume", "recover"}
+        or intent["action"] == "recover"
+        and "recovery" not in intent
         or intent["project_id"] != project
-        or intent["service_account_name"] != vm_ha_service_account_name(gateway)
-        or intent["authorized_key_name"] != vm_ha_authorized_key_name(gateway)
+        or intent["service_account_name"]
+        != vm_ha_service_account_name(gateway, purpose=intent["purpose"])
+        or intent["authorized_key_name"]
+        != vm_ha_authorized_key_name(gateway, purpose=intent["purpose"])
         or intent["algorithm"] != "RS256"
         or intent["key_size_bits"] != 4096
         or intent["expires_at"] is not None
@@ -65,6 +90,8 @@ def _validate_intent(intent: dict, project: str, gateway: str) -> None:
     ):
         raise ValueError("Invalid managed credential intent")
     actions = _actions(intent)
+    if "recovery" in intent and any(item["action"] != "reuse" for item in actions.values()):
+        raise ValueError("Credential recovery cannot create IAM resources")
     for label, record in actions.items():
         expected = (
             {"action", "member_id"}
@@ -189,7 +216,7 @@ def validate(state: dict, *, schema: str, project: str, gateway: str) -> None:
                 actions["authorized-key"]["id"] or by_label["authorized-key"]["resource_id"]
             )
             if (
-                not nodes
+                nodes != set(current["intent"]["node_ids"])
                 or any(not node for node in nodes)
                 or set(bindings) != {prefix + node for prefix in prefixes for node in nodes}
                 or any(

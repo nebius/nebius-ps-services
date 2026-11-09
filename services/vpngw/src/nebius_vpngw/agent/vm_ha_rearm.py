@@ -45,6 +45,7 @@ from .vm_ha.auto_healing import (
     AutoHealingPolicyError,
     AutoHealingPolicyPhase,
     AutoHealingPolicyStore,
+    AutoHealingPolicyUnavailable,
     AutoHealingRecoveryPhase,
     AutoHealingRecoveryReason,
     AutoHealingRecoveryRecord,
@@ -553,6 +554,8 @@ class RearmRuntime:
             )
             if not peer_policy_agrees(record, peer, now=self.clock()):
                 return "standby-auto-healing-peer-policy-unavailable"
+        except AutoHealingPolicyUnavailable:
+            return "standby-auto-healing-policy-unavailable"
         except AutoHealingPolicyError:
             return "standby-auto-healing-policy-invalid"
         return None

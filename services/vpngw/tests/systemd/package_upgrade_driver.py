@@ -33,7 +33,8 @@ def system_python(code: str, request: dict | None = None, *, expected_exit: int 
         env=clean_environment(),
     )
     if result.returncode != expected_exit:
-        raise RuntimeError(result.stderr.decode()[-5000:] or result.stdout.decode()[-2000:])
+        detail = result.stderr.decode()[-5000:] or result.stdout.decode()[-2000:]
+        raise RuntimeError(f"Expected exit {expected_exit}, observed {result.returncode}: {detail}")
     if expected_exit:
         return {"exit": result.returncode}
     return json.loads(result.stdout)
@@ -109,7 +110,7 @@ print(json.dumps({'package_components':'complete','runtime_inhibited':(migration
 
 
 INTERRUPTION_HOOK = r"""
-import os,json
+import os,json,sys
 from pathlib import Path
 import _vpngw_ordinary_remote as remote
 import _vpngw_runtime_migration as migration
@@ -119,7 +120,11 @@ def interrupt_after_effect(arguments,*args,**kwargs):
     value=migration.state()
     wheel=migration.verify_staged(value['plan'])/'payload'/value['manifest']['wheel_name']
     hit=(INTERRUPTION=='native-unpack' and arguments[:2]==['dpkg','--unpack']) or (
-        INTERRUPTION=='product-wheel' and arguments==migration.product_install_command(wheel))
+        INTERRUPTION=='product-wheel'
+        and arguments[:5]==[sys.executable,'-B','-m','pip','install']
+        and '--no-index' in arguments and '--no-deps' in arguments
+        and not any(a in {'--root','--target','--prefix','--user'} for a in arguments)
+        and arguments[-1]==str(wheel))
     if hit:
         receipt={'boundary':INTERRUPTION,'operation':value['operation'],
             'plan_digest':value['plan_digest'],'manifest_digest':migration.digest(value['manifest'])}

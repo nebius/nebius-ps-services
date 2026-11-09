@@ -37,6 +37,15 @@ except ModuleNotFoundError:
     from .. import ordinary_routes as routes
     from .. import runtime_migration as migration
 
+try:
+    import _vpngw_python_package_recovery as python_packages  # type: ignore[import-not-found]
+except ModuleNotFoundError:
+    from .. import python_package_recovery as python_packages
+
+migration.PYTHON_PREPARE = lambda manifest, path: python_packages.prepare_payload(
+    manifest, path, command
+)
+
 CONFIG = Path("/etc/nebius-vpngw/config-resolved.yaml")
 BOOT = Path("/proc/sys/kernel/random/boot_id")
 LOCK = Path("/run/lock/nebius-vpngw-deploy.lock")
@@ -44,6 +53,25 @@ ROUTING_LOCK = Path("/run/nebius-vpngw/fix-routes.lock")
 DEADLINE = 0.0
 CHILD: subprocess.Popen | None = None
 OPERATION: operations.Operation | None = None
+DURABLE_PACKAGES = False
+
+
+def command_environment(args: list[str]) -> dict[str, str]:
+    environment = {
+        **os.environ,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "LC_ALL": "C",
+        "DEBIAN_FRONTEND": "noninteractive",
+    }
+    if "pip" in args[:4] and (DURABLE_PACKAGES or "--root" in args):
+        environment = {
+            k: v
+            for k, v in environment.items()
+            if not k.startswith("PIP_") and k not in {"PYTHONPATH", "PYTHONHOME"}
+        }
+        environment.update(PIP_CONFIG_FILE=os.devnull, PYTHONNOUSERSITE="1")
+    return environment
+
 
 # Shared with HA package preparation; runs under the caller's bounded process
 # group. Only selected, hash-verified wheels reach this installer. Never apply
@@ -88,8 +116,16 @@ def canonical(value: Any) -> str:
     return sha(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
 
 
-def command(args: list[str], *, limit: int = 30, required: bool = True) -> tuple[int, str]:
+def command(
+    args: list[str], *, limit: int = 30, required: bool = True, capture_stderr: bool = False
+) -> tuple[int, str]:
     global CHILD
+    package_effect = (
+        args[0] == "dpkg"
+        and any(action in args for action in ("--remove", "--unpack", "--configure"))
+    ) or ("pip" in args[:4] and "install" in args)
+    if DURABLE_PACKAGES and OPERATION is not None and package_effect:
+        return durable_command(args, required=required)
     remaining = min(limit, DEADLINE - (60 if OPERATION else 0) - time.monotonic())
     if remaining <= 0:
         raise RuntimeError("deadline")
@@ -97,14 +133,12 @@ def command(args: list[str], *, limit: int = 30, required: bool = True) -> tuple
     CHILD = subprocess.Popen(
         args,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT if capture_stderr else subprocess.DEVNULL,
         start_new_session=True,
-        env={
-            **os.environ,
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "LC_ALL": "C",
-            "DEBIAN_FRONTEND": "noninteractive",
-        },
+        env=command_environment(args),
+        # Projection and PID1-owned installation must create identical modes,
+        # regardless of the observing SSH process's inherited mask.
+        umask=0o022 if "pip" in args[:4] and "install" in args else -1,
     )
     try:
         if OPERATION is not None and effect is not None:
@@ -161,6 +195,54 @@ def command(args: list[str], *, limit: int = 30, required: bool = True) -> tuple
             OPERATION.update(effect, state="settled")
     if required and rc:
         raise RuntimeError("command")
+    return rc, output.decode("utf-8", errors="strict").strip()
+
+
+def durable_command(args: list[str], *, required: bool = True) -> tuple[int, str]:
+    """Wait for an admitted owner's child and descendants, independent of SSH.
+
+    No elapsed-time or output-volume event kills package work. Retain bounded
+    diagnostics while draining pipes. Parent death leaves the native effect
+    unresolved and systemd's cgroup prevents a replacement owner overlapping it.
+    """
+    assert OPERATION is not None
+    OPERATION.check()
+    from nebius_vpngw import package_worker
+
+    if args[0] == "dpkg":
+        with package_worker.native_lock("/var/lib/dpkg/lock"):
+            pass
+        OPERATION.check()
+    index = OPERATION.intent("process")
+    child = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        env=command_environment(args),
+        umask=0o022 if "pip" in args[:4] and "install" in args else -1,
+    )
+    OPERATION.process_started(index, child.pid)
+    output = bytearray()
+    assert child.stdout is not None
+    with child.stdout, selectors.DefaultSelector() as selector:
+        selector.register(child.stdout, selectors.EVENT_READ)
+        while selector.get_map():
+            for key, _events in selector.select(1):
+                chunk = os.read(key.fd, 65536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                else:
+                    output.extend(chunk[: max(0, 2 * 1024 * 1024 - len(output))])
+    rc = child.wait()
+    process = OPERATION.check()["effects"][index]["process"]
+    from nebius_vpngw import package_worker
+
+    while not operations.process_group_empty(process) or package_worker.children_running():
+        time.sleep(0.2)
+    OPERATION.update(index, state="settled")
+    if required and rc:
+        raise RuntimeError("package command failed after settlement")
     return rc, output.decode("utf-8", errors="strict").strip()
 
 

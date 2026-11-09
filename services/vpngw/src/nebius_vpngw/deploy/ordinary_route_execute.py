@@ -108,6 +108,7 @@ def execute(
     *,
     approval: str,
     observe: Callable[[], dict],
+    admit_request: Callable[[Any], None] | None = None,
 ) -> None:
     from nebius.api.nebius.vpc.v1 import (
         RouteServiceClient,
@@ -144,7 +145,7 @@ def execute(
         return
     with journal:
         journal.begin(plan, approval=approval)
-        cloud = Cloud(sdk, journal)
+        cloud = Cloud(sdk, journal, admit_request=admit_request)
         # JSON operation summaries omit unknown protobuf fields. Reconstruct
         # uncertain requests from the full approved template and exact receipts;
         # Cloud still checks the original request hash before replaying its key.

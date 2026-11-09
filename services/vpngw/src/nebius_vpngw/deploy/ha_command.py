@@ -15,6 +15,8 @@ from typing import Any
 from ..apply_approval import digest, manifest_identity
 from ..apply_approval import validate as validate_approval
 from . import security_group_apply as attachments
+from .activation_recovery import POLICY as RECOVERY_POLICY
+from .activation_recovery import Recovery
 from .apply_command import CommandJournal
 from .apply_plan import CommandPlan, Effect, Progress
 from .vm_ha_lifecycle import VMHALifecycleState, VMHALifecycleStatus
@@ -58,6 +60,40 @@ class HACommand:
             )
         else:
             self.journal.begin(self.plan, intents=self.bindings)
+        recovery = self.recovery()
+        if recovery is not None:
+            if (
+                current is None
+                or current["execution_id"] != self.execution_id
+                or all(
+                    value == Progress.PLANNED.value
+                    for value in self.journal.state["transaction"]["progress"].values()
+                )
+            ):
+                # A lost journal-publication reply precedes every child effect.
+                recovery.initialize()
+            else:
+                recovery.history()
+
+    def recovery(self) -> Recovery | None:
+        policy = self.intent.get("activation_recovery")
+        if policy is None:
+            return None
+        if policy != RECOVERY_POLICY:
+            raise RuntimeError("unsupported HA recovery policy; exact reviewed successor required")
+        from .package_reservation import SCOPE, recovery_owner
+
+        root, execution, authority = recovery_owner(
+            self.journal.root,
+            self.execution_id,
+            digest(self.intent),
+            parent=SCOPE.get(),
+            admit=all(
+                value == Progress.PLANNED.value
+                for value in self.journal.state["transaction"]["progress"].values()
+            ),
+        )
+        return Recovery(root, execution=execution, authority=authority)
 
     def start_prerequisite(self, key: str) -> None:
         if key not in self.intent.get("prerequisites", {}):
@@ -468,6 +504,7 @@ def create(
         "report": report,
         "attachments": attachment_plan,
         "packages": deepcopy(packages),
+        "activation_recovery": deepcopy(RECOVERY_POLICY),
     }
     if members is not None:
         intent["members"] = deepcopy(members)

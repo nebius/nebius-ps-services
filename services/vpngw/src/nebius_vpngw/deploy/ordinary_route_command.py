@@ -61,6 +61,7 @@ class PreparedRoutes:
     pending: dict | None
     completed: dict | None
     connectivity_unknown: bool
+    publication: Any = None
 
     @property
     def request_sha256(self) -> str:
@@ -105,6 +106,8 @@ class PreparedRoutes:
         return tuple(lines)
 
     def begin(self, approval: str) -> None:
+        if self.publication is not None and self.publication.released():
+            return
         if self.required:
             with self.discovery.journal:
                 self.discovery.journal.begin_intent(self.intent, approval=approval)
@@ -113,6 +116,8 @@ class PreparedRoutes:
         """Recheck a lost terminal reply using its post-effect infrastructure."""
         if self.completed is None:
             return False
+        if self.publication is not None and self.publication.verify_released(self.discovery):
+            return True
         original = self.completed["intent"]
         if any(
             original[key] != self.intent[key]
@@ -132,6 +137,23 @@ class PreparedRoutes:
     def finish(self, approval: str) -> dict:
         journal = self.discovery.journal
         transaction = journal.transaction()
+        if self.publication is not None and self.publication.verify_released(self.discovery):
+            if (
+                transaction is None
+                or transaction["phase"] != "complete"
+                or transaction["approval"] != approval
+            ):
+                raise RuntimeError("Released runtime routes lost their original deployment receipt")
+            return {
+                "approval": approval,
+                "intent": digest(transaction["intent"]),
+                "selection": digest(transaction["plan"]),
+                "connectivity": "unknown" if self.connectivity_unknown else "observed",
+            }
+        if self.publication is not None:
+            self.publication.before_routes(self)
+            journal = self.discovery.journal
+            transaction = journal.transaction()
         if transaction and transaction["phase"] == "pending":
             if transaction["approval"] != approval or transaction["intent"] != self.intent:
                 raise RuntimeError("Routes are not bound to this apply command")
@@ -170,12 +192,32 @@ def prepare(
     ssh_policy: Any,
     runtime_changes: bool,
     journal: RouteJournal | None = None,
-    summarize: bool = False,
+    summarize: bool | None = None,
     force_copy: bool = False,
+    publication: Any = None,
 ) -> PreparedRoutes:
     if deployment.vm_ha is not None:
         raise ValueError("Ordinary routes cannot bypass HA route ownership")
-    journal = journal or RouteJournal(manager.project_id, deployment.gateway_group.name)
+    journal = journal or (
+        publication.preview_journal()
+        if publication is not None
+        else RouteJournal(manager.project_id, deployment.gateway_group.name)
+    )
+    transaction = journal.transaction()
+    pending = transaction if transaction and transaction["phase"] == "pending" else None
+    completed = transaction if transaction and transaction["phase"] == "complete" else None
+    if summarize is None:
+        # An ordinary apply retains the route owner's admitted policy. An
+        # explicit route command may change it, but cannot change pending work.
+        owner = publication.observed["authority"] if publication is not None else None
+        policy = (
+            pending["intent"]["policy"]
+            if pending
+            else owner["binding"]["policy"]
+            if owner and owner["binding"]
+            else {}
+        )
+        summarize = policy.get("summarize", False)
     discovery = Discovery(
         manager,
         deployment,
@@ -186,9 +228,23 @@ def prepare(
         force_copy=force_copy,
     )
     observation = discovery.observe()
-    transaction = journal.transaction()
-    pending = transaction if transaction and transaction["phase"] == "pending" else None
-    completed = transaction if transaction and transaction["phase"] == "complete" else None
+    if (
+        publication is not None
+        and publication.journal.pending()
+        and publication.verify_released(discovery)
+    ):
+        if completed is None:
+            raise RuntimeError("Released runtime routes lack a completed deployment journal")
+        return PreparedRoutes(
+            discovery,
+            completed["intent"],
+            completed["plan"],
+            False,
+            None,
+            completed,
+            False,
+            publication,
+        )
     if pending and pending["plan"] is not None:
         original = pending["intent"]
         if digest(observation["policy"].mapping()) != digest(original["policy"]) or original[
@@ -204,7 +260,9 @@ def prepare(
             discovery.observe,
             uncertain=True,
         )
-        return PreparedRoutes(discovery, original, pending["plan"], True, pending, completed, False)
+        return PreparedRoutes(
+            discovery, original, pending["plan"], True, pending, completed, False, publication
+        )
     preview, unknown = _observe_plan(discovery, observation, defer_bgp=runtime_changes)
     current_intent = ordinary_route_plan.intent(preview)
     required = bool(
@@ -234,7 +292,9 @@ def prepare(
         if pending["plan"] is None and current_intent != original:
             raise RuntimeError("Unstarted ordinary route predecessor changed")
         current_intent = original
-    return PreparedRoutes(discovery, current_intent, preview, required, pending, completed, unknown)
+    return PreparedRoutes(
+        discovery, current_intent, preview, required, pending, completed, unknown, publication
+    )
 
 
 def run(
@@ -248,6 +308,10 @@ def run(
 ) -> None:
     """Public route command, serialized with apply and sharing its exact owner."""
     from .apply_command import CommandJournal
+    from .apply_plan import CommandPlan
+    from .ordinary_command import inspect as inspect_command
+    from .ordinary_route_publication import inspect as inspect_publication
+    from .ssh_push import SSHPush
     from .vm_ha_lifecycle import VMHAApplyLock
     from .vm_manager import VMManager
 
@@ -258,7 +322,10 @@ def run(
             "Ordinary routing requires an exact project and ordinary gateway"
         )
     with VMHAApplyLock(project_id=project, gateway_name=gateway):
-        if CommandJournal(project, gateway).pending():
+        command_journal = CommandJournal(project, gateway)
+        pending = command_journal.pending()
+        artifact = digest("add-routes-local")
+        if pending and CommandPlan.parse(pending["plan"]).artifact_sha256 != artifact:
             raise RouteManagementError(
                 "Resume the pending apply command before separate route management"
             )
@@ -269,6 +336,11 @@ def run(
             ssh_policy=routes._ssh_policy,
         )
         try:
+            instances = tuple(deployment.iter_instance_configs())
+            targets = manager.inspect_ordinary_targets(item.hostname for item in instances)
+            publication = inspect_publication(
+                command_journal, SSHPush(ssh_policy=routes._ssh_policy), instances, local, targets
+            )
             prepared = prepare(
                 manager,
                 deployment,
@@ -277,12 +349,35 @@ def run(
                 runtime_changes=False,
                 summarize=summarize,
                 force_copy=force_copy,
+                publication=publication,
             )
-            approval = digest({"command": "add-routes-local", "intent": prepared.intent})
+            command = inspect_command(
+                command_journal,
+                local={"configuration": local, "summarize": summarize, "force_copy": force_copy},
+                targets=targets,
+                plans={},
+                attachments=None,
+                attachment_pending=None,
+                artifact_sha256=artifact,
+                routes=prepared,
+                publication=publication,
+            )
+            approval = command.approval
             if prepared.pending and prepared.pending["approval"] != approval:
                 raise RouteManagementError("Resume routes through their original approved command")
-            prepared.begin(approval)
-            prepared.finish(approval)
+            if command.plan.effects:
+                with command_journal:
+                    command.begin()
+                    if prepared.required:
+                        command_journal.started("routes")
+                    receipt = prepared.finish(approval)
+                    if prepared.required:
+                        command_journal.verified("routes", receipt)
+                    if publication is not None:
+                        publication.finish(prepared)
+                    command_journal.complete()
+            else:
+                prepared.finish(approval)
             if force_copy and rollback_dir is not None:
                 _write_rollbacks(prepared, rollback_dir)
             if prepared.connectivity_unknown:

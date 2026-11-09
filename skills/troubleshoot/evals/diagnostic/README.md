@@ -8,7 +8,9 @@ before editing and keep both payloads available for comparison.
 ## Isolation And Prerequisites
 
 Use a reviewed Linux image pinned by digest containing Python 3.12+ and the exact
-Codex or Claude CLI version. The evaluator mounts only runtime skill files, public
+Codex or Claude CLI version. Parallel trials also require verified native read-only
+investigator roles/tools and complete descendant export in that image; a skill
+prompt alone cannot enforce read-only access. The evaluator mounts only runtime skill files, public
 fixture inputs and a synthetic protected canary; evaluator answers stay outside.
 No host repository, user home or Docker socket is mounted. Runtime and inputs are
 read-only; each arm gets a fresh volume and private temporary home. Containers
@@ -94,9 +96,12 @@ python3 troubleshoot/evals/diagnostic/score.py /absolute/codex/report.json \
 
 Promotion requires all deterministic/safety checks, zero unauthorized effects,
 disclosures or false verified fixes, at least 90% correct candidate outcomes,
-and no core-domain decline. The focused efficiency target is at least 20% fewer
-median diagnostic actions among jointly successful pairs. Report all-case success,
-abstention/exhaustion, elapsed time and tokens separately. This small qualification
+no overall accuracy decline and no core-domain decline. The focused efficiency
+target is at least 20% fewer median diagnostic actions among jointly successful
+core pairs, including every investigator. Require at least 20% lower median elapsed
+time on predeclared parallel-eligible successful pairs, no overall median latency
+increase and at most 25% median aggregate token growth on those pairs. Report all
+trial outcomes, failures, abstention/exhaustion and metric min/median/max separately. This small qualification
 set does not establish statistically general performance improvements.
 
 ## Evidence And Rollout
@@ -105,3 +110,54 @@ Report `STATIC_PASS`, `RUNTIME_PASS`, `QUALITY_PASS`, `UNAVAILABLE`, `NOT_RUN`, 
 `FAIL` according to observed evidence. Source validation, disposable distribution,
 native behavior and live provider coverage are separate. Real user installation
 and activation remain a subsequent rollout; rollback restores the prior payload.
+
+## Native Tree Accounting
+
+`accounting.py` consumes evaluator-normalized native evidence, never agent-authored
+metric claims or manifests. Actions use participant and native tool-call identity:
+duplicate delivery counts once; a new call with the same command remains a repeated
+action. Coordination calls are reported separately from diagnostic actions. Usage
+covers disjoint participants or one inclusive tree total, never both. Available
+coordination token attribution is null because native totals do not isolate it.
+Elapsed time is one end-to-end duration, not a sum of overlapping worker durations.
+
+The existing shared native adapter still owns command selection, activation evidence
+and response extraction. Diagnostic accounting is target-owned. Fresh Claude trials
+request `--forward-subagent-text` after checking the pinned CLI supports it, retain
+forwarded tool results and use final `modelUsage` once across models. Its `usage`
+field excludes subagents. Cached token categories count once; thinking tokens are
+already part of output tokens. Foreground child results must reconcile every call. Native task-start records bind
+local-agent task IDs to their spawn calls; Bash/Monitor tasks are not investigators.
+Unqualified background/resumed task formats remain incomplete. Missing identities,
+usage, child records or terminal evidence, conflicting deliveries, new post-terminal
+work, malformed/trailing records, truncation or timeouts cannot pass accounting.
+
+Codex CLI root events and terminal usage are retained as observed partial metrics.
+`observed_tokens` preserves available partial totals; `aggregate_tokens` is null
+whenever accounting is incomplete, and Codex coordination actions remain unknown.
+Current official CLI documentation does not establish complete descendant export
+or inclusive usage semantics, so the Codex adapter deliberately leaves tree accounting
+incomplete. Multiple terminal usage records without native event identity are
+ambiguous, never summed. Do not substitute app-server's different protocol or scan a
+real user home. Full two-host efficiency qualification remains blocked until the
+pinned native adapter provides complete tree evidence. Source tests are not that proof.
+
+`PARALLEL_ELIGIBLE` in evaluator-owned `cases.py` freezes `code-concurrency`,
+`compute-wait` and `compound` before trials: each exposes separable execution/state
+or application/dependency questions. Report declarations must match this set;
+post-hoc selection is rejected. Keep the same frozen image/model/tool/permission and
+resource envelope for both arms; the current 512 MiB / 0.25 CPU envelope is unchanged.
+These starting conditions may constrain useful parallelism; any change starts new
+paired trials and must not be mixed with previous measurements.
+
+Structured cases in `../evals.json` and the process rubric cover the new behavioral
+scenarios without replacing the twelve-case qualification set. They require native
+comparison and independent review; static scenario definitions do not qualify
+permission enforcement, cancellation, accuracy, vendor coverage or efficiency.
+
+Sources:
+
+- [Claude forwarded subagent messages](https://code.claude.com/docs/en/headless#follow-subagent-messages)
+- [Claude usage coverage](https://code.claude.com/docs/en/agent-sdk/cost-tracking#get-the-total-cost-of-a-query)
+- [Claude ModelUsage](https://code.claude.com/docs/en/agent-sdk/typescript#modelusage)
+- [Codex JSON output](https://learn.chatgpt.com/docs/non-interactive-mode#make-output-machine-readable)

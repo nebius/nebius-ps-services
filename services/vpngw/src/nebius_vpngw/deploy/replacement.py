@@ -100,9 +100,16 @@ class Plan:
     vm_ha: bool = False
     observed_owner: str | None = None
     ha: dict[str, Any] | None = None
+    route_runtime: dict[str, Any] | None = None
 
     def mapping(self) -> dict[str, Any]:
         result = json.loads(json.dumps(asdict(self)))
+        if self.route_runtime is None:
+            result.pop("route_runtime")
+        else:
+            from .replacement_runtime_routes import validate
+
+            validate(self.route_runtime, self)
         metadata_only(result)
         if (
             not re.fullmatch(r"[a-f0-9]{32,64}", self.operation_id)

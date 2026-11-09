@@ -25,6 +25,7 @@ from tests.unit.test_vm_ha_runtime_ports import (
 )
 
 from nebius_vpngw.agent import frr_renderer, main, strongswan_renderer
+from nebius_vpngw.agent.ordinary import frr_policy_rows
 from nebius_vpngw.agent.vm_ha import tunnel_runtime
 from nebius_vpngw.agent.vm_ha.models import DigestSet
 from nebius_vpngw.agent.vm_ha.runtime import (
@@ -186,7 +187,7 @@ class NativeCommands:
         return CommandResult(0, self.command(argv))
 
 
-def composed(tmp_path, monkeypatch, *, advertise=True):
+def composed(tmp_path, monkeypatch, *, advertise=True, protected_checkpoint=True):
     cfg = config("bgp")
     cfg["gateway"]["local_prefixes"] = ["10.9.0.0/16"]
     cfg["connections"][0]["bgp"] = {"advertise_local_prefixes": advertise}
@@ -236,7 +237,12 @@ def composed(tmp_path, monkeypatch, *, advertise=True):
 
     def data_plane(**kwargs):
         return SystemDataPlaneRuntime(
-            **kwargs, routing_lock_path=state_dir / "routing.lock", bgp_export_attempts=1
+            **kwargs,
+            routing_lock_path=state_dir / "routing.lock",
+            bgp_export_attempts=1,
+            origination_verifier=lambda: (
+                frr_policy_rows(native.applied) == frr_policy_rows(frr_path.read_text())
+            ),
         )
 
     class ExistingRoute(FakeRouteBackend):
@@ -341,7 +347,8 @@ def composed(tmp_path, monkeypatch, *, advertise=True):
     )
     main._prepare_vm_ha_blocked_bgp(config_path)
     native.command(("vtysh", "-b"))
-    ports.data_plane.destination_protection.install()
+    if protected_checkpoint:
+        ports.data_plane.destination_protection.install()
     native.trace.clear()
     return runtime, tunnels, native, selector, now, ports
 
@@ -364,7 +371,10 @@ def test_fenced_restart_activates_before_tunnel_completion(
         state = read_state(selector.path)
         if not native.forwarding and phase != "succeeded":
             assert state["operation"]["phase"] not in {"succeeded", "failed"}
-            assert all(not native.advertised(peer) for peer in native.peers)
+            if ports.data_plane.mode() is DataPlaneMode.ORIGINATING:
+                assert ports.data_plane.origination_policy_ready()
+            else:
+                assert all(not native.advertised(peer) for peer in native.peers)
         now[0] += 1
     assert native.forwarding and ports.routes.readiness().promotion_ready
     state = read_state(selector.path)
@@ -380,6 +390,30 @@ def test_fenced_restart_activates_before_tunnel_completion(
     assert native.trace.index(("vm", ActionKind.ENABLE_ACTIVE)) < forwarding_index
     tunnels.close()
     ports.close()
+
+
+@pytest.mark.parametrize("advertise", [False, True])
+def test_fenced_bgp_startup_installs_protection_before_origination(
+    tmp_path, monkeypatch, advertise
+):
+    runtime, tunnels, native, selector, now, ports = composed(
+        tmp_path, monkeypatch, advertise=advertise, protected_checkpoint=False
+    )
+    protection = ports.data_plane.destination_protection
+    assert not protection.path.exists() and not protection.ready()
+    assert ports.data_plane.mode() is DataPlaneMode.PASSIVE and not native.forwarding
+    try:
+        for _ in range(8):
+            runtime.step()
+            if any(native.advertised(peer) for peer in native.peers) or native.forwarding:
+                protection.verify()
+            now[0] += 1
+        assert native.forwarding and ports.routes.readiness().promotion_ready
+        assert protection.path.exists() and protection.ready()
+        assert read_state(selector.path)["operation"]["phase"] == "succeeded"
+    finally:
+        tunnels.close()
+        ports.close()
 
 
 @pytest.mark.parametrize("routes_retained", [True, False])
@@ -521,7 +555,11 @@ def test_checkpointed_activation_retry_prepares_failed_override_while_blocked(
     tmp_path, monkeypatch, state
 ):
     runtime, tunnels, native, selector, now, ports = composed(tmp_path, monkeypatch)
-    runtime.step()  # Real route reconciliation and receipt.
+    result = runtime.step()
+    assert result.action.kind is ActionKind.PREPARE_OWNER_ORIGINATION
+    now[0] += 1
+    result = runtime.step()  # Real route reconciliation and receipt.
+    assert result.action.kind is ActionKind.RECONCILE_ROUTES
     now[0] += 1
     prepare = ports.data_plane.active_preparer
 
@@ -569,7 +607,9 @@ def test_restart_cleanup_and_failback_require_active_verification(tmp_path, monk
             )
     selector._save()
     deadline = operation["deadline"]
-    for _ in range(8):
+    # Origination and route proof are separate fenced transitions. The original
+    # recovery deadline remains unchanged through both additional observations.
+    for _ in range(10):
         runtime.step()
         state = read_state(selector.path)
         assert state["operation"]["deadline"] == deadline

@@ -95,14 +95,19 @@ def test_tunnel_operator_help_identifies_supported_routing_modes(
     if arguments[0] == "restart-tunnel":
         assert "supported only on regular gateways (non-HA)" in normalized_output
     else:
-        assert "on the current owner" in normalized_output
+        assert "on the HA owner" in normalized_output
+        assert "Single-VM" in normalized_output
         assert "Required when selection is ambiguous" in normalized_output
         if arguments[0] == "failover":
-            assert "HA: eligible alternative tunnel" in normalized_output
-            assert "Ordinary BGP: passive tunnel" in normalized_output
+            assert (
+                "Eligible alternative tunnel on the current gateway owner (Static/BGP)"
+                in normalized_output
+            )
         else:
-            assert "HA: configured preferred tunnel" in normalized_output
-            assert "Ordinary BGP: active tunnel" in normalized_output
+            assert (
+                "Configured preferred tunnel on the current gateway owner (Static/BGP)"
+                in normalized_output
+            )
     assert routing_contract in normalized_output
 
 

@@ -331,7 +331,7 @@ def test_build_cloud_init_includes_ssh_key_and_local_prefixes() -> None:
     assert "systemctl restart ssh.socket" in rendered
     assert "ss -H -lnt sport = :22 | grep -q ." in rendered
     assert "[ systemctl, reload, ssh ]" not in rendered
-    assert "net.ipv4.ip_forward = 1" in rendered
+    assert "net.ipv4.ip_forward = 0" in rendered
     assert yaml.safe_load(rendered)["package_upgrade"] is False
 
 
@@ -721,6 +721,7 @@ def test_agent_capability_document_is_read_only_and_machine_readable(
     assert json.loads(capsys.readouterr().out) == {
         "features": [
             "independent-heartbeat-v6",
+            "bounded-ha-activation-v1",
             "connection-tunnel-selection-v1",
             "ordinary-apply-v1",
             "managed-peer-ingress-v2",

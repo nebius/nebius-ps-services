@@ -2789,6 +2789,7 @@ def test_auto_healing_projection_uses_exact_restoration_phase(
     projected = _project_auto_healing_status({}, state_dir=tmp_path)
 
     assert projected["auto_healing"] == {
+        "evidence_reason": None,
         "state": expected_state,
         "peer_agrees": False,
         "accepted_start": False,
@@ -2822,6 +2823,7 @@ def test_auto_healing_projection_blocks_malformed_restoration(
     projected = _project_auto_healing_status({}, state_dir=tmp_path)
 
     assert projected["auto_healing"] == {
+        "evidence_reason": "standby-auto-healing-policy-invalid",
         "state": "blocked",
         "peer_agrees": False,
         "accepted_start": False,
@@ -3008,6 +3010,7 @@ def test_auto_healing_projection_ignores_completed_restoration_after_policy_chan
     projected = _project_auto_healing_status({}, state_dir=tmp_path)
 
     assert projected["auto_healing"] == {
+        "evidence_reason": None,
         "state": "disabled",
         "peer_agrees": True,
         "accepted_start": False,
@@ -4785,6 +4788,7 @@ def test_current_boot_status_projection_is_unchanged(
             "reason": "identity-proof-unavailable",
         },
         "auto_healing": {
+            "evidence_reason": "standby-auto-healing-policy-invalid",
             "state": "blocked",
             "peer_agrees": False,
             "accepted_start": False,

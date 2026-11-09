@@ -757,7 +757,9 @@ def test_executor_resumes_after_each_durable_write_without_resource_effects(
         ),
     )
 
-    def install(ssh, target, instance, local, *, artifact, checkpoint_conversion=None):
+    def install(
+        ssh, target, instance, local, *, artifact, checkpoint_conversion=None, recovery_scope=None
+    ):
         assert_ssh_authority()
         assert {name for action, name in trace if action == "stop"} == {
             i.hostname for i in instances

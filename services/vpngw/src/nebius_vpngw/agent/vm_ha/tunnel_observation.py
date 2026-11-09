@@ -131,6 +131,7 @@ def path_health(
     require_routes: bool,
 ) -> Health:
     try:
+        required = policy.destinations or frozenset({str(ipaddress.IPv4Network(path.peer + "/32"))})
         ike = parse_sas(sas)
         state = xfrm_records(states, policy=False)
         rules = xfrm_records(policies, policy=True)
@@ -164,9 +165,9 @@ def path_health(
                 # while the authenticated identities match the configured peer.
                 for child in sa.get("child-sas", {}).values():
                     if child.get("name") == path.name and child.get("state") == "INSTALLED":
-                        if not covers(
-                            frozenset(child["remote-ts"]), policy.destinations
-                        ) or not covers(frozenset(child["local-ts"]), path.local_selectors):
+                        if not covers(frozenset(child["remote-ts"]), required) or not covers(
+                            frozenset(child["local-ts"]), path.local_selectors
+                        ):
                             continue
                         installed.append((child, sa["local-host"], sa["remote-host"]))
         usable = False
@@ -211,7 +212,7 @@ def path_health(
                     for r in matching
                 )
                 for local in path.local_selectors
-                for remote in policy.destinations
+                for remote in required
                 for direction, src, dst in (
                     ("out", local, remote),
                     ("in", remote, local),
@@ -223,7 +224,7 @@ def path_health(
         if not usable:
             return Health.DOWN
         if require_routes:
-            for prefix in policy.destinations:
+            for prefix in required:
                 observed = [
                     r
                     for r in routes

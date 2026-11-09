@@ -1027,10 +1027,12 @@ def test_get_bgp_learned_routes_queries_only_connection_owner_vm(
             {
                 "gateway_instance_index": 1,
                 "ha_role": "active",
+                "inner_remote_ip": "169.254.20.2",
             },
             {
                 "gateway_instance_index": 1,
                 "ha_role": "passive",
+                "inner_remote_ip": "169.254.21.2",
             },
         ],
     }

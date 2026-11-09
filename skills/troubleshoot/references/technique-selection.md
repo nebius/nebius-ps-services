@@ -33,6 +33,16 @@ runtime documentation.
 6. Prefer deterministic helpers for repeated mechanics and retain causal
    judgment in the investigation.
 
+## Revision Bisection
+
+Require a reliable failure test with equivalent good/bad artifacts, inputs and
+configuration before bisection. Classify build failures, unavailable dependencies
+and otherwise untestable revisions separately; use Git's documented skip behavior
+rather than calling them bad. Skipped revisions can leave several possible culprit
+commits; retain that ambiguity and validate the proposed mechanism independently.
+
+Source: [Git bisect](https://git-scm.com/docs/git-bisect).
+
 ## Bundled Helpers
 
 ### `collect_evidence.py`

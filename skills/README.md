@@ -1669,7 +1669,7 @@ controls, examples, and CI expectations.
 
 ### `troubleshoot`
 
-`troubleshoot` uses adaptive failing-path coverage and causally investigates difficult code, shell, CI, installed
+`troubleshoot` uses layered, evidence-driven failing-path coverage and causally investigates difficult code, shell, CI, installed
 software, service, container, network, storage, and infrastructure failures.
 It preserves evidence, maintains competing hypotheses, runs discriminating
 experiments, proves the earliest causal divergence, applies the smallest
@@ -1677,6 +1677,16 @@ durable repair, and verifies the original failure plus affected boundaries.
 Live mutations are bounded to confirmed non-production unless the user
 authorizes an exact production action; destructive and high-impact changes
 always require action-specific approval.
+
+Seven phases preserve the canonical states and initially route code,
+infrastructure, mixed or undetermined failures. Scoped hypothesis exclusions reopen
+on contradictory evidence or relevant changes. One coordinator may assign independent
+questions to normally two enforceably read-only native investigators (ceiling three),
+under five-minute deadlines and one shared budget. Host authorization remains binding;
+active diagnostics and repair stay with the coordinator, with serial fallback.
+Technology guides include exact version/resource boundaries, NVIDIA, AMD, Kubernetes
+and provider proof limits. Aggregate evaluation includes every investigator and
+separate coordination overhead; missing child traces or usage cannot qualify gains.
 
 Discovery starts with the implicated component, effective configuration and immediate
 dependencies. Evidence determines expansion. Record examined and material unexamined

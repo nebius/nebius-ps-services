@@ -46,6 +46,27 @@ def test_no_success_inferred_from_normal_return(monkeypatch):
     assert payload["inhibition_retained"] is None
 
 
+@pytest.mark.parametrize("output", ["json", "text"])
+def test_pending_authority_is_visible_through_wrapped_public_apply(monkeypatch, output):
+    from nebius_vpngw.deploy.authority_observation import AuthorityUnavailable
+
+    def apply(**kwargs):
+        kwargs["result_report"].started = True
+        raise typer.Exit(1) from AuthorityUnavailable("compute-read-timeout", attempts=3)
+
+    monkeypatch.setattr(cli, "_apply_impl", apply)
+    result = CliRunner().invoke(cli.app, ["apply", "--output-format", output])
+    assert result.exit_code == 1
+    if output == "json":
+        payload = json.loads(result.stdout)
+        assert payload["outcome"] == "pending"
+        assert payload["authority"] == "unknown"
+        assert payload["pending_reason"] == "waiting-for-authority"
+        assert payload["next_command"] == "nebius-vpngw apply"
+    else:
+        assert "pending: waiting for authority" in result.stdout
+
+
 def test_json_separates_diagnostics_and_explicit_evidence(monkeypatch):
     def apply(**kwargs):
         typer.echo("planning progress")
@@ -155,7 +176,9 @@ def test_unreadable_receipt_keeps_json_and_preserves_existing_failure(monkeypatc
 
     def apply(**kwargs):
         report = kwargs["result_report"]
-        report.journal = SimpleNamespace(snapshot=unavailable)
+        report.journal = SimpleNamespace(
+            snapshot=unavailable, record_failure=lambda *a, **kw: unavailable()
+        )
         report.started = True
         if execution_exit is not None:
             raise typer.Exit(execution_exit)

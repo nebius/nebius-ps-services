@@ -8,6 +8,7 @@ guard. Read-only discovery and an unchanged command never publish a revision.
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from pathlib import Path
@@ -25,6 +26,66 @@ class CommandJournal(Journal):
             project,
             gateway,
             root=root or Path.home() / ".local/state/nebius-vpngw/apply" / project / gateway,
+        )
+
+    def failure_for(self, execution_id: str, *, latest: bool = False):
+        """Read diagnostic history only for an exact validated execution."""
+        from .apply_diagnostics import Failure
+        from .operator_guest import read_file
+
+        if re.fullmatch(r"[a-f0-9]{32}", execution_id) is None:
+            raise ValueError("Invalid diagnostic execution identity")
+        directory = self.root / "failures"
+        if latest:
+            directory = directory / "latest"
+        record = read_file(directory / (execution_id + ".json"))
+        if record is None:
+            return None
+        if record["uid"] != os.getuid() or record["mode"] != 0o600:
+            raise ValueError("Apply diagnostic history is not protected")
+        value = json.loads(record["content"])
+        if (
+            set(value) != {"schema", "execution_id", "failure"}
+            or value["schema"] != "nebius-vpngw.apply-failure.v1"
+            or value["execution_id"] != execution_id
+        ):
+            raise ValueError("Apply diagnostic history has a foreign identity")
+        failure = value["failure"]
+        return Failure(**{**failure, "reasons": tuple(failure.get("reasons", ()))})
+
+    def record_failure(self, failure: dict, *, latest: bool = False) -> None:
+        """Retain the first failure for this exact execution, separately from authority."""
+        from .apply_diagnostics import Failure
+        from .operator_guest import publish, read_file
+        from .operator_keys import protected_directory
+
+        Failure(**failure)
+        snapshot = self.snapshot()
+        transaction = snapshot.get("transaction") if snapshot else None
+        if transaction is None:
+            return
+        root = self.root / "failures"
+        if latest:
+            root = root / "latest"
+        protected_directory(root)
+        path = root / (transaction["execution_id"] + ".json")
+        prior = self.failure_for(transaction["execution_id"], latest=latest)
+        if prior is not None and not latest:
+            return
+        payload = {
+            "schema": "nebius-vpngw.apply-failure.v1",
+            "execution_id": transaction["execution_id"],
+            "failure": failure,
+        }
+        publish(
+            path,
+            read_file(path) if prior is not None else None,
+            {
+                "content": json.dumps(payload, sort_keys=True),
+                "uid": os.getuid(),
+                "gid": os.getgid(),
+                "mode": 0o600,
+            },
         )
 
     def validate(self, state: dict) -> None:
@@ -208,12 +269,29 @@ def replacement_plan(child: dict) -> CommandPlan:
     """The existing replacement approval authorizes this complete child scope."""
     from .apply_plan import Effect
 
+    credentials = child.get("route_runtime", {}).get("credentials")
+    prefix = (
+        ()
+        if credentials is None
+        else (
+            Effect(
+                "credentials",
+                "managed-credentials",
+                credentials["action"],
+                tuple(credentials["node_ids"]),
+                digest(credentials),
+                digest(credentials),
+                False,
+            ),
+        )
+    )
     return CommandPlan(
         child["project_id"],
         child["gateway_name"],
         child["configuration_sha256"],
         child["artifact_sha256"],
-        (
+        prefix
+        + (
             Effect(
                 "replacement",
                 "gateway-replacement",
@@ -222,6 +300,7 @@ def replacement_plan(child: dict) -> CommandPlan:
                 digest(child),
                 digest(child["members"]),
                 True,
+                ("credentials",) if credentials is not None else (),
             ),
         ),
     )
@@ -244,8 +323,14 @@ def begin_replacement(journal: CommandJournal, child: dict) -> None:
         if child["phase"] != "complete":
             raise RuntimeError("Completed apply cannot restart its replacement")
         return
-    journal.begin(plan)
-    journal.started("replacement")
+    credentials = child["plan"].get("route_runtime", {}).get("credentials")
+    journal.begin(
+        plan,
+        intents={"credentials": credentials} if credentials else None,
+        execution_id=child["plan"]["operation_id"][:32] if credentials else None,
+    )
+    if credentials is None:
+        journal.started("replacement")
 
 
 def require_replacement_scope(journal: CommandJournal, child_plan: dict) -> None:

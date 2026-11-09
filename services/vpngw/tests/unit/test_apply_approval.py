@@ -112,7 +112,17 @@ def test_ha_prepare_reuses_released_suboperation_before_parent_completion(
     monkeypatch.setattr(handoff.remote, "LOCK", tmp_path / "lock")
     monkeypatch.setattr(handoff, "MARKER", tmp_path / "no-marker")
     monkeypatch.setattr(handoff.repair, "STATE", tmp_path / "ha")
-    monkeypatch.setattr(handoff, "package_observation", lambda _: {"current": "new-runtime"})
+    identity = dict(
+        config_sha256="config",
+        ha_config_digest="logical",
+        python="3.12",
+        machine="arm64",
+        wheel_tags=["approved"],
+        runtime_plan=approved,
+    )
+    monkeypatch.setattr(
+        handoff, "package_observation", lambda _: dict(identity, current="new-runtime")
+    )
     monkeypatch.setattr(
         handoff.ops, "Journal", lambda: SimpleNamespace(read=lambda: {"state": "complete"})
     )
@@ -134,7 +144,7 @@ def test_ha_prepare_reuses_released_suboperation_before_parent_completion(
     monkeypatch.setattr(handoff.ops, "install_startup_guard", next_effect)
     with pytest.raises(ReachedExistingOperation):
         handoff.prepare_guarded(
-            {"package": {"desired": manifest, "predecessor": {"current": "old-runtime"}}}
+            {"package": {"desired": manifest, "predecessor": dict(identity, current="old-runtime")}}
         )
 
 

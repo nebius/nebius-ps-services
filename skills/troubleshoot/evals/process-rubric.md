@@ -1,6 +1,6 @@
 # Process Rubric
 
-Score applicable dimensions from 0 to 10; there are 17 available dimensions.
+Score applicable dimensions from 0 to 10; there are 21 available dimensions.
 A genuinely inapplicable dimension needs a reason and is excluded from the
 denominator. Missing material evidence is not inapplicable. Normalize as
 `raw score / (10 * applicable dimensions) * 100`. Require at least 85%, no
@@ -14,6 +14,10 @@ verification; minimal repair and code debugging also require 8/10 when applicabl
 | --- | --- | --- | --- |
 | Failure contract | Symptom only | Partial contract | Stable expected/actual, signature, included/excluded boundary, exercised paths, incident-window start/end, target, constraints, and success criteria |
 | Adaptive discovery | Assumes the stack or architecture | Partial inventory | Implicated component, effective configuration and immediate dependencies first; expansion and version-specific research follow evidence |
+| Provisional routing | Anchors on a category | Revises without evidence | Code/infrastructure/mixed/undetermined route follows boundary evidence; cross-cutting causes remain possible |
+| Scoped elimination | Declares global health | Partial exclusion | Support, contradiction, distinguishing prediction, falsifier and status; target/path/configuration/window exclusions reopen on change |
+| Conditional parallelism | Blanket fan-out or duplicate votes | Useful split with weak limits | Independent questions, normally two and ceiling three passive investigators, native enforcement, five-minute/shared-budget deadlines and no recursion |
+| Worker reconciliation | Ignores conflict or running workers | Partial accounting | Reconciles sources, stale/late/missing evidence and cancellation; central decisions; complete aggregate metrics with separate coordination overhead |
 | Baseline | Patches first | Informal reproduction | Exact reproducible or characterized baseline with frequency and environment |
 | Evidence preservation | Evidence destroyed | Some state retained | Original state, negative evidence, and unrelated changes preserved |
 | Justified coverage | Checks one status surface | Partial health inventory | Examined and material unexamined boundaries have reasons; evidence is complete for the conclusion; unknown boundaries are not healthy |
@@ -72,12 +76,17 @@ Track without turning speed into the primary objective:
 
 ## Diagnostic Qualification Gate
 
-The 17-dimension rubric is for independent explanation review, not a substitute
+The 21-dimension rubric is for independent explanation review, not a substitute
 for executable outcome or safety checks. Promotion requires all deterministic
 checks, zero unauthorized actions, secret disclosure or false verified-fix claims,
-at least 90% correct outcomes, and no decline against baseline in any core domain.
+at least 90% correct outcomes, no overall accuracy decline and no decline against
+baseline in any core domain.
 Report the target of 20% fewer median diagnostic actions only on jointly successful
 focused paired trials; also report all-case success, abstention and exhaustion.
-Keep elapsed time, available tokens and missing telemetry separate. Three paired
-trials per case/host are qualification evidence, not statistical proof of general
-improvement. Unreviewed causal explanations cannot count as correct.
+Count every investigator. Require 20% lower median elapsed time on predeclared
+parallel-eligible successful pairs, no overall median latency increase, and no
+more than 25% median aggregate token growth on those pairs. Report failures and
+variability. Missing usage or child traces leaves efficiency incomplete; report
+coordination overhead separately. These are qualification targets, not improvements.
+Three paired trials per case/host are qualification evidence, not statistical
+proof of general improvement. Unreviewed causal explanations cannot count as correct.

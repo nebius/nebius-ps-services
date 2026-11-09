@@ -656,6 +656,7 @@ def test_force_reconcile_bypasses_unchanged_config_short_circuit(
     tmp_path: Path,
     monkeypatch,
     ordinary_operation_guest,
+    ordinary_protection_guest,
 ) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -844,6 +845,7 @@ def test_failed_frr_activation_does_not_advance_last_applied_state(
     tmp_path: Path,
     monkeypatch,
     ordinary_operation_guest,
+    ordinary_protection_guest,
 ) -> None:
     config_path = tmp_path / "config.yaml"
     state_path = tmp_path / "last-applied.json"

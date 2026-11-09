@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import fcntl
+import functools
+import hashlib
 import json
 import os
 import select
@@ -45,7 +47,95 @@ PACKAGE_FIELDS = (
     "package_version",
     "runtime_plan",
 )
+
+
+def package_exclusion(function):
+    """Hold dpkg's native frontend lock for one prepared package phase only."""
+
+    @functools.wraps(function)
+    def run(*args, **kwargs):
+        if not remote.DURABLE_PACKAGES:
+            return function(*args, **kwargs)
+        from nebius_vpngw import package_worker
+
+        with package_worker.native_lock("/var/lib/dpkg/lock-frontend"):
+            # Direct dpkg writers need not hold the frontend lock. Observe their
+            # backend exclusion too, then let dpkg take its own native lock.
+            with package_worker.native_lock("/var/lib/dpkg/lock"):
+                pass
+            previous = os.environ.get("DPKG_FRONTEND_LOCKED")
+            try:
+                os.environ["DPKG_FRONTEND_LOCKED"] = "1"
+                return function(*args, **kwargs)
+            finally:
+                if previous is None:
+                    os.environ.pop("DPKG_FRONTEND_LOCKED", None)
+                else:
+                    os.environ["DPKG_FRONTEND_LOCKED"] = previous
+
+    return run
+
+
 LIMIT = 128 * 1024 * 1024
+
+
+def runtime_routes() -> dict:
+    # This is the canonical source reader in the streamed bundle, so an
+    # interrupted package install cannot replace it with a partial import.
+    from nebius_vpngw.agent.ordinary_route_authority import RouteAuthority
+
+    return RouteAuthority().snapshot()
+
+
+def reserve_runtime_routes(request: dict) -> None:
+    from nebius_vpngw.agent.ordinary_route_authority import RouteAuthority
+
+    expected = request["observed"].get("route_runtime")
+    if expected is None or expected["authority"] is None:
+        if runtime_routes()["authority"] is not None:
+            raise RuntimeError("Ordinary route writer appeared during HA handoff")
+        return
+    # The migration's immutable target identity survives the reservation write
+    # even if the ordinary operation journal has not yet been published.
+    holder = ops.digest(["ordinary-to-ha", request["binding"]])
+    current = RouteAuthority().reserve(holder, ops.digest(expected))
+    if (
+        current["journal"] != expected["journal"]
+        or current["authority"]["binding"] != expected["authority"]["binding"]
+    ):
+        raise RuntimeError("Ordinary route receipts changed during HA handoff")
+
+
+def verify_runtime_routes(request: dict) -> None:
+    expected = request["observed"].get("route_runtime")
+    current = runtime_routes()
+    if expected is None or expected["authority"] is None:
+        if current["authority"] is not None:
+            raise RuntimeError("Unreviewed runtime route writer during HA handoff")
+        return
+    authority = current["authority"]
+    if (
+        authority is None
+        or authority["writer"] != "workstation"
+        or authority["holder"] != ops.digest(["ordinary-to-ha", request["binding"]])
+        or authority["binding"] != expected["authority"]["binding"]
+        or current["journal"] != expected["journal"]
+    ):
+        raise RuntimeError("Ordinary runtime route writer is not excluded during HA handoff")
+
+
+def retire_runtime_routes(request: dict) -> None:
+    """Finish the exact migration reservation while HA remains fenced."""
+    from nebius_vpngw.agent.ordinary_route_authority import RouteAuthority
+
+    verify_runtime_routes(request)
+    current = runtime_routes()
+    if current["authority"] is not None:
+        RouteAuthority().retire(
+            ops.digest(["ordinary-to-ha", request["binding"]]),
+            hashlib.sha256(remote.CONFIG.read_bytes()).hexdigest(),
+            current["journal"],
+        )
 
 
 def never_started(value: dict[str, Any] | None, expected: dict[str, Any]) -> bool:
@@ -120,13 +210,17 @@ def package_observation(manifest: dict[str, Any]) -> dict[str, Any]:
     return {key: observed[key] for key in PACKAGE_FIELDS}
 
 
-def inspect(expected: dict[str, Any]) -> dict[str, Any]:
+def inspect(expected: dict[str, Any], *, inhibited: bool = False) -> dict[str, Any]:
     journal = ops.Journal().read()
     manager = ops.Manager(time.monotonic() + 60)
     pending = journal is not None and journal["state"] != "complete"
+    routes = runtime_routes()
+    route_transaction = routes["journal"]["transaction"] if routes["journal"] else None
+    if route_transaction and route_transaction["phase"] != "complete":
+        raise ops.OperationBlocked("ordinary_runtime_route_operation_unresolved")
     if pending and (journal["purpose"] != "ha-handoff" or ops.alive(journal["owner"])):
         raise ops.OperationBlocked("ordinary_handoff_owner_unresolved")
-    if pending and not ops.handoff_recoverable(journal, manager):
+    if pending and not ops.handoff_recoverable(journal, manager, inhibited_quiescence=inhibited):
         raise ops.OperationBlocked("ordinary_handoff_effect_unresolved")
     if MARKER.exists():
         lock_path = repair.STATE / "apply.lock"
@@ -144,6 +238,7 @@ def inspect(expected: dict[str, Any]) -> dict[str, Any]:
             "boot_id": ops.BOOT.read_text().strip(),
             "config_sha256": remote.sha(remote.CONFIG.read_bytes()),
             "unstarted": never_started(journal, expected),
+            "route_runtime": routes,
         }
     if (
         journal is not None
@@ -165,6 +260,7 @@ def inspect(expected: dict[str, Any]) -> dict[str, Any]:
         "unstarted": False,
         "boot_id": ops.BOOT.read_text().strip(),
         "config_sha256": remote.sha(remote.CONFIG.read_bytes()),
+        "route_runtime": routes,
     }
 
 
@@ -247,17 +343,27 @@ class Holder:
         self.plan = request.get("package")
         self.directory: Path | None = None
         self.prepared = False
+        self.activation = None
         self.repairing = request["observed"].get("mode") == "ha"
+        if self.plan is not None:
+            saved = repair.read_json(STAGING / (operation.value["id"] + ".json"))
+            self.activation = saved.get("activation")
+            if saved.get("prepared") is not None:
+                self.directory = STAGING / ops.digest(self.plan)
+                self.prepared = True
 
     def check(self) -> None:
         value = self.operation.check()
         if value["purpose"] != "ha-handoff" or value["predecessor"] != self.request["approval"]:
             raise RuntimeError("HA handoff binding changed")
+        verify_runtime_routes(self.request)
 
     def verify_prepared_predecessor(self) -> None:
         assert self.plan is not None
         manifest = self.plan["desired"]
         expected = json.loads(json.dumps(self.plan["predecessor"]))
+        if self.request.get("resuming"):
+            expected["boot_id"] = self.operation.check()["owner"]["boot"]
         expected.update(
             files=manifest["files"],
             package_version=manifest["version"],
@@ -267,7 +373,42 @@ class Holder:
         for path, item in self.request.get("owned_assets", {}).items():
             expected["assets"][path] = item["sha256"]
             expected["asset_modes"][path] = [item["mode"], 0, 0]
-        if package_observation(manifest) != expected:
+        current = package_observation(manifest)
+        if self.activation is not None:
+            receipt = self.activation["receipt"]
+            raw = repair.verified_file(
+                STAGED_CONFIG / (self.request["ha"]["generation_id"] + ".yaml"),
+                receipt["staged_file_sha256"],
+            )
+            import yaml
+
+            config = yaml.safe_load(raw)
+            config["vm_ha"].pop("runtime_binding", None)
+            if current["config_sha256"] not in {
+                expected["config_sha256"],
+                receipt["staged_file_sha256"],
+            }:
+                raise RuntimeError("HA published configuration changed")
+            if current["ha_config_digest"] not in {
+                expected["ha_config_digest"],
+                remote.canonical(config),
+            }:
+                raise RuntimeError("HA published configuration identity changed")
+            expected.update(
+                config_sha256=current["config_sha256"], ha_config_digest=current["ha_config_digest"]
+            )
+            for path, item in manifest["assets"].items():
+                if current["assets"][path] not in {
+                    expected["assets"][path],
+                    item["sha256"],
+                } or current["asset_modes"][path] not in [
+                    expected["asset_modes"][path],
+                    [item["mode"], 0, 0],
+                ]:
+                    raise RuntimeError("HA publication contains an unowned asset")
+                expected["assets"][path] = current["assets"][path]
+                expected["asset_modes"][path] = current["asset_modes"][path]
+        if current != expected:
             raise RuntimeError("HA prepared predecessor changed")
 
     def convert_checkpoint(self, *, preflight: bool = False) -> None:
@@ -284,18 +425,17 @@ class Holder:
             artifact=self.request["artifact"],
             state_dir=repair.STATE,
             repair=repair,
-            boot_id=self.plan["predecessor"]["boot_id"],
+            boot_id=self.operation.check()["owner"]["boot"],
             unstarted=self.request["observed"].get("unstarted", False),
         )
 
+    @package_exclusion
     def prepare(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.check()
-        if (
-            self.prepared
-            or self.plan is None
-            or payload.get("plan_digest") != ops.digest(self.plan)
-        ):
+        if self.plan is None or payload.get("plan_digest") != ops.digest(self.plan):
             raise RuntimeError("HA handoff package request changed")
+        if self.prepared:
+            return self.verify_prepared(payload)
         manifest = self.plan["desired"]
         if manifest["wheel_sha256"] != self.request["artifact"]:
             raise RuntimeError("HA handoff artifact binding changed")
@@ -304,7 +444,7 @@ class Holder:
             raise RuntimeError("HA staged package plan changed")
         self.operation.phase("install")
         remote.OPERATION = self.operation
-        remote.DEADLINE = time.monotonic() + 600
+        remote.DEADLINE = float("inf") if remote.DURABLE_PACKAGES else time.monotonic() + 600
         self.operation.manager.deadline = remote.DEADLINE - 60
         try:
             scope = (
@@ -326,16 +466,31 @@ class Holder:
                 for path, item in self.request.get("owned_assets", {}).items():
                     predecessor["assets"][path] = item["sha256"]
                     predecessor["asset_modes"][path] = [item["mode"], 0, 0]
-                if package_observation(manifest) != predecessor:
-                    raise RuntimeError("HA package predecessor changed after approval")
+                current = package_observation(manifest)
+                if not self.request.get("resuming"):
+                    if current != predecessor:
+                        raise RuntimeError("HA package predecessor changed after approval")
+                else:
+                    # Native and Python owners validate their prospective exact
+                    # write sets. Identity/config/architecture cannot change.
+                    if current["boot_id"] != self.operation.check()["owner"]["boot"]:
+                        raise RuntimeError("HA resumed package boot authority changed")
+                    for key in (
+                        "config_sha256",
+                        "ha_config_digest",
+                        "python",
+                        "machine",
+                        "wheel_tags",
+                        "runtime_plan",
+                    ):
+                        if current[key] != predecessor[key]:
+                            raise RuntimeError("HA resumed package identity changed")
+                    remote.migration.verify_inhibited()
                 for name, digest in {
                     manifest["wheel_name"]: manifest["wheel_sha256"],
                     **manifest["dependency_wheels"],
                 }.items():
                     repair.verified_file(self.directory / name, digest)
-                dependencies = [
-                    str(self.directory / name) for name in manifest["dependency_wheels"]
-                ]
                 remote.migration.COMMAND = remote.command
                 remote.migration.CHECK = self.operation.check
                 remote.migration.inhibit()
@@ -351,32 +506,21 @@ class Holder:
                     if not self.operation.manager.stopped(unit):
                         raise RuntimeError("daemon package writer is not quiescent")
                 remote.migration.install()
-                if dependencies:
-                    remote.command(
-                        [
-                            sys.executable,
-                            "-B",
-                            "-c",
-                            remote.DEPENDENCY_INSTALL_SCRIPT,
-                            *dependencies,
-                        ],
-                        limit=240,
-                    )
-                if (
-                    self.plan["predecessor"]["files"] != manifest["files"]
-                    or self.plan["predecessor"]["package_version"] != manifest["version"]
-                ):
-                    remote.command(
-                        remote.migration.product_install_command(
-                            self.directory / manifest["wheel_name"]
-                        ),
-                        limit=240,
-                    )
+                payload_directory = (
+                    remote.migration.verify_staged(manifest["runtime_plan"]) / "payload"
+                )
+                remote.python_packages.install_payload(
+                    manifest, payload_directory, remote.command, self.operation.check
+                )
                 receipt = verify_package(manifest)
                 self.convert_checkpoint()
                 if not self.repairing:
                     self.publish_assets(manifest["ordinary_assets"])
                 self.prepared = True
+                binding_path = STAGING / (self.operation.value["id"] + ".json")
+                binding = repair.read_json(binding_path)
+                binding["prepared"] = receipt
+                repair.publish(binding_path, json.dumps(binding, sort_keys=True).encode())
                 self.operation.phase("publish")
                 return receipt
         finally:
@@ -413,7 +557,7 @@ class Holder:
                 raise RuntimeError("HA package repair writer is not stopped")
             self.verify_prepared_predecessor()
             receipt = verify_package(self.plan["desired"])
-            self.convert_checkpoint()
+            self.convert_checkpoint(preflight=True)
             return receipt
 
     def publish_assets(self, assets: dict[str, Any]) -> None:
@@ -460,8 +604,13 @@ class Holder:
         raw = repair.verified_file(staged, receipt["staged_file_sha256"])
         credentials = Path(receipt["nebius_credentials_path"])
         repair.verified_file(credentials, receipt["nebius_credentials_sha256"])
+        publication = {k: payload[k] for k in ("receipt", "operation_id")}
+        binding_path = STAGING / (self.operation.value["id"] + ".json")
+        binding = repair.read_json(binding_path)
+        if binding.get("activation") is not None and binding["activation"] != publication:
+            raise RuntimeError("HA activation publication changed")
         remote.OPERATION = self.operation
-        remote.DEADLINE = time.monotonic() + 600
+        remote.DEADLINE = float("inf") if remote.DURABLE_PACKAGES else time.monotonic() + 600
         self.operation.manager.deadline = remote.DEADLINE - 60
         try:
             with repair.writer_locks(deadline=time.monotonic() + 30):
@@ -476,6 +625,8 @@ class Holder:
                 self.verify_prepared_predecessor()
                 verify_package(manifest)
                 self.convert_checkpoint()
+                binding["activation"] = publication
+                repair.publish(binding_path, json.dumps(binding, sort_keys=True).encode())
                 repair.publish(remote.CONFIG, raw)
                 # Keep management Wants disabled until every fencing prerequisite
                 # and the independent cold guard are durable.
@@ -493,8 +644,9 @@ class Holder:
                 self.publish_assets(
                     {p: v for p, v in manifest["assets"].items() if p in management}
                 )
-                remote.migration.activate()
+                remote.migration.activate_ha(expected)
                 self.operation.phase("activate")
+                self.activation = publication
         finally:
             remote.OPERATION = None
             remote.migration.COMMAND = remote.migration.CHECK = None
@@ -530,11 +682,12 @@ def initialize_unstarted_writer_layout() -> None:
     repair.sync_directory(repair.STATE.parent)
 
 
+@package_exclusion
 def prepare_guarded(request: dict) -> dict:
     """Package effects for retained/fresh HA use the same canonical journal."""
     manifest = request["package"]["desired"]
     expected = request.get("expected")
-    manager = ops.Manager(time.monotonic() + 540)
+    manager = ops.Manager(float("inf") if remote.DURABLE_PACKAGES else time.monotonic() + 540)
     lock = os.open(remote.LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     operation = None
     try:
@@ -543,6 +696,19 @@ def prepare_guarded(request: dict) -> dict:
         pending = remote.migration.pending(manifest.get("ha_parent"))
         if pending is None and current != request["package"]["predecessor"]:
             raise RuntimeError("HA package predecessor changed")
+        if pending is not None:
+            if pending["manifest"] != manifest or any(
+                current[key] != request["package"]["predecessor"][key]
+                for key in (
+                    "config_sha256",
+                    "ha_config_digest",
+                    "python",
+                    "machine",
+                    "wheel_tags",
+                    "runtime_plan",
+                )
+            ):
+                raise RuntimeError("HA resumed package authority changed")
         if MARKER.exists():
             if expected is None:
                 raise RuntimeError("HA package lacks exact apply lock")
@@ -558,6 +724,9 @@ def prepare_guarded(request: dict) -> dict:
         identity = pending["operation"] if pending else os.urandom(16).hex()
         remote.migration.begin(manifest["runtime_plan"], identity, manifest)
         ops.install_startup_guard(ha_repair=True)
+        resuming = old is not None and old["state"] != "complete"
+        if resuming and (pending is None or pending["phase"] != "prepared"):
+            remote.migration.verify_inhibited()
         operation = ops.Operation.begin(
             request=identity,
             config=manifest["config_sha256"],
@@ -567,6 +736,7 @@ def prepare_guarded(request: dict) -> dict:
             network=manager.network(),
             previous=ops.digest(old),
             purpose="ha-handoff",
+            resume_inhibited_quiescence=resuming,
         )
         remote.OPERATION = operation
         remote.migration.COMMAND, remote.migration.CHECK = remote.command, operation.check
@@ -590,15 +760,8 @@ def prepare_guarded(request: dict) -> dict:
                 repair.cold_guard(state_dir=repair.STATE, boot_id=ops.BOOT.read_text().strip())
             operation.phase("install")
             remote.migration.install()
-            dependencies = [str(directory / name) for name in manifest["dependency_wheels"]]
-            if dependencies:
-                remote.command(
-                    [sys.executable, "-B", "-c", remote.DEPENDENCY_INSTALL_SCRIPT, *dependencies],
-                    limit=120,
-                )
-            remote.command(
-                remote.migration.product_install_command(directory / manifest["wheel_name"]),
-                limit=120,
+            remote.python_packages.install_payload(
+                manifest, directory, remote.command, operation.check
             )
             receipt = verify_package(manifest)
             operation.phase("publish")
@@ -712,7 +875,7 @@ def reserve_corrective(request: dict) -> dict:
     path = repair.STATE / "corrective" / (operation_id + ".json")
     key = {k: request[k] for k in ("operation", "previous_lock", "children")}
     key["manifest"] = ops.digest(manifest)
-    manager = ops.Manager(time.monotonic() + 540)
+    manager = ops.Manager(float("inf") if remote.DURABLE_PACKAGES else time.monotonic() + 540)
     descriptor = os.open(remote.LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     operation = None
     try:
@@ -813,15 +976,51 @@ def reserve_corrective(request: dict) -> dict:
         os.close(descriptor)
 
 
-def main() -> None:
+def completed_receipt(request: dict, action: dict) -> dict | None:
+    """Resolve a lost final ACK from canonical completion, never by replay."""
+    value = ops.Journal().read()
+    if not (
+        action.get("action") == "complete"
+        and request.get("action") == "reserve"
+        and value is not None
+        and value["state"] == "complete"
+        and value["purpose"] == "ha-handoff"
+        and value["config"] == request["binding"]
+        and value["artifact"] == request["artifact"]
+        and value["predecessor"] == request["approval"]
+    ):
+        return None
+    binding = repair.read_json(STAGING / (value["id"] + ".json"))
+    publication = binding.get("activation")
+    if (
+        binding.get("package_digest") != ops.digest(request["package"])
+        or publication is None
+        or publication["operation_id"] != action["operation"]
+        or not MARKER.exists()
+    ):
+        raise RuntimeError("HA completed handoff binding changed")
+    repair.exact_lock(dict(request["ha"], operation_id=action["operation"]))
+    repair.verified_file(remote.CONFIG, publication["receipt"]["staged_file_sha256"])
+    verify_package(request["package"]["desired"])
+    return {"complete": True}
+
+
+def main(*, durable: bool = False) -> None:
     def expired(_signum, _frame):
         raise TimeoutError("HA handoff deadline")
 
-    for signum in (signal.SIGALRM, signal.SIGTERM, signal.SIGHUP):
-        signal.signal(signum, expired)
-    signal.alarm(630)
+    if not durable:
+        for signum in (signal.SIGALRM, signal.SIGTERM, signal.SIGHUP):
+            signal.signal(signum, expired)
+        signal.alarm(630)
     request = receive()
-    remote.DEADLINE = time.monotonic() + 600
+    remote.DURABLE_PACKAGES = durable
+    remote.DEADLINE = float("inf") if durable else time.monotonic() + 600
+    if request["action"].startswith("worker-"):
+        from nebius_vpngw import package_worker
+
+        reply(package_worker.control(request))
+        return
     if request["action"] == "corrective-inspect":
         reply(corrective_inspect(request))
         return
@@ -844,22 +1043,46 @@ def main() -> None:
     operation = None
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        observed = inspect(request["ha"])
-        if observed != request["observed"]:
-            raise RuntimeError("HA handoff predecessor changed")
         old = ops.Journal().read()
+        pending_package = remote.migration.pending(
+            (request.get("package") or {}).get("desired", {}).get("ha_parent")
+        )
+        resuming = bool(
+            old
+            and old["purpose"] == "ha-handoff"
+            and old["config"] == request["binding"]
+            and old["artifact"] == request["artifact"]
+            and old["predecessor"] == request["approval"]
+            and pending_package
+            and (old["state"] != "complete" or pending_package["phase"] == "activating")
+            and pending_package["operation"] == old["id"]
+            and pending_package["manifest"] == (request.get("package") or {}).get("desired")
+        )
+        if resuming and pending_package["phase"] == "activating":
+            saved = repair.read_json(STAGING / (old["id"] + ".json"))
+            activation = saved.get("activation")
+            if activation is None:
+                raise RuntimeError("HA activation has no exact publication receipt")
+            repair.fencing_evidence(dict(request["ha"], operation_id=activation["operation_id"]))
+        observed = inspect(request["ha"], inhibited=resuming)
+        request["resuming"] = resuming
+        if observed != request["observed"] and not resuming:
+            raise RuntimeError("HA handoff predecessor changed")
+        if resuming and pending_package["phase"] not in {"prepared", "activating"}:
+            remote.migration.verify_inhibited()
         if old and old["state"] != "complete" and old["config"] != request["binding"]:
             raise RuntimeError("HA handoff target changed")
-        manager = ops.Manager(time.monotonic() + 180)
+        with remote.routing_lock():
+            reserve_runtime_routes(request)
+        manager = ops.Manager(float("inf") if durable else time.monotonic() + 180)
         parent = (request.get("package") or {}).get("desired", {}).get("ha_parent")
         operation_id = (remote.migration.pending(parent) or {}).get("operation") or (
             old["id"] if old and old["state"] != "complete" else os.urandom(16).hex()
         )
         if request.get("package") is not None:
             package = request["package"]
-            if (
-                package["desired"]["wheel_sha256"] != request["artifact"]
-                or package_observation(package["desired"]) != package["predecessor"]
+            if package["desired"]["wheel_sha256"] != request["artifact"] or (
+                not resuming and package_observation(package["desired"]) != package["predecessor"]
             ):
                 raise RuntimeError("HA handoff package approval changed before reservation")
             directory = stage_package(package, request["staged_package"])
@@ -900,7 +1123,7 @@ def main() -> None:
             )
             if old and old["state"] != "complete":
                 if (
-                    not ops.handoff_recoverable(old, manager)
+                    not ops.handoff_recoverable(old, manager, inhibited_quiescence=resuming)
                     or old["artifact"] != request["artifact"]
                 ):
                     raise RuntimeError("HA package operation remains unresolved")
@@ -909,21 +1132,36 @@ def main() -> None:
                     predecessor=old["predecessor"],
                 )
             if request.get("package") is not None:
-                durable = {k: new[k] for k in ("id", "owner", "config", "artifact", "predecessor")}
-                durable.update(
+                binding = {k: new[k] for k in ("id", "owner", "config", "artifact", "predecessor")}
+                binding.update(
                     ha=request["ha"],
                     package_digest=ops.digest(request["package"]),
                     unstarted=not repairing or observed.get("unstarted", False),
                 )
-                repair.publish(STAGING / (new["id"] + ".json"), json.dumps(durable).encode())
+                saved_path = STAGING / (new["id"] + ".json")
+                if resuming:
+                    saved = repair.read_json(saved_path)
+                    if saved.get("package_digest") != binding["package_digest"]:
+                        raise RuntimeError("HA handoff prepared binding changed")
+                    if "prepared" in saved:
+                        binding["prepared"] = saved["prepared"]
+                    if "activation" in saved:
+                        binding["activation"] = saved["activation"]
+                repair.publish(saved_path, json.dumps(binding).encode())
             ops.Journal().write(new, expected=ops.digest(old))
             operation = ops.Operation(new, manager)
+        if request.get("package") is not None:
+            remote.OPERATION = operation
+            remote.migration.COMMAND, remote.migration.CHECK = remote.command, operation.check
+            remote.migration.inhibit()
+            remote.OPERATION = None
+            remote.migration.COMMAND = remote.migration.CHECK = None
         for name in (*(ops.HA_WRITERS if repairing else ()), *ops.MANAGEMENT):
             if not manager.unit(name).get("missing") or not manager.stopped(name):
                 operation.service("stop", name, timeout=45)
             if not manager.stopped(name):
                 raise RuntimeError("HA handoff writer did not stop")
-        if repairing:
+        if repairing and request.get("repair") is not None:
             with repair.writer_locks(deadline=time.monotonic() + 30):
                 repair.exact_lock(request["repair"])
                 repair.cold_guard(state_dir=repair.STATE, boot_id=ops.BOOT.read_text().strip())
@@ -932,12 +1170,14 @@ def main() -> None:
         reply({"ready": True})
         deadline = time.monotonic() + 3600
         while True:
-            signal.alarm(max(1, int(deadline - time.monotonic())))
-            remaining = deadline - time.monotonic()
-            if remaining <= 0 or not select.select([sys.stdin], [], [], remaining)[0]:
-                raise RuntimeError("HA handoff deadline")
+            if not durable:
+                signal.alarm(max(1, int(deadline - time.monotonic())))
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not select.select([sys.stdin], [], [], remaining)[0]:
+                    raise RuntimeError("HA handoff deadline")
             action = receive()
-            signal.alarm(min(600, max(1, int(deadline - time.monotonic()))))
+            if not durable:
+                signal.alarm(min(600, max(1, int(deadline - time.monotonic()))))
             if action["action"] == "prepare-package":
                 reply(holder.prepare(action))
             elif action["action"] == "publish-activation":
@@ -954,12 +1194,15 @@ def main() -> None:
                     raise RuntimeError("HA handoff activation is incomplete")
                 repair.exact_lock(dict(request["ha"], operation_id=action["operation"]))
                 with remote.routing_lock():
+                    retire_runtime_routes(request)
                     operation.complete()
                 reply({"complete": True})
                 return
             else:
                 raise RuntimeError("HA handoff action invalid")
     finally:
+        remote.OPERATION = None
+        remote.migration.COMMAND = remote.migration.CHECK = None
         if operation is not None:
             operation.fail()
         os.close(lock)

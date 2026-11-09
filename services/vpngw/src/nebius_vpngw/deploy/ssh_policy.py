@@ -12,6 +12,7 @@ import re
 import stat
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -1037,13 +1038,20 @@ class SSHTrustPolicy:
     _evidence_checks: tuple[Callable[[], None], ...] = field(default=(), repr=False, compare=False)
 
     def assert_current(self) -> None:
+        from .ssh_commands import DEADLINE
+        from .vm_ha_cloud import vm_ha_observation_budget
+
         if (
             hashlib.sha256(_regular_file(self.known_hosts_file, KNOWN_HOSTS_ENV)).hexdigest()
             != self.known_hosts_sha256
         ):
             raise RuntimeError("VM-HA immutable SSH trust source changed after preflight")
-        for check in self._evidence_checks:
-            check()
+        deadline = DEADLINE.get()
+        with vm_ha_observation_budget(
+            seconds=30.0 if deadline is None else deadline - time.monotonic()
+        ):
+            for check in self._evidence_checks:
+                check()
 
     def identity_for(self, hostname: str) -> SSHHostIdentity:
         self.assert_current()
@@ -1937,7 +1945,9 @@ def require_vm_ha_ssh_policy(
     # Missing pins were rejected above; resolving their directory grants no repair.
     if (
         not directory_is_explicit
-        and (private_key_hosts or (allow_managed_repair and recovered and persist_default_host_keys))
+        and (
+            private_key_hosts or (allow_managed_repair and recovered and persist_default_host_keys)
+        )
         and trust_scope is not None
     ):
         raw_directory = str(_default_vm_ha_ssh_host_keys_directory(trust_scope))

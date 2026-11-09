@@ -31,7 +31,12 @@ def snapshot(*, coverage="ready", policy="enabled"):
             "apply_convergence": projection,
             "generation_id": "g",
             "digests": {"configuration": "g"},
-            "auto_healing": {"state": policy, "peer_agrees": True, "accepted_start": False},
+            "auto_healing": {
+                "evidence_reason": None,
+                "state": policy,
+                "peer_agrees": True,
+                "accepted_start": False,
+            },
             "mtls": {
                 "state": "healthy",
                 "operation_id": None,

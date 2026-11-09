@@ -14,7 +14,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Generic, Protocol, TypeVar
 
 from ...ha_tunnel_policy import ConnectionPolicy, connection_policies, selections
 from .models import canonical_json
@@ -58,18 +58,43 @@ class Authority:
         return {k: v for k, v in asdict(self).items() if k not in {"generation", "epoch"}}
 
 
-class TunnelEffects(Protocol):
-    def revalidate(self, authority: Authority) -> bool: ...
-    def active(self, authority: Authority) -> bool: ...
+@dataclass(frozen=True)
+class OrdinaryAuthority:
+    """Ordinary authority has no cloud ownership or HA incarnation claim."""
+
+    boot_id: str
+    generation: str
+
+    def __post_init__(self) -> None:
+        if not self.boot_id or not self.generation:
+            raise ValueError("ordinary tunnel authority is incomplete")
+
+    @property
+    def owner_key(self) -> dict[str, Any]:
+        return {"boot_id": self.boot_id}
+
+
+TunnelAuthority = Authority | OrdinaryAuthority
+AuthorityT = TypeVar("AuthorityT", Authority, OrdinaryAuthority)
+EffectAuthorityT = TypeVar("EffectAuthorityT", bound=TunnelAuthority, contravariant=True)
+
+
+def _authority(value: dict[str, Any]) -> TunnelAuthority:
+    return OrdinaryAuthority(**value) if "boot_id" in value else Authority(**value)
+
+
+class TunnelEffects(Protocol[EffectAuthorityT]):
+    def revalidate(self, authority: EffectAuthorityT) -> bool: ...
+    def active(self, authority: EffectAuthorityT) -> bool: ...
     def candidate(self, policy: ConnectionPolicy, target: str) -> Health: ...
     def observe(self, policy: ConnectionPolicy, target: str, *, selected: bool) -> Health: ...
-    def suspend(self, policy: ConnectionPolicy, authority: Authority) -> None: ...
+    def suspend(self, policy: ConnectionPolicy, authority: EffectAuthorityT) -> None: ...
     def activate(
-        self, policy: ConnectionPolicy, target: str | None, authority: Authority
+        self, policy: ConnectionPolicy, target: str | None, authority: EffectAuthorityT
     ) -> None: ...
     def verify(self, policy: ConnectionPolicy, target: str | None) -> Health: ...
     def authority_restored(
-        self, policy: ConnectionPolicy, target: str, authority: Authority
+        self, policy: ConnectionPolicy, target: str, authority: EffectAuthorityT
     ) -> bool: ...
     def fence(self) -> None: ...
 
@@ -119,7 +144,7 @@ def read_state(path: Path) -> dict[str, Any]:
         raise CorruptStateError("HA tunnel sequence is invalid")
     try:
         if value["authority"] is not None:
-            Authority(**value["authority"])
+            _authority(value["authority"])
         episode = value["episode"]
         if episode is not None:
             if set(episode) != {
@@ -131,7 +156,13 @@ def read_state(path: Path) -> dict[str, Any]:
                 "exhausted",
             }:
                 raise ValueError
-            Authority(**episode["owner"], generation="validation", epoch="validation")
+            _authority(
+                {
+                    **episode["owner"],
+                    "generation": "validation",
+                    **({} if "boot_id" in episode["owner"] else {"epoch": "validation"}),
+                }
+            )
             for key in ("started", "deadline", "last_observed"):
                 if type(episode[key]) not in {int, float} or not math.isfinite(episode[key]):
                     raise ValueError
@@ -184,11 +215,9 @@ def read_state(path: Path) -> dict[str, Any]:
 
 
 def effective_config(
-    cfg: dict[str, Any], state: dict[str, Any], authority: Authority
+    cfg: dict[str, Any], state: dict[str, Any], authority: TunnelAuthority
 ) -> dict[str, Any]:
     """Do not carry a selection across semantic config or ownership changes."""
-    if not cfg.get("vm_ha"):
-        return cfg
     effective = dict(cfg)
     effective["_ha_tunnel_selections"] = (
         dict(state["selected"]) if state["authority"] == asdict(authority) else {}
@@ -204,36 +233,41 @@ def effective_config(
     return effective
 
 
-class TunnelController:
+class TunnelController(Generic[AuthorityT]):
     def __init__(
         self,
         cfg: dict[str, Any],
         path: Path,
-        effects: TunnelEffects,
+        effects: TunnelEffects[AuthorityT],
         after_persist: Callable[[], None] = lambda: None,
+        *,
+        preferred_probe: Callable[[ConnectionPolicy, str, AuthorityT], Health] | None = None,
+        preferred_observations: dict[str, Any] | None = None,
     ) -> None:
-        if not cfg.get("vm_ha"):
-            raise ValueError("tunnel controller requires explicit HA")
         self.cfg = cfg
-        self.policies = {p.name: p for p in connection_policies(cfg)}
+        self.policies: dict[str, ConnectionPolicy] = {p.name: p for p in connection_policies(cfg)}
         self.path = path
-        self.effects = effects
+        self.effects: TunnelEffects[AuthorityT] = effects
         self.state = read_state(path)
         self.after_persist = after_persist
+        self.preferred_probe: Callable[[ConnectionPolicy, str, AuthorityT], Health] | None = (
+            preferred_probe
+        )
+        # Owned by the process adapter, never persisted across a restart. Each
+        # observation still binds the full current authority and selected path.
+        self.preferred_observations = (
+            preferred_observations if preferred_observations is not None else {}
+        )
 
     def _save(self) -> None:
         atomic_write_json(self.path, _envelope(self.state))
         self.after_persist()
 
-    def bind(self, authority: Authority) -> None:
+    def bind(self, authority: AuthorityT) -> None:
         previous = self.state["authority"]
         if previous == asdict(authority):
             return
-        same_owner = (
-            previous is not None
-            and {k: v for k, v in previous.items() if k not in {"generation", "epoch"}}
-            == authority.owner_key
-        )
+        same_owner = previous is not None and _authority(previous).owner_key == authority.owner_key
         if not same_owner:
             self.state["episode"] = None
         # Configuration changes invalidate an operation, not its consumed episode.
@@ -246,7 +280,7 @@ class TunnelController:
             self.state["operation"].update(phase="failed", result="authority-changed")
         self._save()
 
-    def _episode(self, now: float, authority: Authority) -> dict[str, Any]:
+    def _episode(self, now: float, authority: AuthorityT) -> dict[str, Any]:
         episode = self.state["episode"]
         if episode is None:
             episode = {
@@ -266,7 +300,7 @@ class TunnelController:
         return op is not None and op["phase"] not in {"succeeded", "failed"}
 
     def prepare_bgp_resume(
-        self, authority: Authority, now: float, *, revalidate: Callable[[], bool]
+        self, authority: AuthorityT, now: float, *, revalidate: Callable[[], bool]
     ) -> None:
         """Prepare desired policy behind the fence; the VM activation owns effects.
 
@@ -279,6 +313,7 @@ class TunnelController:
         previous = deepcopy(self.state)
         op = self.state["operation"] if self._pending() else None
         changed = False
+        policy: ConnectionPolicy
         for policy in self.policies.values():
             if policy.mode != "bgp":
                 continue
@@ -290,11 +325,11 @@ class TunnelController:
 
             def candidate(
                 target: str,
-                policy: ConnectionPolicy = policy,
+                candidate_policy: ConnectionPolicy = policy,
                 observations: dict[str, Health] = observations,
             ) -> Health:
                 if target not in observations:
-                    observations[target] = self.effects.candidate(policy, target)
+                    observations[target] = self.effects.candidate(candidate_policy, target)
                 return observations[target]
 
             release = selected is not None and candidate(selected) is Health.DOWN
@@ -333,7 +368,7 @@ class TunnelController:
         self,
         verb: str,
         target: str | None,
-        authority: Authority,
+        authority: AuthorityT,
         now: float,
         *,
         operation_id: str | None = None,
@@ -408,7 +443,7 @@ class TunnelController:
         policy: ConnectionPolicy,
         target: str,
         verb: str,
-        authority: Authority,
+        authority: AuthorityT,
         now: float,
         *,
         operation_id: str | None = None,
@@ -452,7 +487,7 @@ class TunnelController:
         }
         self._save()
 
-    def tick(self, authority: Authority, now: float) -> None:
+    def tick(self, authority: AuthorityT, now: float) -> None:
         if not math.isfinite(now):
             raise ValueError("tunnel clock must be finite")
         if not self.effects.revalidate(authority):
@@ -543,6 +578,7 @@ class TunnelController:
                 self._save()
         self._save()
         if self._pending():
+            self.preferred_observations.clear()
             self._advance(authority, now)
             return
         if episode is not None and episode["exhausted"]:
@@ -561,13 +597,53 @@ class TunnelController:
                     self._advance(authority, now)
                     return
             elif health[policy.name] == Health.DOWN.value:
+                self.preferred_observations.pop(policy.name, None)
                 current = self.state["selected"].get(policy.name, policy.preferred)
                 alternatives = [p.name for p in policy.paths if p.name != current]
                 if alternatives:
                     self._begin(policy, alternatives[0], "automatic", authority, now)
                     return
+            elif self._preferred_ready(policy, authority, now, health[policy.name]):
+                self._begin(policy, policy.preferred, "automatic-failback", authority, now)
+                return
 
-    def _advance(self, authority: Authority, now: float) -> None:
+    def _preferred_ready(
+        self, policy: ConnectionPolicy, authority: AuthorityT, now: float, selected_health: str
+    ) -> bool:
+        selected = self.state["selected"].get(policy.name, policy.preferred)
+        records = self.preferred_observations
+        if (
+            policy.mode != "static"
+            or self.preferred_probe is None
+            or selected == policy.preferred
+            or selected_health != Health.HEALTHY.value
+            or self.state["reasons"].get(policy.name) == "failover"
+        ):
+            records.pop(policy.name, None)
+            return False
+        binding = (asdict(authority), selected)
+        record = records.get(policy.name)
+        if (
+            record is None
+            or record["binding"] != binding
+            or now < record["last"]
+            or now - record["last"] > 10
+        ):
+            record = {"binding": binding, "last": now - 5, "since": None, "successes": 0}
+            records[policy.name] = record
+        if now - record["last"] < 5:
+            return False
+        record["last"] = now
+        observed = self.preferred_probe(policy, policy.preferred, authority)
+        if observed is not Health.HEALTHY or not self.effects.revalidate(authority):
+            record.update(since=None, successes=0)
+            return False
+        if record["since"] is None:
+            record["since"] = now
+        record["successes"] += 1
+        return record["successes"] >= 2 and now - record["since"] >= 60
+
+    def _advance(self, authority: AuthorityT, now: float) -> None:
         op = self.state["operation"]
         policy = self.policies[op["connection"]]
         if not self.effects.revalidate(authority):
@@ -669,7 +745,8 @@ class TunnelController:
                         if failed_target
                         else "verified",
                     )
-                    self.state["reasons"][policy.name] = "restored" if restoring else op["verb"]
+                    if not restoring:
+                        self.state["reasons"][policy.name] = op["verb"]
                 elif (
                     now >= op["attempt_deadline"]
                     and not restoring

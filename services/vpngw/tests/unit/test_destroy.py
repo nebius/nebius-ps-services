@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -34,6 +35,241 @@ from nebius_vpngw.deploy.vm_ha_lifecycle import (
     normalize_vm_ha_observation,
     vm_ha_destroyed_retained_public_bindings,
 )
+
+
+@pytest.fixture
+def pending_destroy_command(tmp_path, monkeypatch):
+    from nebius_vpngw.deploy.apply_command import CommandJournal
+    from nebius_vpngw.deploy.apply_plan import CommandPlan, Effect
+    from nebius_vpngw.deploy.replacement import digest
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    plan = _plan(topology="vm-ha")
+    lifecycle = _lifecycle(VMHALifecycleStatus.ACTIVE, plan)
+    config = tmp_path / "gateway.config.yaml"
+    VMHALifecycleStore(config).write_verified(lifecycle, predecessor_sha256=None)
+    command = CommandJournal(plan.project_id, plan.gateway_name)
+    intent = {"attachments": None, "packages": None}
+    command_plan = CommandPlan(
+        plan.project_id,
+        plan.gateway_name,
+        "a" * 64,
+        "b" * 64,
+        (
+            Effect(
+                "runtime", "ha-lifecycle", "apply", ("old-compute",), digest(intent), "c" * 64, True
+            ),
+        ),
+    )
+    with command:
+        command.begin(command_plan, intents={"runtime": intent})
+        command.started("runtime")
+    old_bytes = command.path.read_bytes()
+    backend = _Backend(plan)
+    backend.build_plan = lambda _: plan
+    backend.old_observations = []
+
+    def absent(target):
+        backend.old_observations.append(target)
+        return True
+
+    backend.command_compute_absent = absent
+    monkeypatch.setattr(destroy_module, "NebiusDestroyBackend", lambda *_a, **_k: backend)
+    spec = SimpleNamespace(
+        name=lifecycle.gateway_name,
+        vm_ha=SimpleNamespace(
+            cluster_id=lifecycle.cluster_id,
+            members=tuple(
+                SimpleNamespace(
+                    instance_index=m.instance_index,
+                    node_id=m.node_id,
+                    role=SimpleNamespace(value=m.role),
+                )
+                for m in lifecycle.members
+            ),
+        ),
+    )
+    args = dict(
+        config_path=config,
+        config_digest=plan.config_digest,
+        spec=spec,
+        project_id=plan.project_id,
+        vm_manager=object(),
+    )
+    return command, backend, args, old_bytes, command_plan, intent
+
+
+def test_destroy_retires_old_pending_command_without_claiming_completion(pending_destroy_command):
+    command, backend, args, old_bytes, command_plan, intent = pending_destroy_command
+    old_execution = command.pending()["execution_id"]
+    history_file = command.root / "failures" / "preserved.json"
+    history_file.parent.mkdir(mode=0o700)
+    history_file.write_text("retained diagnostic")
+    result = execute_destroy(**args)
+    assert result.topology == "vm-ha"
+    assert backend.verifications == 2
+    assert backend.old_observations == ["old-compute", "old-compute"]
+    assert command.pending() is None
+    assert any(path.read_bytes() == old_bytes for path in (command.root / "history").glob("*.json"))
+    receipt = json.loads((command.root / "retirements" / (old_execution + ".json")).read_text())
+    assert receipt["targets"] == ["old-compute"]
+    assert receipt["execution"] == old_execution
+    assert history_file.read_text() == "retained diagnostic"
+    before = command.path.read_bytes()
+    assert execute_destroy(**args).already_absent
+    assert command.path.read_bytes() == before
+    with command:
+        command.begin(command_plan, intents={"runtime": intent})
+    assert command.pending()["execution_id"] != old_execution
+
+
+@pytest.mark.parametrize("failure", ["present", "unknown", "second-read"])
+def test_destroy_keeps_old_admission_when_compute_absence_is_unproven(
+    pending_destroy_command, failure
+):
+    command, backend, args, old_bytes, _, _ = pending_destroy_command
+    observations = []
+
+    def absent(target):
+        observations.append(target)
+        if failure == "unknown":
+            raise RuntimeError("unavailable")
+        return failure == "second-read" and len(observations) == 1
+
+    backend.command_compute_absent = absent
+    with pytest.raises(DestroyFailure, match="admission could not be retired"):
+        execute_destroy(**args)
+    assert command.path.read_bytes() == old_bytes
+    assert not (command.root / "retirements").exists()
+    assert backend.verifications == 2
+
+
+@pytest.mark.parametrize("boundary", ["archive", "receipt", "clear"])
+def test_destroy_retirement_resumes_each_publication_boundary(
+    pending_destroy_command, monkeypatch, boundary
+):
+    from nebius_vpngw.deploy import destroy_command
+    from nebius_vpngw.deploy.apply_command import CommandJournal
+
+    command, backend, args, old_bytes, _, _ = pending_destroy_command
+    owner, attribute = (
+        (destroy_command, "publish")
+        if boundary == "receipt"
+        else (CommandJournal, "archive" if boundary == "archive" else "save")
+    )
+    original = getattr(owner, attribute)
+
+    def fail(*_args, **_kwargs):
+        raise OSError("interrupted retirement publication")
+
+    monkeypatch.setattr(owner, attribute, fail)
+    with pytest.raises(DestroyFailure, match="admission could not be retired"):
+        execute_destroy(**args)
+    assert command.path.read_bytes() == old_bytes
+    monkeypatch.setattr(owner, attribute, original)
+    assert execute_destroy(**args).already_absent
+    assert command.pending() is None
+    assert backend.verifications == 4
+
+
+@pytest.mark.parametrize("boundary", ["receipt-link", "command-exchange"])
+def test_destroy_retirement_recovers_interruption_inside_atomic_publication(
+    pending_destroy_command, monkeypatch, boundary
+):
+    from nebius_vpngw.deploy import operator_guest
+
+    command, _, args, _, _, _ = pending_destroy_command
+    execution = command.pending()["execution_id"]
+    receipt = command.root / "retirements" / (execution + ".json")
+    fsync = operator_guest._fsync_directory
+    exchange = operator_guest._exchange
+    interrupted = []
+
+    def fail_fsync(path):
+        fsync(path)
+        if path == receipt.parent and receipt.exists() and not interrupted:
+            interrupted.append(True)
+            raise OSError("lost receipt publication acknowledgment")
+
+    def fail_exchange(first, second):
+        exchange(first, second)
+        if second == command.path and not interrupted:
+            interrupted.append(True)
+            raise OSError("lost command publication acknowledgment")
+
+    attribute = "_fsync_directory" if boundary == "receipt-link" else "_exchange"
+    monkeypatch.setattr(
+        operator_guest, attribute, fail_fsync if boundary == "receipt-link" else fail_exchange
+    )
+    with pytest.raises(DestroyFailure, match="admission could not be retired"):
+        execute_destroy(**args)
+    assert interrupted
+    monkeypatch.setattr(
+        operator_guest, attribute, fsync if boundary == "receipt-link" else exchange
+    )
+    assert execute_destroy(**args).already_absent
+    assert command.pending() is None
+    assert not list(command.root.rglob("*.vpngw-recovery"))
+
+
+@pytest.mark.parametrize("target", ["old-compute", "foreign-compute"])
+def test_destroy_retirement_validates_and_preserves_package_reservations(
+    pending_destroy_command, target
+):
+    from nebius_vpngw.deploy import package_reservation
+    from nebius_vpngw.deploy.replacement import digest
+
+    command, _, args, old_bytes, _, intent = pending_destroy_command
+    scope = (command.root, command.pending()["execution_id"], digest(intent))
+    token = package_reservation.SCOPE.set(scope)
+    try:
+        package_reservation.admit(
+            {"action": "reserve", "package": {"host": "gateway-0", "target": target}},
+            "d" * 64,
+        )
+    finally:
+        package_reservation.SCOPE.reset(token)
+    path = package_reservation.path_for(*scope[:2], "gateway-0")
+    before = path.read_bytes()
+    if target == "old-compute":
+        execute_destroy(**args)
+        assert command.pending() is None
+    else:
+        with pytest.raises(DestroyFailure, match="admission could not be retired"):
+            execute_destroy(**args)
+        assert command.path.read_bytes() == old_bytes
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "key,owner,action",
+    [
+        ("credentials", "managed-credentials", "enroll"),
+        ("ssh", "ssh-bootstrap", "publish"),
+        ("attachments", "security-groups", "reconcile"),
+        ("runtime", "unknown-owner", "apply"),
+    ],
+)
+def test_destroy_does_not_retire_unsettled_or_unknown_child_authority(
+    pending_destroy_command, key, owner, action
+):
+    from nebius_vpngw.deploy.apply_plan import CommandPlan, Effect
+    from nebius_vpngw.deploy.replacement import digest
+
+    command, _, args, _, original, intent = pending_destroy_command
+    runtime = original.effects[0]
+    effect = Effect(key, owner, action, runtime.targets, digest(intent), "c" * 64, True)
+    effects = (effect,) if key == "runtime" else (effect, runtime)
+    new_plan = CommandPlan(command.project, command.gateway, "a" * 64, "b" * 64, effects)
+    with command:
+        command.state.update(transaction=None, bindings={})
+        command.save()
+        command.begin(new_plan, intents={"runtime": intent})
+        command.started(key)
+    before = command.path.read_bytes()
+    with pytest.raises(DestroyFailure, match="admission could not be retired"):
+        execute_destroy(**args)
+    assert command.path.read_bytes() == before
 
 
 def _plan(*, topology: str = "ordinary", blockers: tuple[str, ...] = ()) -> DestroyPlan:

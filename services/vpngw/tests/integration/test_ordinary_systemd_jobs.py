@@ -210,6 +210,7 @@ def test_shared_static_prefix_real_kernel_verification(
         "gateway": {},
         "connections": [
             {
+                "name": "static",
                 "routing_mode": "static",
                 "remote_prefixes": ["192.0.2.0/24"],
                 "tunnels": [
@@ -259,11 +260,11 @@ def test_shared_static_prefix_real_kernel_verification(
             configure("ip", "addr", "add", endpoint["local_inner_ip"] + "/30", "dev", name)
             xfrm_manager.XFRMManager()._add_static_routes(name, endpoint["remote_prefixes"])
         rows = json.loads(configure("ip", "-j", "route", "show", "192.0.2.0/24").stdout)
-        assert len(rows) == 1 and rows[0]["dev"] == "xfrm1"
+        assert len(rows) == 1 and rows[0]["dev"] == "xfrm0"
         if fault == "wrong":
-            configure("ip", "route", "replace", "192.0.2.0/24", "dev", "xfrm0")
+            configure("ip", "route", "replace", "192.0.2.0/24", "dev", "xfrm1")
         elif fault == "loser":
-            configure("ip", "route", "add", "192.0.2.0/24", "dev", "xfrm0", "metric", "50")
+            configure("ip", "route", "add", "192.0.2.0/24", "dev", "xfrm1", "metric", "50")
         elif fault == "multipath":
             configure(
                 "ip",
@@ -870,6 +871,7 @@ def test_exact_static_route_retirement_in_private_kernel_namespace(manager, tmp_
         "gateway": {},
         "connections": [
             {
+                "name": "static",
                 "routing_mode": "static",
                 "tunnels": [
                     {
@@ -890,6 +892,7 @@ def test_exact_static_route_retirement_in_private_kernel_namespace(manager, tmp_
         "gateway": {},
         "connections": [
             {
+                "name": "static",
                 "routing_mode": "static",
                 "tunnels": old["connections"][0]["tunnels"][1:] if transition == "reindex" else [],
             }

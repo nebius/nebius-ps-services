@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import yaml
+from tests.systemd.ha_bgp_owner_observation import wait_for_owner_coverage
 from tests.unit.test_vm_ha_runtime_ports import (
     FakeRouteBackend,
     FakeSDK,
@@ -184,9 +185,10 @@ controller = VMHAController(peer_timeout_seconds=10, suspicion_seconds=5)
 checkpoint = ControllerCheckpoint()
 
 
-def observation(label):
+def observation(label, *, readiness=None):
     global checkpoint
-    readiness = routes.readiness()
+    if readiness is None:
+        readiness = routes.readiness()
     receipt = routes.receipt_context()
     now = time.monotonic()
     snap = ControllerSnapshot(
@@ -236,6 +238,29 @@ assert decision.action is None and baseline.readiness.promotion_ready, (
     baseline.readiness.blocked_reasons,
     decision.reasons,
 )
+
+
+def sample_coverage():
+    readiness = routes.readiness()
+    print(
+        json.dumps(
+            {
+                "coverage_sample": {
+                    "monotonic": time.monotonic(),
+                    "sample_complete": readiness.sample_complete,
+                    "promotion_ready": readiness.promotion_ready,
+                    "fault_category": readiness.fault_category.value,
+                    "covered_destinations": readiness.covered_destinations,
+                    "blocked_reasons": readiness.blocked_reasons,
+                }
+            }
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
+    return readiness
+
+
 # Freeze only the failed peer's transport and terminate every rekey instance.
 blocked = False
 try:
@@ -269,24 +294,21 @@ try:
     # established until its real three-second hold timer expires.
     deadline = time.monotonic() + 10
     expect_stale = len(sys.argv) > 2 and sys.argv[2] == "stale"
-    while time.monotonic() < deadline:
-        readiness = routes.readiness()
-        if (
-            not readiness.promotion_ready and readiness.service_healthy
-            if expect_stale
-            else readiness.promotion_ready and readiness.path_degraded
-        ):
-            break
-        time.sleep(0.1)
+    readiness = wait_for_owner_coverage(
+        sample_coverage,
+        retained_route=expect_stale,
+        required_prefix="10.200.2.1/32",
+        deadline=deadline,
+    )
     if expect_stale:
-        stale, decision = observation("retained-route-not-coverage")
+        stale, decision = observation("retained-route-not-coverage", readiness=readiness)
         assert not stale.readiness.promotion_ready
         assert stale.readiness.fault_category is FaultCategory.COVERAGE_LOSS
         assert "10.200.2.1/32" not in stale.readiness.covered_destinations
         assert decision.action is None and decision.checkpoint.repair_attempt is None
         assert decision.forwarding_enabled and ports.data_plane.mode() is DataPlaneMode.ACTIVE
         raise SystemExit(0)
-    recovered, decision = observation("native-alternative-recovery")
+    recovered, decision = observation("native-alternative-recovery", readiness=readiness)
     assert recovered.readiness.promotion_ready and recovered.routes_reconciled_context is not None
     assert decision.action is None and decision.checkpoint.repair_attempt is None
     assert decision.state.value == "degraded-path" and decision.forwarding_enabled, (

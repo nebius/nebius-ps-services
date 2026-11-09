@@ -94,6 +94,37 @@ def test_unknown_cause_and_cyclic_chain_are_safe():
     )
 
 
+@pytest.mark.parametrize("wrapped", [False, True, "package"])
+def test_authority_pending_survives_vm_ha_adapter(monkeypatch, wrapped):
+    from nebius_vpngw.deploy.authority_observation import AuthorityUnavailable
+
+    report = cli._VMHAApplyPlanReport(
+        kind="apply-convergence",
+        digest="d" * 64,
+        engine_digest="e" * 64,
+        effects=("typed-effect",),
+        has_destructive_changes=False,
+        managed_ssh_action=None,
+    )
+
+    def failure(**_kwargs):
+        cause = AuthorityUnavailable("compute-read-timeout")
+        if wrapped == "package":
+            package = cli._VMHAAgentPackagePreparationFailed(1, "safe diagnostic")
+            package.__cause__ = cause
+            raise typer.Exit(1) from package
+        if wrapped:
+            raise typer.Exit(1) from cause
+        raise cause
+
+    monkeypatch.setattr(cli, "_apply_impl", failure)
+    with pytest.raises(cli._VMHAApplyConvergenceFailed) as caught:
+        cli._execute_vm_ha_apply_convergence(Path("test.yaml"), report)
+    assert caught.value.pending
+    assert caught.value.reason == "waiting-for-authority"
+    assert "same vm-ha command" in caught.value.next_action
+
+
 @pytest.mark.parametrize(
     ("field", "value", "reason"),
     [

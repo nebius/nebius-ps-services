@@ -349,8 +349,10 @@ class NebiusSDKRouteBackend:
         """Freshly prove the full declared parent chain before route authority is used."""
 
         from nebius.api.nebius.vpc.v1 import (
+            GetNetworkRequest,
             GetRouteTableRequest,
             GetSubnetRequest,
+            NetworkServiceClient,
             RouteTableServiceClient,
             SubnetServiceClient,
         )
@@ -375,6 +377,8 @@ class NebiusSDKRouteBackend:
         subnet_spec = getattr(subnet, "spec", None)
         table_metadata = getattr(route_table, "metadata", None)
         table_spec = getattr(route_table, "spec", None)
+        effective = getattr(getattr(subnet, "status", None), "route_table", None)
+        explicit_table = str(getattr(subnet_spec, "route_table_id", "") or "")
         observed = VMHARouteTarget(
             project_id=str(getattr(subnet_metadata, "parent_id", "") or ""),
             network_id=str(getattr(subnet_spec, "network_id", "") or ""),
@@ -383,11 +387,35 @@ class NebiusSDKRouteBackend:
         )
         if (
             observed != target
-            or str(getattr(subnet_spec, "route_table_id", "") or "") != target.route_table_id
+            or str(getattr(effective, "id", "") or "") != target.route_table_id
+            or (explicit_table and explicit_table != target.route_table_id)
             or str(getattr(table_metadata, "parent_id", "") or "") != target.project_id
             or str(getattr(table_spec, "network_id", "") or "") != target.network_id
         ):
             raise RuntimeError("VM-HA route target membership changed")
+
+        if not explicit_table:
+            # An inherited attachment has no spec.route_table_id. Prove its
+            # effective table against the owning network instead of treating
+            # an empty specification as drift or trusting status alone.
+            assignment = getattr(getattr(route_table, "status", None), "assignment", None)
+            if getattr(effective, "default", None) is not True or set(
+                getattr(assignment, "subnets", ()) or ()
+            ) != {target.workload_subnet_id}:
+                raise RuntimeError("VM-HA route target membership changed")
+            network = (
+                NetworkServiceClient(self.sdk)
+                .get(GetNetworkRequest(id=target.network_id), **vm_ha_request_kwargs())
+                .wait()
+            )
+            metadata = getattr(network, "metadata", None)
+            status = getattr(network, "status", None)
+            if (
+                str(getattr(metadata, "id", "") or "") != target.network_id
+                or str(getattr(metadata, "parent_id", "") or "") != target.project_id
+                or str(getattr(status, "default_route_table_id", "") or "") != target.route_table_id
+            ):
+                raise RuntimeError("VM-HA route target membership changed")
 
     def verify_migration_route(self, binding: VMHAMigrationRouteBinding) -> bool:
         """Reobserve one exact approval-bound route without adopting by name."""
@@ -4467,6 +4495,58 @@ class RouteManager:
             rollback_dir=rollback_dir,
         )
 
+    def selected_peer_routes(
+        self,
+        bgp_data: dict,
+        *,
+        peers: set[str],
+        allowed: tuple = (),
+    ) -> tuple[str, ...]:
+        """Read a complete FRR RIB, scoped to configured peers and best paths.
+
+        Both SSH deployment observations and the in-guest runtime use this parser.
+        A malformed row anywhere makes this snapshot unknown, never absent.
+        """
+        if not peers:
+            raise RouteManagementError("BGP route inventory has no exact configured peers")
+        if not isinstance(bgp_data, dict) or not isinstance(bgp_data.get("routes"), dict):
+            raise RouteManagementError("BGP route inventory is incomplete")
+        result = set()
+        for raw_prefix, value in bgp_data["routes"].items():
+            network = self._parse_ipv4_network(str(raw_prefix))
+            paths = [value] if isinstance(value, dict) else value
+            if (
+                network is None
+                or not isinstance(paths, list)
+                or not paths
+                or any(
+                    not isinstance(path, dict)
+                    or type(path.get("valid")) is not bool
+                    or not isinstance(path.get("peerId"), str)
+                    or any(
+                        key in path and type(path[key]) is not bool
+                        for key in ("bestpath", "multipath")
+                    )
+                    or not isinstance(path.get("nexthops"), list)
+                    or any(
+                        not isinstance(hop, dict) or not hop.get("ip") for hop in path["nexthops"]
+                    )
+                    for path in paths
+                )
+            ):
+                raise RouteManagementError("BGP route inventory contains malformed paths")
+            if allowed and not any(network.subnet_of(item) for item in allowed):
+                continue
+            if any(
+                path["valid"]
+                and (path.get("bestpath") is True or path.get("multipath") is True)
+                and path["peerId"] in peers
+                and self._path_nexthops(path) & peers
+                for path in paths
+            ):
+                result.add(str(network))
+        return tuple(sorted(result))
+
     def _get_bgp_learned_routes(
         self, plan: ResolvedDeploymentPlan, conn: dict, local_cfg: dict
     ) -> list[str]:
@@ -4487,7 +4567,7 @@ class RouteManager:
                 if network is not None:
                     whitelist_networks.append(network)
 
-        learned_prefixes = []
+        learned_prefixes: list[str] = []
         queried_gateway = False
 
         target_instance_indices = set(self._connection_instance_indices(conn))
@@ -4522,77 +4602,14 @@ class RouteManager:
                     )
 
                 bgp_data = json.loads(result.stdout)
-                if not isinstance(bgp_data, dict) or not isinstance(bgp_data.get("routes"), dict):
-                    raise RouteManagementError(
-                        "BGP route discovery returned an incomplete route inventory."
-                    )
+                selected = self.selected_peer_routes(
+                    bgp_data,
+                    peers=peer_ips,
+                    allowed=tuple(whitelist_networks),
+                )
+                selected_prefixes_for_host = len(set(selected) - set(learned_prefixes))
+                learned_prefixes.extend(p for p in selected if p not in learned_prefixes)
                 routes = bgp_data["routes"]
-
-                selected_prefixes_for_host = 0
-                for prefix, route_data in routes.items():
-                    if isinstance(route_data, dict):
-                        paths = [route_data]
-                    elif isinstance(route_data, list):
-                        paths = route_data
-                    else:
-                        raise RouteManagementError("BGP route discovery returned malformed paths.")
-                    if (
-                        not paths
-                        or self._parse_ipv4_network(str(prefix)) is None
-                        or any(
-                            not isinstance(path, dict)
-                            or type(path.get("valid")) is not bool
-                            or not isinstance(path.get("peerId"), str)
-                            or any(
-                                key in path and type(path[key]) is not bool
-                                for key in ("bestpath", "multipath")
-                            )
-                            or not isinstance(path.get("nexthops"), list)
-                            or any(
-                                not isinstance(nexthop, dict) or not nexthop.get("ip")
-                                for nexthop in path["nexthops"]
-                            )
-                            for path in paths
-                        )
-                    ):
-                        raise RouteManagementError("BGP route discovery returned malformed paths.")
-
-                    relevant_paths = []
-                    for path in paths:
-                        if not path["valid"] or not (
-                            path.get("bestpath") is True or path.get("multipath") is True
-                        ):
-                            continue
-                        if peer_ips and path.get("peerId") not in peer_ips:
-                            continue
-                        path_nexthops = self._path_nexthops(path)
-                        if not path_nexthops:
-                            continue
-                        if peer_ips and not (path_nexthops & peer_ips):
-                            continue
-                        relevant_paths.append(path)
-
-                    if not relevant_paths:
-                        continue
-
-                    # Apply whitelist filter if configured
-                    if whitelist_networks:
-                        try:
-                            prefix_net = self._parse_ipv4_network(str(prefix))
-                            if prefix_net is None:
-                                continue
-                            allowed = any(
-                                prefix_net.subnet_of(wl) or prefix_net == wl
-                                for wl in whitelist_networks
-                            )
-                            if not allowed:
-                                continue
-                        except Exception:
-                            continue
-
-                    if prefix not in learned_prefixes:
-                        learned_prefixes.append(prefix)
-                        selected_prefixes_for_host += 1
 
                 print(
                     f"[cyan]Selected {selected_prefixes_for_host} connection-scoped BGP "

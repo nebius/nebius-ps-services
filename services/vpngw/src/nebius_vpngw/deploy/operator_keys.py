@@ -14,9 +14,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
 _NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\Z")
 
 
@@ -128,6 +125,10 @@ def protected_directory(path: Path) -> None:
         raise ValueError("Operator key directory must be owned by the operator with mode 0700")
 
 
+class PrivateFileChanged(ValueError):
+    """A protected read raced a writer; the captured bytes are not usable."""
+
+
 def read_private_file(path: Path, *, required: bool = True) -> bytes | None:
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -164,7 +165,7 @@ def read_private_file(path: Path, *, required: bool = True) -> bytes | None:
         if signature(os.fstat(fd)) != signature(metadata) or signature(path.lstat()) != signature(
             metadata
         ):
-            raise ValueError("Operator key file changed while being read")
+            raise PrivateFileChanged("Operator key file changed while being read")
         return content
     finally:
         os.close(fd)
@@ -192,6 +193,8 @@ def publish_new(path: Path, content: bytes) -> None:
 
 def public_identity(content: str) -> tuple[str, str]:
     """Accept one plain Ed25519 key; enrollment cannot inject authorized_keys options."""
+    from cryptography.hazmat.primitives import serialization
+
     fields = content.strip().split()
     if len(content.strip().splitlines()) != 1 or len(fields) < 2 or fields[0] != "ssh-ed25519":
         raise ValueError("New operators require one plain Ed25519 public key")
@@ -217,6 +220,9 @@ class OperatorKey:
 
 def generate_or_resume(path: Path, passphrase: str) -> OperatorKey:
     """Retry the same encrypted pair, including a crash before public-file creation."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
     if not passphrase:
         raise ValueError("A nonempty passphrase is required for generated operator keys")
     path = path.expanduser().absolute()

@@ -42,6 +42,7 @@ def build_binary() -> None:
             f"{remote_runner}{os.pathsep}nebius_vpngw/deploy",
         ]
     )
+    from .handoff_bootstrap import SOURCES as HANDOFF_SOURCES
     from .ingress_policy import INGRESS_SOURCES
     from .ordinary_routes import OWNERSHIP_SOURCES
     from .replay_window import REPLAY_WINDOW_SOURCES
@@ -51,6 +52,7 @@ def build_binary() -> None:
             *OWNERSHIP_SOURCES,
             *REPLAY_WINDOW_SOURCES,
             *INGRESS_SOURCES,
+            *(relative for _name, relative in HANDOFF_SOURCES),
             "ordinary_bootstrap.py",
             "boot_policy.py",
             "packet_health.py",
@@ -66,6 +68,12 @@ def build_binary() -> None:
 
     for relative in (
         "ha_repair.py",
+        "ha_activation.py",
+        "agent/main.py",
+        "agent/local_commands.py",
+        "agent/routing_guard.py",
+        "agent/strongswan_renderer.py",
+        "agent/vm_ha/runtime.py",
         "runtime_migration.py",
         "apply_lock.py",
         "faults.py",
@@ -76,6 +84,7 @@ def build_binary() -> None:
         "agent/tunnel_iterator.py",
         "deploy/handoff_remote.py",
         "deploy/operator_guest.py",
+        "deploy/stopped_upgrade.py",
         "agent/vm_ha_checkpoint.py",
         "agent/vm_ha_controller.py",
         "agent/vm_ha/models.py",

@@ -59,6 +59,7 @@ class ComputeState(str, Enum):
 class DataPlaneMode(str, Enum):
     BLOCKED = "blocked"
     PASSIVE = "passive"
+    ORIGINATING = "originating"
     ACTIVE = "active"
 
 
@@ -73,6 +74,7 @@ class ActionKind(str, Enum):
     ATTACH_CANDIDATE = "attach-candidate"
     CONFIRM_CANDIDATE_OWNERSHIP = "confirm-candidate-ownership"
     PREPARE_CANDIDATE_DATAPLANE = "prepare-candidate-dataplane"
+    PREPARE_OWNER_ORIGINATION = "prepare-owner-origination"
     RECONCILE_ROUTES = "reconcile-routes"
     ENABLE_ACTIVE = "enable-active"
 
@@ -122,6 +124,9 @@ class LocalReadiness:
     local_defects: tuple[str, ...] = ()
     required_destinations: tuple[str, ...] = ()
     covered_destinations: tuple[str, ...] = ()
+    origination_required: bool = False
+    origination_ready: bool = False
+    diagnostic_reasons: tuple[str, ...] = ()
 
     @property
     def fault_category(self) -> FaultCategory:
@@ -168,7 +173,15 @@ class LocalReadiness:
             (self.xfrm_ready, "xfrm-not-ready"),
             (self.routing_hygiene_ready, "routing-hygiene-not-ready"),
         )
-        return (*tuple(reason for ready, reason in checks if not ready), *self.local_defects)
+        return tuple(
+            dict.fromkeys(
+                (
+                    *tuple(reason for ready, reason in checks if not ready),
+                    *self.diagnostic_reasons,
+                    *self.local_defects,
+                )
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -620,7 +633,7 @@ class VMHAController:
                 and snapshot.guard_boot_id != snapshot.boot_id
             ):
                 guard_action = ActionKind.INSTALL_COLD_START_GUARD
-                if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+                if snapshot.data_plane_mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}:
                     guard_action = ActionKind.DISABLE_ACTIVE
                 return self._action(
                     HAState.BLOCKED,
@@ -662,10 +675,14 @@ class VMHAController:
             elif (
                 pending.kind in _PASSIVE_REPLAY_ACTIONS
                 and snapshot.data_plane_mode is not DataPlaneMode.PASSIVE
+                and not (
+                    pending.kind is ActionKind.RECONCILE_ROUTES
+                    and snapshot.data_plane_mode is DataPlaneMode.ORIGINATING
+                )
             ):
                 passive_action = (
                     ActionKind.DISABLE_ACTIVE
-                    if snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+                    if snapshot.data_plane_mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}
                     else ActionKind.ENTER_PASSIVE
                 )
                 return self._action(
@@ -728,7 +745,7 @@ class VMHAController:
                         ),
                     ),
                 )
-                if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+                if snapshot.data_plane_mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}:
                     return self._action(
                         HAState.BLOCKED,
                         ("checkpointed-action-prerequisites-changed",),
@@ -795,7 +812,7 @@ class VMHAController:
             )
         local_ownership_safe = self._local_ownership_safe(snapshot, checkpoint)
         if local_owns and not local_ownership_safe:
-            if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+            if snapshot.data_plane_mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}:
                 return self._action(
                     HAState.BLOCKED,
                     ("local-ownership-lacks-establishment-proof",),
@@ -810,7 +827,10 @@ class VMHAController:
                     snapshot,
                     replace(checkpoint, state=HAState.BLOCKED),
                 )
-        if snapshot.data_plane_mode is DataPlaneMode.ACTIVE and not local_owns:
+        if (
+            snapshot.data_plane_mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}
+            and not local_owns
+        ):
             return self._action(
                 HAState.BLOCKED,
                 ("active-node-lacks-exact-allocation-ownership",),
@@ -936,7 +956,7 @@ class VMHAController:
                 suspect_since=None,
                 suspicion_boot_id=None,
             )
-            if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+            if snapshot.data_plane_mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}:
                 return self._action(
                     HAState.BLOCKED,
                     ("apply-lock-held",),
@@ -1092,7 +1112,7 @@ class VMHAController:
         # passive mode.  That transition authorizes only node-local tunnel
         # materialization; promotion readiness and owner-only effects are
         # evaluated on a later observation.
-        if snapshot.data_plane_mode is not DataPlaneMode.PASSIVE:
+        if snapshot.data_plane_mode not in {DataPlaneMode.PASSIVE, DataPlaneMode.ORIGINATING}:
             return self._action(
                 HAState.NORMAL,
                 ("owner-must-materialize-passive-dataplane",),
@@ -1109,6 +1129,8 @@ class VMHAController:
         elif parity_reasons:
             promotion_blockers = parity_reasons
         if promotion_blockers:
+            if snapshot.data_plane_mode is DataPlaneMode.ORIGINATING:
+                return self._block_or_disable(promotion_blockers, snapshot, checkpoint)
             return self._result(
                 HAState.BLOCKED,
                 promotion_blockers,
@@ -1126,6 +1148,41 @@ class VMHAController:
                 checkpoint,
                 ActionKind.ENTER_PASSIVE,
             )
+
+        if snapshot.readiness.origination_required:
+            if snapshot.transfer_inhibited:
+                return self._block_or_disable("origination-inhibited", snapshot, checkpoint)
+            if snapshot.data_plane_mode is DataPlaneMode.PASSIVE:
+                # The fenced preparation action installs and verifies protection
+                # before advertising. Requiring it here would deadlock a fresh
+                # gateway or an upgrade without the destination-protection table.
+                if not (
+                    snapshot.readiness.service_healthy
+                    and snapshot.readiness.sample_complete
+                    and snapshot.readiness.routing_hygiene_ready
+                    and not snapshot.readiness.local_defects
+                ):
+                    return self._result(
+                        HAState.BLOCKED,
+                        ("origination-preparation-unready", *reasons),
+                        snapshot,
+                        replace(checkpoint, state=HAState.BLOCKED),
+                    )
+                return self._action(
+                    HAState.PROMOTING,
+                    ("owner-local-prefix-origination-required",),
+                    snapshot,
+                    checkpoint,
+                    ActionKind.PREPARE_OWNER_ORIGINATION,
+                )
+            if not snapshot.readiness.origination_ready:
+                return self._action(
+                    HAState.BLOCKED,
+                    ("origination-policy-unproven",),
+                    snapshot,
+                    checkpoint,
+                    ActionKind.DISABLE_ACTIVE,
+                )
 
         if snapshot.readiness.candidate_preparation_required:
             return self._action(
@@ -1622,7 +1679,7 @@ class VMHAController:
         checkpoint: ControllerCheckpoint,
     ) -> ControllerResult:
         reasons = (reason,) if isinstance(reason, str) else reason
-        if snapshot.data_plane_mode is DataPlaneMode.ACTIVE:
+        if snapshot.data_plane_mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}:
             return self._action(
                 HAState.BLOCKED,
                 reasons,
@@ -1689,6 +1746,7 @@ class VMHAController:
                 kind
                 in {
                     ActionKind.PREPARE_CANDIDATE_DATAPLANE,
+                    ActionKind.PREPARE_OWNER_ORIGINATION,
                     ActionKind.RECONCILE_ROUTES,
                 }
                 and self._transfer_in_progress(snapshot, checkpoint)
@@ -1724,7 +1782,11 @@ class VMHAController:
             ActionKind.INSTALL_COLD_START_GUARD: snapshot.guard_boot_id == snapshot.boot_id
             and snapshot.data_plane_mode is DataPlaneMode.BLOCKED,
             ActionKind.ENTER_PASSIVE: snapshot.data_plane_mode is DataPlaneMode.PASSIVE,
-            ActionKind.DISABLE_ACTIVE: snapshot.data_plane_mode is not DataPlaneMode.ACTIVE,
+            ActionKind.DISABLE_ACTIVE: snapshot.data_plane_mode
+            in {DataPlaneMode.BLOCKED, DataPlaneMode.PASSIVE},
+            ActionKind.PREPARE_OWNER_ORIGINATION: snapshot.data_plane_mode
+            is DataPlaneMode.ORIGINATING
+            and snapshot.readiness.origination_ready,
             ActionKind.REPAIR_LOCAL_DATAPLANE: (
                 snapshot.completed_effect_operation_id == action.operation_id
             ),
@@ -1795,6 +1857,27 @@ class VMHAController:
             return True
         if not self._pending_action_context_matches(action, snapshot, checkpoint):
             return False
+        if kind is ActionKind.PREPARE_OWNER_ORIGINATION:
+            return bool(
+                cloud.authoritative
+                and self._local_ownership_safe(snapshot, checkpoint)
+                and snapshot.data_plane_mode in {DataPlaneMode.PASSIVE, DataPlaneMode.ORIGINATING}
+                and not snapshot.apply_locked
+                and not snapshot.transfer_inhibited
+                and not snapshot.emergency_active_only
+                and not self._parity_reasons(snapshot)
+                and snapshot.readiness.service_healthy
+                and snapshot.readiness.sample_complete
+                and snapshot.readiness.routing_hygiene_ready
+                and not snapshot.readiness.local_defects
+                and (
+                    not action.takeover_fence_required
+                    or (
+                        cloud.transfer_complete(snapshot.local_node_id)
+                        and self._transfer_intent_valid(snapshot, checkpoint)
+                    )
+                )
+            )
         if not self._path_obligation_ready(snapshot, checkpoint):
             return False
         if kind is ActionKind.REPAIR_LOCAL_DATAPLANE:
@@ -1835,6 +1918,10 @@ class VMHAController:
             return False
         if kind in _PASSIVE_REPLAY_ACTIONS and (
             snapshot.data_plane_mode is not DataPlaneMode.PASSIVE
+            and not (
+                kind is ActionKind.RECONCILE_ROUTES
+                and snapshot.data_plane_mode is DataPlaneMode.ORIGINATING
+            )
         ):
             return False
         if kind is ActionKind.ENABLE_ACTIVE:

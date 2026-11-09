@@ -168,6 +168,11 @@ def main() -> None:
         "native-fixture", cfg.get("_fixture_owner", "owner"), "allocation", "1", 1, "a" * 64
     )
     state_dir = Path("/var/lib/nebius-vpngw/vm-ha")
+    if not cfg.get("vm_ha"):
+        from nebius_vpngw.agent.ordinary_selection import authority as ordinary_authority
+
+        authority = ordinary_authority(cfg, "native-boot")
+        state_dir = Path("/var/lib/nebius-vpngw/ordinary")
     state_dir.mkdir(parents=True, exist_ok=True)
     if command in {"activation-checkpoint", "activation"}:
         activate_retained_static(
@@ -232,6 +237,22 @@ def main() -> None:
         return
     selector = TunnelController(cfg, state_dir / "tunnel-selection.json", effects)
     policy = next(p for p in connection_policies(cfg) if p.name == "site")
+    if command == "protect-learned":
+        from nebius_vpngw.agent.vm_ha.forwarding import DestinationProtection
+
+        protection = DestinationProtection(
+            state_dir / "destination-protection.json",
+            cluster=cfg["vm_ha"]["cluster_id"],
+            policies=connection_policies(cfg),
+            local_prefixes=tuple(cfg["gateway"]["local_prefixes"]),
+        )
+        protection.admit(frozenset({"10.200.2.1/32"}))
+        protection.verify()
+        print("learned-destination-protected")
+        return
+    if command == "probe-preferred":
+        print(effects.probe_preferred(policy, policy.preferred, authority).value)
+        return
     if command == "diagnose":
         print(
             json.dumps(

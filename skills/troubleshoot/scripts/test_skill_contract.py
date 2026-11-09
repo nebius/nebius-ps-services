@@ -260,6 +260,8 @@ class TroubleshootContractTest(unittest.TestCase):
             "network",
             "code-debugging",
             "gpu",
+            "amd",
+            "provider-routing",
             "kubernetes",
             "slurm",
             "soperator",
@@ -271,7 +273,9 @@ class TroubleshootContractTest(unittest.TestCase):
                 "Cheapest distinguishing evidence",
                 "Interpretation",
                 "Next branch",
-                "Escalation Conditions",
+                "Applicability",
+                "Version Fingerprint",
+                "Diagnostic Effects",
                 "Verification",
             ):
                 self.assertIn(heading, guide, name)

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -38,6 +39,31 @@ class EnrollmentJournal(Journal):
 
     def validate(self, state: dict) -> None:
         validate(state, schema=self.schema, project=self.project, gateway=self.gateway)
+
+    def restore_completed(
+        self, snapshot: dict, *, intent: dict, approval: str, execution_id: str
+    ) -> None:
+        """Restore exact portable owner evidence, never overwrite other enrollment."""
+        self.validate(snapshot)
+        selected = snapshot["transaction"]
+        if (
+            selected is None
+            or selected["phase"] != "complete"
+            or selected["intent"] != intent
+            or selected["approval"] != approval
+            or selected["execution_id"] != execution_id
+        ):
+            raise RuntimeError("Portable enrollment differs from its approved owner")
+        with self:
+            current = self.state["transaction"]
+            if current is not None:
+                if current != selected:
+                    raise RuntimeError("Portable enrollment would replace another operation")
+                return
+            revision = self.state["revision"]
+            self.state = deepcopy(snapshot)
+            self.state["revision"] = max(revision, snapshot["revision"])
+            self.save()
 
     def begin(self, intent: dict, *, approval: str, execution_id: str) -> None:
         current = self.state["transaction"]
@@ -114,6 +140,17 @@ class EnrollmentJournal(Journal):
             "runtime_credentials",
             "iam_resources",
         }
+        if (
+            current["phase"] == "complete"
+            and current["receipt"] is not None
+            and original["purpose"] == "ordinary-route-writer"
+            and "recovery" not in original
+            and actual.get("recovery") is not None
+        ):
+            # A completed first enrollment may later recover its identical key
+            # from the replacement candidate. The selected public key, complete
+            # IAM receipts and credential resource bindings below remain exact.
+            changing.add("recovery")
         if {k: v for k, v in original.items() if k not in changing} != {
             k: v for k, v in actual.items() if k not in changing
         }:
@@ -139,6 +176,10 @@ class EnrollmentJournal(Journal):
             or observed.credentials.resource_bindings() != current["receipt"]
         ):
             raise RuntimeError("Published credential identity changed")
+        if current["phase"] == "complete":
+            # Completed IAM effects must never be replanned as creations. All
+            # current reuse identities have just been checked against receipts.
+            return observed
         graph = original["iam_resources"]
         return replace(
             observed,
@@ -221,7 +262,9 @@ class EnrollmentJournal(Journal):
                 project_id=self.project,
                 expected_name=current["intent"]["service_account_name"],
                 ownership_labels=vm_ha_ownership_labels(
-                    project_id=self.project, gateway_name=self.gateway
+                    project_id=self.project,
+                    gateway_name=self.gateway,
+                    purpose=current["intent"]["purpose"],
                 ),
             )
             != group_id
@@ -287,6 +330,7 @@ def execute(
     region_id: str | None,
     key: str = "credentials",
     ensure: Callable[..., VMHAManagedCredentialResult] | None = None,
+    checkpoint: Callable[[dict], None] | None = None,
 ) -> VMHAManagedCredentialResult:
     """Run the existing secret owner only under the exact active parent effect."""
     from ..vm_ha_managed_credentials import ensure_managed_vm_ha_credentials
@@ -305,6 +349,8 @@ def execute(
         or effect.owner != "managed-credentials"
         or intent is None
         or effect.request_sha256 != digest(intent)
+        or list(sorted(node_ids)) != intent["node_ids"]
+        or observed.purpose != intent["purpose"]
         or set(effect.targets) != set(node_ids)
         or len(node_ids) != len(set(node_ids))
         or parent["progress"][key] not in {Progress.STARTED.value, Progress.VERIFIED.value}
@@ -339,5 +385,7 @@ def execute(
             or result.credentials.resource_bindings() != child.state["transaction"]["receipt"]
         ):
             raise RuntimeError("Published credentials differ from the command scope")
+        if checkpoint is not None:
+            checkpoint(deepcopy(child.state))
         command.verified(key, child.receipt())
         return result

@@ -153,6 +153,9 @@ def prepare(
         if name in plans:
             raise RuntimeError("Created guest has an ambiguous retained package selection")
         instance, target = entries[name]
+        from .package_reservation import read as read_reservation
+        from .package_reservation import recovery_owner
+
         package = vm_ha_package.inspect_plan(
             ssh,
             target,
@@ -162,6 +165,10 @@ def prepare(
             wheel=artifact.path,
             resume_parent=tx.operation_id,
             resume_manifest=saved["manifests"][name] if saved is not None else None,
+            reservation=read_reservation(
+                *recovery_owner(command.journal.root, command.execution_id, digest(command.intent)),
+                name,
+            ),
         )
         resources.callback(package.close)
         if saved is not None and manifest_identity(package.manifest) != manifest_identity(

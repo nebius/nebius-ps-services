@@ -26,7 +26,15 @@ pytestmark = [
     ),
 ]
 
-CONFIG = {"connections": [{"routing_mode": "bgp", "tunnels": [{"remote_public_ip": "192.0.2.1"}]}]}
+CONFIG = {
+    "connections": [
+        {
+            "name": "fixture",
+            "routing_mode": "bgp",
+            "tunnels": [{"name": "fixture", "remote_public_ip": "192.0.2.1"}],
+        }
+    ]
+}
 
 
 def test_ufw_boot_transaction_preserves_early_firewall_ordering(tmp_path):

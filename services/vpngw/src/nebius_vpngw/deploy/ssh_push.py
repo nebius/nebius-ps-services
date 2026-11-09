@@ -62,7 +62,7 @@ from . import ingress_ssh
 from .ssh_client_auth import SSHClientAuth, operator_identity, resolve_ssh_client_auth
 from .ssh_policy import SSHTrustPolicy, configure_paramiko_host_verification
 from .vm_ha_identity import LegacyVMHAIdentity, parse_legacy_vm_ha_identity
-from .vm_ha_package import VMHAAgentPackageError, VMHAPackagePlan
+from .vm_ha_package import VMHAAgentPackageError, VMHAPackagePlan, package_step
 
 _VM_HA_APPLY_QUIESCENCE_SCRIPT = r"""
 import json
@@ -737,7 +737,16 @@ class VMHAAgentArtifact:
                         limit=64 * 1024,
                     ),
                 }
-                for source_name in ("boot_policy.py", "vm_ha_diagnostics.py"):
+                for source_name in (
+                    "boot_policy.py",
+                    "vm_ha_diagnostics.py",
+                    "ha_activation.py",
+                    "agent/local_commands.py",
+                    "agent/routing_guard.py",
+                    "agent/strongswan_renderer.py",
+                    "agent/vm_ha/runtime.py",
+                    "agent/vm_ha/models.py",
+                ):
                     member_name = "nebius_vpngw/" + source_name
                     required[member_name] = cls._read_wheel_member(
                         wheel, member_name, limit=256 * 1024
@@ -795,6 +804,24 @@ class VMHAAgentArtifact:
                     raise VMHAAgentArtifactError(
                         VMHAAgentArtifactProblem.INCOMPATIBLE, str(error)
                     ) from error
+                for source_name in (
+                    "ha_activation.py",
+                    "agent/main.py",
+                    "agent/local_commands.py",
+                    "agent/routing_guard.py",
+                    "agent/strongswan_renderer.py",
+                    "agent/vm_ha/runtime.py",
+                    "agent/vm_ha/models.py",
+                ):
+                    member_name = "nebius_vpngw/" + source_name
+                    if (
+                        required[member_name]
+                        != (Path(__file__).parent.parent / source_name).read_bytes()
+                    ):
+                        raise VMHAAgentArtifactError(
+                            VMHAAgentArtifactProblem.INCOMPATIBLE,
+                            "VM-HA activation recovery capability must match this CLI; select its built wheel",
+                        )
                 replay_supported = wheel_supports_replay_window(wheel)
                 if replay_supported:
                     for source_name in REPLAY_WINDOW_SOURCES:
@@ -940,7 +967,51 @@ class SSHPush:
         self._ssh_policy = ssh_policy
         self._ssh_client_auth: SSHClientAuth | None = None
         self._ssh_client_auth_input: tuple[str, str | None] | None = None
+        self._ssh_client_auth_operator: SSHClientAuth | None = None
+        self._prepared_client_auth = False
+        self._prepared_operator_identity: SSHClientAuth | None = None
         self._authentication_lock = authentication_lock
+
+    def prepare_client_authentication(self, vm_spec: dict[str, Any]) -> None:
+        """Resolve exact authentication on the owner before concurrent cloud reads.
+
+        Key validation can invoke ssh-keygen. Forking from a package worker while
+        another thread drives gRPC can strand the process inside native at-fork
+        handlers, beyond Python request deadlines. Prepared workers only consume
+        this identity; changed inputs never trigger lazy discovery in a worker.
+        """
+        if self._client_authentication(vm_spec) is None:
+            raise ValueError("Coordinated package SSH requires an exact selected identity")
+        self._prepared_operator_identity = operator_identity()
+        self._prepared_client_auth = True
+
+    def _client_authentication(self, vm_spec: dict[str, Any]) -> SSHClientAuth | None:
+        public_key = str(vm_spec.get("ssh_public_key") or "").strip()
+        raw_private = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
+        auth_input = (public_key, str(raw_private) if raw_private else None)
+        selected = operator_identity()
+        if self._prepared_client_auth:
+            if (
+                auth_input != self._ssh_client_auth_input
+                or selected is not self._prepared_operator_identity
+                or self._ssh_client_auth is None
+            ):
+                raise ValueError("Prepared SSH client identity changed before connection")
+            return self._ssh_client_auth
+        if not public_key and selected is None:
+            return None
+        if (
+            self._ssh_client_auth is None
+            or self._ssh_client_auth_input != auth_input
+            or self._ssh_client_auth_operator is not selected
+        ):
+            self._ssh_client_auth = resolve_ssh_client_auth(
+                public_key,
+                explicit_private_key=Path(str(raw_private)).expanduser() if raw_private else None,
+            )
+            self._ssh_client_auth_input = auth_input
+            self._ssh_client_auth_operator = selected
+        return self._ssh_client_auth
 
     def _connect_client(
         self,
@@ -949,8 +1020,36 @@ class SSHPush:
         hostname: str,
         username: str,
         vm_spec: dict[str, Any],
-        timeout: int = 15,
+        timeout: float = 15.0,
     ) -> None:
+        from .ssh_commands import DEADLINE, connection_deadline
+
+        deadline = DEADLINE.get()
+        if deadline is not None:
+            acquired = False
+            with connection_deadline(client, deadline):
+                try:
+                    if self._authentication_lock is not None:
+                        acquired = self._authentication_lock.acquire(
+                            timeout=max(0, deadline - time.monotonic())
+                        )
+                        if not acquired:
+                            raise TimeoutError("activation SSH authentication lock expired")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("activation SSH authentication deadline expired")
+                    self._connect_client_unlocked(
+                        client,
+                        hostname=hostname,
+                        username=username,
+                        vm_spec=vm_spec,
+                        timeout=min(timeout, remaining),
+                    )
+                finally:
+                    if acquired:
+                        assert self._authentication_lock is not None
+                        self._authentication_lock.release()
+            return
         # Parallel member transports can reference the same selected ssh-agent
         # key. Its signing socket is shared, so only authentication is serialized;
         # each authenticated client/channel remains independently owned.
@@ -966,27 +1065,18 @@ class SSHPush:
         hostname: str,
         username: str,
         vm_spec: dict[str, Any],
-        timeout: int = 15,
+        timeout: float = 15.0,
     ) -> None:
-        public_key = str(vm_spec.get("ssh_public_key") or "").strip()
+        auth = self._client_authentication(vm_spec)
         raw_private = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
-        if public_key or operator_identity() is not None:
-            auth_input = (public_key, str(raw_private) if raw_private else None)
-            if self._ssh_client_auth is None or self._ssh_client_auth_input != auth_input:
-                self._ssh_client_auth = resolve_ssh_client_auth(
-                    public_key,
-                    explicit_private_key=(
-                        Path(str(raw_private)).expanduser() if raw_private else None
-                    ),
-                )
-                self._ssh_client_auth_input = auth_input
+        if auth is not None:
             client.connect(
                 hostname=hostname,
                 username=username,
                 timeout=timeout,
                 auth_timeout=timeout,
                 banner_timeout=timeout,
-                **self._ssh_client_auth.paramiko_connect_kwargs(),
+                **auth.paramiko_connect_kwargs(),
             )
             return
         client.connect(
@@ -1327,22 +1417,31 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         commands: Iterable[str],
         *,
         required_remote: bool,
+        deadline: float | None = None,
+        serialize_activation: bool = False,
     ) -> bool:
         """Run activation commands and preserve one bounded, sanitized failure."""
 
         had_failures = False
+        deadline = deadline if deadline is not None else time.monotonic() + 120.0
         for command in commands:
             command_class = cls._remote_command_class(command)
-            try:
-                _stdin, stdout, stderr = client.exec_command(
-                    command,
-                    get_pty=True,
-                    # Admission: quiesce35 + locks5 + observe15 + guard30 + transport10.
-                    timeout=95 if command_class == "admit HA checkpoint activation" else 20,
+            if serialize_activation:
+                command = (
+                    "sudo -n install -d -o root -g root -m 0755 /run/nebius-vpngw && "
+                    "sudo -n flock -x -n /run/nebius-vpngw/activation-writer.lock sh -c "
+                    + shlex.quote(command)
                 )
-                safe_stdout = cls._read_bounded_remote_output(stdout)
-                safe_stderr = cls._read_bounded_remote_output(stderr)
-                return_code = stdout.channel.recv_exit_status()
+            try:
+                if required_remote:
+                    from .ssh_commands import run
+
+                    return_code, safe_stdout, safe_stderr = run(client, command, deadline=deadline)
+                else:
+                    _stdin, stdout, stderr = client.exec_command(command, get_pty=True, timeout=20)
+                    safe_stdout = cls._read_bounded_remote_output(stdout)
+                    safe_stderr = cls._read_bounded_remote_output(stderr)
+                    return_code = stdout.channel.recv_exit_status()
             except Exception as error:
                 if required_remote:
                     raise VMHARemoteActivationError(
@@ -1381,39 +1480,29 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     ) -> None:
         """Wait for the controller-owned passive materialization predicate."""
 
-        if not all(math.isfinite(value) and value > 0 for value in (timeout_seconds, interval_seconds)):
+        if not all(
+            math.isfinite(value) and value > 0 for value in (timeout_seconds, interval_seconds)
+        ):
             raise ValueError("VM-HA materialization timeout and interval must be positive")
         deadline = clock() + timeout_seconds
         command = "sudo /usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-materialized"
         while (remaining := deadline - clock()) > 0:
+            from .ssh_commands import run
+
             observation_deadline = min(deadline, clock() + 20.0)
-            _stdin, stdout, _stderr = client.exec_command(
-                command, get_pty=True, timeout=min(20.0, remaining)
-            )
-            channel = stdout.channel
             try:
-                while True:
-                    remaining = observation_deadline - clock()
-                    if remaining <= 0:
-                        raise RuntimeError(
-                            "VM-HA passive materialization observation exceeded the bounded wait"
-                        )
-                    # Drain without retaining potentially sensitive diagnostics.
-                    # Bounded reads keep a noisy peer from defeating the deadline.
-                    if channel.recv_ready():
-                        channel.recv(65536)
-                    if channel.recv_stderr_ready():
-                        channel.recv_stderr(65536)
-                    if (
-                        channel.exit_status_ready()
-                        and not channel.recv_ready()
-                        and not channel.recv_stderr_ready()
-                    ):
-                        rc = channel.recv_exit_status()
-                        break
-                    sleeper(min(0.02, remaining))
-            finally:
-                channel.close()
+                rc, _, _ = run(
+                    client,
+                    command,
+                    deadline=observation_deadline,
+                    limit=0,
+                    clock=clock,
+                    sleeper=sleeper,
+                )
+            except Exception as error:
+                raise RuntimeError(
+                    "VM-HA passive materialization observation failed within the bounded wait"
+                ) from error
             remaining = deadline - clock()
             if remaining <= 0:
                 break
@@ -1950,9 +2039,16 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
                 "else exit 42; fi"
             )
             command = self._vm_ha_rearm_locked_command(action, create_parent=False)
-            stdin, stdout, stderr = client.exec_command(command, timeout=60)
-            return_code = stdout.channel.recv_exit_status()
-            result = stdout.read().decode("utf-8").strip()
+            from .ssh_commands import DEADLINE, run
+
+            deadline = DEADLINE.get()
+            if deadline is not None:
+                return_code, output, _ = run(client, command, deadline=deadline)
+                result = output.decode("utf-8").strip()
+            else:
+                stdin, stdout, stderr = client.exec_command(command, timeout=60)
+                return_code = stdout.channel.recv_exit_status()
+                result = stdout.read().decode("utf-8").strip()
             if return_code != 0 or result != "CLEARED":
                 raise RuntimeError(f"VM-HA apply-lock clear failed for {node.node_id}")
         except Exception as error:
@@ -2379,9 +2475,16 @@ printf "VM_HA_DEACTIVATED=1\\n"
             yaml.safe_load(inst_cfg.config_yaml), artifact.capabilities
         )
         dependency_plan = dict(artifact.dependency_plans).get(inst_cfg.hostname)
-        with ExitStack() as resources:
+        with package_step("package-admission"), ExitStack() as resources:
             if dependency_plan is None and handoff is None:
+                from .package_reservation import SCOPE
+                from .package_reservation import read as read_reservation
                 from .vm_ha_package import inspect_plan
+
+                scope = SCOPE.get()
+                reservation = (
+                    read_reservation(*scope, inst_cfg.hostname) if scope is not None else None
+                )
 
                 # Fresh/recovery hosts use the same selected dependency installer.
                 # Ignoring pip-owned predecessors leaves conflicting dist-info.
@@ -2392,8 +2495,51 @@ printf "VM_HA_DEACTIVATED=1\\n"
                     local_cfg,
                     target_identity=inst_cfg.hostname,
                     wheel=artifact.path,
+                    reservation=reservation,
+                    resume_parent=reservation["request"]["package"]["desired"].get("ha_parent")
+                    if reservation is not None
+                    else None,
+                    resume_manifest=reservation["request"]["package"]["desired"]
+                    if reservation is not None
+                    else None,
                 )
                 resources.callback(dependency_plan.close)
+            from .activation_recovery import Recovery
+            from .package_recovery import COORDINATED
+            from .package_recovery import prepare as recover_packages
+            from .package_reservation import SCOPE
+
+            scope = SCOPE.get()
+            if scope is not None and not COORDINATED.get():
+                root, execution, authority = scope
+                recovery = Recovery(root, execution=execution, authority=authority)
+                result = {}
+
+                def effect():
+                    result.update(
+                        self._ensure_vm_ha_planned_package(
+                            ssh_target,
+                            inst_cfg,
+                            local_cfg,
+                            artifact=artifact,
+                            dependency_plan=dependency_plan,
+                            handoff=handoff,
+                            checkpoint_conversion=checkpoint_conversion,
+                        )
+                    )
+
+                recover_packages(
+                    recovery,
+                    effect=effect,
+                    members=lambda: [(self, dependency_plan, local_cfg, checkpoint_conversion)],
+                    stage="packages-" + inst_cfg.hostname,
+                    handoffs={inst_cfg.hostname: handoff} if handoff is not None else None,
+                )
+                if not result:
+                    # Read back the same completed receipt after recovery; the
+                    # guest owner does not rerun a completed package effect.
+                    effect()
+                return result
             return self._ensure_vm_ha_planned_package(
                 ssh_target,
                 inst_cfg,
@@ -2421,55 +2567,81 @@ printf "VM_HA_DEACTIVATED=1\\n"
         if handoff is not None:
             if dependency_plan is None:
                 raise VMHAAgentPackageError("HA handoff requires its approved package plan")
-            receipt = (
-                handoff.verify_prepared()
-                if handoff.package_receipt is not None
-                else handoff.prepare_package(dependency_plan)
-            )
+            with package_step("handoff-package"):
+                receipt = (
+                    handoff.verify_prepared()
+                    if handoff.package_receipt is not None
+                    else handoff.prepare_package(dependency_plan)
+                )
             if not set(artifact.capabilities).issubset(receipt.get("capabilities", [])):
                 raise VMHAAgentPackageError("HA handoff package capabilities changed")
             return receipt
         if dependency_plan is None:
             raise VMHAAgentPackageError("VM-HA package requires a selected dependency plan")
         from .ordinary_apply import digest, remote
+        from .ordinary_handoff import observe_guarded
         from .vm_ha_package import package_predecessor
 
-        current = remote(
-            self,
-            ssh_target,
-            inst_cfg,
-            local_cfg,
-            {"action": "inspect-package", "manifest": dependency_plan.manifest},
-        )["observation"]
-        if digest(package_predecessor(current)) != digest(dependency_plan.observation):
-            raise VMHAAgentPackageError("VM-HA package predecessor changed after approval")
+        previous_job = observe_guarded(self, dependency_plan, local_cfg, checkpoint_conversion)
+        resuming_package = previous_job["state"] != "NOT_SUBMITTED"
+
+        if not resuming_package:
+            with package_step("inspect-predecessor"):
+                current = remote(
+                    self,
+                    ssh_target,
+                    inst_cfg,
+                    local_cfg,
+                    {"action": "inspect-package", "manifest": dependency_plan.manifest},
+                )["observation"]
+                if digest(package_predecessor(current)) != digest(dependency_plan.observation):
+                    raise VMHAAgentPackageError("VM-HA package predecessor changed after approval")
         from .checkpoint_conversion import guard_package
 
-        guard_package(
-            self,
-            ssh_target,
-            inst_cfg,
-            local_cfg,
-            artifact=wheel_sha256,
-            boot_id=dependency_plan.observation["boot_id"],
-            expected=checkpoint_conversion,
-            publish=False,
-        )
+        if not resuming_package:
+            with package_step("checkpoint-admission"):
+                guard_package(
+                    self,
+                    ssh_target,
+                    inst_cfg,
+                    local_cfg,
+                    artifact=wheel_sha256,
+                    boot_id=dependency_plan.observation["boot_id"],
+                    expected=checkpoint_conversion,
+                    publish=False,
+                )
         from .ordinary_handoff import prepare_guarded
         from .vm_ha_package import stage
 
-        stage(self, dependency_plan, local_cfg, artifact=artifact)
-        receipt = prepare_guarded(self, dependency_plan, local_cfg, checkpoint_conversion)
-        guard_package(
-            self,
-            ssh_target,
-            inst_cfg,
-            local_cfg,
-            artifact=wheel_sha256,
-            boot_id=dependency_plan.observation["boot_id"],
-            expected=checkpoint_conversion,
-            publish=True,
-        )
+        with package_step("stage-payload"):
+            if not resuming_package:
+                stage(self, dependency_plan, local_cfg, artifact=artifact)
+        with package_step("guarded-install"):
+            receipt = prepare_guarded(self, dependency_plan, local_cfg, checkpoint_conversion)
+        if resuming_package:
+            from .vm_ha_package import verify_prepared
+
+            with package_step("guarded-install"):
+                verify_prepared(
+                    self,
+                    dependency_plan,
+                    local_cfg,
+                    checkpoint_conversion=checkpoint_conversion,
+                    convert=True,
+                    allow_new_boot=True,
+                )
+        if not resuming_package:
+            with package_step("checkpoint-publication"):
+                guard_package(
+                    self,
+                    ssh_target,
+                    inst_cfg,
+                    local_cfg,
+                    artifact=wheel_sha256,
+                    boot_id=dependency_plan.observation["boot_id"],
+                    expected=checkpoint_conversion,
+                    publish=True,
+                )
         if not set(artifact.capabilities).issubset(receipt.get("capabilities", [])):
             raise VMHAAgentPackageError("HA guarded package capabilities differ")
         return receipt
@@ -3006,6 +3178,10 @@ printf "VM_HA_MUTATION_SERVICES_STOPPED=1\\n"
 
         if not ssh_target or self._ssh_policy is None:
             raise ValueError("VM-HA pre-host inspection requires an exact-pinned SSH target")
+        from .apply_diagnostics import ObservationUnavailable
+        from .ssh_commands import budget, connection_deadline
+        from .vm_ha_cloud import vm_ha_observation_remaining
+
         paramiko = self._ensure_paramiko()
         vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
         username = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
@@ -3013,42 +3189,62 @@ printf "VM_HA_MUTATION_SERVICES_STOPPED=1\\n"
         if len(source) > 4 * 1024 * 1024:
             raise ValueError("VM-HA source transport exceeds limit")
         client = paramiko.SSHClient()
+        deadline = time.monotonic() + 30
         try:
-            configure_paramiko_host_verification(
-                client,
-                paramiko,
-                policy=self._ssh_policy,
-                hostname=instance_name,
-                transport_host=ssh_target,
-            )
-            self._connect_client(client, hostname=ssh_target, username=username, vm_spec=vm_spec)
-            stdin, stdout, _stderr = client.exec_command(
-                "sudo -n PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B", timeout=30
-            )
-            deadline = time.monotonic() + 30
-            sent = 0
-            while sent < len(source):
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise RuntimeError("VM-HA source upload timed out; result unverified")
-                stdin.channel.settimeout(remaining)
-                count = stdin.channel.send(source[sent : sent + 65536])
-                if not count:
-                    raise RuntimeError("VM-HA source transport closed; result unverified")
-                sent += count
-            stdin.channel.shutdown_write()
-            stdout.channel.settimeout(max(0.001, deadline - time.monotonic()))
-            output = stdout.read(1048577)
-            if len(output) > 1048576 or stdout.channel.recv_exit_status() != 0:
-                raise RuntimeError("VM-HA pre-host observation failed closed")
-            payload = json.loads(output)
-            if not isinstance(payload, dict):
-                raise ValueError("VM-HA pre-host observation is malformed")
-            return payload
+            with budget(deadline) as deadline, connection_deadline(client, deadline):
+                configure_paramiko_host_verification(
+                    client,
+                    paramiko,
+                    policy=self._ssh_policy,
+                    hostname=instance_name,
+                    transport_host=ssh_target,
+                )
+                self._connect_client(
+                    client, hostname=ssh_target, username=username, vm_spec=vm_spec
+                )
+                stdin, stdout, _stderr = client.exec_command(
+                    "sudo -n PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B",
+                    timeout=vm_ha_observation_remaining(),
+                )
+                sent = 0
+                while sent < len(source):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("VM-HA source upload timed out; result unverified")
+                    stdin.channel.settimeout(remaining)
+                    count = stdin.channel.send(source[sent : sent + 65536])
+                    if not count:
+                        raise EOFError("VM-HA source transport closed; result unverified")
+                    sent += count
+                stdin.channel.shutdown_write()
+                stdout.channel.settimeout(max(0.001, deadline - time.monotonic()))
+                output = stdout.read(1048577)
+                if len(output) > 1048576 or stdout.channel.recv_exit_status() != 0:
+                    raise ObservationUnavailable(
+                        "inspect-predecessor", "guest-observation-rejected", retryable=False
+                    )
+                payload = json.loads(output)
+                if not isinstance(payload, dict):
+                    raise ValueError("VM-HA pre-host observation is malformed")
+                return payload
         except Exception as error:
             identity_failure = _host_identity_failure(error, paramiko, ssh_target)
             if identity_failure is not None:
-                raise identity_failure from error
+                raise ObservationUnavailable(
+                    "verify-ssh-authority", "ssh-identity-conflict", retryable=False
+                ) from error
+            if isinstance(error, (PermissionError, paramiko.AuthenticationException)):
+                raise ObservationUnavailable(
+                    "inspect-predecessor", "ssh-access-denied", retryable=False
+                ) from error
+            if isinstance(error, (OSError, EOFError, paramiko.SSHException)):
+                raise ObservationUnavailable(
+                    "inspect-predecessor", "ssh-observation-unavailable"
+                ) from error
+            if isinstance(error, ValueError):
+                raise ObservationUnavailable(
+                    "inspect-predecessor", "guest-response-malformed", retryable=False
+                ) from error
             raise
         finally:
             client.close()
@@ -3376,6 +3572,73 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
             print("[SSHPush] dist/ directory not found; wheel not built")
         return None
 
+    def activation_control(
+        self,
+        target: str,
+        instance: InstanceResolvedConfig,
+        local: dict,
+        request: dict,
+        *,
+        deadline: float,
+    ) -> dict:
+        """Exact-pinned, bounded observation/submission; never replay a lost reply."""
+        from .apply_diagnostics import DiagnosticFailure, Failure, ObservationUnavailable
+        from .ssh_commands import budget, run
+
+        def unavailable_reply(reason: str) -> DiagnosticFailure:
+            if request.get("action") in ("inspect", "inspect-unlock"):
+                return ObservationUnavailable("activation-observation", reason)
+            error = DiagnosticFailure("activation command reply unavailable; outcome unverified")
+            error.first = Failure("activation-command", "reply-unavailable", (reason,))
+            return error
+
+        paramiko = self._ensure_paramiko()
+        client = paramiko.SSHClient()
+        try:
+            with budget(deadline) as deadline:
+                configure_paramiko_host_verification(
+                    client,
+                    paramiko,
+                    policy=self._ssh_policy,
+                    hostname=instance.hostname,
+                    transport_host=target,
+                )
+                spec = (local.get("gateway_group") or {}).get("vm_spec") or {}
+                self._connect_client(
+                    client,
+                    hostname=target,
+                    username=spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu"),
+                    vm_spec=spec,
+                )
+                payload = base64.b64encode(json.dumps(request).encode()).decode()
+                try:
+                    rc, output, _ = run(
+                        client,
+                        "sudo -n /usr/bin/python3 -m nebius_vpngw.ha_activation " + payload,
+                        deadline=deadline,
+                        limit=32768,
+                    )
+                except EOFError as error:
+                    raise unavailable_reply("ssh-response-eof") from error
+                if rc == -1:
+                    raise unavailable_reply("ssh-exit-status-missing")
+                if rc:
+                    raise RuntimeError("activation recovery authority or observation unavailable")
+                try:
+                    value = json.loads(output)
+                except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                    reason = (
+                        "guest-response-malformed" if output.strip() else "guest-response-missing"
+                    )
+                    raise unavailable_reply(reason) from error
+                if not isinstance(value, dict):
+                    raise unavailable_reply("guest-response-not-object")
+                if "error" in value:
+                    raise RuntimeError("activation recovery authority or observation unavailable")
+                return value
+        finally:
+            client.close()
+
     def push_config_and_reload(
         self,
         ssh_target: str,
@@ -3392,7 +3655,29 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
         handoff: Any = None,
         apply_operation_id: str | None = None,
         initialize_checkpoint: bool = False,
+        activation_recovery: Any = None,
+        deadline: float | None = None,
+        serialize_activation: bool = False,
     ) -> None:
+        if activation_recovery is not None:
+            from .activation_driver import activate
+
+            activate(
+                self,
+                ssh_target,
+                inst_cfg,
+                local_cfg,
+                recovery=activation_recovery,
+                staged_receipt=staged_receipt,
+                runtime_binding=runtime_binding,
+                agent_artifact=agent_artifact,
+                replacement_policy_request=replacement_policy_request,
+                fail_closed=fail_closed,
+                handoff=handoff,
+                apply_operation_id=apply_operation_id,
+                initialize_checkpoint=initialize_checkpoint,
+            )
+            return
         if staged_receipt is None:
             from .ordinary_apply import execute_plan
 
@@ -3599,11 +3884,18 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
                 client,
                 cmds,
                 required_remote=required_remote,
+                deadline=deadline,
+                serialize_activation=serialize_activation,
             )
 
             if staged_receipt is not None:
                 try:
-                    self._wait_for_vm_ha_materialization(client)
+                    self._wait_for_vm_ha_materialization(
+                        client,
+                        timeout_seconds=min(60.0, deadline - time.monotonic())
+                        if deadline is not None
+                        else 60.0,
+                    )
                 except Exception:
                     client.close()
                     raise

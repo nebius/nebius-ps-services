@@ -3115,7 +3115,7 @@ def test_passive_heartbeat_reports_role_neutral_exact_standby_readiness(
     )
 
     assert heartbeat.promotion_ready is promotion_ready
-    assert heartbeat.to_dict()["schema"] == "nebius-vpngw/vm-ha-heartbeat-v6"
+    assert heartbeat.to_dict()["schema"] == "nebius-vpngw/vm-ha-heartbeat-v7"
     assert heartbeat.auto_healing_policy_state == "blocked"
     ports.close()
 
@@ -4084,6 +4084,120 @@ def test_active_persistence_failure_rolls_forwarding_back_off(
         runtime.enable_active(action)
 
     assert forwarding == "0"
+
+
+def test_active_deadline_expiry_restores_forwarding_fence(tmp_path: Path) -> None:
+    from nebius_vpngw.agent.local_commands import CURRENT, CommandBudget
+
+    now = 100.0
+    forwarding = "0"
+
+    def runner(argv: tuple[str, ...], _timeout: float) -> CommandResult:
+        nonlocal now, forwarding
+        if argv[-1] == "net.ipv4.ip_forward":
+            return CommandResult(0, forwarding)
+        if argv[-1].startswith("net.ipv4.ip_forward="):
+            forwarding = argv[-1].rsplit("=", 1)[-1]
+            if forwarding == "1":
+                now = 221.0
+            return CommandResult(0)
+        raise AssertionError(argv)
+
+    runtime = SystemDataPlaneRuntime(
+        state_path=tmp_path / "data-plane.json",
+        guard_path=tmp_path / "guard.json",
+        routing_lock_path=tmp_path / "routing.lock",
+        configured_bgp_sessions=(),
+        expected_bgp_policy_digest="c" * 64,
+        runner=runner,
+        monotonic_clock=lambda: now,
+    )
+    action = ControllerAction(
+        ActionKind.ENABLE_ACTIVE,
+        "enable-op",
+        "boot-a",
+        "node-a",
+        "allocation-a",
+        "7",
+        "a" * 64,
+        DigestSet("a" * 64, "b" * 64, "c" * 64),
+    )
+    budget = CommandBudget(220.0)
+    token = CURRENT.set(budget)
+    try:
+        with pytest.raises(RuntimeError):
+            runtime.enable_active(action)
+        assert CURRENT.get() is budget
+    finally:
+        CURRENT.reset(token)
+    assert forwarding == "0"
+    assert json.loads(runtime.guard_path.read_text())["data_plane_mode"] == "blocked"
+
+
+@pytest.mark.parametrize("contended", [False, True])
+def test_owner_origination_obeys_activation_lock_deadline(tmp_path, monkeypatch, contended):
+    from nebius_vpngw.agent.local_commands import CURRENT, CommandBudget
+
+    now = 100.0
+    revalidations = []
+
+    def sleep(seconds):
+        nonlocal now
+        now += seconds
+
+    def flock(_fd, flags):
+        assert flags & fcntl.LOCK_NB, "origination must not enter a blocking lock wait"
+        raise BlockingIOError
+
+    monkeypatch.setattr(fcntl, "flock", flock)
+    runtime = SystemDataPlaneRuntime(
+        state_path=tmp_path / "data-plane.json",
+        guard_path=tmp_path / "guard.json",
+        routing_lock_path=tmp_path / "routing.lock",
+        monotonic_clock=lambda: now,
+        sleeper=sleep,
+        configured_bgp_sessions=(),
+        expected_bgp_policy_digest="c" * 64,
+    )
+    action = ControllerAction(
+        ActionKind.PREPARE_OWNER_ORIGINATION,
+        "originate-op",
+        "boot-a",
+        "node-a",
+        "allocation-a",
+        "7",
+        "a" * 64,
+        DigestSet("a" * 64, "b" * 64, "c" * 64),
+    )
+    token = CURRENT.set(CommandBudget(100.1 if contended else 99.0))
+    try:
+        with pytest.raises(TimeoutError, match="routing writer deadline expired"):
+            runtime.prepare_owner_origination(action, lambda: revalidations.append(True))
+    finally:
+        CURRENT.reset(token)
+    assert revalidations == []
+    assert now <= 100.1
+
+
+def test_native_repair_command_intersects_activation_deadline(tmp_path):
+    from nebius_vpngw.agent.local_commands import CURRENT, CommandBudget
+
+    timeouts = []
+    runtime = SystemDataPlaneRuntime(
+        state_path=tmp_path / "data-plane.json",
+        guard_path=tmp_path / "guard.json",
+        routing_lock_path=tmp_path / "routing.lock",
+        monotonic_clock=lambda: 100.0,
+        runner=lambda argv, timeout: timeouts.append(timeout) or CommandResult(0),
+        configured_bgp_sessions=(),
+        expected_bgp_policy_digest="c" * 64,
+    )
+    token = CURRENT.set(CommandBudget(101.0))
+    try:
+        runtime._run_before(220.0, "systemctl", "restart", "strongswan")
+    finally:
+        CURRENT.reset(token)
+    assert timeouts == [1.0]
 
 
 def test_active_preparation_failure_keeps_forwarding_fenced(tmp_path: Path) -> None:
@@ -5301,7 +5415,9 @@ def test_pending_bgp_health_accepts_only_complete_serving_transition_policy(
     ready = ports.sample_local_health(
         config_path=config_path, state_dir=state_dir, deadline=105, clock=lambda: 102
     )
-    assert ready.sample_complete
+    # Passive import policy cannot be authenticated from this active-policy
+    # fixture. Treat that evidence as unknown before owner origination.
+    assert ready.sample_complete is (case != "passive")
     healthy = case in {"normal-policy", "previous-override", "release-requested-policy"}
     assert ready.serving_ready is healthy
     assert ready.promotion_ready is healthy

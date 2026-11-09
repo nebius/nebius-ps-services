@@ -81,6 +81,9 @@ def test_inspection_checks_later_member_before_admitting_group(monkeypatch, tmp_
         lambda *_: [NICSecurityGroups("eth0", "subnet-test", "network-test", (), ())],
     )
     monkeypatch.setattr(replacement_ordinary.replacement_routes, "inventory", lambda *_, **_kw: ())
+    monkeypatch.setattr(
+        replacement_ordinary.replacement_runtime_routes, "inspect", lambda *_: (None, None)
+    )
     assert len(value.inspect().members) == 2
     oversize(value.snapshots["gateway-1"])
     with pytest.raises(ValueError, match="cloud-init exceeds"):

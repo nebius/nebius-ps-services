@@ -54,16 +54,21 @@ def _write_secret_file(path: Path, content: str) -> None:
 
 
 def _wait_for_vici_socket(timeout_seconds: float = 15.0, interval_seconds: float = 0.5) -> bool:
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
+    from .local_commands import CURRENT
+
+    deadline = time.monotonic() + timeout_seconds
+    budget = CURRENT.get()
+    if budget is not None:
+        deadline = min(deadline, budget.deadline)
+    while (remaining := deadline - time.monotonic()) > 0:
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
-                probe.settimeout(min(interval_seconds or 0.1, 0.5))
+                probe.settimeout(min(interval_seconds or 0.1, 0.5, remaining))
                 probe.connect(str(VICI_SOCKET))
             return True
         except OSError:
             pass
-        time.sleep(interval_seconds)
+        time.sleep(min(interval_seconds, max(0, deadline - time.monotonic())))
     return False
 
 
@@ -74,6 +79,7 @@ def _swanctl_content(
     for tun in tunnels:
         if tun.get("ha_cold"):
             continue
+        initiate = activate and not tun.get("responder_only", False)
         name = tun["name"]
         swanctl_lines.append(f"  {name} {{")
         swanctl_lines.append(f"    version = {tun['ike_version']}")
@@ -86,7 +92,7 @@ def _swanctl_content(
         # INITIAL_CONTACT handling. Forced replacement can loop against a
         # peer that immediately recreates a session on DELETE.
         swanctl_lines.append("    unique = no")
-        swanctl_lines.append(f"    keyingtries = {0 if activate else 1}")
+        swanctl_lines.append(f"    keyingtries = {0 if initiate else 1}")
         swanctl_lines.append("    local {")
         swanctl_lines.append("      auth = psk")
         if tun["local_public_ip"]:
@@ -110,9 +116,9 @@ def _swanctl_content(
         if "replay_window" in tun:
             swanctl_lines.append(f"        replay_window = {tun['replay_window']}")
         swanctl_lines.append("        mode = tunnel")
-        swanctl_lines.append(f"        start_action = {'trap|start' if activate else 'none'}")
-        swanctl_lines.append(f"        dpd_action = {'restart' if activate else 'clear'}")
-        swanctl_lines.append(f"        close_action = {'trap' if activate else 'none'}")
+        swanctl_lines.append(f"        start_action = {'trap|start' if initiate else 'none'}")
+        swanctl_lines.append(f"        dpd_action = {'restart' if initiate else 'clear'}")
+        swanctl_lines.append(f"        close_action = {'trap' if initiate else 'none'}")
         swanctl_lines.append(f"        if_id_in = {tun['if_id']}")
         swanctl_lines.append(f"        if_id_out = {tun['if_id']}")
         swanctl_lines.append("      }")

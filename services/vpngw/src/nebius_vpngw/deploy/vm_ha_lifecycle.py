@@ -2282,6 +2282,15 @@ def _validate_successor(
 
     if validate_prepared_replacement(previous, successor):
         return
+    if (
+        previous.transaction is not None
+        and successor.transaction.operation_id != previous.transaction.operation_id
+        and successor.transaction.approval_kind == "destruction"
+    ):
+        # Destruction retains predecessor bindings as history. A retained
+        # corrective authority record does not make this a corrective release.
+        _validate_destruction_successor(previous, successor)
+        return
     from .vm_ha_corrective import validate_successor as validate_corrective
 
     if validate_corrective(previous, successor):
@@ -2295,12 +2304,6 @@ def _validate_successor(
             or not previous.has_same_identity(successor)
         ):
             raise ValueError("VM-HA lifecycle v2 successor is not approved")
-        return
-    if (
-        successor.transaction.operation_id != previous.transaction.operation_id
-        and successor.transaction.approval_kind == "destruction"
-    ):
-        _validate_destruction_successor(previous, successor)
         return
     if (
         previous.status is VMHALifecycleStatus.DESTROYED

@@ -20,6 +20,7 @@ class VMHACommandOutcome(str, Enum):
     PLANNED = "planned"
     ACTION_REQUIRED = "action-required"
     BLOCKED = "blocked"
+    PENDING = "pending"
     FAILED = "failed"
 
 
@@ -186,6 +187,7 @@ class VMHACommandResult:
                 VMHACommandOutcome.PLANNED: "VM-HA plan is ready; no changes were made.",
                 VMHACommandOutcome.ACTION_REQUIRED: "VM-HA needs operator action.",
                 VMHACommandOutcome.BLOCKED: "VM-HA convergence is blocked.",
+                VMHACommandOutcome.PENDING: "VM-HA operation is pending: waiting for authority.",
                 VMHACommandOutcome.FAILED: "VM-HA convergence failed safely.",
             }[self.outcome]
         )

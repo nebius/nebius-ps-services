@@ -4,6 +4,16 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Refactored `troubleshoot` into seven evidence-driven phases with provisional
+  routing, explicit scoped exclusions and conditional bounded read-only native
+  investigators. Preserved public budgets, helper schema 2, `diagnosis-v3`, report
+  classes, provider gates and Stop ownership.
+- Standardized technology decision guides, added AMD/provider routing, and expanded
+  process/quality cases. Diagnostic accounting now separates aggregate actions,
+  inclusive/disjoint usage and coordination overhead, with fail-closed completeness
+  and accuracy/action/latency/token qualification gates. Native speed and quality
+  improvements remain unqualified until isolated paired trials pass.
+
 - Add public, product-neutral `test-software-in-container`, broadening and renaming
   the initial software-upgrade-test draft. Bare invocation tests the current
   project source with automatic compatible suite selection; installation and

@@ -65,6 +65,10 @@ class Effects:
     def candidate(self, policy, target):
         return self.health[target]
 
+    def probe_preferred(self, policy, target, authority):
+        self.calls.append(("probe", target))
+        return self.health[target]
+
     def observe(self, policy, target, *, selected):
         return self.health[target]
 
@@ -86,12 +90,12 @@ class Effects:
         self.calls.append(("fence",))
 
 
-def test_ordinary_static_order_and_no_policy():
+def test_ordinary_static_uses_shared_preferred_policy():
     cfg = config()
     del cfg["vm_ha"]
-    assert connection_policies(cfg) == ()
+    assert connection_policies(cfg)[0].preferred == "preferred"
     endpoints = collect_tunnel_state(cfg)[2]
-    assert [e["remote_prefixes"] for e in endpoints] == [["10.1.0.0/16"]] * 2
+    assert [e["remote_prefixes"] for e in endpoints] == [["10.1.0.0/16"], []]
 
 
 def test_static_defaults_and_selection_preserve_interfaces_and_roles():
@@ -115,9 +119,9 @@ def test_disjoint_paths_are_preserved_and_switching_unavailable():
     assert all(e["remote_prefixes"] for e in collect_tunnel_state(cfg)[2])
 
 
-@pytest.mark.parametrize("mode", ["static", "bgp"])
 @pytest.mark.parametrize("prefixes", [None, []])
-def test_unspecified_destinations_leave_native_policy_and_reject_switch(tmp_path, mode, prefixes):
+def test_unspecified_static_destinations_leave_native_policy_and_reject_switch(tmp_path, prefixes):
+    mode = "static"
     cfg = config(mode)
     cfg["connections"][0]["remote_prefixes"] = prefixes
     cfg["connections"][0]["bgp"] = {"remote_prefixes": prefixes}
@@ -916,7 +920,10 @@ def test_kernel_cleanup_requires_authority_and_complete_effect_readback(tmp_path
 def test_activation_kernel_cleanup_uses_exact_effective_file_and_fenced_authority(
     tmp_path, monkeypatch, candidate, admitted
 ):
+    from types import SimpleNamespace
+
     from nebius_vpngw.agent import strongswan_renderer
+    from nebius_vpngw.agent.vm_ha import tunnel_runtime
     from nebius_vpngw.agent.vm_ha.tunnel_runtime import (
         NativeTunnelEffects,
         reconcile_inactive_static,
@@ -927,18 +934,32 @@ def test_activation_kernel_cleanup_uses_exact_effective_file_and_fenced_authorit
     effective = cfg if candidate else {**cfg, "_ha_static_passive": True}
     path = tmp_path / "swanctl.conf"
     monkeypatch.setattr(strongswan_renderer, "SWANCTL_CONF", path)
+    monkeypatch.setattr(tunnel_runtime, "SWANCTL_CONF", path)
     files = {}
     strongswan_renderer.StrongSwanRenderer().render_and_apply(effective, rendered_files=files)
     path.write_text(files[path])
     path.chmod(0o600)
+    original = path.read_bytes()
     removed = []
+    loads = []
+
+    def runner(argv, timeout):
+        assert 0 < timeout <= 3
+        if tuple(argv) == inventory_command():
+            return SimpleNamespace(returncode=0, stdout=Inventory.from_events([]).json())
+        assert tuple(argv) == ("swanctl", "--load-all", "--noprompt")
+        loads.append(path.read_text())
+        return SimpleNamespace(returncode=0, stdout="")
 
     def cleanup(self, policy, authority):
         assert self.revalidate(authority)
+        assert "  preferred {" not in path.read_text()
+        assert ("  backup {" in path.read_text()) is candidate
         removed.extend(p.name for p in policy.paths)
 
     monkeypatch.setattr(NativeTunnelEffects, "_remove_orphan_kernel_objects", cleanup)
-    args = dict(candidate=candidate, permitted=lambda deadline: admitted, runner=lambda *a: None)
+    monkeypatch.setattr(NativeTunnelEffects, "_kernel_deletions", lambda *a: ())
+    args = dict(candidate=candidate, permitted=lambda deadline: admitted, runner=runner)
     if not admitted:
         with pytest.raises(RuntimeError, match="authority is unproven"):
             reconcile_inactive_static(cfg, tmp_path, AUTH, **args)
@@ -946,11 +967,73 @@ def test_activation_kernel_cleanup_uses_exact_effective_file_and_fenced_authorit
         return
     reconcile_inactive_static(cfg, tmp_path, AUTH, **args)
     assert removed == (["preferred"] if candidate else ["preferred", "backup"])
+    assert path.read_bytes() == original
+    assert len(loads) == (2 if candidate else 0)
+    if candidate:
+        assert "  preferred {" not in loads[0] and "  backup {" in loads[0]
+        assert "  preferred {" in loads[1] and "start_action = none" in loads[1]
     removed.clear()
     path.write_text("changed loader authority")
     with pytest.raises(RuntimeError, match="loader policy is unproven"):
         reconcile_inactive_static(cfg, tmp_path, AUTH, **args)
     assert not removed
+
+
+@pytest.mark.parametrize(
+    "failure", ["inventory-unknown", "authority-after-write", "authority-after-load", "cleanup"]
+)
+def test_candidate_cleanup_never_restores_responders_after_unproven_authority(
+    tmp_path, monkeypatch, failure
+):
+    from types import SimpleNamespace
+
+    from nebius_vpngw.agent import strongswan_renderer
+    from nebius_vpngw.agent.vm_ha import tunnel_runtime
+
+    cfg = config()
+    cfg["_ha_tunnel_selections"] = {"site": "backup"}
+    path = tmp_path / "swanctl.conf"
+    monkeypatch.setattr(strongswan_renderer, "SWANCTL_CONF", path)
+    monkeypatch.setattr(tunnel_runtime, "SWANCTL_CONF", path)
+    files = {}
+    strongswan_renderer.StrongSwanRenderer().render_and_apply(cfg, rendered_files=files)
+    path.write_text(files[path])
+    path.chmod(0o600)
+    original = path.read_bytes()
+    loads = []
+    cleanup = []
+
+    def runner(argv, timeout):
+        if tuple(argv) == inventory_command():
+            return SimpleNamespace(
+                returncode=int(failure == "inventory-unknown"),
+                stdout=Inventory.from_events([]).json(),
+            )
+        assert tuple(argv) == ("swanctl", "--load-all", "--noprompt")
+        loads.append(path.read_text())
+        return SimpleNamespace(returncode=0, stdout="")
+
+    def permitted(deadline):
+        if failure == "authority-after-write":
+            return path.read_bytes() == original
+        return not (failure == "authority-after-load" and loads)
+
+    def remove(self, policy, authority):
+        cleanup.append(policy.name)
+        raise RuntimeError("kernel teardown unproven")
+
+    monkeypatch.setattr(tunnel_runtime.NativeTunnelEffects, "_kernel_deletions", lambda *a: ())
+    monkeypatch.setattr(tunnel_runtime.NativeTunnelEffects, "_remove_orphan_kernel_objects", remove)
+    with pytest.raises(RuntimeError):
+        tunnel_runtime.reconcile_inactive_static(
+            cfg, tmp_path, AUTH, candidate=True, permitted=permitted, runner=runner
+        )
+    assert len(loads) == int(failure in {"authority-after-load", "cleanup"})
+    assert cleanup == (["site"] if failure == "cleanup" else [])
+    assert (path.read_bytes() == original) is (failure == "inventory-unknown")
+    assert "  backup {" in path.read_text()
+    if loads:
+        assert all("  preferred {" not in content for content in loads)
 
 
 @pytest.mark.parametrize("after_failure", ["absent", "present", "unavailable", "shared"])
@@ -1325,7 +1408,7 @@ def test_serving_export_alternatives_are_current_and_connection_scoped(tmp_path,
     if case == "generation":
         cfg["vm_ha"]["generation"]["generation_id"] = "b" * 64
     if case == "ineligible":
-        cfg["connections"][0]["remote_prefixes"] = []
+        cfg["connections"][0]["tunnels"][1]["ha_role"] = "disable"
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(cfg))
     (tmp_path / "controller-checkpoint.json").write_text(
@@ -1417,3 +1500,43 @@ def test_release_retains_installed_requested_policy_until_native_restore(tmp_pat
     else:
         selector.tick(AUTH, selector.state["operation"]["deadline"] + 1)
     assert effects.release_observed
+
+
+@pytest.mark.parametrize("prefixes", [None, []])
+def test_bgp_without_required_destinations_keeps_manual_selection(tmp_path, prefixes):
+    cfg = config("bgp")
+    cfg["connections"][0]["remote_prefixes"] = prefixes
+    policy = connection_policies(cfg)[0]
+    assert policy.eligible and not policy.destinations
+    effects = Effects()
+    selector = TunnelController(cfg, tmp_path / "state", effects)
+    selector.request("failover", "backup", AUTH, 100)
+    assert selector.state["operation"]["target"] == "backup"
+
+
+def test_bgp_empty_required_prefixes_still_checks_exact_encryption(tmp_path):
+    effects, policy, responses = native_bgp_effects(tmp_path)
+    effects.cfg["connections"][0]["remote_prefixes"] = []
+    policy = connection_policies(effects.cfg)[0]
+    assert effects.verify(policy, None) is Health.HEALTHY
+    responses[("ip", "-j", "xfrm", "policy")] = "[]"
+    assert effects.verify(policy, None) is not Health.HEALTHY
+
+
+def test_bgp_selection_retains_currently_learned_admitted_coverage(tmp_path):
+    from nebius_vpngw.agent.vm_ha.forwarding import SCHEMA
+
+    effects, _, responses = native_bgp_effects(tmp_path)
+    effects.cfg["connections"][0]["remote_prefixes"] = []
+    path = tmp_path / "destination-protection.json"
+    path.write_text(
+        json.dumps({"schema": SCHEMA, "cluster": "cluster", "admitted": {"10.2.0.0/16": "site"}})
+    )
+    path.chmod(0o600)
+    policy = connection_policies(effects.cfg)[0]
+    responses[
+        ("vtysh", "-c", f"show bgp ipv4 unicast neighbors {policy.paths[0].peer} routes json")
+    ] = json.dumps({"routes": {"10.2.0.0/16": [{"valid": True}]}})
+    assert effects.verify(policy, None) is Health.DOWN
+    path.write_text("{}")
+    assert effects.verify(policy, None) is Health.UNKNOWN

@@ -292,15 +292,16 @@ def test_independent_probe_is_fresh_bounded_and_never_updates_hysteresis(
 
     monkeypatch.setattr("nebius_vpngw.agent.vm_ha.tunnel_runtime._run_command", command)
     effects = NativeTunnelEffects(
-        {"vm_ha": {"tunnel_probes": {"path": probe}}},
+        {"gateway": {"tunnel_probes": {"path": probe}}},
         tmp_path,
         lambda authority: False,
         active_revalidate=lambda authority: False,
         clock=lambda: now[0],
+        command_runner=command,
     )
     effects.effect_deadline = 105
     effects.observer.observe = lambda *args, **kwargs: Health.HEALTHY
-    policy = SimpleNamespace(paths=[SimpleNamespace(name="path", interface="xfrm0")])
+    policy = SimpleNamespace(mode="static", paths=[SimpleNamespace(name="path", interface="xfrm0")])
     result = effects.observe_readonly(policy, "path", selected=True)
     assert result is (Health.HEALTHY if probe_succeeds else Health.UNKNOWN)
     assert [cmd[0][0] for cmd in commands] == ["ip", "ping"]

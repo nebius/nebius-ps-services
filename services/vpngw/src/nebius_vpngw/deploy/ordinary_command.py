@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .. import apply_approval
@@ -36,6 +36,7 @@ class OrdinaryCommand:
     satisfied: dict[str, dict]
     routes: Any = None
     intents: dict | None = None
+    publication: Any = None
 
     @property
     def approval(self) -> str:
@@ -46,7 +47,15 @@ class OrdinaryCommand:
         for effect in self.plan.effects:
             if effect.key in self.satisfied:
                 self.journal.verified(effect.key, self.satisfied[effect.key])
+        if self.publication is not None:
+            self.publication.begin()
         if self.routes is not None:
+            if self.publication is not None and self.publication.acquired:
+                from .ordinary_route_ownership import RouteJournal
+
+                self.routes.discovery.journal = RouteJournal(
+                    self.journal.project, self.journal.gateway
+                )
             self.routes.begin(self.approval)
 
 
@@ -64,7 +73,15 @@ def package_manifests(
         != apply_approval.digest({"desired": local, "targets": targets})
         or original.artifact_sha256 != artifact
         or any(
-            effect.owner not in {"ordinary-runtime", "ordinary-routes", "security-groups"}
+            effect.owner
+            not in {
+                "ordinary-runtime",
+                "ordinary-routes",
+                "security-groups",
+                "managed-credentials",
+                "ordinary-route-reservation",
+                "ordinary-route-runtime",
+            }
             for effect in original.effects
         )
     ):
@@ -94,6 +111,7 @@ def inspect(
     artifact_sha256: str,
     attachment_completed: dict | None = None,
     routes: Any = None,
+    publication: Any = None,
 ) -> OrdinaryCommand:
     pending = journal.pending()
     original = CommandPlan.parse(pending["plan"]) if pending else None
@@ -101,8 +119,26 @@ def inspect(
     progress = (
         {key: Progress(value) for key, value in pending["progress"].items()} if pending else {}
     )
-    effects = []
+    if publication is not None:
+        publication.select(
+            changed=any(not p.noop for p in plans.values())
+            or bool(routes and (routes.required or publication.scope_changed(routes.intent)))
+        )
+        # Publication transfers even an empty ledger. Persist a parent-bound
+        # route verification receipt so a lost release reply can always resume.
+        if (
+            publication.required
+            and routes is not None
+            and (
+                original is None
+                or progress.get("routes") is Progress.PLANNED
+                and not (routes.completed and routes.completed["approval"] == original.approval)
+            )
+        ):
+            routes.required = True
+    effects, extra_intents = publication.prefix() if publication is not None else ([], {})
     satisfied = {}
+    publication_satisfied = set()
     resumable = set()
     for name, prepared in sorted(plans.items()):
         key = guest_key(name)
@@ -122,6 +158,8 @@ def inspect(
                 effects.append(previous)
             continue
         effect = guest_effect(name, prepared, targets[name])
+        if publication is not None and publication.required:
+            effect = replace(effect, requires=("route-reservation",))
         child = prepared.observation.get("runtime_pending")
         if child:
             if original is None or prepared.manifest.get("command_approval") != apply_approval.bind(
@@ -166,6 +204,16 @@ def inspect(
                 raise RuntimeError("Started routes lack their exact terminal receipt")
             effects.append(previous)
             satisfied[key] = {"observed": apply_approval.digest(routes.preview)}
+    if publication is not None and publication.required:
+        effect, value = publication.suffix(tuple(item.key for item in effects))
+        effects.append(effect)
+        extra_intents[effect.key] = value
+        if original is not None:
+            # The enrollment owner and guest reservation retain exact resume
+            # authority. Their independent terminal receipts are checked by begin
+            # and finish before this command can complete.
+            extra_resume, publication_satisfied = publication.resume_sets(progress)
+            resumable.update(extra_resume)
     if attachments is not None and (attachments_changed(attachments) or attachment_pending):
         key = "attachments"
         guest_keys = tuple(effect.key for effect in effects)
@@ -229,7 +277,7 @@ def inspect(
             current,
             progress,
             resumable_children=frozenset(resumable),
-            satisfied_children=frozenset(satisfied),
+            satisfied_children=frozenset(satisfied) | publication_satisfied,
         )
         if set(approved) != {effect.key for effect in effects}:
             raise RuntimeError("Apply child inventory changed before independent verification")
@@ -249,6 +297,7 @@ def inspect(
             for effect in effects
             if effect.owner == "ordinary-runtime"
         }
+        intents.update(extra_intents)
     return OrdinaryCommand(
-        journal, original or current, original is not None, satisfied, routes, intents
+        journal, original or current, original is not None, satisfied, routes, intents, publication
     )

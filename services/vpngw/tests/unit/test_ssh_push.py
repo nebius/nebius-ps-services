@@ -96,6 +96,12 @@ def _write_vm_ha_agent_wheel(
         "ingress_policy.py",
         "boot_policy.py",
         "vm_ha_diagnostics.py",
+        "ha_activation.py",
+        "agent/local_commands.py",
+        "agent/routing_guard.py",
+        "agent/strongswan_renderer.py",
+        "agent/vm_ha/runtime.py",
+        "agent/vm_ha/models.py",
         "schema.py",
         "config_loader.py",
         "agent/firewall_manager.py",
@@ -515,6 +521,7 @@ class _CommandStream(BytesIO):
             recv_ready=lambda: self.tell() < len(payload),
             recv=self.read,
             recv_stderr_ready=lambda: False,
+            recv_stderr=lambda _size: b"",
             close=lambda: None,
         )
 
@@ -787,7 +794,8 @@ class _MaterializationClient:
 class _ActivationFailureClient:
     def exec_command(self, command: str, **kwargs):
         assert command == "sudo systemctl restart nebius-vpngw-vm-ha-guard.service"
-        assert kwargs == {"get_pty": True, "timeout": 20}
+        assert kwargs["get_pty"] is True
+        assert 90 < kwargs["timeout"] <= 120
         output = (
             b"Job for nebius-vpngw-vm-ha-guard.service failed because the control "
             b"process exited with error code. TOP_SECRET_REMOTE_DETAIL"
@@ -801,7 +809,8 @@ class _AutoHealingInitializationFailureClient:
             "sudo /usr/bin/python3 -m nebius_vpngw.agent.main "
             "--vm-ha-auto-healing-action initialize"
         )
-        assert kwargs == {"get_pty": True, "timeout": 20}
+        assert kwargs["get_pty"] is True
+        assert 90 < kwargs["timeout"] <= 120
         output = b"standby auto-healing policy action failed: TOP_SECRET_REMOTE_DETAIL"
         return BytesIO(), _CommandStream(output, 2), BytesIO()
 
@@ -884,6 +893,11 @@ def test_vm_ha_agent_activation_is_controller_owned() -> None:
 
 @pytest.fixture
 def selected_package_plan(monkeypatch):
+    from nebius_vpngw.deploy import ordinary_handoff
+
+    monkeypatch.setattr(
+        ordinary_handoff, "observe_guarded", lambda *args: {"state": "NOT_SUBMITTED"}
+    )
     from nebius_vpngw.deploy import checkpoint_conversion, ordinary_apply, vm_ha_package
 
     monkeypatch.setattr(checkpoint_conversion, "guard_package", lambda *args, **kwargs: None)
@@ -1322,7 +1336,8 @@ def test_vm_ha_materialization_waits_for_controller_convergence() -> None:
     assert len(client.commands) == 3
     assert sleeps == [1.0, 1.0]
     assert all("--vm-ha-materialized" in command for command, _ in client.commands)
-    assert all(kwargs == {"get_pty": True, "timeout": 20} for _, kwargs in client.commands)
+    assert all(kwargs["get_pty"] is True for _, kwargs in client.commands)
+    assert all(0 < kwargs["timeout"] <= 20 for _, kwargs in client.commands)
 
 
 def test_vm_ha_materialization_wait_is_bounded() -> None:
@@ -1347,9 +1362,7 @@ def test_vm_ha_materialization_wait_is_bounded() -> None:
     assert len(client.commands) == 3
     assert sleeps == pytest.approx([0.25, 0.25, 0.1])
     assert now == pytest.approx(0.6)
-    assert [kwargs["timeout"] for _, kwargs in client.commands] == pytest.approx(
-        [0.6, 0.35, 0.1]
-    )
+    assert [kwargs["timeout"] for _, kwargs in client.commands] == pytest.approx([0.6, 0.35, 0.1])
 
 
 @pytest.mark.parametrize("return_code", [0, 1])
@@ -1399,8 +1412,8 @@ def test_vm_ha_materialization_noisy_stalled_channel_is_closed_at_deadline() -> 
     channel = SimpleNamespace(
         recv_ready=lambda: True,
         recv_stderr_ready=lambda: True,
-        recv=lambda size: drained.append("stdout"),
-        recv_stderr=lambda size: drained.append("stderr"),
+        recv=lambda size: drained.append("stdout") or b"out",
+        recv_stderr=lambda size: drained.append("stderr") or b"err",
         exit_status_ready=lambda: False,
         recv_exit_status=lambda: pytest.fail("must not block waiting for exit status"),
         close=lambda: closed.append(True),
@@ -1959,7 +1972,9 @@ def test_vm_ha_stop_barrier_bounds_unfinished_remote_command(monkeypatch, noisy:
     )
     client = _RemovalPhaseClient()
     monkeypatch.setattr(
-        client, "exec_command", lambda *args, **kwargs: (None, SimpleNamespace(channel=channel), None)
+        client,
+        "exec_command",
+        lambda *args, **kwargs: (None, SimpleNamespace(channel=channel), None),
     )
     monkeypatch.setattr(ssh_push.time, "monotonic", lambda: elapsed[0])
     monkeypatch.setattr(ssh_push.time, "sleep", sleep)

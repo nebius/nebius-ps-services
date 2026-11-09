@@ -60,6 +60,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -324,10 +325,23 @@ def acquire_routing_lock(blocking: bool = True) -> int | None:
     try:
         import fcntl
 
+        from .local_commands import CURRENT
+
+        budget = CURRENT.get()
         flags = fcntl.LOCK_EX
-        if not blocking:
+        if not blocking or budget is not None:
             flags |= fcntl.LOCK_NB
-        fcntl.flock(fd, flags)
+        while True:
+            try:
+                fcntl.flock(fd, flags)
+                break
+            except BlockingIOError:
+                if not blocking or budget is None:
+                    raise
+                remaining = budget.deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("routing lock deadline expired") from None
+                time.sleep(min(0.05, remaining))
     except BlockingIOError:
         os.close(fd)
         return None
@@ -447,6 +461,13 @@ def _enforce_routing_invariants_locked(cfg: dict[str, Any]) -> None:
         "scope_link_routes_removed": 0,
         "local_prefix_routes_fixed": 0,
     }
+
+    if cfg.get("vm_ha") is None:
+        from .ordinary import destination_protection
+
+        # Every ordinary forwarding writer, including the timer, requires the
+        # same kernel proof. Boot stays fenced until the agent restores it.
+        destination_protection(cfg).verify()
 
     # INVARIANT 0: Enforce critical sysctl settings (self-healing)
     # This ensures routing works even if cloud-init or other services reset sysctls

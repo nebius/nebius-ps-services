@@ -905,10 +905,39 @@ causal proof, safe repair and independent verification.
   independent hidden oracles, fresh Linux containers and a 600-second deadline.
 - AC-013: Promotion requires deterministic checks, zero unauthorized actions,
   disclosures or false verified fixes, at least 90% correct outcomes and no core
-  domain regression. Target 20% fewer median diagnostic actions on jointly
-  successful focused cases; report all-case outcomes and time/token changes
-  separately. Missing telemetry remains unavailable; small trials prove no
-  general statistical improvement.
+  domain regression or overall accuracy decline from baseline. Target 20% fewer
+  median diagnostic actions on jointly successful core pairs, counting every
+  investigator; target 20% lower median elapsed time on predeclared parallel-eligible
+  successful pairs with no overall median latency increase and at most 25% median
+  aggregate token growth on those pairs. Missing usage or descendant traces leave
+  efficiency qualification incomplete. Report failures and variability too.
+
+- AC-014: Classify provisionally as code, infrastructure, mixed or undetermined;
+  configuration, compatibility, permissions and resources are cross-cutting causes.
+  Organize the unchanged canonical states into seven phases with explicit exits.
+  Start and narrow at evidence-selected boundaries, never a compulsory stack sweep.
+- AC-015: Every material hypothesis records support, contradiction, distinguishing
+  prediction, falsifier and status. Exclusions bind target, path, configuration
+  and window; contradictory evidence or relevant changes reopen them. One fault
+  does not exclude contributing or independent faults.
+- AC-016: One coordinator owns the failure contract, shared evidence and budget,
+  conclusions, remediation and report. Delegate only authorized independent
+  questions to enforceably read-only native investigators: normally two, at most
+  three simultaneously, with five-minute deadlines shortened by remaining budget.
+  No recursive delegation; serial fallback when permissions or tools are absent.
+  Reconcile conflicts, duplication, stale/late evidence and all outstanding work;
+  cancel unnecessary investigations after localization. Active diagnostics remain
+  coordinator-owned and effect/authority checked.
+- AC-017: Technology guides share applicability, version fingerprint, symptom,
+  alternatives, distinguishing evidence, interpretation, next branch, effects and
+  verification. Retain existing overlays and add bounded AMD/provider routing;
+  identify actual runtime, resource, scheduler and fabric boundaries. Unsupported
+  combinations remain explicit gaps; tools prove only their documented scope.
+- AC-018: Aggregate parent and descendant actions, usage and outcomes once by
+  native identity, report coordination overhead separately, and fail incomplete
+  accounting closed. Extend process cases and quality oracles for reclassification,
+  ambiguous symptoms, conditional parallelism, contradictory/stale/missing evidence,
+  vendor signals, permission escapes, cancellation and budget exhaustion.
 
 #### Negative Criteria
 

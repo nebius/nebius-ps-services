@@ -1466,6 +1466,13 @@ class VMManager:
             raise RuntimeError("VM-HA approved active primary allocation is malformed")
 
         targets_by_table = {target.route_table_id: target for target in route_targets}
+        from .ordinary_route_migration import matches, persisted
+
+        if not self.project_id:
+            raise RuntimeError("VM-HA migration route authority requires an exact project")
+        ordinary_receipts = persisted(
+            dict(transaction.resource_bindings), self.project_id, spec.name, expected_instance_name
+        )
         route_indexes = sorted(
             {
                 int(matched.group(1))
@@ -1505,7 +1512,18 @@ class VMManager:
             legacy_name = f"vpngw-{prefix.replace('/', '-')}"[:63]
             if string_values["allocation_id"] == primary_allocation_id:
                 if string_values["name"] != legacy_name:
-                    continue
+                    receipt = ordinary_receipts.get(string_values["route_id"])
+                    if receipt is None:
+                        continue
+                    snapshot_digest = self._normalized_observation_value(
+                        transaction.observation, f"{base}/snapshot_sha256"
+                    )
+                    if not matches(
+                        receipt,
+                        string_values,
+                        snapshot_digest if isinstance(snapshot_digest, str) else None,
+                    ):
+                        continue
             elif string_values["name"] not in self._vm_ha_managed_route_names(
                 cluster_id=spec.vm_ha.cluster_id,
                 route_target=route_target,
@@ -1783,6 +1801,9 @@ class VMManager:
         from .route_manager import NebiusSDKRouteBackend, RouteManager
 
         backend = NebiusSDKRouteBackend(client)
+        from ..apply_approval import digest as route_snapshot_digest
+        from .ordinary_route_ownership import snapshot as route_snapshot
+
         route_rows: list[dict[str, object]] = []
         for target in route_targets:
             backend.verify_target(target)
@@ -1804,6 +1825,7 @@ class VMManager:
                         "route_id": RouteManager._metadata_id(route),
                         "route_table_id": target.route_table_id,
                         "revision": self._metadata_revision(route),
+                        "snapshot_sha256": route_snapshot_digest(route_snapshot(route)),
                     }
                 )
         route_rows.sort(
@@ -2452,9 +2474,10 @@ class VMManager:
         deadline = start_time + timeout
         if timeout <= 0:
             return False
+        client_auth = self._require_ssh_client_auth()
         ssh_base = build_openssh_base_command(
-            key_path=(self._management_key_path if self._management_public_key is None else None),
-            client_auth=self._require_ssh_client_auth(),
+            key_path=self._management_key_path if client_auth is None else None,
+            client_auth=client_auth,
             connect_timeout=min(5, timeout),
             policy=self._ssh_policy,
             hostname=vm_name if self._ssh_policy is not None else None,
@@ -2576,9 +2599,10 @@ class VMManager:
 
         # Wait a moment for VM to boot and network to initialize
         time.sleep(2)
+        client_auth = self._require_ssh_client_auth()
         ssh_base = build_openssh_base_command(
-            key_path=(self._management_key_path if self._management_public_key is None else None),
-            client_auth=self._require_ssh_client_auth(),
+            key_path=self._management_key_path if client_auth is None else None,
+            client_auth=client_auth,
             connect_timeout=5,
             policy=self._ssh_policy,
             hostname=vm_name if self._ssh_policy is not None else None,
@@ -3272,25 +3296,24 @@ class VMManager:
         return policy
 
     def _get_vm_by_id_for_vm_ha_preflight(self, client: t.Any, compute_id: str) -> t.Any:
-        try:
-            from nebius.api.nebius.compute.v1 import (  # type: ignore
-                GetInstanceRequest,
-                InstanceServiceClient,
-            )
+        from nebius.api.nebius.compute.v1 import GetInstanceRequest, InstanceServiceClient
 
-            response = (
+        from .authority_observation import AuthorityUnavailable, read_compute
+
+        value = read_compute(
+            lambda options: (
                 InstanceServiceClient(client)
-                .get(
-                    GetInstanceRequest(id=compute_id),
-                    **vm_ha_request_kwargs(),
-                )
+                .get(GetInstanceRequest(id=compute_id), **options)
                 .wait()
             )
-        except Exception as error:
-            raise RuntimeError("VM-HA Compute identity changed after SSH preflight") from error
-        if response is None:
-            raise RuntimeError("VM-HA Compute identity changed after SSH preflight")
-        return response
+        )
+        metadata = getattr(value, "metadata", None)
+        if not all(
+            isinstance(getattr(metadata, field, None), str) and getattr(metadata, field)
+            for field in ("id", "name", "parent_id")
+        ):
+            raise AuthorityUnavailable("compute-response-incomplete")
+        return value
 
     def _vm_ha_ssh_member_signature(self, vm_obj: t.Any) -> tuple[str, str, str, str, str, str]:
         metadata = getattr(vm_obj, "metadata", None)
@@ -3831,11 +3854,10 @@ class VMManager:
         if selected_policy is None:
             raise RuntimeError("VM-HA existing-member verification requires an SSH policy")
         for name, public_ip in existing.items():
+            client_auth = self._require_ssh_client_auth()
             ssh_base = build_openssh_base_command(
-                key_path=(
-                    self._management_key_path if self._management_public_key is None else None
-                ),
-                client_auth=self._require_ssh_client_auth(),
+                key_path=self._management_key_path if client_auth is None else None,
+                client_auth=client_auth,
                 connect_timeout=max(1, min(5, math.ceil(probe_timeout))),
                 policy=selected_policy,
                 hostname=name,
@@ -8228,8 +8250,8 @@ class VMManager:
             "            # Nebius VPN Gateway – XFRM Routing Stack\n"
             "            ########################################\n"
             "            \n"
-            "            # 1. Global forwarding – the box is a router\n"
-            f"            net.ipv4.ip_forward = {0 if vm_ha else 1}\n"
+            "            # 1. Boot fenced; the agent enables protected forwarding\n"
+            "            net.ipv4.ip_forward = 0\n"
             "            \n"
             "            # 1.1 TCP MTU probing – recover when PMTUD is blocked\n"
             "            net.ipv4.tcp_mtu_probing = 1\n"

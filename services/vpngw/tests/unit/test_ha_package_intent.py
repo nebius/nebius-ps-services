@@ -258,6 +258,89 @@ def test_package_restore_never_substitutes_a_wheel(packages, monkeypatch, tmp_pa
     assert list(target.iterdir()) == []
 
 
+def test_new_artifact_without_old_reservation_still_refuses_pending_native_work(packages):
+    packages.observed["runtime_pending"] = {
+        "manifest": {**packages.manifest, "wheel_sha256": "0" * 64}
+    }
+    with pytest.raises(vm_ha_package.VMHAAgentPackageError, match="same approved artifact"):
+        vm_ha_package.inspect_plan(
+            NS(),
+            "target",
+            NS(hostname="gateway-a", config_yaml="approved configuration"),
+            {},
+            target_identity="compute-a",
+            wheel=packages.wheel,
+        )
+    assert packages.requests == []
+
+
+@pytest.mark.parametrize(
+    ("phase", "ordinary_state", "blocked"),
+    [
+        ("complete", None, False),
+        ("complete", "complete", False),
+        ("packages", "complete", True),
+        ("complete", "installing", True),
+    ],
+)
+def test_successor_ignores_only_completed_prior_package_work(
+    packages, tmp_path, monkeypatch, phase, ordinary_state, blocked
+):
+    from nebius_vpngw import runtime_migration as migration
+
+    native = {
+        "phase": phase,
+        "operation": "f" * 32,
+        "manifest": {**packages.manifest, "ha_parent": "e" * 64, "wheel_sha256": "0" * 64},
+    }
+    journal = tmp_path / "ordinary.json"
+    if ordinary_state is not None:
+        journal.write_text(json.dumps({"id": native["operation"], "state": ordinary_state}))
+    monkeypatch.setattr(migration, "state", lambda: deepcopy(native))
+    monkeypatch.setattr(migration, "Path", lambda _path: journal)
+    assert migration.pending("e" * 64) is not None
+    packages.observed.update(dependencies={}, requirements={})
+    remote = ordinary_apply.remote
+
+    def observe(*args):
+        result = remote(*args)
+        result["observation"]["runtime_pending"] = migration.pending(
+            args[-1]["manifest"].get("ha_parent")
+        )
+        return result
+
+    monkeypatch.setattr(ordinary_apply, "remote", observe)
+    resolved = []
+
+    def resolve(*args):
+        resolved.append(True)
+        return []
+
+    monkeypatch.setattr(ordinary_apply, "resolve_dependencies", resolve)
+
+    def inspect():
+        return vm_ha_package.inspect_plan(
+            NS(),
+            "target",
+            NS(hostname="gateway-a", config_yaml="approved configuration"),
+            {},
+            target_identity="compute-a",
+            wheel=packages.wheel,
+        )
+
+    if blocked:
+        with pytest.raises(vm_ha_package.VMHAAgentPackageError, match="same approved artifact"):
+            inspect()
+        assert resolved == []
+    else:
+        plan = inspect()
+        try:
+            assert "ha_parent" not in plan.manifest and resolved == [True]
+            assert plan.manifest["wheel_sha256"] == packages.manifest["wheel_sha256"]
+        finally:
+            plan.close()
+
+
 def test_native_pending_uses_its_existing_staged_bytes(packages):
     packages.observed["runtime_pending"] = {
         "manifest": {

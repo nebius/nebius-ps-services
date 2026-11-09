@@ -173,7 +173,7 @@ def test_production_tunnel_provider_proves_only_warm_canonical_policy(
 
     cfg = deepcopy(sample_config)
     warm = deepcopy(cfg["connections"][0])
-    warm.update(name="warm", routing_mode="bgp")
+    warm.update(name="warm", routing_mode="bgp", remote_prefixes=["172.20.0.0/24"])
     warm["tunnels"][0]["name"] = "warm-path"
     cfg["connections"].append(warm)
     cfg["vm_ha"] = {"cluster_id": "fixture"}
@@ -210,7 +210,7 @@ def test_fenced_static_preparation_is_observable_without_granting_reload(
     cfg = deepcopy(sample_config)
     if mixed:
         warm = deepcopy(cfg["connections"][0])
-        warm.update(name="warm", routing_mode="bgp")
+        warm.update(name="warm", routing_mode="bgp", remote_prefixes=["172.20.0.0/24"])
         warm["tunnels"][0]["name"] = "warm-path"
         cfg["connections"].append(warm)
     cfg["vm_ha"] = {"cluster_id": "fixture"}

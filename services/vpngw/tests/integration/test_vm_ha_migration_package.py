@@ -27,6 +27,10 @@ pytestmark = pytest.mark.integration
 def migration_guest(monkeypatch, tmp_path, ordinary_operation_guest, runtime_migration_guest):
     root = tmp_path / "guest"
     root.mkdir()
+    from nebius_vpngw.agent import ordinary_route_authority
+
+    route_owner = ordinary_route_authority.RouteAuthority(root / "cloud-routes")
+    monkeypatch.setattr(ordinary_route_authority, "RouteAuthority", lambda: route_owner)
     config = root / "resolved.yaml"
     config.write_text("gateway: {}\n")
     marker = root / "vm-ha-enabled"
@@ -154,6 +158,15 @@ def migration_guest(monkeypatch, tmp_path, ordinary_operation_guest, runtime_mig
         return 0, ""
 
     monkeypatch.setattr(ordinary_remote, "command", command)
+    # This fixture tests the Holder protocol, not native pip file ownership.
+    monkeypatch.setattr(ordinary_remote.python_packages, "prepare_payload", lambda *args: None)
+    monkeypatch.setattr(
+        ordinary_remote.python_packages,
+        "install_payload",
+        lambda manifest, directory, run, check: run(
+            ["python3", "-m", "pip", "install", str(directory / manifest["wheel_name"])]
+        ),
+    )
     units = {name: "inactive" for name in ops.HA_WRITERS}
 
     def service(action, name):
@@ -363,17 +376,13 @@ def test_retry_uses_handoff_admission_after_partial_assets(monkeypatch, migratio
     assert ops.handoff_recoverable(old, ops.Manager(time.monotonic() + 60))
 
 
-def test_retry_completes_with_fresh_package_plan(monkeypatch, migration_guest):
+def test_retry_completes_with_original_package_plan(monkeypatch, migration_guest):
     fixture = migration_guest
     with pytest.raises(RuntimeError, match="disconnect"):
         run_protocol(monkeypatch, requests(fixture)[:1])
     previous = ops.identity
     monkeypatch.setattr(ops, "identity", lambda pid=None: dict(previous(pid), start="2"))
     monkeypatch.setattr(ops, "alive", lambda owner: owner["start"] == "2")
-    fixture.plan.close()
-    fixture.plan = vm_ha_package.inspect_plan(
-        fixture.ssh, "203.0.113.10", fixture.instance, {}, target_identity="compute-a"
-    )
     assert run_protocol(monkeypatch, requests(fixture))[-1] == {"complete": True}
 
 
@@ -450,7 +459,7 @@ def test_staged_bytes_are_rechecked_before_any_installer(monkeypatch, migration_
 @pytest.mark.parametrize(
     "damage", ["none", "broken-product", "peer-drift", "checkpoint-disconnect"]
 )
-def test_post_publication_repair_stays_stopped_until_desired_activation(
+def test_post_publication_replanning_cannot_replace_original_package_admission(
     monkeypatch, migration_guest, damage
 ):
     fixture = migration_guest
@@ -483,31 +492,11 @@ def test_post_publication_repair_stays_stopped_until_desired_activation(
         return [*messages[:2], checkpoint, *messages[2:]]
 
     messages = repair_requests()
-    if damage == "peer-drift":
-        messages[1]["peer"]["lock"]["generation_id"] = "f" * 64
-        before = fixture.state["installs"]
-        with pytest.raises(RuntimeError, match="peer repair admission changed"):
-            run_protocol(monkeypatch, messages)
-        assert fixture.state["installs"] == before
-        return
-    if damage == "checkpoint-disconnect":
-        with pytest.raises(RuntimeError, match="disconnect"):
-            run_protocol(monkeypatch, messages[:3])
-        assert ops.Journal().read()["phase"] == "publish"
-        assert all(fixture.units[name] == "inactive" for name in ops.HA_WRITERS)
-        fresh_owner(monkeypatch, start="3")
-        fixture.plan.close()
-        fixture.plan = vm_ha_package.inspect_plan(
-            fixture.ssh, "203.0.113.10", fixture.instance, {}, target_identity="compute-a"
-        )
-        messages = repair_requests()
-    result = run_protocol(monkeypatch, messages)
-    assert result[-1] == {"complete": True}
-    assert result[2] == result[1]  # exact package receipt reverified under exclusion
-    assert fixture.package_file.read_bytes() == b"approved new package\n"
+    before = fixture.state["installs"]
+    with pytest.raises(RuntimeError, match="prepared binding changed"):
+        run_protocol(monkeypatch, messages)
+    assert fixture.state["installs"] == before
     assert all(fixture.units[name] == "inactive" for name in ops.HA_WRITERS)
-    assert ops.Journal().read()["state"] == "complete"
-    assert ha_repair.evidence(expected)["forwarding"] is False
 
 
 def test_credential_drift_rejects_before_marker(monkeypatch, migration_guest):
@@ -540,3 +529,68 @@ def test_retry_does_not_reinterpret_settled_stops_after_canonical_start(
     monkeypatch.setattr(ops, "alive", lambda owner: False)
     observed = guest.inspect(fixture.ha)
     assert observed["pending"] is True and observed["mode"] == "ha"
+
+
+@pytest.mark.parametrize("crash", ["publication", "completion"])
+def test_original_admission_resumes_after_publication_or_lost_completion(
+    monkeypatch, migration_guest, crash
+):
+    fixture = migration_guest
+    messages = requests(fixture)
+    raw = b"gateway: {}\nvm_ha: {cluster_id: fixture}\n"
+    (guest.STAGED_CONFIG / (fixture.ha["generation_id"] + ".yaml")).write_bytes(raw)
+    messages[2]["receipt"]["staged_file_sha256"] = ordinary_remote.sha(raw)
+    if crash == "publication":
+        with pytest.raises(RuntimeError, match="disconnect"):
+            run_protocol(monkeypatch, messages[:3])
+    else:
+        # The canonical journal completes before the transport receipt is sent.
+        original = ops.Operation.complete
+
+        def complete_then_disconnect(self):
+            original(self)
+            raise RuntimeError("disconnect after complete")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(ops.Operation, "complete", complete_then_disconnect)
+            with pytest.raises(RuntimeError, match="disconnect after complete"):
+                run_protocol(monkeypatch, messages)
+    if crash == "completion":
+        assert guest.completed_receipt(messages[0], messages[-1]) == {"complete": True}
+        changed = dict(messages[-1], operation="c" * 64)
+        with pytest.raises(RuntimeError, match="binding changed"):
+            guest.completed_receipt(messages[0], changed)
+    fresh_owner(monkeypatch)
+    result = run_protocol(monkeypatch, messages)
+    assert result[-1] == {"complete": True}
+    assert fixture.state["installs"] == 1
+    assert ops.Journal().read()["state"] == "complete"
+
+
+def test_resumed_guarded_package_rejects_config_drift_before_effects(monkeypatch, migration_guest):
+    fixture = migration_guest
+    messages = requests(fixture)
+    with pytest.raises(RuntimeError, match="disconnect"):
+        run_protocol(monkeypatch, messages[:1])
+    fixture.config.write_text("gateway: {changed: true}\n")
+    before = ops.Journal().read()
+    with pytest.raises(RuntimeError, match="resumed package authority changed"):
+        guest.prepare_guarded({"package": fixture.plan.envelope, "expected": None})
+    assert ops.Journal().read() == before
+    assert fixture.state["installs"] == 0
+
+
+def test_prepared_conversion_rechecks_current_boot_without_replacing_original_plan(
+    monkeypatch, migration_guest
+):
+    fixture = migration_guest
+    messages = requests(fixture)
+    original = copy.deepcopy(messages[0]["package"])
+    with pytest.raises(RuntimeError, match="disconnect"):
+        run_protocol(monkeypatch, messages[:2])
+    ops.BOOT.write_text("87654321-4321-4321-4321-210987654321")
+    fresh_owner(monkeypatch)
+    result = run_protocol(monkeypatch, messages)
+    assert result[-1] == {"complete": True}
+    assert messages[0]["package"] == original
+    assert fixture.state["installs"] == 1

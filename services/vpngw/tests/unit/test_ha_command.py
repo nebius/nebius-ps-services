@@ -350,3 +350,17 @@ def test_reviewed_successor_refuses_uncertain_attachment_operation(context):
             attachment_child=child.read_transaction(),
         )
     assert (command.journal.path.read_bytes(), child.path.read_bytes()) == before
+
+
+def test_composite_prerequisite_uses_public_approval_from_real_command(context):
+    from nebius_vpngw.deploy.ha_composite import prerequisite_matches
+
+    _state, _manager, command, _child, _observed = context
+    with command.journal:
+        command.begin()
+    checkpoint = command.journal.snapshot()
+    assert checkpoint["transaction"]["approval"] != command.approval
+    assert prerequisite_matches(checkpoint, {"prerequisite": command.approval})
+    assert not prerequisite_matches(
+        checkpoint, {"prerequisite": checkpoint["transaction"]["approval"]}
+    )

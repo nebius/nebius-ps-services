@@ -31,6 +31,7 @@ PLAN_SCHEMA = "nebius-vpngw.ordinary-route-plan.v1"
 STORE_SCHEMA = "nebius-vpngw.ordinary-route-store.v1"
 PROOF_KEY = "route_retirement_sha256"
 OWNERSHIP_SOURCES = (
+    "ha_tunnel_policy.py",
     "ordinary_routes.py",
     "tunnel_state.py",
     "agent/ordinary.py",
@@ -50,6 +51,7 @@ def require(condition: bool, code: str = "ordinary_route_ownership_unverified") 
 def streamed_bootstrap() -> str:
     from_source = []
     for name, path in (
+        ("_vpngw_ha_tunnel_policy", Path(__file__).with_name("ha_tunnel_policy.py")),
         ("_vpngw_tunnel_state", Path(__file__).with_name("tunnel_state.py")),
         ("_vpngw_ordinary_routes", Path(__file__)),
     ):
@@ -65,12 +67,16 @@ def prefix(value: str) -> str:
     return str(ipaddress.IPv4Network("0.0.0.0/0" if value == "default" else value, strict=False))
 
 
-def projection(cfg: dict[str, Any] | None) -> list[dict[str, Any]]:
+def projection(cfg: dict[str, Any] | None, *, effective: bool = False) -> list[dict[str, Any]]:
     if cfg is None:
         return []
     require(isinstance(cfg, dict) and cfg.get("vm_ha") is None)
     require(isinstance(cfg.get("connections", []), list))
-    _, _, endpoints = collect_tunnel_state(cfg, log=lambda message: None)
+    # Retirement records retain every configured claim, including an unselected
+    # responder. Forwarding verification explicitly requests effective routes.
+    _, _, endpoints = collect_tunnel_state(
+        cfg, log=lambda message: None, include_unselected_routes=not effective
+    )
     result = []
     for endpoint in endpoints:
         mode = endpoint["mode"]
@@ -96,11 +102,7 @@ def projection(cfg: dict[str, Any] | None) -> list[dict[str, Any]]:
 
 
 def effective_static_routes(endpoints: list[dict]) -> dict[str, str]:
-    """Final ordinary forwarding after ordered replacements, not historical claims.
-
-    Consume only the current per-VM projection: recovery sources are deduplicated
-    and sorted independently of tunnel precedence. Keep every claim in keys().
-    """
+    """Effective forwarding from the canonical selected endpoint projection."""
     return {
         prefix(destination): endpoint["name"]
         for endpoint in endpoints

@@ -1,8 +1,15 @@
 # Slurm Troubleshooting Playbook
 
+## Applicability
+
 Use this playbook when the discovered path includes Slurm. Pin the observed
 Slurm version and compare its active configuration with the matching SchedMD
 documentation before interpreting defaults or fields.
+
+## Version Fingerprint
+
+Pin Slurm, configured topology/selection/GRES plugins, node hardware, driver and
+fabric versions, job allocation and observed placement; consult matching SchedMD docs.
 
 ## Adaptive Decision Guide
 
@@ -19,8 +26,10 @@ crosses a boundary. They are not a mandatory whole-platform checklist.
 
 <!-- markdownlint-enable MD013 -->
 
-### Escalation Conditions
+### Diagnostic Effects
 
+Passive bounded inspection comes first. Active diagnostics remain coordinator-owned;
+workers may not launch tests, captures, debug containers, stress or repairs.
 Escalate only if the next observation can separate remaining explanations. Bound
 time, output, target and effects; preserve evidence and original settings. Treat
 production or unconfirmed targets as read-only without exact action authority.
@@ -145,6 +154,8 @@ identified event, restore the original level, and verify rollback. Do not leave
 cluster-wide debug enabled.
 
 ## Official Sources
+
+- [Topology allocation](https://slurm.schedmd.com/topology.html)
 
 - [Slurm overview](https://slurm.schedmd.com/overview.html)
 - [Slurm configuration](https://slurm.schedmd.com/slurm.conf.html)

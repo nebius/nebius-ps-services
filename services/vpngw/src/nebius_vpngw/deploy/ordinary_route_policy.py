@@ -1,16 +1,13 @@
 """Frozen destination intent for ordinary VPC routes.
 
-BGP observations select additions inside the approved policy. They never retire
-previously admitted destinations. This module has no cloud or guest effects.
+BGP observations select additions inside the approved policy. Runtime withdrawal
+requires three complete absence observations. This module has no cloud effects.
 """
 
 from __future__ import annotations
 
 import ipaddress
 from dataclasses import asdict, dataclass
-
-from ..config_loader import connection_static_remote_prefixes
-from .route_manager import RouteManager
 
 
 def prefix(value: str) -> str:
@@ -47,6 +44,61 @@ class Policy:
 
     def mapping(self) -> dict:
         return asdict(self)
+
+    @classmethod
+    def parse(cls, value: dict) -> Policy:
+        """Read generated policy without accepting extra ownership or peer fields."""
+        try:
+            if (
+                set(value) != {"connections", "excluded_prefixes", "summarize"}
+                or type(value["summarize"]) is not bool
+            ):
+                raise ValueError
+            connections = []
+            for item in value["connections"]:
+                if (
+                    set(item)
+                    != {"name", "mode", "instance_index", "peers", "prefixes", "max_prefixes"}
+                    or not isinstance(item["name"], str)
+                    or not item["name"]
+                    or item["mode"] not in {"static", "bgp"}
+                    or type(item["instance_index"]) is not int
+                    or item["instance_index"] < 0
+                    or type(item["max_prefixes"]) is not int
+                    or not 1 <= item["max_prefixes"] <= 10000
+                ):
+                    raise ValueError
+                peers = tuple(item["peers"])
+                prefixes = tuple(item["prefixes"])
+                if (
+                    peers != tuple(sorted(set(peers)))
+                    or any(str(ipaddress.IPv4Address(peer)) != peer for peer in peers)
+                    or item["mode"] == "bgp"
+                    and not peers
+                    or prefixes != tuple(sorted({prefix(p) for p in prefixes}))
+                ):
+                    raise ValueError
+                connections.append(
+                    Connection(
+                        item["name"],
+                        item["mode"],
+                        item["instance_index"],
+                        peers,
+                        prefixes,
+                        item["max_prefixes"],
+                    )
+                )
+            excluded = tuple(value["excluded_prefixes"])
+            if (
+                not excluded
+                or excluded != tuple(sorted({prefix(p) for p in excluded}))
+                or len({c.name for c in connections}) != len(connections)
+                or connections != sorted(connections, key=lambda c: c.name)
+            ):
+                raise ValueError
+            return cls(tuple(connections), excluded, value["summarize"])
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise ValueError("Invalid generated ordinary route policy") from None
 
     @property
     def dynamic(self) -> bool:
@@ -110,6 +162,9 @@ class Policy:
 
 def freeze(local: dict, *, network_prefixes: tuple[str, ...], summarize: bool = False) -> Policy:
     """Reuse configured connection ownership and Static selector semantics."""
+    from ..config_loader import connection_static_remote_prefixes
+    from .route_manager import RouteManager
+
     manager = RouteManager(None)
     defaults = local.get("defaults", {})
     default_mode = manager._normalize_value(defaults.get("routing", {}).get("mode", "bgp"))
@@ -160,3 +215,77 @@ def freeze(local: dict, *, network_prefixes: tuple[str, ...], summarize: bool = 
     if not excluded:
         raise ValueError("Route policy requires canonical local and VPC exclusions")
     return Policy(tuple(sorted(connections, key=lambda item: item.name)), excluded, summarize)
+
+
+@dataclass(frozen=True)
+class AbsenceEvidence:
+    """Three consecutive complete observations under one configuration and boot."""
+
+    binding: str
+    policy: str
+    selected: str
+    absent: frozenset[str]
+    observations: int
+
+    def admits(self, policy: Policy, learned: dict[str, tuple[str, ...]], destination: str) -> bool:
+        from ..apply_approval import digest
+
+        network = ipaddress.IPv4Network(destination)
+        return (
+            self.observations >= 3
+            and self.policy == digest(policy.mapping())
+            and self.selected == digest(policy.select(learned))
+            and destination in self.absent
+            and destination not in policy.select(learned)
+            and any(
+                c.mode == "bgp"
+                and policy.retains(destination, c.instance_index)
+                and (
+                    not c.prefixes
+                    or any(network.overlaps(ipaddress.IPv4Network(p)) for p in c.prefixes)
+                )
+                for c in policy.connections
+            )
+            and not any(c.mode == "static" and c.accepts(destination) for c in policy.connections)
+        )
+
+
+class AbsenceObservations:
+    """Unknown evidence or a changed snapshot resets the withdrawal window.
+
+    Deliberately process-owned: reboot, daemon restart and generation change all
+    require three fresh complete samples; persisted counts confer no authority.
+    """
+
+    def __init__(self) -> None:
+        self.signature: str | None = None
+        self.count = 0
+
+    def unknown(self) -> None:
+        self.signature, self.count = None, 0
+
+    def observe(
+        self,
+        binding: str,
+        policy: Policy,
+        learned: dict[str, tuple[str, ...]],
+        admitted: frozenset[str],
+    ) -> AbsenceEvidence:
+        from ..apply_approval import digest
+
+        try:
+            selected = policy.select(learned)
+            missing = admitted - selected.keys()
+            signature = digest([binding, policy.mapping(), selected, sorted(admitted)])
+        except (ValueError, RuntimeError, TypeError, KeyError):
+            self.unknown()
+            raise
+        self.count = min(3, self.count + 1) if signature == self.signature else 1
+        self.signature = signature
+        return AbsenceEvidence(
+            binding,
+            digest(policy.mapping()),
+            digest(selected),
+            frozenset(missing),
+            self.count,
+        )

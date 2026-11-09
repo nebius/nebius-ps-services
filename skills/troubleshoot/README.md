@@ -11,6 +11,20 @@ INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
        -> LOCALIZED -> PROVEN -> REMEDIATED -> VERIFIED -> REPORTED
 ```
 
+Seven operational phases group these unchanged states: define/classify, baseline,
+map/prioritize, investigate/narrow, establish causality, repair the owner, then
+verify/report. Initial routing is code, infrastructure, mixed or undetermined;
+configuration, compatibility, permissions and resources are cross-cutting causes.
+The [triage guide](references/triage-and-routing.md) selects the starting boundary.
+
+Use one coordinator and [conditional parallel investigation](references/parallel-investigation.md)
+only for independent evidence questions. Normally two native read-only investigators
+(maximum three) share the task budget, with five-minute deadlines shortened by
+remaining time. Host authorization and enforceable passive access are prerequisites;
+otherwise continue serially. The coordinator owns active diagnostics, causal
+conclusions and remediation; cancel unnecessary work and reconcile all outcomes.
+These limits are evaluation defaults, not demonstrated performance optima.
+
 The workflow preserves evidence before functional edits, maintains competing
 hypotheses, chooses discriminating experiments, localizes the earliest
 divergence, and requires a causal mechanism before claiming root cause.
@@ -30,8 +44,10 @@ Troubleshooting records examined boundaries and material unexamined boundaries w
 reasons, target identity and incident window. Unexamined stays unknown; there is no
 mandatory global inventory or fixed eight-row log ledger. Keep negative evidence,
 contradictions, query failures, truncation, stale sources and clock uncertainty.
-Invalidate affected evidence after deployment, restart, configuration or topology
-changes. After three consecutive completed observations that neither distinguish
+Every material hypothesis records support, contradiction, prediction, falsifier
+and status. Exclusions bind target, path, configuration and window; contradictory
+evidence reopens them. Invalidate affected evidence after deployment, restart,
+configuration or topology changes. After three consecutive completed observations that neither distinguish
 hypotheses nor narrow a boundary, rebuild the model without extending any budget.
 Primary local logs do not require remote provider admission.
 
@@ -317,3 +333,20 @@ for isolated fixtures, paired runs, hidden oracles, measurements and promotion.
 Static tests do not establish model diagnostic accuracy or live provider coverage.
 Actual installation and runtime activation remain a separate rollout. Rollback
 restores the prior reviewed payload, never a parallel legacy mode.
+
+## Layered Qualification
+
+The original twelve cases and platform replays remain intact. Structured quality
+cases and process scenarios add route changes, shared symptoms, conditional
+parallelism, worker evidence conflicts, scope violations, cancellation, vendor
+proof limits and correct abstention. Guides share applicability, version
+fingerprint, distinguishing evidence, interpretation, next branch, effects and
+verification; AMD and provider routing supplement the existing overlays.
+
+The [diagnostic evaluator](evals/diagnostic/README.md) counts parent/worker actions
+and usage once, reports coordination overhead, and rejects incomplete accounting.
+Qualification targets include no accuracy regression, 20% fewer aggregate diagnostic
+actions on successful core pairs, 20% lower elapsed time on predeclared successful
+parallel pairs, no overall median latency increase and at most 25% aggregate token
+growth on parallel pairs. These are targets, not measured gains. Native descendant
+coverage and installed command support need independent qualification.

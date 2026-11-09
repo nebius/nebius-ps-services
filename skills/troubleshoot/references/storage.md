@@ -1,10 +1,17 @@
 # Storage Troubleshooting Playbook
 
+## Applicability
+
 Identify the storage contract before collecting commands: block, filesystem,
 shared filesystem, object, database, queue, or container volume; authoritative
 owner; client and server; mount or endpoint; consistency and durability model;
 capacity and performance expectations; encryption and identity; and incident
 window.
+
+## Version Fingerprint
+
+Pin client/backend and filesystem versions, volume/device identity, mount options,
+CSI/controller versions when applicable, request size, queueing, IOPS and throughput.
 
 ## Adaptive Decision Guide
 
@@ -21,8 +28,10 @@ Use only rows implicated by the failing path; record material unexamined boundar
 
 <!-- markdownlint-enable MD013 -->
 
-### Escalation Conditions
+### Diagnostic Effects
 
+Passive bounded inspection comes first. Active diagnostics remain coordinator-owned;
+workers may not launch tests, captures, debug containers, stress or repairs.
 Escalate only if the next observation can separate remaining explanations. Bound
 time, output, target and effects; preserve evidence and original settings. Treat
 production or unconfirmed targets as read-only without exact action authority.
@@ -41,6 +50,11 @@ filesystem or object client, page and metadata caches, mount namespace, volume
 attachment or CSI, network path, storage service or device, replication, and
 backend media. Record versions, topology, configuration authorities, device or
 volume IDs, mount options, access mode, ownership, quota, and recent changes.
+
+Do not diagnose saturation from one utilization threshold. Compare request size,
+queue length, achieved IOPS/throughput and latency with the workload and service
+limits. Capacity, inodes, quota, permissions, attachment/mount, consistency and
+corruption remain separate hypotheses even when they produce similar errors.
 
 ## Component Verification
 
@@ -105,6 +119,8 @@ original settings; and verify rollback. Production data mutation always needs
 action-specific approval.
 
 ## Official Sources
+
+- [EBS I/O characteristics](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-io-characteristics.html)
 
 - [Linux storage documentation](https://docs.kernel.org/admin-guide/device-mapper/index.html)
 - [Linux filesystems documentation](https://docs.kernel.org/filesystems/index.html)

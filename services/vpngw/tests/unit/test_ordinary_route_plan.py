@@ -264,3 +264,102 @@ def test_summary_is_verified_before_working_specifics_are_retired(world, monkeyp
             "192.168.1.0/24"
         }
         assert len(journal.inventory()) == 1
+
+
+def test_runtime_withdrawal_needs_three_complete_samples_and_preserves_foreign(world):
+    from nebius_vpngw.deploy.ordinary_route_policy import AbsenceObservations
+
+    state, journal, policy, plan, observe = world
+    execute(object(), journal, plan(), approval="a" * 64, observe=observe)
+    state.routes["external"] = external_route("172.16.0.0/24", "unrelated")
+    foreign = snapshot(state.routes["external"])
+    evidence = AbsenceObservations()
+    learned = {"peer": ()}
+    for count in range(1, 4):
+        absence = evidence.observe("boot/config", policy, learned, frozenset({"192.168.1.0/24"}))
+        observed = observe()
+        selected = inspect(
+            project="project",
+            gateway="gateway",
+            policy=policy,
+            learned=learned,
+            allocations=observed["allocations"],
+            active_tables=("table",),
+            routes=observed["routes"],
+            ownership=journal.inventory(),
+            infrastructure=observed["infrastructure"],
+            absence=absence,
+        )
+        assert bool(selected["requests"]) is (count == 3)
+    assert {item["reason"] for item in selected["requests"].values()} == {"bgp-withdrawn"}
+    execute(object(), journal, selected, approval="b" * 64, observe=observe)
+    assert list(state.routes) == ["external"] and snapshot(state.routes["external"]) == foreign
+    assert journal.inventory() == {}
+
+
+def test_unknown_or_changed_route_observations_restart_absence_window(world):
+    from nebius_vpngw.deploy.ordinary_route_policy import AbsenceObservations
+
+    _, _, policy, _, _ = world
+    samples = AbsenceObservations()
+    admitted = frozenset({"192.168.1.0/24"})
+    for _ in range(2):
+        assert not samples.observe("first", policy, {"peer": ()}, admitted).admits(
+            policy, {"peer": ()}, next(iter(admitted))
+        )
+    with pytest.raises(RuntimeError, match="complete"):
+        samples.observe("first", policy, {}, admitted)
+    assert samples.observe("first", policy, {"peer": ()}, admitted).observations == 1
+    assert samples.observe("second", policy, {"peer": ()}, admitted).observations == 1
+    assert (
+        samples.observe("second", policy, {"peer": ("192.168.2.0/24",)}, admitted).observations == 1
+    )
+
+
+def test_dynamic_summary_withdrawal_restores_static_coverage_before_retirement(world):
+    from nebius_vpngw.deploy.ordinary_route_policy import AbsenceObservations
+
+    state, journal, _, plan, observe = world
+    policy = Policy(
+        (
+            Connection("peer", "bgp", 0, ("169.254.1.2",), ("192.168.1.128/25",), 10),
+            Connection("static", "static", 0, (), ("192.168.1.0/25",), 1),
+        ),
+        ("10.0.0.0/8",),
+        summarize=True,
+    )
+    execute(
+        object(),
+        journal,
+        plan(intent=policy, learned=("192.168.1.128/25",)),
+        approval="a" * 64,
+        observe=observe,
+    )
+    assert {r.spec.destination.cidr for r in state.routes.values()} == {"192.168.1.0/24"}
+    samples = AbsenceObservations()
+    for count in range(1, 4):
+        observed = observe()
+        selected = inspect(
+            project="project",
+            gateway="gateway",
+            policy=policy,
+            learned={"peer": ()},
+            allocations=observed["allocations"],
+            active_tables=("table",),
+            routes=observed["routes"],
+            ownership=journal.inventory(),
+            infrastructure=observed["infrastructure"],
+            absence=samples.observe(
+                "boot/config", policy, {"peer": ()}, frozenset({"192.168.1.0/24"})
+            ),
+        )
+        assert any(r["type"] == "DeleteRouteRequest" for r in selected["requests"].values()) is (
+            count == 3
+        )
+    execute(object(), journal, selected, approval="b" * 64, observe=observe)
+    assert [kind for kind, _ in state.effects] == [
+        "CreateRouteRequest",
+        "CreateRouteRequest",
+        "DeleteRouteRequest",
+    ]
+    assert {r.spec.destination.cidr for r in state.routes.values()} == {"192.168.1.0/25"}

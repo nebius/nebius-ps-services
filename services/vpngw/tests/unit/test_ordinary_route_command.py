@@ -113,3 +113,67 @@ def test_review_exposes_deferred_bgp_authority_without_resolving_routes(composed
     assert not prepared.preview["requests"]
     assert not journal.root.exists()
     assert state.effects == []
+
+
+@pytest.mark.parametrize("runtime_changes", [False, True])
+@pytest.mark.parametrize("explicit", [None, False])
+def test_apply_retains_runtime_summary_policy_but_manual_choice_is_explicit(
+    request, monkeypatch, runtime_changes, explicit
+):
+    from dataclasses import replace
+
+    state, journal, policy, _plan, read = request.getfixturevalue("world")
+    discovery_calls = []
+    manager = NS(project_id="project", auth_token=None, _get_client=lambda: object())
+    deployment = NS(vm_ha=None, gateway_group=NS(name="gateway"))
+    publication = NS(
+        observed={"authority": {"binding": {"policy": {"summarize": True}}}},
+        journal=NS(pending=lambda: None),
+        released=lambda: False,
+    )
+
+    def discovery(*args, **kwargs):
+        discovery_calls.append(kwargs["summarize"])
+        selected = replace(policy, summarize=kwargs["summarize"])
+        return NS(
+            journal=journal,
+            manager=manager,
+            force_copy=False,
+            observe=lambda: {
+                **read(),
+                "policy": selected,
+                "active_tables": ("table",),
+                "conversions": [],
+            },
+            learned=lambda p: {"peer": ()},
+        )
+
+    monkeypatch.setattr(command, "Discovery", discovery)
+    prepared = command.prepare(
+        manager,
+        deployment,
+        {},
+        ssh_policy=None,
+        runtime_changes=runtime_changes,
+        journal=journal,
+        summarize=explicit,
+        publication=publication,
+    )
+    assert discovery_calls == [explicit is None]
+    assert prepared.intent["policy"]["summarize"] is (explicit is None)
+    assert state.effects == []
+    if runtime_changes:
+        prepared.begin("a" * 64)
+        # The durable pending intent wins even if the installed binding still
+        # represents an older policy. Resuming cannot silently change selection.
+        publication.observed["authority"]["binding"]["policy"]["summarize"] = False
+        resumed = command.prepare(
+            manager,
+            deployment,
+            {},
+            ssh_policy=None,
+            runtime_changes=True,
+            journal=journal,
+            publication=publication,
+        )
+        assert resumed.intent == prepared.intent

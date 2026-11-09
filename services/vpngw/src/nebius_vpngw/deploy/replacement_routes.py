@@ -16,11 +16,18 @@ from .vm_ha_cloud import (
 )
 
 
-def inventory(sdk: Any, project: str, allocations: set[str], *, gateway: str) -> tuple[dict, ...]:
+def inventory(
+    sdk: Any,
+    project: str,
+    allocations: set[str],
+    *,
+    gateway: str,
+    journal: RouteJournal | None = None,
+) -> tuple[dict, ...]:
     from nebius.api.nebius.common.v1 import ResourceMetadata
     from nebius.api.nebius.vpc import v1 as vpc
 
-    ledger = RouteJournal(project, gateway)
+    ledger = journal or RouteJournal(project, gateway)
     transaction = ledger.transaction()
     if transaction and transaction["phase"] != "complete":
         raise RuntimeError("Resume ordinary route apply before planning replacement")

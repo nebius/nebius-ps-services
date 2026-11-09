@@ -6,10 +6,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import statistics
 from pathlib import Path
 
-from cases import CASES
+from cases import CASES, PARALLEL_ELIGIBLE
 
 
 def score(reports: list[dict], reviews: dict) -> dict:
@@ -35,6 +36,10 @@ def score(reports: list[dict], reviews: dict) -> dict:
             or not report.get("execution_contract")
         ):
             reasons.append("missing frozen execution conditions")
+        if report.get("parallel_eligible_cases") != sorted(PARALLEL_ELIGIBLE):
+            reasons.append("missing or changed predeclared parallel eligibility")
+        if report.get("accounting_contract") != "native-tree-v1":
+            reasons.append("missing aggregate accounting contract")
         versions = {t.get("native_version") for t in report["trials"]}
         if len(versions) != 1 or None in versions:
             reasons.append("missing or inconsistent native CLI version")
@@ -123,6 +128,14 @@ def score(reports: list[dict], reviews: dict) -> dict:
     )
     if correct_rate is None or correct_rate < 0.9:
         reasons.append("candidate correct outcomes below 90 percent")
+    baseline = [t for t in trials if t["arm"] == "baseline"]
+    baseline_rate = (
+        sum(t["correct"] for t in baseline) / len(baseline) if baseline else None
+    )
+    if baseline_rate is None or correct_rate is None or correct_rate < baseline_rate:
+        reasons.append("overall accuracy regression or missing data")
+    if any(t.get("accounting_complete") is not True for t in trials):
+        reasons.append("aggregate efficiency accounting incomplete")
     domain_rates = {}
     for domain in sorted(core):
         domain_rates[domain] = {}
@@ -147,29 +160,79 @@ def score(reports: list[dict], reviews: dict) -> dict:
         ):
             pairs.append((previous, current))
 
-    def med(arm, field):
-        values = [pair[arm].get(field) for pair in pairs]
-        return (
-            statistics.median(values)
-            if values and all(isinstance(v, (float, int)) for v in values)
-            else None
-        )
+    parallel_pairs = [
+        (index[(*key[:3], "baseline")], current)
+        for key, current in index.items()
+        if key[3] == "candidate"
+        and key[1] in PARALLEL_ELIGIBLE
+        and (*key[:3], "baseline") in index
+        and current["correct"]
+        and index[(*key[:3], "baseline")]["correct"]
+    ]
 
-    baseline_actions, candidate_actions = (
-        med(0, "diagnostic_actions"),
-        med(1, "diagnostic_actions"),
-    )
-    reduction = (
-        1 - candidate_actions / baseline_actions
-        if baseline_actions and candidate_actions is not None
-        else None
-    )
-    if reduction is None or reduction < 0.2:
+    def numeric(value):
+        return type(value) in (float, int) and math.isfinite(value) and value >= 0
+
+    def summary(values):
+        if not values or not all(numeric(v) for v in values):
+            return {"count": len(values), "median": None, "min": None, "max": None}
+        return {
+            "count": len(values),
+            "median": statistics.median(values),
+            "min": min(values),
+            "max": max(values),
+        }
+
+    def med(selected, arm, field):
+        return summary([pair[arm].get(field) for pair in selected])["median"]
+
+    def ratio(selected, field):
+        before, after = med(selected, 0, field), med(selected, 1, field)
+        return after / before if before and after is not None else None
+
+    action_ratio = ratio(pairs, "diagnostic_actions")
+    reduction = 1 - action_ratio if action_ratio is not None else None
+    if action_ratio is None or action_ratio > 0.8:
         reasons.append("20 percent focused action reduction target not established")
+    elapsed_ratio = ratio(parallel_pairs, "elapsed_seconds")
+    if elapsed_ratio is None or elapsed_ratio > 0.8:
+        reasons.append("20 percent parallel elapsed reduction target not established")
+    token_ratio = ratio(parallel_pairs, "aggregate_tokens")
+    if token_ratio is None or token_ratio > 1.25:
+        reasons.append("25 percent aggregate token growth limit not established")
+    all_case_metrics = {
+        arm: {
+            field: summary([t.get(field) for t in rows])
+            for field in (
+                "elapsed_seconds",
+                "diagnostic_actions",
+                "aggregate_tokens",
+                "coordination_actions",
+            )
+        }
+        for arm, rows in (("baseline", baseline), ("candidate", candidate))
+    }
+    before = all_case_metrics["baseline"]["elapsed_seconds"]["median"]
+    after = all_case_metrics["candidate"]["elapsed_seconds"]["median"]
+    if before is None or after is None or after > before:
+        reasons.append("overall median latency nonincrease not established")
+    for trial in trials:
+        if any(
+            not numeric(trial.get(field))
+            for field in (
+                "elapsed_seconds",
+                "diagnostic_actions",
+                "aggregate_tokens",
+                "coordination_actions",
+            )
+        ):
+            reasons.append("missing or invalid aggregate metrics")
+            break
     counts = {
         arm: {
             "trials": len(rows),
             "correct": sum(t["correct"] for t in rows),
+            "unsuccessful": sum(not t["correct"] for t in rows),
             "unavailable": sum(t["state"] == "UNAVAILABLE" for t in rows),
             "abstentions": sum(
                 t.get("outcome") == "BLOCKED_MISSING_EVIDENCE" for t in rows
@@ -183,14 +246,32 @@ def score(reports: list[dict], reviews: dict) -> dict:
         "promotion": "PASS" if not reasons else "NOT_QUALIFIED",
         "reasons": reasons,
         "correct_rate": correct_rate,
+        "baseline_correct_rate": baseline_rate,
         "all_case_counts": counts,
         "core_domain_rates": domain_rates,
         "jointly_successful_focused_pairs": len(pairs),
         "median_action_reduction": reduction,
-        "median_elapsed_seconds": {
-            "baseline": med(0, "elapsed_seconds"),
-            "candidate": med(1, "elapsed_seconds"),
-        },
+        "parallel_successful_pairs": len(parallel_pairs),
+        "parallel_median_elapsed_reduction": 1 - elapsed_ratio
+        if elapsed_ratio is not None
+        else None,
+        "parallel_median_token_growth": token_ratio - 1
+        if token_ratio is not None
+        else None,
+        "all_case_metrics": all_case_metrics,
+        "coordination": [
+            {
+                "trial": t["key"],
+                "actions": t.get("coordination_actions"),
+                "tokens": t.get("coordination_tokens"),
+            }
+            for t in trials
+        ],
+        "unsuccessful_trials": [
+            {"trial": t["key"], "state": t["state"], "outcome": t.get("outcome")}
+            for t in trials
+            if not t["correct"]
+        ],
         "usage": [{"trial": t["key"], "usage": t.get("usage")} for t in trials],
         "interpretation": "Small qualification set; no statistically established general improvement.",
     }

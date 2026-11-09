@@ -30,13 +30,18 @@ _OBSERVATION_DEADLINE: ContextVar[t.Callable[[], float] | None] = ContextVar(
 )
 
 
+def vm_ha_observation_remaining(*, default: float = VM_HA_REQUEST_TIMEOUT_SECONDS) -> float:
+    provider = _OBSERVATION_DEADLINE.get()
+    return default if provider is None else provider()
+
+
 @contextmanager
 def vm_ha_observation_budget(
     *,
     seconds: float = VM_HA_REQUEST_TIMEOUT_SECONDS,
     clock: t.Callable[[], float] = time.monotonic,
 ) -> t.Iterator[None]:
-    """One thread-local cumulative read budget, including nested route reads."""
+    """One thread-local cumulative request budget, including nested route reads."""
     parent = _OBSERVATION_DEADLINE.get()
     deadline = clock() + seconds
 
@@ -86,8 +91,7 @@ def vm_ha_idempotency_key(operation_id: str) -> str:
 
 
 def vm_ha_request_kwargs(operation_id: str | None = None) -> dict[str, t.Any]:
-    provider = _OBSERVATION_DEADLINE.get()
-    remaining = VM_HA_REQUEST_TIMEOUT_SECONDS if provider is None else provider()
+    remaining = vm_ha_observation_remaining()
     value: dict[str, t.Any] = {
         "timeout": min(VM_HA_REQUEST_TIMEOUT_SECONDS, remaining),
         "auth_timeout": min(VM_HA_REQUEST_TIMEOUT_SECONDS, remaining),
@@ -102,13 +106,15 @@ def vm_ha_request_kwargs(operation_id: str | None = None) -> dict[str, t.Any]:
 def wait_vm_ha_operation(operation: t.Any) -> None:
     if not callable(getattr(operation, "sync_wait", None)):
         raise RuntimeError("VM-HA mutation returned no bounded operation waiter")
+    provider = _OBSERVATION_DEADLINE.get()
+    remaining = VM_HA_OPERATION_TIMEOUT_SECONDS if provider is None else provider()
     operation.sync_wait(
-        interval=VM_HA_OPERATION_POLL_INTERVAL_SECONDS,
-        timeout=VM_HA_OPERATION_TIMEOUT_SECONDS,
-        poll_iteration_timeout=VM_HA_REQUEST_TIMEOUT_SECONDS,
-        poll_per_retry_timeout=VM_HA_PER_RETRY_TIMEOUT_SECONDS,
+        interval=min(VM_HA_OPERATION_POLL_INTERVAL_SECONDS, remaining),
+        timeout=min(VM_HA_OPERATION_TIMEOUT_SECONDS, remaining),
+        poll_iteration_timeout=min(VM_HA_REQUEST_TIMEOUT_SECONDS, remaining),
+        poll_per_retry_timeout=min(VM_HA_PER_RETRY_TIMEOUT_SECONDS, remaining),
         poll_retries=VM_HA_REQUEST_RETRIES,
-        auth_timeout=VM_HA_REQUEST_TIMEOUT_SECONDS,
+        auth_timeout=min(VM_HA_REQUEST_TIMEOUT_SECONDS, remaining),
     )
 
 

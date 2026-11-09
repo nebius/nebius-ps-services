@@ -1,7 +1,6 @@
-"""Opt-in bounded command accounting for synchronous ordinary reconciliation.
+"""Opt-in bounded command accounting for synchronous reconciliation.
 
-HA callers retain their existing command policy. The ordinary owner checks the
-whole ledger even when a historical renderer catches an individual exception.
+Owners check the ledger even when a renderer catches an individual exception.
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ class CommandBudget:
 
     def require_success(self) -> None:
         if self.failures or time.monotonic() >= self.deadline:
-            raise RuntimeError("ordinary local command failed")
+            raise RuntimeError("local reconciliation command failed")
 
 
 CURRENT: ContextVar[CommandBudget | None] = ContextVar("ordinary_command_budget", default=None)

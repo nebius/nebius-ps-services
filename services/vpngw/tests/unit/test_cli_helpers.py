@@ -254,6 +254,7 @@ EXPECTED_ROOT_COMMANDS = (
     "validate-config",
     "apply",
     "status",
+    "pair",
     "access",
     "failover",
     "failback",
@@ -271,6 +272,10 @@ EXPECTED_PUBLIC_COMMAND_PATHS = (
     ("validate-config",),
     ("apply",),
     ("status",),
+    ("pair",),
+    ("pair", "create-config"),
+    ("pair", "apply"),
+    ("pair", "status"),
     ("access",),
     ("access", "add-operator"),
     ("failover",),
@@ -329,6 +334,8 @@ def _isolate_vm_ha_apply_identity_preflight(
         lambda **_kwargs: SimpleNamespace(
             action="reuse",
             command_action="reuse",
+            project_id="project-test",
+            gateway_name="nebius-vpn-gw",
             credentials=credentials,
             source_path=Path("/private/managed-vm-ha-credentials.json"),
             approval_record=lambda: {"action": "reuse"},
@@ -351,6 +358,18 @@ def _isolate_vm_ha_apply_identity_preflight(
     monkeypatch.setattr(
         "nebius_vpngw.deploy.ha_created_packages.prepare", lambda **kwargs: kwargs["artifact"]
     )
+    from nebius_vpngw.deploy import package_recovery
+
+    real_package_recovery = package_recovery.prepare
+
+    def selected_package_owner(recovery, *, effect, members, **kwargs):
+        # CLI orchestration fixtures below deliberately omit package envelopes.
+        # Real guest/coordinator state machines are tested in their owner suites.
+        if not members():
+            return effect()
+        return real_package_recovery(recovery, effect=effect, members=members, **kwargs)
+
+    monkeypatch.setattr(package_recovery, "prepare", selected_package_owner)
     artifact = SimpleNamespace(sha256="f" * 64, dependency_plans=(), capabilities=())
     monkeypatch.setattr("nebius_vpngw.cli._unchanged_vm_ha_apply", lambda *args, **kwargs: False)
     monkeypatch.setattr(
@@ -629,9 +648,14 @@ def test_remote_restart_requires_exact_tunnel_identity(observed_name: str) -> No
     from nebius_vpngw.cli import _build_remote_tunnel_restart_script
 
     namespace = {"__name__": "restart_helper_test"}
-    exec(_build_remote_tunnel_restart_script(), namespace)
-    observer = namespace["_module"].observation
-    assert observer.child_ready(sas(name=observed_name), "vpn-1", 100) is (observed_name == "vpn-1")
+    # The remote bootstrap installs guest-only modules; do not leak them into
+    # subsequent local CLI or packaging tests in this interpreter.
+    with patch.dict("sys.modules"):
+        exec(_build_remote_tunnel_restart_script(), namespace)
+        observer = namespace["_module"].observation
+        assert observer.child_ready(sas(name=observed_name), "vpn-1", 100) is (
+            observed_name == "vpn-1"
+        )
 
 
 def test_status_ipsec_fallback_does_not_borrow_another_bgp_peer(tmp_path, monkeypatch):
@@ -953,7 +977,11 @@ def ordinary_deployment_boundary(monkeypatch, tmp_path):
             {},
             False,
             SimpleNamespace(
-                resumed=False, plan=SimpleNamespace(effects=()), approval=None, routes=None
+                resumed=False,
+                plan=SimpleNamespace(effects=()),
+                approval=None,
+                routes=None,
+                publication=None,
             ),
         ),
     )
@@ -3197,7 +3225,9 @@ def test_cli_help_command_order() -> None:
 
     assert command_names == list(EXPECTED_ROOT_COMMANDS)
     assert [_registered_command_name(command) for command in app.registered_commands] == [
-        name for name in EXPECTED_ROOT_COMMANDS if name not in {"access", "failover", "failback"}
+        name
+        for name in EXPECTED_ROOT_COMMANDS
+        if name not in {"access", "failover", "failback", "pair"}
     ]
     for group_name in ("failover", "failback"):
         group = click_app.commands[group_name]
@@ -4529,8 +4559,12 @@ def test_vm_ha_migration_preserves_approval_through_durable_intent(
     assert observed == (removed if with_removed_tombstone else None)
 
 
-def test_fresh_ha_approval_survives_ephemeral_ssh_key_generation(tmp_path, monkeypatch):
-    from nebius_vpngw.deploy import ssh_policy
+@pytest.mark.parametrize("credential_action", ("reuse", "create"))
+def test_fresh_ha_approval_survives_ephemeral_ssh_key_generation(
+    tmp_path, monkeypatch, credential_action
+):
+    from nebius_vpngw import cli as cli_module
+    from nebius_vpngw.deploy import credential_enrollment, ssh_policy
 
     config = tmp_path / "fresh-ha.yaml"
     config.write_text("version: 1\n")
@@ -4572,6 +4606,33 @@ def test_fresh_ha_approval_survives_ephemeral_ssh_key_generation(tmp_path, monke
         "project_id": "project-test",
         "gateway_group": {"vm_spec": {}},
     }
+    enrollment_calls = []
+    if credential_action == "create":
+        existing_plan = cli_module.inspect_managed_vm_ha_credentials()
+        new_plan = SimpleNamespace(
+            **{
+                **vars(existing_plan),
+                "action": "create",
+                "command_action": "create",
+                "credentials": None,
+                "approval_record": lambda: {"action": "create"},
+            }
+        )
+        monkeypatch.setattr(
+            cli_module, "inspect_managed_vm_ha_credentials", lambda **kwargs: new_plan
+        )
+
+        def enroll(parent, _journal, selected, **kwargs):
+            assert selected is new_plan
+            assert kwargs["node_ids"] == ("node-0", "node-1")
+            enrollment_calls.append(parent.state["bindings"]["runtime"]["approval"])
+            parent.verified("credentials", {"enrolled": "exact-approved-plan"})
+            return SimpleNamespace(
+                credentials=existing_plan.credentials,
+                token_identity=SimpleNamespace(token="managed-token"),
+            )
+
+        monkeypatch.setattr(credential_enrollment, "execute", enroll)
     policies = []
     monkeypatch.delenv(ssh_policy.KNOWN_HOSTS_ENV, raising=False)
     monkeypatch.delenv(ssh_policy.HOST_KEYS_DIR_ENV, raising=False)
@@ -4638,9 +4699,14 @@ def test_fresh_ha_approval_survives_ephemeral_ssh_key_generation(tmp_path, monke
         durable.assert_not_called()
         assert not (tmp_path / ".ssh").exists() and not (tmp_path / "trust").exists()
         instances[1].external_ip = original_target
+        unapproved = CliRunner().invoke(app, command)
+        assert "requires --approve-disruption" in str(unapproved.exception)
+        assert enrollment_calls == []
+        durable.assert_not_called()
         result = CliRunner().invoke(app, [*command, "--approve-disruption", approvals[0]])
         assert durable.call_count == 1, (result.stdout, result.exception)
         assert str(result.exception) == "durable boundary reached"
+        assert enrollment_calls == ([approvals[0]] if credential_action == "create" else [])
 
 
 def test_vm_ha_checkpoint_retains_the_ordinary_active_ssh_provenance() -> None:
@@ -4784,6 +4850,17 @@ def test_vm_ha_post_compute_refresh_rebinds_exact_current_members() -> None:
     ("failing_stage_role", "final_transition_fault", "peer_shapes", "start_destroyed"),
     [
         (None, None, (("gcp", "static"),), False),
+        *[
+            (None, "pair-" + boundary, (("generic", mode),), False)
+            for boundary in (
+                "prepared",
+                "unlock-before",
+                "unlock-after",
+                "originating",
+                "forwarding",
+            )
+            for mode in ("static", "bgp")
+        ],
         (None, "prepare", (("gcp", "static"),), False),
         (None, "retained-prepare", (("gcp", "static"),), False),
         (None, "retained-prepare", (("gcp", "bgp"),), False),
@@ -4832,6 +4909,8 @@ def test_vm_ha_post_compute_refresh_rebinds_exact_current_members() -> None:
         (None, "package-ssh", (("gcp", "static"),), False),
         (None, "package-channel", (("gcp", "static"),), False),
         (None, "package-eof", (("gcp", "static"),), False),
+        (None, "stopped-readback-pending", (("gcp", "static"),), False),
+        (None, "stopped-readback-blocked", (("gcp", "bgp"),), False),
         (None, None, (("gcp", "bgp"),), True),
     ]
     + [
@@ -4855,12 +4934,20 @@ def test_vm_ha_post_compute_refresh_rebinds_exact_current_members() -> None:
 )
 def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activates_partial_stage(
     approved_disruption,
+    monkeypatch,
     tmp_path: Path,
     failing_stage_role: str | None,
     final_transition_fault: str | None,
     peer_shapes: tuple[tuple[str, str], ...],
     start_destroyed: bool,
 ) -> None:
+    stopped_readback_failure = (
+        final_transition_fault
+        if (final_transition_fault or "").startswith("stopped-readback-")
+        else None
+    )
+    if stopped_readback_failure:
+        final_transition_fault = "upgrade-package-passive"
     reversed_owner_case = final_transition_fault == "before-write-reversed-owner"
     if reversed_owner_case:
         final_transition_fault = "before-write"
@@ -5155,7 +5242,14 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 "message": "ready",
             }
 
+    from nebius_vpngw.deploy.ssh_push import SSHPush
+
+    stop_dispatches = []
+
     class FakeSSHPush:
+        def prepare_client_authentication(self, vm_spec):
+            assert vm_spec == local_cfg["gateway_group"]["vm_spec"]
+
         def stage_vm_ha_config(
             self,
             target,
@@ -5172,6 +5266,7 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             return SimpleNamespace(
                 node_id=inst_cfg.vm_ha_node.node_id,
                 generation_id="a" * 64,
+                staged_file_sha256="d" * 64,
                 configuration_digest="a" * 64,
                 static_routes_digest="b" * 64,
                 bgp_policy_digest="c" * 64,
@@ -5248,6 +5343,9 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             assert [role for phase, role, _ in observed if phase == "quiescent"][
                 -2:
             ] == deployment_roles
+            stop_dispatches.append(
+                (invocation[0], "active" if hostname == "gateway-0" else "passive")
+            )
             observed.append(
                 ("stopped-guarded", "active" if hostname == "gateway-0" else "passive", binding)
             )
@@ -5276,14 +5374,53 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             agent_artifact,
             apply_operation_id,
             initialize_checkpoint,
+            activation_recovery=None,
+            deadline=None,
+            serialize_activation=False,
         ) -> None:
+            if activation_recovery is not None:
+                from nebius_vpngw.deploy.activation_driver import activate
+
+                return activate(
+                    self,
+                    target,
+                    inst_cfg,
+                    cfg,
+                    recovery=activation_recovery,
+                    staged_receipt=staged_receipt,
+                    runtime_binding=runtime_binding,
+                    agent_artifact=agent_artifact,
+                    apply_operation_id=apply_operation_id,
+                    initialize_checkpoint=initialize_checkpoint,
+                )
             assert agent_artifact is not None
             assert apply_operation_id == self.apply_operation_id
             assert isinstance(initialize_checkpoint, bool)
             observed.append(("activate", inst_cfg.vm_ha_node.role.value, runtime_binding))
 
+        def activation_control(self, target, inst_cfg, cfg, request, *, deadline):
+            import time
+
+            from test_ha_activation import observation
+
+            result = observation(failed=None)
+            result.update(materialized=True, complete=True, clock=time.monotonic())
+            return result
+
         def clear_vm_ha_apply_lock(self, target, inst_cfg, cfg, *, receipt) -> None:
+            if (
+                invocation[0] == 1
+                and inst_cfg.vm_ha_node.node_id == owner_node_id
+                and final_transition_fault == "pair-unlock-before"
+            ):
+                raise KeyboardInterrupt("before owner unlock")
             observed.append(("clear", inst_cfg.vm_ha_node.role.value, binding))
+            if (
+                invocation[0] == 1
+                and inst_cfg.vm_ha_node.node_id == owner_node_id
+                and final_transition_fault == "pair-unlock-after"
+            ):
+                raise KeyboardInterrupt("after owner unlock")
 
     original_write_verified = VMHALifecycleStore.write_verified
 
@@ -5318,6 +5455,12 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             raise RuntimeError("injected post-write verification failure")
 
     def wait_with_controller_shaped_status(*, predicate, inst_cfg, **_kwargs):
+        if (
+            final_transition_fault == "pair-forwarding"
+            and invocation[0] == 1
+            and _kwargs.get("phase") == "verify-owner-forwarding-and-routes"
+        ):
+            raise KeyboardInterrupt("before owner verification")
         base = {
             "node_id": inst_cfg.vm_ha_node.node_id,
             "apply_locked": _kwargs.get("expected_apply_locked") is True,
@@ -5350,6 +5493,28 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             },
         }
         role = inst_cfg.vm_ha_node.role.value
+        if _kwargs.get("phase") == "verify-owner-origination":
+            # The controller publishes nested origination evidence while the
+            # owner is still forwarding-fenced. Paired cold start must reach
+            # this barrier before either region has learned remote routes.
+            originating = {
+                **base,
+                "data_plane_mode": "originating",
+                "origination": {"required": True, "ready": True},
+            }
+            assert predicate(originating)
+            for evidence in (
+                None,
+                {},
+                "ready",
+                {"required": True, "ready": False},
+                {"required": False, "ready": True},
+                {"required": True, "ready": 1},
+            ):
+                assert not predicate({**originating, "origination": evidence})
+            assert not predicate({**originating, "observed_owner_node_id": "foreign-owner"})
+            assert not predicate({**originating, "data_plane_mode": "passive"})
+            return originating
         # Controller-owned materialization has already established the
         # current-boot passive guard before the exact apply lock is checked.
         candidates = [{**base, "data_plane_mode": "passive"}]
@@ -5384,14 +5549,44 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 },
             }
             if predicate(later_valid_lineage):
-                assert not predicate(invalid_lineage)
-                assert not predicate(wrong_revision)
+                if _kwargs.get("phase") != "verify-owner-origination":
+                    assert not predicate(invalid_lineage)
+                    assert not predicate(wrong_revision)
                 return later_valid_lineage
             candidates.append({**base, "data_plane_mode": "active", "promotion_ready": True})
         for payload in candidates:
             if predicate(payload):
                 return payload
         raise AssertionError(f"status predicate rejected controller-shaped {role} states")
+
+    def fetch_controller_status(**kwargs):
+        role = kwargs["inst_cfg"].vm_ha_node.role.value
+        last = next(
+            (
+                phase
+                for phase, member_role, _ in reversed(observed)
+                if member_role == role and phase in {"lock", "clear"}
+            ),
+            None,
+        )
+        if (last == "lock") != bool(kwargs.get("expected_apply_locked")):
+            from nebius_vpngw.cli import _VMHAAgentStatusStale
+
+            raise _VMHAAgentStatusStale("expected lock transition", predicate="apply-lock-held")
+        mode = (
+            "active"
+            if kwargs["inst_cfg"].vm_ha_node.node_id == owner_node_id and last == "clear"
+            else "passive"
+        )
+        return wait_with_controller_shaped_status(
+            predicate=lambda payload: (
+                cli._owner_activation_predicate(payload, owner=owner_node_id, binding=binding)
+                is None
+                if mode == "active"
+                else payload.get("data_plane_mode") == mode
+            ),
+            **kwargs,
+        )
 
     idempotent_result = None
     continuation_result = None
@@ -5531,9 +5726,96 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             assert [role for step, role, _binding in observed if step == phase][
                 -2:
             ] == deployment_roles
+        # This orchestration fixture omits package envelopes. Supply the exact
+        # preplanned identities required by the real parallel coordinator; real
+        # key resolution and package contents have separate owner tests.
+        artifact = kwargs["artifact"]
+        kwargs["artifact"] = SimpleNamespace(
+            **{
+                **vars(artifact),
+                "dependency_plans": tuple(
+                    (
+                        instance.hostname,
+                        SimpleNamespace(
+                            instance=instance,
+                            target=target,
+                            manifest={"wheel_sha256": artifact.sha256},
+                        ),
+                    )
+                    for instance, target, _ in kwargs["staged"]
+                ),
+            }
+        )
         return prepare_stopped(**kwargs)
 
+    def stopped_readback(ssh, instance, target, local, *, artifact, receipt, binding, operation_id):
+        if stopped_readback_failure and invocation[0] == 3:
+            from nebius_vpngw.deploy.apply_diagnostics import ObservationUnavailable
+
+            raise ObservationUnavailable(
+                "package-stopped-barrier",
+                "guest-writer-unsettled",
+                retryable=stopped_readback_failure.endswith("pending"),
+            )
+        role = instance.vm_ha_node.role.value
+        assert any(phase == "stopped-guarded" and member == role for phase, member, _ in observed)
+        assert receipt.node_id == instance.vm_ha_node.node_id and len(operation_id) == 64
+        # These are fresh proof events. Unlike stop-dispatch, they perform no stop.
+        observed.extend(
+            (phase, role, binding) for phase in ("stopped-readback", "quiescent", "stopped-guarded")
+        )
+
+    monkeypatch.setattr("nebius_vpngw.deploy.stopped_upgrade.verify", stopped_readback)
+
+    def preview_with_prior_reservation(args, *, successor=True):
+        def successor_packages(artifact, **options):
+            if successor:
+                assert not options["reservations"], "old artifact reservation reached successor"
+                if final_transition_fault == "combined-upgrade-recovery":
+                    assert options["resume_parent"] is None, "old parent reached successor"
+                else:
+                    assert options["resume_parent"] is not None
+            else:
+                assert set(options["reservations"]) == {"gateway-0", "gateway-1"}
+                assert options["resume_parent"] is not None
+            return artifact
+
+        with (
+            patch(
+                "nebius_vpngw.deploy.package_reservation.read",
+                return_value={"request": {"action": "prepare-guarded"}},
+            ),
+            patch(
+                "nebius_vpngw.cli._plan_vm_ha_package_dependencies",
+                side_effect=successor_packages,
+            ),
+        ):
+            return CliRunner().invoke(app, [*args, "--dry-run"])
+
+    from contextvars import ContextVar
+
+    pair_receipts = []
+
+    class PairPhases:
+        def reached(self, phase, receipt):
+            assert receipt["execution"] and receipt["artifact"] == "f" * 64
+            assert receipt["evidence"] is not None
+            pair_receipts.append((invocation[0], phase, receipt["execution"]))
+            if invocation[0] == 1 and final_transition_fault == "pair-" + phase:
+                raise KeyboardInterrupt("pair coordinator interrupted")
+
+        def report(self, _result):
+            pass
+
+    pair_context = ContextVar("test-pair-phases", default=None)
+    pair_context.set(PairPhases())
     with (
+        patch(
+            "nebius_vpngw.deploy.pair_phases.CURRENT",
+            pair_context,
+        )
+        if final_transition_fault and final_transition_fault.startswith("pair-")
+        else nullcontext(),
         patch("nebius_vpngw.cli.load_local_config", return_value=local_cfg),
         patch("nebius_vpngw.cli.merge_with_peer_configs", return_value=plan),
         patch("nebius_vpngw.cli._ensure_authentication", return_value="token"),
@@ -5556,7 +5838,7 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             return_value=package_policy,
         ),
         patch("nebius_vpngw.cli.VMManager", FakeVMManager),
-        patch("nebius_vpngw.cli.SSHPush", return_value=FakeSSHPush()),
+        patch("nebius_vpngw.cli.SSHPush", wraps=SSHPush, return_value=FakeSSHPush()),
         patch(
             "nebius_vpngw.cli._prepare_stopped_vm_ha_packages", side_effect=verify_package_barrier
         ),
@@ -5564,9 +5846,10 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             "nebius_vpngw.cli._prepare_vm_ha_managed_mtls",
             return_value=SimpleNamespace(changed=False, operation_id=None),
         ),
-        patch(
-            "nebius_vpngw.cli._wait_for_vm_ha_agent_status",
-            side_effect=wait_with_controller_shaped_status,
+        patch.multiple(
+            "nebius_vpngw.cli",
+            _wait_for_vm_ha_agent_status=Mock(side_effect=wait_with_controller_shaped_status),
+            _fetch_vm_ha_agent_status=Mock(side_effect=fetch_controller_status),
         ),
         patch.object(
             VMHALifecycleStore,
@@ -5597,6 +5880,47 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             )
             final_transition_fault = None
         first_result = CliRunner().invoke(app, apply_args)
+        if final_transition_fault and final_transition_fault.startswith("pair-"):
+            from nebius_vpngw.deploy.apply_command import CommandJournal
+
+            assert first_result.exit_code != 0, first_result.stdout
+            trace = [(phase, role) for phase, role, _ in observed]
+            assert ("clear", "passive") not in trace
+            if final_transition_fault == "pair-prepared":
+                assert not any(phase == "clear" for phase, _ in trace)
+                assert [(phase, role) for phase, role in trace if phase == "lock"] == [
+                    ("lock", "passive"),
+                    ("lock", "active"),
+                ]
+            else:
+                assert trace[-1] == ("lock", "active")
+            parent = CommandJournal("project-test", "gateway")
+            original_execution = parent.pending()["execution_id"]
+            invocation[0] = 2
+            resumed = CliRunner().invoke(app, apply_args)
+            if resumed.exit_code:
+                errors = []
+                error = resumed.exception
+                while error is not None and len(errors) < 10:
+                    errors.append(repr(error))
+                    error = error.__cause__ or error.__context__
+                pytest.fail(str(errors))
+
+            assert parent.pending() is None
+            assert parent.snapshot()["transaction"]["execution_id"] == original_execution
+            assert [(phase, role) for phase, role, _ in observed][-2:] == [
+                ("clear", "active"),
+                ("clear", "passive"),
+            ]
+            assert [phase for turn, phase, _ in pair_receipts if turn == 2] == [
+                "prepared",
+                "originating",
+            ]
+            # Resume retains the prepared artifact and does not stop or reinstall
+            # writers merely to reach the interrupted unlock.
+            assert sum(phase == "package" for phase, _role, _ in observed) == 2
+
+            return
         if fresh_execution is not None:
             assert first_result.exit_code == 0, (first_result.stdout, first_result.exception)
             assert parent.snapshot()["transaction"]["execution_id"] == fresh_execution
@@ -5658,6 +5982,9 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             parent = CommandJournal("project-test", "gateway")
             original = parent.path.read_bytes()
             old_execution = parent.pending()["execution_id"]
+            same_artifact = preview_with_prior_reservation(apply_args, successor=False)
+            assert same_artifact.exit_code == 0, (same_artifact.stdout, same_artifact.exception)
+            assert parent.path.read_bytes() == original
             proposed = record(checkpoint)
             proposed["owner"] = "node-a"
             proposed.pop("approval")
@@ -5673,7 +6000,7 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 ),
                 patch("nebius_vpngw.cli._plan_vm_ha_corrective", return_value=corrective),
             ):
-                preview = CliRunner().invoke(app, [*apply_args, "--dry-run"])
+                preview = preview_with_prior_reservation(apply_args)
                 assert preview.exit_code == 0, (preview.stdout, preview.exception)
                 assert parent.path.read_bytes() == original and observed[boundary:] == []
                 with patch(
@@ -5909,7 +6236,7 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                             "nebius_vpngw.cli._plan_vm_ha_upgrade_recovery", return_value=recovery
                         ),
                     ):
-                        preview = CliRunner().invoke(app, [*apply_args, "--dry-run"])
+                        preview = preview_with_prior_reservation(apply_args)
                         assert preview.exit_code == 0, (preview.stdout, preview.exception)
                         assert (parent.path.read_bytes(), child.path.read_bytes()) == (
                             old_parent,
@@ -6111,7 +6438,7 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 else "SSH or local artifact I/O failed during package preparation"
             )
             assert f"Reason: {reason}" in failed.stdout
-            assert "Resume the exact apply transaction" in failed.stdout
+            assert "Automatic package recovery stopped" in failed.stdout
             assert "TOP_SECRET" not in failed.stdout
             trace = [(phase, role) for phase, role, _ in observed[boundary:]]
             for phase in ("lock", "quiescent", "stopped-guarded"):
@@ -6253,9 +6580,30 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 assert "artifact changed" in str(rejected.exception)
                 assert not any(phase == "package" for phase, _, _ in observed[resume_boundary:])
                 return
+            if stopped_readback_failure:
+                blocked = CliRunner().invoke(app, apply_args)
+                assert blocked.exit_code != 0
+                assert not any(
+                    phase in {"package", "clear", "activate"}
+                    for phase, _, _ in observed[resume_boundary:]
+                )
+                assert not any(number == 3 for number, _ in stop_dispatches)
+                after = VMHALifecycleStore(config_path).read(
+                    expected_project_id="project-test", expected_gateway_name="gateway"
+                )
+                assert after.transaction.operation_id == persisted.transaction.operation_id
+                invocation[0] = 4
+                resume_boundary = len(observed)
             resumed = CliRunner().invoke(app, apply_args)
             assert resumed.exit_code == 0, resumed.stdout
             replay_trace = [(phase, role) for phase, role, _ in observed[resume_boundary:]]
+            if final_transition_fault == "upgrade-stopped-guarded-active":
+                assert ("stopped-readback", "passive") in replay_trace
+                assert ("stopped-readback", "active") not in replay_trace
+                assert (invocation[0], "active") in stop_dispatches
+            for phase, role in replay_trace:
+                if phase == "stopped-readback":
+                    assert (invocation[0], role) not in stop_dispatches
             for index, (phase, _) in enumerate(replay_trace):
                 if phase == "package":
                     assert all(
@@ -6444,10 +6792,10 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             assert "Apply completed successfully" not in result.stdout
         elif final_transition_fault and final_transition_fault.startswith("package-"):
             assert isinstance(result.exception, SystemExit)
-            assert "existing inhibition and guards remain in place" in " ".join(
+            assert "Existing inhibition and guards remain in place" in " ".join(
                 result.stdout.split()
             )
-            assert "Resume the exact apply transaction" in result.stdout
+            assert "Automatic package recovery stopped" in result.stdout
             member = 2 if final_transition_fault == "package-first-failure" else 1
             assert f"Package preparation failed on member {member}" in result.stdout
             reason = {
@@ -7833,6 +8181,7 @@ def test_vm_ha_display_status_validates_every_controller_and_rearm_state(
         "apply_locked": False,
         "apply_operation_id": None,
         "auto_healing": {
+            "evidence_reason": None,
             "state": "enabled",
             "peer_agrees": True,
             "accepted_start": False,
@@ -7900,6 +8249,7 @@ def test_vm_ha_display_status_validates_every_controller_and_rearm_state(
                     {
                         **payload,
                         "auto_healing": {
+                            "evidence_reason": None,
                             "state": committed_state,
                             "peer_agrees": False,
                             "accepted_start": False,
@@ -8350,7 +8700,7 @@ def test_missing_standby_plan_waits_for_exact_identity_preflight(pending_samples
 
         with pytest.raises(RuntimeError, match="identity preflight did not complete"):
             invoke(deliver)
-    with pytest.raises(RuntimeError, match="transport unavailable"):
+    with pytest.raises(RuntimeError, match="status command returned no usable evidence"):
         invoke([SimpleNamespace(returncode=1, stdout="", stderr="transport unavailable")])
 
 
@@ -8995,6 +9345,7 @@ def _vm_ha_view_record(
         },
         "repair": repair,
         "auto_healing": {
+            "evidence_reason": None,
             "state": "enabled",
             "peer_agrees": True,
             "accepted_start": False,
@@ -9207,7 +9558,7 @@ def test_vm_ha_status_view_blocks_committed_policy_without_peer_agreement(
     )
 
     assert view.overall == "BLOCKED"
-    assert "standby-auto-healing-policy-invalid" in view.reasons
+    assert "standby-auto-healing-peer-policy-unavailable" in view.reasons
     assert next(row for row in view.summary_rows if row[0] == "Auto-healing")[1] == "blocked"
     assert "--standby-auto-healing enabled" not in view.action
 
@@ -11042,7 +11393,7 @@ def test_vm_ha_status_wait_timeout_retains_last_stale_diagnostic() -> None:
         patch("nebius_vpngw.cli.time.sleep"),
         pytest.raises(
             RuntimeError,
-            match="expected apply lock is not visible",
+            match="predicate=status-observation-stale",
         ),
     ):
         _wait_for_vm_ha_agent_status(
@@ -11069,7 +11420,7 @@ def test_vm_ha_status_wait_bounds_fetch_and_rejects_late_success(late_success: b
         patch("nebius_vpngw.cli._fetch_vm_ha_agent_status", side_effect=fetch),
         patch("nebius_vpngw.cli.time.monotonic", side_effect=lambda: elapsed[0]),
         patch("nebius_vpngw.cli.time.sleep", side_effect=sleep),
-        pytest.raises(RuntimeError, match="status verification timed out"),
+        pytest.raises(RuntimeError, match="status verification failed"),
     ):
         _wait_for_vm_ha_agent_status(
             predicate=lambda payload: payload["ready"],
@@ -14621,8 +14972,12 @@ def test_each_cli_command_example_uses_supported_syntax(
         "gateway.config.yaml",
         "peer-vpn.txt",
         "alice.pub",
+        "a.config.yaml",
+        "b.config.yaml",
     ):
         (tmp_path / filename).touch()
+    (tmp_path / "regional").mkdir()
+    (tmp_path / "regional" / "pair.json").touch()
     monkeypatch.chdir(tmp_path)
 
     command: Command = get_command(app)
@@ -14688,16 +15043,14 @@ def test_route_and_operator_help_mentions_multi_connection_behavior() -> None:
     assert "--swap-route-table" in option_help_by_name["yes"]
 
     assert "multi-connection topologies" in failover_help
-    assert "HA: eligible alternative tunnel on the current owner" in failover_help
-    assert "Ordinary BGP: passive tunnel" in failover_help
+    assert "Eligible alternative tunnel on the current gateway owner (Static/BGP)" in failover_help
     failback_help = failback_command.params[0].help or ""
-    assert "HA: configured preferred tunnel on the current owner" in failback_help
-    assert "Ordinary BGP: active tunnel" in failback_help
+    assert "Configured preferred tunnel on the current gateway owner (Static/BGP)" in failback_help
     for command in (failover_command, failback_command):
         assert "Required when selection is ambiguous" in command.params[0].help
         command_help = command.help or ""
         assert "HA owner (Static/BGP)" in command_help
-        assert "regular BGP gateway" in command_help
+        assert "Single-VM gateway (Static/BGP)" in command_help
     assert "only the owning gateway VM" in restart_help
     normalized_restart_command_help = " ".join((restart_command.help or "").split())
     assert "supported only on regular gateways (non-HA)" in normalized_restart_command_help
@@ -15615,17 +15968,36 @@ def test_failover_accepts_enum_routing_modes(tmp_path: Path) -> None:
             )
         ],
     )
+    import json
+
+    import yaml
+
+    for instance in plan.per_instance:
+        scoped = {"gateway": local_cfg["gateway"], "connections": []}
+        for connection in local_cfg["connections"]:
+            tunnels = [
+                dict(tunnel, ha_role=tunnel["ha_role"].value)
+                for tunnel in connection["tunnels"]
+                if tunnel["gateway_instance_index"] == instance.instance_index
+            ]
+            if tunnels:
+                scoped["connections"].append(dict(connection, routing_mode="bgp", tunnels=tunnels))
+        instance.config_yaml = yaml.safe_dump(scoped)
     recorded_cmds: list[list[str]] = []
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, check=False):
         recorded_cmds.append(cmd)
-        if "show bgp ipv4 unicast summary json" in cmd[-1]:
-            return SimpleNamespace(
-                returncode=0,
-                stdout='{"ipv4Unicast":{"peers":{"169.254.10.2":{"state":"Idle"},"169.254.11.2":{"state":"Established"}}}}',
-                stderr="",
-            )
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        phase = "activate" if "--ordinary-tunnel-request" in cmd[-1] else "succeeded"
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "authority": {"boot_id": "fixture", "generation": "a" * 64},
+                    "operation": {"id": "fixture-op", "phase": phase},
+                }
+            ),
+            stderr="",
+        )
 
     with (
         patch("nebius_vpngw.cli._resolve_local_config", return_value=config_path),
@@ -15639,11 +16011,11 @@ def test_failover_accepts_enum_routing_modes(tmp_path: Path) -> None:
             ["failover", "tunnel", "--local-config-file", str(config_path)],
         )
 
-    assert result.exit_code == 0
-    script = shlex.split(recorded_cmds[0][-1])[-1]
-    assert "with _ops.mutation_lock():" in script
-    assert "neighbor 169.254.10.2 shutdown" in script
-    assert "Failover confirmed" in result.stdout
+    assert result.exit_code == 0, result.stdout
+    assert "Tunnel failover verified" in result.stdout
+    assert all("203.0.113.10" in cmd[-2] for cmd in recorded_cmds)
+    assert "--ordinary-tunnel-request" in recorded_cmds[0][-1]
+    assert "--ordinary-tunnel-status" in recorded_cmds[1][-1]
 
 
 def test_failover_targets_selected_passive_tunnel_instance_in_multivm_config(
@@ -15723,17 +16095,36 @@ def test_failover_targets_selected_passive_tunnel_instance_in_multivm_config(
             ),
         ],
     )
+    import json
+
+    import yaml
+
+    for instance in plan.per_instance:
+        scoped = {"gateway": local_cfg["gateway"], "connections": []}
+        for connection in local_cfg["connections"]:
+            tunnels = [
+                dict(tunnel, ha_role=tunnel["ha_role"].value)
+                for tunnel in connection["tunnels"]
+                if tunnel["gateway_instance_index"] == instance.instance_index
+            ]
+            if tunnels:
+                scoped["connections"].append(dict(connection, routing_mode="bgp", tunnels=tunnels))
+        instance.config_yaml = yaml.safe_dump(scoped)
     recorded_cmds: list[list[str]] = []
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, check=False):
         recorded_cmds.append(cmd)
-        if "show bgp ipv4 unicast summary json" in cmd[-1]:
-            return SimpleNamespace(
-                returncode=0,
-                stdout='{"ipv4Unicast":{"peers":{"169.254.20.2":{"state":"Idle"},"169.254.21.2":{"state":"Established"}}}}',
-                stderr="",
-            )
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        phase = "activate" if "--ordinary-tunnel-request" in cmd[-1] else "succeeded"
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "authority": {"boot_id": "fixture", "generation": "a" * 64},
+                    "operation": {"id": "fixture-op", "phase": phase},
+                }
+            ),
+            stderr="",
+        )
 
     with (
         patch("nebius_vpngw.cli._resolve_local_config", return_value=config_path),
@@ -15753,14 +16144,11 @@ def test_failover_targets_selected_passive_tunnel_instance_in_multivm_config(
             ],
         )
 
-    assert result.exit_code == 0
-    assert "Failing over connection 'site-b'" in result.stdout
-    assert "site-b-active" in result.stdout
-    assert "site-b-passive" in result.stdout
+    assert result.exit_code == 0, result.stdout
+    assert "Tunnel failover verified" in result.stdout
     assert all("203.0.113.20" in cmd[-2] for cmd in recorded_cmds)
-    script = shlex.split(recorded_cmds[0][-1])[-1]
-    assert "with _ops.mutation_lock():" in script
-    assert "neighbor 169.254.20.2 shutdown" in script
+    assert "--ordinary-tunnel-request" in recorded_cmds[0][-1]
+    assert "--ordinary-tunnel-status" in recorded_cmds[1][-1]
 
 
 def test_failback_accepts_enum_routing_modes(tmp_path: Path) -> None:
@@ -15814,17 +16202,36 @@ def test_failback_accepts_enum_routing_modes(tmp_path: Path) -> None:
             )
         ],
     )
+    import json
+
+    import yaml
+
+    for instance in plan.per_instance:
+        scoped = {"gateway": local_cfg["gateway"], "connections": []}
+        for connection in local_cfg["connections"]:
+            tunnels = [
+                dict(tunnel, ha_role=tunnel["ha_role"].value)
+                for tunnel in connection["tunnels"]
+                if tunnel["gateway_instance_index"] == instance.instance_index
+            ]
+            if tunnels:
+                scoped["connections"].append(dict(connection, routing_mode="bgp", tunnels=tunnels))
+        instance.config_yaml = yaml.safe_dump(scoped)
     recorded_cmds: list[list[str]] = []
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, check=False):
         recorded_cmds.append(cmd)
-        if "show bgp ipv4 unicast summary json" in cmd[-1]:
-            return SimpleNamespace(
-                returncode=0,
-                stdout='{"ipv4Unicast":{"peers":{"169.254.10.2":{"state":"Established"},"169.254.11.2":{"state":"Idle"}}}}',
-                stderr="",
-            )
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        phase = "activate" if "--ordinary-tunnel-request" in cmd[-1] else "succeeded"
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "authority": {"boot_id": "fixture", "generation": "a" * 64},
+                    "operation": {"id": "fixture-op", "phase": phase},
+                }
+            ),
+            stderr="",
+        )
 
     with (
         patch("nebius_vpngw.cli._resolve_local_config", return_value=config_path),
@@ -15838,11 +16245,11 @@ def test_failback_accepts_enum_routing_modes(tmp_path: Path) -> None:
             ["failback", "tunnel", "--local-config-file", str(config_path)],
         )
 
-    assert result.exit_code == 0
-    script = shlex.split(recorded_cmds[0][-1])[-1]
-    assert "with _ops.mutation_lock():" in script
-    assert "no neighbor 169.254.10.2 shutdown" in script
-    assert "Failback confirmed" in result.stdout
+    assert result.exit_code == 0, result.stdout
+    assert "Tunnel failback verified" in result.stdout
+    assert all("203.0.113.10" in cmd[-2] for cmd in recorded_cmds)
+    assert "--ordinary-tunnel-request" in recorded_cmds[0][-1]
+    assert "--ordinary-tunnel-status" in recorded_cmds[1][-1]
 
 
 def test_failback_targets_selected_active_tunnel_instance_in_multivm_config(tmp_path: Path) -> None:
@@ -15920,17 +16327,36 @@ def test_failback_targets_selected_active_tunnel_instance_in_multivm_config(tmp_
             ),
         ],
     )
+    import json
+
+    import yaml
+
+    for instance in plan.per_instance:
+        scoped = {"gateway": local_cfg["gateway"], "connections": []}
+        for connection in local_cfg["connections"]:
+            tunnels = [
+                dict(tunnel, ha_role=tunnel["ha_role"].value)
+                for tunnel in connection["tunnels"]
+                if tunnel["gateway_instance_index"] == instance.instance_index
+            ]
+            if tunnels:
+                scoped["connections"].append(dict(connection, routing_mode="bgp", tunnels=tunnels))
+        instance.config_yaml = yaml.safe_dump(scoped)
     recorded_cmds: list[list[str]] = []
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, check=False):
         recorded_cmds.append(cmd)
-        if "show bgp ipv4 unicast summary json" in cmd[-1]:
-            return SimpleNamespace(
-                returncode=0,
-                stdout='{"ipv4Unicast":{"peers":{"169.254.20.2":{"state":"Established"},"169.254.21.2":{"state":"Idle"}}}}',
-                stderr="",
-            )
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        phase = "activate" if "--ordinary-tunnel-request" in cmd[-1] else "succeeded"
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "authority": {"boot_id": "fixture", "generation": "a" * 64},
+                    "operation": {"id": "fixture-op", "phase": phase},
+                }
+            ),
+            stderr="",
+        )
 
     with (
         patch("nebius_vpngw.cli._resolve_local_config", return_value=config_path),
@@ -15950,12 +16376,11 @@ def test_failback_targets_selected_active_tunnel_instance_in_multivm_config(tmp_
             ],
         )
 
-    assert result.exit_code == 0
-    assert "restore site-b-active" in result.stdout
+    assert result.exit_code == 0, result.stdout
+    assert "Tunnel failback verified" in result.stdout
     assert all("203.0.113.20" in cmd[-2] for cmd in recorded_cmds)
-    script = shlex.split(recorded_cmds[0][-1])[-1]
-    assert "with _ops.mutation_lock():" in script
-    assert "no neighbor 169.254.20.2 shutdown" in script
+    assert "--ordinary-tunnel-request" in recorded_cmds[0][-1]
+    assert "--ordinary-tunnel-status" in recorded_cmds[1][-1]
 
 
 @pytest.mark.parametrize("pending", [True, False])

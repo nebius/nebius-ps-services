@@ -51,9 +51,22 @@ possibly completed actions against authoritative state before repetition.
 ## Hypotheses And Experiments
 
 Keep the strongest plausible alternatives supported by evidence; no minimum
-count. For each record support, contradiction, prediction, falsifier, confidence
-and next decision. Identify initiating faults, contributing conditions,
+count. For each record support, contradiction, distinguishing prediction,
+falsifier, confidence, status and next decision. Identify initiating faults, contributing conditions,
 downstream symptoms and independent blockers; multiple causes may coexist.
+
+Use statuses `open`, `supported`, `excluded-in-scope` and `unresolved`. For an
+exclusion record the target, exercised path, effective configuration and observation
+window, plus evidence and its proof limit. A successful TCP connection can narrow
+transport reachability; it establishes neither TLS nor authorization nor application
+correctness. Passing unit tests do not eliminate defects in an unexercised deployed
+path. Missing logs, denied access, stale counters and failed queries stay unknown.
+Reopen affected exclusions after contradictory evidence or relevant configuration
+changes; preserve historical reasons. One cause never eliminates independent faults.
+
+| Hypothesis/status | Support | Contradiction | Prediction/falsifier | Exclusion scope or next observation |
+| --- | --- | --- | --- | --- |
+| Concrete mechanism / open | Source and identity | Retained counterevidence | Distinguishing result | Target/path/config/window; limitation |
 
 Before each consequential experiment record:
 

@@ -22,6 +22,7 @@ def config(*prefixes):
         "gateway": {},
         "connections": [
             {
+                "name": "site",
                 "routing_mode": "static",
                 "tunnels": [
                     {
@@ -341,7 +342,7 @@ def test_commit_then_proof_failure_survives_fresh_journal_and_real_quiescent_ins
 
 @pytest.mark.parametrize("failure", ["frr", "proof", None])
 def test_composed_reconciliation_cleans_before_reuse_and_retains_partial_successor(
-    guest, monkeypatch, tmp_path, failure
+    guest, monkeypatch, tmp_path, failure, ordinary_protection_guest
 ):
     import yaml
 
@@ -557,7 +558,7 @@ def test_duplicate_retirement_keeps_superseded_history(guest, transition):
 
 
 def test_saved_proof_lost_reply_retry_rebinds_ledger_before_final_confirmation(
-    guest, monkeypatch, tmp_path
+    guest, monkeypatch, tmp_path, ordinary_protection_guest
 ):
     import hashlib
 

@@ -506,6 +506,7 @@ def test_autorestarted_daemon_reloads_current_authorized_configuration(
     cfg = {
         "connections": [
             {
+                "name": "reload",
                 "routing_mode": "static",
                 "tunnels": [
                     {
@@ -522,6 +523,7 @@ def test_autorestarted_daemon_reloads_current_authorized_configuration(
         cfg["connections"][0]["routing_mode"] = "bgp"
         cfg["connections"].append(
             {
+                "name": "cold",
                 "routing_mode": "static",
                 "tunnels": [
                     {

@@ -18,7 +18,7 @@ from .models import PeerHeartbeat, canonical_json
 from .store import AtomicGenerationStore, CorruptStateError, atomic_write_json
 
 AUTO_HEALING_POLICY_SCHEMA = "nebius-vpngw/vm-ha-standby-auto-healing-policy-v2"
-AUTO_HEALING_STATUS_SCHEMA = "nebius-vpngw/vm-ha-auto-healing-policy-status-v2"
+AUTO_HEALING_STATUS_SCHEMA = "nebius-vpngw/vm-ha-auto-healing-policy-status-v3"
 AUTO_HEALING_POLICY_FILENAME = "standby-auto-healing-policy.json"
 AUTO_HEALING_RECOVERY_SCHEMA = "nebius-vpngw/vm-ha-auto-healing-recovery-v1"
 AUTO_HEALING_RECOVERY_FILENAME = "standby-auto-healing-recovery.json"
@@ -59,6 +59,20 @@ class AutoHealingRecoveryReason(str, Enum):
 
 class AutoHealingPolicyError(RuntimeError):
     """A policy record or transaction is unsafe to use."""
+
+
+class AutoHealingPolicyUnavailable(AutoHealingPolicyError):
+    """Required local policy evidence cannot currently be read."""
+
+
+POLICY_EVIDENCE_REASONS = frozenset(
+    {
+        "standby-auto-healing-policy-unavailable",
+        "standby-auto-healing-policy-invalid",
+        "standby-auto-healing-peer-policy-unavailable",
+        "standby-auto-healing-policy-disagreement",
+    }
+)
 
 
 def _require_identifier(name: str, value: object) -> str:
@@ -254,8 +268,10 @@ class AutoHealingPolicyStore:
             return AutoHealingPolicyRecord.from_mapping(
                 json.loads(self.path.read_text(encoding="utf-8"))
             )
-        except (OSError, UnicodeError, json.JSONDecodeError) as error:
-            raise AutoHealingPolicyError("policy record is unreadable") from error
+        except OSError as error:
+            raise AutoHealingPolicyUnavailable("policy observation is unavailable") from error
+        except (UnicodeError, json.JSONDecodeError) as error:
+            raise AutoHealingPolicyError("policy record is malformed") from error
 
     def require_bound(
         self,
@@ -267,7 +283,7 @@ class AutoHealingPolicyStore:
     ) -> AutoHealingPolicyRecord:
         record = self.load()
         if record is None:
-            raise AutoHealingPolicyError("policy record is missing")
+            raise AutoHealingPolicyUnavailable("policy record is missing")
         if not (
             record.cluster_id == cluster_id
             and record.node_id == node_id
@@ -899,6 +915,32 @@ def project_local_policy(
     ):
         return "blocked", record.decision_digest
     return record.desired.value, record.decision_digest
+
+
+def peer_policy_evidence_reason(
+    record: AutoHealingPolicyRecord, heartbeat: PeerHeartbeat | None, *, now: float
+) -> str | None:
+    if heartbeat is None:
+        return "standby-auto-healing-peer-policy-unavailable"
+    from datetime import datetime
+
+    try:
+        sent = datetime.fromisoformat(heartbeat.sent_at.removesuffix("Z") + "+00:00").timestamp()
+    except ValueError:
+        return "standby-auto-healing-peer-policy-unavailable"
+    if not (
+        0 <= now - sent <= 30
+        and heartbeat.cluster_id == record.cluster_id
+        and heartbeat.node_id == record.peer_node_id
+        and heartbeat.generation_id == record.generation_id
+    ):
+        return "standby-auto-healing-peer-policy-unavailable"
+    if (
+        heartbeat.auto_healing_policy_state != record.desired.value
+        or heartbeat.auto_healing_policy_digest != record.decision_digest
+    ):
+        return "standby-auto-healing-policy-disagreement"
+    return None
 
 
 def peer_policy_agrees(

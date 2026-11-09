@@ -58,6 +58,12 @@ def pending(journal: CommandJournal, local: dict, artifact: str | None = None) -
             )
         elif effect.key == "attachments":
             expected[effect.key] = "security-groups"
+        elif effect.key in {"credentials", "route-reservation", "route-runtime"}:
+            expected[effect.key] = {
+                "credentials": "managed-credentials",
+                "route-reservation": "ordinary-route-reservation",
+                "route-runtime": "ordinary-route-runtime",
+            }[effect.key]
     if (
         {effect.key: effect.owner for effect in plan.effects} != expected
         or set(snapshot["bindings"]) != set(expected)
@@ -124,6 +130,7 @@ class ProvisioningCommand:
     trust_scope: Any
     routes: Any = None
     route_receipt: dict | None = None
+    publication: Any = None
 
     @property
     def approval(self) -> str:
@@ -138,6 +145,8 @@ class ProvisioningCommand:
 
     def begin(self) -> None:
         self.journal.begin(self.plan, intents=self.intents)
+        if self.publication is not None:
+            self.publication.begin()
 
     def publish_trust(self):
         key = "ssh"
@@ -210,6 +219,8 @@ class ProvisioningCommand:
             if not target:
                 raise RuntimeError("Created gateway has no authoritative public transport")
             targets[name] = target
+        if self.publication is not None:
+            self.publication.target = targets[self.publication.instance.hostname]
         return targets
 
     def bind_policy(self, ssh_policy: Any, targets: dict):
@@ -258,6 +269,7 @@ class ProvisioningCommand:
             self.local,
             ssh_policy=ssh_policy,
             runtime_changes=True,
+            publication=self.publication,
         )
         completed = routes.completed
         if completed is not None and completed["approval"] == self.approval:
@@ -292,7 +304,7 @@ class ProvisioningCommand:
         routes.begin(self.approval)
         self.routes = routes
 
-    def finish_routes(self) -> None:
+    def finish_routes(self) -> dict:
         if self.routes is None:
             raise RuntimeError("Provisioned routes have no bound intent")
         if self.route_receipt is None:
@@ -300,6 +312,12 @@ class ProvisioningCommand:
             receipt = self.routes.finish(self.approval)
             self.route_receipt = {key: receipt[key] for key in ("approval", "intent", "selection")}
         self.journal.verified("routes", self.route_receipt)
+        # Connectivity is a current observation, never part of the immutable
+        # publication receipt used for interrupted-resume verification.
+        return {
+            **self.route_receipt,
+            "connectivity": "unknown",
+        }
 
 
 def inspect(
@@ -315,11 +333,14 @@ def inspect(
     trust_scope: Any,
     attachments: dict | None,
     attachment_pending: dict | None,
+    publication: Any = None,
 ) -> ProvisioningCommand:
     previous = pending(journal, local, artifact)
     instances = tuple(deployment.iter_instance_configs())
     if deployment.vm_ha is not None:
         raise RuntimeError("Ordinary provisioning cannot own HA lifecycle effects")
+    if publication is not None:
+        publication.select(changed=True)
     if previous is not None:
         root = previous["transaction"]
         approved = CommandPlan.parse(root["plan"])
@@ -357,8 +378,22 @@ def inspect(
             or attachment_pending["operation_id"] != root["execution_id"]
         ):
             raise RuntimeError("Provisioning attachments belong to another command")
+        if publication is not None:
+            if saved.get("route-runtime") != publication.desired:
+                raise RuntimeError("Pending runtime route publication changed its intent")
+            publication.resume_sets(
+                {key: Progress(value) for key, value in root["progress"].items()}
+            )
         return ProvisioningCommand(
-            journal, approved, True, saved, manager, deployment, local, trust_scope
+            journal,
+            approved,
+            True,
+            saved,
+            manager,
+            deployment,
+            local,
+            trust_scope,
+            publication=publication,
         )
     if journal.pending() is not None or attachment_pending is not None:
         raise RuntimeError("Resume the pending command before fresh provisioning")
@@ -394,7 +429,10 @@ def inspect(
     )
     routes = provisioning_routes.prepare(discovery, resources)
     intents = {"ssh": trust, "provisioning": resources, "routes": routes}
+    prefix, extra_intents = publication.prefix() if publication is not None else ([], {})
+    intents.update(extra_intents)
     effects = [
+        *prefix,
         Effect(
             "ssh",
             "ssh-bootstrap",
@@ -454,6 +492,10 @@ def inspect(
             tuple(effect.key for effect in effects if effect.key != "ssh"),
         )
     )
+    if publication is not None:
+        effect, value = publication.suffix(tuple(item.key for item in effects))
+        effects.append(effect)
+        intents[effect.key] = value
     if attachments is not None and attachments_changed(attachments):
         intents["attachments"] = attachments
         effects.append(
@@ -472,5 +514,13 @@ def inspect(
         journal.project, journal.gateway, apply_approval.digest(local), artifact, tuple(effects)
     )
     return ProvisioningCommand(
-        journal, plan, False, intents, manager, deployment, local, trust_scope
+        journal,
+        plan,
+        False,
+        intents,
+        manager,
+        deployment,
+        local,
+        trust_scope,
+        publication=publication,
     )

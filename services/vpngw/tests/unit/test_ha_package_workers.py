@@ -26,14 +26,38 @@ def entries():
 
 
 def prepare(staged, policy=None):
-    cli._prepare_stopped_vm_ha_packages(
-        staged=staged,
-        ssh_policy=policy or SSHTrustPolicy(known_hosts_file=Path("unused"), known_hosts_sha256=""),
-        local={},
-        artifact=object(),
-        operation_id="operation",
-        cluster_id="cluster",
-    )
+    # These tests replace guest preparation to exercise evidence dispatch and
+    # settlement. Supply its required approved plan and preselected identity;
+    # real key discovery is exercised by test_package_auth_preparation.
+    token = None
+    if ssh_client_auth.operator_identity() is None:
+        token = ssh_client_auth.OPERATOR_IDENTITY.set(
+            ssh_client_auth.SSHClientAuth("synthetic", "ssh-ed25519", "synthetic", _pkey=object())
+        )
+    try:
+        cli._prepare_stopped_vm_ha_packages(
+            staged=staged,
+            ssh_policy=policy
+            or SSHTrustPolicy(known_hosts_file=Path("unused"), known_hosts_sha256=""),
+            local={},
+            artifact=SimpleNamespace(
+                sha256="a" * 64,
+                dependency_plans=tuple(
+                    (
+                        instance.hostname,
+                        SimpleNamespace(
+                            instance=instance, target=target, manifest={"wheel_sha256": "a" * 64}
+                        ),
+                    )
+                    for instance, target, _ in staged
+                ),
+            ),
+            operation_id="operation",
+            cluster_id="cluster",
+        )
+    finally:
+        if token is not None:
+            ssh_client_auth.OPERATOR_IDENTITY.reset(token)
 
 
 def test_package_evidence_stays_on_command_owner_and_is_fresh(monkeypatch, tmp_path):
@@ -70,6 +94,72 @@ def test_package_evidence_stays_on_command_owner_and_is_fresh(monkeypatch, tmp_p
     finally:
         ssh_client_auth.OPERATOR_IDENTITY.reset(token)
     assert checks == [0, 1, 2, 3]
+
+
+def test_expired_running_read_and_queued_read_never_admit_late_ssh(monkeypatch, tmp_path):
+    import time
+
+    from nebius_vpngw.deploy.authority_observation import AuthorityUnavailable
+    from nebius_vpngw.deploy.vm_ha_cloud import vm_ha_observation_budget
+
+    pins = tmp_path / "known_hosts"
+    pins.write_text("# isolated pins\n")
+    checks, admitted, settled = [], [], []
+
+    def evidence():
+        checks.append(1)
+        time.sleep(0.1)  # Owner settles this already-running read after caller expiry.
+
+    policy = SSHTrustPolicy(
+        pins, hashlib.sha256(pins.read_bytes()).hexdigest(), _evidence_checks=(evidence,)
+    )
+    arrived = threading.Barrier(2)
+
+    def package(worker, target, *_args, **_kwargs):
+        arrived.wait(timeout=2)
+        try:
+            with vm_ha_observation_budget(seconds=0.04):
+                worker._ssh_policy.assert_current()
+                admitted.append(target)
+        finally:
+            settled.append(target)
+
+    monkeypatch.setattr(checkpoint_conversion, "context", lambda *a, **kw: {})
+    monkeypatch.setattr(cli, "_prepare_vm_ha_agent_package", package)
+    with pytest.raises(AuthorityUnavailable):
+        prepare(entries(), policy)
+    assert checks == [1] and not admitted and sorted(settled) == ["owner", "standby"]
+
+
+def test_interruption_after_evidence_becomes_running_drains_workers(monkeypatch, tmp_path):
+    from concurrent.futures import Future
+
+    pins = tmp_path / "known_hosts"
+    pins.write_text("# isolated pins\n")
+    policy = SSHTrustPolicy(pins, hashlib.sha256(pins.read_bytes()).hexdigest())
+    original = Future.set_running_or_notify_cancel
+    command = threading.get_ident()
+    injected, settled = [], []
+
+    def running(future):
+        result = original(future)
+        if threading.get_ident() == command and not injected:
+            injected.append(1)
+            raise KeyboardInterrupt()
+        return result
+
+    def package(worker, target, *_args, **_kwargs):
+        try:
+            worker._ssh_policy.assert_current()
+        finally:
+            settled.append(target)
+
+    monkeypatch.setattr(Future, "set_running_or_notify_cancel", running)
+    monkeypatch.setattr(checkpoint_conversion, "context", lambda *a, **kw: {})
+    monkeypatch.setattr(cli, "_prepare_vm_ha_agent_package", package)
+    with pytest.raises(KeyboardInterrupt):
+        prepare(entries(), policy)
+    assert injected == [1] and sorted(settled) == ["owner", "standby"]
 
 
 @pytest.mark.parametrize("failure", [RuntimeError("identity drift"), Empty(), KeyboardInterrupt()])
@@ -143,15 +233,21 @@ def test_interrupted_queue_handoff_does_not_strand_package_worker(tmp_path):
     """Interrupt after Queue removes a request, before its caller receives it."""
     known_hosts = tmp_path / "known_hosts"
     known_hosts.write_text("# Isolated cancellation test\n")
-    script = r'''
+    script = r"""
 import hashlib, inspect, queue, sys
 from pathlib import Path
 from types import SimpleNamespace
 from nebius_vpngw import cli
-from nebius_vpngw.deploy import checkpoint_conversion
+from nebius_vpngw.deploy import checkpoint_conversion, ssh_client_auth
 from nebius_vpngw.deploy.ssh_policy import SSHTrustPolicy
 path = Path(sys.argv[1])
 policy = SSHTrustPolicy(path, hashlib.sha256(path.read_bytes()).hexdigest())
+ssh_client_auth.OPERATOR_IDENTITY.set(object())
+staged = [(SimpleNamespace(hostname=n, vm_ha_node=SimpleNamespace(node_id=n)), n, object())
+          for n in ('standby', 'owner')]
+artifact = SimpleNamespace(sha256='a' * 64, dependency_plans=tuple(
+    (instance.hostname, SimpleNamespace(instance=instance, target=target,
+        manifest={'wheel_sha256': 'a' * 64})) for instance, target, _ in staged))
 checkpoint_conversion.context = lambda *args, **kwargs: {}
 cli._prepare_vm_ha_agent_package = lambda worker, *args, **kwargs: worker._ssh_policy.assert_current()
 lines, start = inspect.getsourcelines(queue.Queue.get)
@@ -167,9 +263,8 @@ def trace(frame, event, argument):
 sys.settrace(trace)
 try:
     cli._prepare_stopped_vm_ha_packages(
-        staged=[(SimpleNamespace(hostname=n, vm_ha_node=SimpleNamespace(node_id=n)), n, object())
-                for n in ('standby', 'owner')],
-        ssh_policy=policy, local={}, artifact=object(), operation_id='operation', cluster_id='cluster')
+        staged=staged, ssh_policy=policy, local={}, artifact=artifact,
+        operation_id='operation', cluster_id='cluster')
 except KeyboardInterrupt:
     assert injected
     print('interruption drained both workers')
@@ -177,7 +272,7 @@ else:
     raise AssertionError('interruption was not propagated')
 finally:
     sys.settrace(None)
-'''
+"""
     child = subprocess.Popen(
         [sys.executable, "-B", "-c", script, str(known_hosts)],
         stdout=subprocess.PIPE,

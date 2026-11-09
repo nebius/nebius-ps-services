@@ -9,7 +9,7 @@ from typing import Any
 
 from ..apply_approval import digest
 from .ordinary_route_ownership import allocation_id, labels, owned, snapshot
-from .ordinary_route_policy import Policy, prefix
+from .ordinary_route_policy import AbsenceEvidence, Policy, prefix
 from .replacement_cloud import message_digest
 
 
@@ -70,6 +70,7 @@ def inspect(
     routes: dict[str, tuple[Any, ...]],
     ownership: dict[str, dict],
     infrastructure: dict,
+    absence: AbsenceEvidence | None = None,
 ) -> dict:
     from nebius.api.nebius.common.v1 import ResourceMetadata
     from nebius.api.nebius.vpc.v1 import (
@@ -110,12 +111,13 @@ def inspect(
             observed[item["id"]] = item
             by_prefix[table][destination] = route
             owned(route, ownership, project=project, gateway=gateway)
-    # BGP withdrawal changes connectivity only. Preserve and repair the admitted
-    # destination ledger while the authoritative policy still permits it.
+    # Deployment observations retain admitted destinations. The runtime owner
+    # may withdraw only with its complete, consecutive absence evidence.
     for identifier, record in sorted(ownership.items()):
         item = record["snapshot"]
         table, destination, index = item["parent_id"], item["destination"], record["instance_index"]
-        retained = table in desired and policy.retains(destination, index)
+        withdrawn = absence is not None and absence.admits(policy, learned, destination)
+        retained = table in desired and policy.retains(destination, index) and not withdrawn
         summary = (
             next(
                 (
@@ -130,7 +132,7 @@ def inspect(
             if policy.summarize
             else None
         )
-        if summary is not None:
+        if summary is not None and (absence is None or withdrawn):
             retained = False
         if retained:
             previous = desired[table].get(destination)
@@ -142,12 +144,16 @@ def inspect(
         if identifier not in observed:
             absent.append(identifier)
         elif not retained:
-            # Only a removed destination policy or removed workload target admits
-            # deletion. No learned-route snapshot participates in this decision.
+            # Ordinary previews supply no absence evidence, so only the runtime
+            # owner can admit a learned-prefix withdrawal.
             requests["retire-" + identifier] = request_record(
                 DeleteRouteRequest(id=identifier),
                 before=item,
-                reason="configuration-summarized" if summary else "configuration-retired",
+                reason="bgp-withdrawn"
+                if withdrawn
+                else "configuration-summarized"
+                if summary
+                else "configuration-retired",
                 instance_index=index,
                 covered_by=summary,
             )
@@ -213,7 +219,7 @@ def inspect(
                 "kind": "create",
                 "route": None,
             }
-    result = {
+    result: dict = {
         "project": project,
         "gateway": gateway,
         "policy": policy.mapping(),
@@ -229,6 +235,14 @@ def inspect(
         "released": [],
         "options": {"force_copy": False},
     }
+    if absence is not None:
+        result["options"]["absence"] = {
+            "binding": absence.binding,
+            "policy": absence.policy,
+            "selected": absence.selected,
+            "absent": sorted(absence.absent),
+            "observations": absence.observations,
+        }
     return json.loads(json.dumps(result))
 
 

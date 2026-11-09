@@ -79,7 +79,14 @@ def run():
         if argv[0] == "netplan" or (argv[0] == "systemctl" and argv[-1].startswith("strongswan")):
             return subprocess.CompletedProcess(argv, 0, "", "")
         if argv[0] == "systemctl" and argv[-1] == "frr":
-            return subprocess.run(["vtysh", "-b"], capture_output=True, text=True, timeout=10)
+            # Match the distro service reload owner: additive vtysh -b leaves
+            # removed route-map clauses behind and cannot model exact policy.
+            return subprocess.run(
+                ["/usr/lib/frr/frr-reload.py", "--reload", str(frr_renderer.FRR_CONF)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
         return original_run(argv, **kwargs)
 
     frr_renderer.run = strongswan_renderer.run = renderer_run
@@ -141,6 +148,7 @@ def run():
         route_backend_factory=lambda sdk: Backend(),
         runner=runner,
         active_preparer=lambda: main._prepare_vm_ha_active_data_plane(config_path),
+        origination_verifier=lambda: main._vm_ha_origination_policy_ready(config_path),
         blocked_preparer=lambda: main._prepare_vm_ha_blocked_bgp(config_path),
         data_plane_factory=lambda **kw: SystemDataPlaneRuntime(
             **kw, bgp_export_attempts=10, bgp_export_interval=0.2
@@ -253,6 +261,19 @@ def run():
     # Product restart workflow: install guard, passive Agent materialization,
     # controller route reconciliation/activation, then selector verification.
     ports.data_plane.install_guard(replace(action, kind=ActionKind.INSTALL_COLD_START_GUARD))
+    if scenario == "missing-protection":
+        # Declared fixture fault: model an upgrade that has never installed the
+        # new destination guard. The product is already forwarding-fenced and
+        # must recreate protection through its own origination action.
+        assert not ports.data_plane._forwarding()
+        subprocess.run(
+            ["nft", "delete", "table", "inet", "nebius_vpngw_forward"],
+            check=True,
+            capture_output=True,
+            timeout=5,
+        )
+        ports.data_plane.destination_protection.path.unlink()
+        assert not ports.data_plane.destination_protection.ready()
     if scenario == "failed-selected":
         # A peer failure during downtime survives passive materialization. The
         # product must release the persisted override; the fixture never edits it.
@@ -262,7 +283,8 @@ def run():
             check=True,
             capture_output=True,
         )
-    limit = time.monotonic() + 35
+    started = time.monotonic()
+    limit = started + 35
     steps = []
     while time.monotonic() < limit:
         status = runtime.step()
@@ -272,18 +294,21 @@ def run():
         steps.append(
             {
                 "state": status["state"],
+                "elapsed_seconds": time.monotonic() - started,
                 "reasons": status["reasons"],
                 "pending": status["pending_operation_id"],
                 "tunnel_phase": state["operation"]["phase"],
                 "tunnel_result": state["operation"].get("result"),
             }
         )
+        print(json.dumps({"restart_step": steps[-1]}), file=sys.stderr, flush=True)
         assert state["operation"]["id"] == operation_id
         assert state["operation"]["deadline"] == original_deadline
         if ports.data_plane.mode() is not DataPlaneMode.ACTIVE:
             assert state["operation"]["phase"] not in {"succeeded", "failed"}
         elif state["operation"]["phase"] in {"succeeded", "failed"}:
             assert ports.routes.readiness().promotion_ready
+            ports.data_plane.destination_protection.verify()
             expected = {} if scenario in {"release", "failed-selected"} else {"site": "backup"}
             assert state["selected"] == expected, state["selected"]
             assert (

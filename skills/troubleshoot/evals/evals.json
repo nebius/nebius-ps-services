@@ -22,6 +22,116 @@
         "Requires a known-good checkpoint before the earliest divergence or contamination and quiescent writers.",
         "Does not mutate production or claim end-to-end repair from the healthy final state."
       ]
+    },
+    {
+      "id": "route-code-to-infrastructure",
+      "prompt": "Diagnose only: a request times out after a code deploy. The executed source matches the tested artifact and the failing request spends 900 ms waiting for CPU. The affected container reports increasing throttled time at its quota while host CPU is mostly idle. No platform change is authorized.",
+      "expected_output": "Reclassifies code suspicion to workload cgroup infrastructure with scoped evidence.",
+      "files": [],
+      "assertions": [
+        "Treats code as provisional and follows the earliest observed CPU-wait boundary.",
+        "Does not infer healthy workload resources from idle host averages or change quota without authority.",
+        "Retains configuration and application contributors until excluded in a named scope."
+      ]
+    },
+    {
+      "id": "route-infrastructure-to-code",
+      "prompt": "Diagnose only: operations suspects storage because a job reports write failure. Same namespace, identity, path and window show successful reads/writes; a traced executed function replaces the intended path with an empty string before the failing call. No repair is authorized.",
+      "expected_output": "Reclassifies toward the executed transformation without declaring all storage healthy.",
+      "files": [],
+      "assertions": [
+        "Explains the input transformation and proposed safe counterfactual.",
+        "Binds the storage exclusion to target, path, configuration and window.",
+        "Keeps diagnose-only scope and does not claim verified repair."
+      ]
+    },
+    {
+      "id": "ambiguous-shared-symptom",
+      "prompt": "Diagnose only: three deployments all report slow requests. One has an effective timeout configuration mismatch, another has cgroup memory high events and pressure, and the third has an application retry loop. Evidence is from three exact artifact/window pairs. Plan the next observations.",
+      "expected_output": "Separates three plausible mechanisms without a universal resource diagnosis.",
+      "files": [],
+      "assertions": [
+        "Distinguishes configuration, resource boundary and code causes across routes.",
+        "Selects cheapest distinguishing evidence per target rather than one global sweep.",
+        "Does not pool stale or unrelated counters or declare independent causes eliminated."
+      ]
+    },
+    {
+      "id": "conditional-parallel",
+      "prompt": "Use $troubleshoot in read-only mode. Host policy authorizes two enforceably read-only native investigators. One request fails across an application boundary and a platform dependency; each has separate available evidence. Nine minutes remain. Give bounded assignments and the reconciliation decision; do not run active diagnostics.",
+      "expected_output": "Two independent evidence questions with shared budget and coordinator ownership.",
+      "files": [],
+      "assertions": [
+        "Assignments include scope, artifact/window, permitted reads, prohibitions, deadline and expected findings/counterevidence/uncertainty/next check.",
+        "Caps each task at five minutes or remaining budget and reserves cancellation/reconciliation time.",
+        "Keeps causal conclusion and active diagnostics with the coordinator; no recursive delegation."
+      ]
+    },
+    {
+      "id": "worker-reconciliation",
+      "prompt": "Read-only investigation: two workers cite the same successful TCP check as independent proof. A third returns a conflicting TLS failure from the current workload; another late result concerns the pre-deployment configuration. One worker query failed. Reconcile these findings.",
+      "expected_output": "Rejects duplicate corroboration, preserves TLS contradiction and invalidates stale scope.",
+      "files": [],
+      "assertions": [
+        "TCP success does not establish TLS, authorization or application correctness.",
+        "Common-source agreement counts once; failed query is unknown and stale evidence is historical.",
+        "Chooses a targeted same-identity/window reconciliation check and reopens affected exclusions."
+      ]
+    },
+    {
+      "id": "worker-boundary-budget",
+      "prompt": "Read-only host investigators are available but one proposes kubectl debug and a GPU stress test. Localization has completed and less than a minute of shared budget remains; another worker has no confirmed cancellation. State the safe next actions.",
+      "expected_output": "Coordinator stops out-of-scope diagnostics and reconciles workers within budget.",
+      "files": [],
+      "assertions": [
+        "Workers do not execute tests, debug containers, capture, stress, restart or repair.",
+        "Cancels unnecessary work before exhaustion and reports unconfirmed cancellation honestly.",
+        "Does not issue tools after the hard budget-stop boundary or claim quiescent verified replay."
+      ]
+    },
+    {
+      "id": "gpu-compatibility",
+      "prompt": "Diagnose only: a GPU application needs a newer CUDA driver-dependent feature, but the operator cites generic minor-version compatibility. An old Xid belongs to a previous boot. A different multi-node collective fails while waiting on a rank assigned across a different fabric unit.",
+      "expected_output": "Checks exact compatibility and separates old hardware evidence from current placement/fabric causes.",
+      "files": [],
+      "assertions": [
+        "Pins exact GPU, driver/runtime/library/OS and feature compilation constraints.",
+        "Stale Xid cannot prove present device failure; DCGM pass would not establish comprehensive hardware health.",
+        "Collective failure follows rank placement and network/runtime evidence rather than presuming a GPU defect."
+      ]
+    },
+    {
+      "id": "platform-health-signals",
+      "prompt": "A Kubernetes Pod is Ready and AWS Reachability Analyzer says reachable, but the original Service request fails TLS from its actual namespace. The CNI/service-routing implementation is not identified. Production is read-only.",
+      "expected_output": "Scopes health signals and follows the actual service/TLS path.",
+      "files": [],
+      "assertions": [
+        "Readiness does not prove DNS, selected EndpointSlice or application response.",
+        "Reachability Analyzer models configuration without sending packets or validating the data plane.",
+        "Identifies distribution/runtime/CNI/CSI/service routing before version-specific commands; no debug Pod mutation."
+      ]
+    },
+    {
+      "id": "decisive-worker-gap",
+      "prompt": "Diagnose only: the only source that can distinguish storage corruption from application transformation is inaccessible to every investigator. Passive alternatives are exhausted; a worker proposes guessing the cause because the rest of the dashboard is green.",
+      "expected_output": "Abstains with a decisive missing-evidence report.",
+      "files": [],
+      "assertions": [
+        "Uses BLOCKED_MISSING_EVIDENCE and names exact highest-value missing observation.",
+        "Does not convert absent evidence into an exclusion or let worker agreement substitute for corroboration.",
+        "Makes no verified-fix claim or unauthorized access expansion."
+      ]
+    },
+    {
+      "id": "serial-simple-case",
+      "prompt": "Diagnose only: the exact executed function deterministically divides by zero for an empty input. A minimal safe reproduction and source are supplied; no infrastructure or concurrency evidence is implicated. Native worker tools are available.",
+      "expected_output": "Remains serial because one cheap local observation suffices.",
+      "files": [],
+      "assertions": [
+        "Does not dispatch workers merely because tools are available.",
+        "Keeps a scoped hypothesis and meaningful counterfactual without full-stack checks.",
+        "Reports diagnosis and repair/verification limits within diagnose-only authority."
+      ]
     }
   ]
 }

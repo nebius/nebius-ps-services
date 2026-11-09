@@ -409,6 +409,11 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
         lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
 
+    # Native process execution now uses the bounded command adapter in HA too.
+    monkeypatch.setattr(
+        "nebius_vpngw.agent.local_commands._bounded_run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
     materialized_endpoints: list[dict[str, object]] = []
     agent = agent_main.Agent()
 

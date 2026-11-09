@@ -1,4 +1,4 @@
-"""Persistent HA forwarding policy; executable before the package is installed.
+"""Persistent forwarding policy; executable before the package is installed.
 
 This never changes the running kernel. The HA guard must fence an existing
 member before installation; only the controller may later enable forwarding.
@@ -110,25 +110,36 @@ def _publish(path: Path, content: str) -> None:
 
 
 def restore_ordinary_bootstrap_policy(*, root: Path = Path("/")) -> None:
-    """Ordinary XFRM preparation removes only the product's previous HA policy.
+    """Persist a boot fence; ordinary runtime enables forwarding after protection.
 
-    Called only on the existing persist=True path after HA deactivation. The
-    ordinary agent still owns live routing; this does not change the kernel.
+    Live forwarding is unchanged. Existing configured destinations are protected
+    before the XFRM owner calls this, including during upgrades from HA.
     """
-    path = root / OWNED[0]
-    if not path.exists():
-        return
-    lines = path.read_text().splitlines()
-    if HA_MARKER not in lines:
-        return
     if (root / "etc/nebius-vpngw/vm-ha-enabled").exists():
         raise BootPolicyError("ordinary-boot-policy-requires-ha-deactivation")
-    if path.is_symlink():
-        raise BootPolicyError("ha-boot-policy-owned-file-invalid")
-    content = "\n".join(
-        line for line in lines if _forward_setting(line) is None and line != HA_MARKER
-    )
-    _publish(path, content.rstrip("\n") + "\n" + KEY + " = 1\n")
+    owned = {root / name for name in OWNED}
+    for path in owned:
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise BootPolicyError("ordinary-boot-policy-owned-file-invalid")
+    for path in _inputs(root):
+        if (
+            path not in owned
+            and path.exists()
+            and any(
+                value not in (None, "0")
+                for value in map(_forward_setting, path.read_text().splitlines())
+            )
+        ):
+            raise BootPolicyError("ordinary-boot-policy-unmanaged-forwarding-conflict")
+    for name in OWNED:
+        path = root / name
+        if name == OWNED[1] and not path.exists():
+            continue
+        lines = path.read_text().splitlines() if path.exists() else []
+        content = "\n".join(
+            line for line in lines if _forward_setting(line) is None and line != HA_MARKER
+        )
+        _publish(path, content.rstrip("\n") + "\n" + KEY + " = 0\n")
 
 
 if __name__ == "__main__":

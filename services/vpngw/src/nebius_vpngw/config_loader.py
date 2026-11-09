@@ -405,8 +405,8 @@ def _build_vm_ha_cluster_record(local_cfg: dict) -> VMHAClusterRecord | None:
         canonical_config["gateway_group"].get("vm_spec", {}).pop(key, None)
     # An empty optional probe map has no operational semantics. Keep omitted
     # and explicit-empty inputs identical, including across package refreshes.
-    if not canonical_config["gateway_group"]["vm_ha"].get("tunnel_probes"):
-        canonical_config["gateway_group"]["vm_ha"].pop("tunnel_probes", None)
+    if not canonical_config["gateway"].get("tunnel_probes"):
+        canonical_config["gateway"].pop("tunnel_probes", None)
     canonical_config["gateway_group"]["vm_ha"]["members"] = sorted(
         canonical_config["gateway_group"]["vm_ha"]["members"],
         key=lambda item: int(item["instance_index"]),
@@ -1162,6 +1162,15 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
             "defaults": local_cfg.get("defaults", {}),
             "connections": merged_connections,
         }
+        probes = local_cfg.get("gateway", {}).get("tunnel_probes", {})
+        if probes:
+            local_names = {t["name"] for c in merged_connections for t in c["tunnels"]}
+            per_vm_cfg["gateway"] = {
+                **per_vm_cfg["gateway"],
+                "tunnel_probes": {
+                    name: probe for name, probe in probes.items() if name in local_names
+                },
+            }
         vm_ha_node: VMHANodeRecord | None = None
         if vm_ha_cluster is not None:
             vm_ha_node = next(
@@ -1170,17 +1179,6 @@ def merge_with_peer_configs(local_cfg: dict, peer_files: list[Path]) -> Resolved
             digests = vm_ha_cluster.generation.digests
             per_vm_cfg["vm_ha"] = {
                 "cluster_id": vm_ha_cluster.cluster_id,
-                "tunnel_probes": {
-                    name: probe
-                    for name, probe in (
-                        local_cfg.get("gateway_group", {}).get("vm_ha", {}).get("tunnel_probes", {})
-                    ).items()
-                    if any(
-                        t.get("name") == name
-                        for c in per_vm_cfg["connections"]
-                        for t in c["tunnels"]
-                    )
-                },
                 "node": {
                     "node_id": vm_ha_node.node_id,
                     "instance_index": vm_ha_node.instance_index,
