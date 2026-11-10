@@ -3800,6 +3800,21 @@ REQ-033 where they conflict; their remaining safety obligations remain active.
   number of destination prefixes. Admit a bounded native route batch under the
   routing writer and recheck authority after it. Replaying already restored
   policy and routes retains native IKE recovery rather than suspending it again.
+  For explicit VM-HA automatic Static selection, confirmed selected-path loss
+  instead starts a per-connection 30-second monotonic observation delay. Require
+  continuous current-authority DOWN evidence and two fresh usable alternate-path
+  confirmations at least five seconds apart before selection. Require existing
+  configured encrypted probes into remote workload destination coverage. Inner
+  peer responses or established SAs alone never admit automatic backup movement. UNKNOWN, health,
+  observation gaps over ten seconds, clock rollback, process restart, or changed
+  authority/selection reset the delay. The existing persisted exhausted episode
+  is retained as evidence and never renewed. A late usable remote backup may
+  admit a new bounded 29-second connection-only operation after that episode,
+  including after a 180-second remote outage. Preserve exact suspension/kernel
+  scope, writer locks, ownership and route guards, durable effect resumption,
+  bounded cleanup and healthy unrelated forwarding. A failed candidate is not
+  retried while continuously healthy without a new non-healthy observation.
+  Ordinary gateways, manual tunnel requests and BGP retain the existing policy.
 - AC-006: At path-episode expiry, transfer only with fresh candidate coverage
   for every required destination, rechecked before transfer. Cold Static
   readiness is insufficient. Without such proof keep the safe owner and native

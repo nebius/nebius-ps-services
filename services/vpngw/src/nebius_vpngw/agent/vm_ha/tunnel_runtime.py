@@ -289,6 +289,26 @@ class NativeTunnelEffects(Generic[AuthorityT]):
         except (OSError, RuntimeError, ValueError, KeyError, TypeError):
             return Health.UNKNOWN
 
+    def probe_backup(self, policy: ConnectionPolicy, target: str, authority: AuthorityT) -> Health:
+        """Backup admission requires forwarding proof into the remote destination.
+
+        An authenticated SA or an inner peer response can belong to a passive
+        remote gateway. Neither admits automatic workload route movement.
+        """
+        probe = self.cfg.get("gateway", {}).get("tunnel_probes", {}).get(target)
+        if not isinstance(probe, dict):
+            return Health.UNKNOWN
+        try:
+            destination = ipaddress.IPv4Address(probe["target_ip"])
+            if not any(
+                destination in ipaddress.IPv4Network(prefix, strict=False)
+                for prefix in policy.destinations
+            ):
+                return Health.UNKNOWN
+        except (KeyError, ValueError, TypeError):
+            return Health.UNKNOWN
+        return self.probe_preferred(policy, target, authority)
+
     def probe_preferred(
         self, policy: ConnectionPolicy, target: str, authority: AuthorityT
     ) -> Health:
@@ -418,12 +438,18 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             )
             if policy.mode == "bgp" and state["operation"]["verb"] == "release":
                 self.effect_deadline = self.clock() + 10
-            if policy.mode == "static" and state["episode"] is not None:
+            if (
+                policy.mode == "static"
+                and state["episode"] is not None
+                and state["operation"]["requested_verb"] != "automatic-recovery"
+            ):
                 self.effect_deadline = min(self.effect_deadline, state["episode"]["deadline"] - 1)
-                if state["operation"]["phase"] in {"restore", "verify-restore"}:
-                    # Cleanup can resume after reboot/expiry without admitting
-                    # another candidate or renewing the persisted episode.
-                    self.effect_deadline = self.clock() + 10
+            if policy.mode == "static" and state["operation"]["phase"] in {
+                "restore",
+                "verify-restore",
+            }:
+                # Cleanup resumes after expiry without new candidate authority.
+                self.effect_deadline = self.clock() + 10
             yield
         finally:
             self.effect_deadline = None
@@ -861,9 +887,12 @@ class ControllerTunnelRuntime:
         controller: Any,
         ports: Any,
         clock: Callable[[], float] = time.time,
+        *,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.config_path, self.state_dir = config_path, state_dir
         self.controller, self.ports, self.clock = controller, ports, clock
+        self.monotonic = monotonic
         self.cfg = yaml.safe_load(config_path.read_text())
         self.effects = NativeTunnelEffects(
             self.cfg, state_dir, self.revalidate, active_revalidate=self.active, clock=clock
@@ -892,6 +921,7 @@ class ControllerTunnelRuntime:
 
         self.restart_pending = True
         self.preferred_observations: dict[str, Any] = {}
+        self.static_recovery_observations: dict[str, Any] = {}
 
     def prepare_daemon_reload(self, action: ControllerAction, deadline: float) -> None:
         """Complete one admitted component repair without entering selector authority."""
@@ -1307,6 +1337,9 @@ class ControllerTunnelRuntime:
                 self.effects,
                 preferred_probe=self.effects.probe_preferred,
                 preferred_observations=self.preferred_observations,
+                backup_probe=self.effects.probe_backup,
+                static_recovery_observations=self.static_recovery_observations,
+                monotonic=self.monotonic,
             )
             prepare_bgp = any(
                 policy.mode == "bgp"

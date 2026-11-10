@@ -15077,3 +15077,87 @@ update_req = UpdateSubnetRequest(
 
 **Resolution:**
 **Switching to XFRM interfaces completely eliminated this issue.** XFRM's `if_id` binding mechanism provides clean separation between tunnel interfaces and avoids the packet duplication problem that occurred with VTI mode. The current implementation uses XFRM interfaces exclusively and does not experience packet duplication.
+
+
+### VM-HA Static backup recovery after prolonged remote loss
+
+The explicit HA adapter supplies a process-local Static recovery observation
+map to the existing durable `TunnelController`. This ports the usable-backup
+route-selection principle from origin's `da868ab` and `b9b739c` without importing
+its superseded route writer or weakening upstream's connection-scoped native
+teardown. Observations bind the complete authority and currently selected path.
+They use monotonic time, require 30 seconds of uninterrupted confirmed loss,
+and discard uncertainty, gaps over ten seconds and clock rollback. Restart
+conservatively starts a new observation delay. Persisted wall-clock episode
+exhaustion is never cleared or extended to grant another budget.
+
+After the delay, one existing bounded owner-only cold-path probe per connection
+per poll obtains fresh native SA/kernel identity and reachability evidence. A
+configured `gateway.tunnel_probes` target inside the connection’s remote workload
+coverage is mandatory. Missing probes and inner-peer-only probes return UNKNOWN
+without initiation or route movement. An authenticated SA or an inner peer that
+answers while its gateway is passive cannot qualify this backup. Probe sources
+must be assigned locally and the remote workload must route replies through the
+working VPN path. Existing source assignment, interface binding and hysteresis
+checks remain in force. The candidate build alone is insufficient for deployments
+without these configured workload probes. Two healthy samples at
+least five seconds apart admit `automatic-recovery` through the existing
+persisted operation. Its own 29-second deadline bounds selection and verification
+instead of clipping to the earlier expired episode. Selection intent precedes
+native activation and routes. Suspension still proves the exact connection's
+IKE and kernel scope, activation still holds the routing lock and revalidates
+current ownership before each route write, and cleanup remains durable across
+restart. No cloud, VM promotion, global forwarding, Home policy or FRR restart
+port is introduced. Unknown observations never select a candidate. A failed
+candidate is held until a fresh non-healthy observation allows a later health
+transition, avoiding an endless same-evidence mutation retry. Native effect
+failures retain a sanitized `native-effect-failed-restoring` result while the
+existing cleanup state remains outstanding.
+
+A remote backup that first becomes usable after a 180-second outage is therefore
+eligible even though the original 30-second path episode remains exhausted.
+The accepted operation can resume after a process restart without restarting
+the failure delay or manufacturing authority. Ordinary single-VM callers do not
+supply this observation map and retain their existing behavior. BGP and explicit
+manual tunnel-request admission are unchanged. Live bidirectional qualification
+and Home/owner continuity remain required before claiming S01 recovery is fixed.
+
+
+Example configuration delta, using existing fields and deployment-specific
+reachable workload addresses:
+
+```yaml
+gateway:
+  tunnel_probes:
+    site-preferred:
+      source_ip: 169.254.10.1
+      target_ip: 192.168.1.10
+      interval_seconds: 5
+      timeout_seconds: 1
+      failure_threshold: 3
+      recovery_threshold: 2
+    site-backup:
+      source_ip: 169.254.10.5
+      target_ip: 192.168.1.10
+      interval_seconds: 5
+      timeout_seconds: 1
+      failure_threshold: 3
+      recovery_threshold: 2
+```
+
+These addresses are examples, not defaults. The source must already be assigned
+on its exact XFRM interface and covered by the negotiated selectors. Before
+applying, prove actual path-bound reachability to the remote workload, its reply
+route through the active peer, and the existing workload security-group/firewall
+admission. Do not add source aliases, impersonate workload VM addresses or change
+Home policy to make a probe pass. The schema and per-member compiler already
+validate selector/destination coverage and project each probe to its local
+member. Changing these supported configuration fields creates a genuine new
+compiled generation and requires the normal deployment path.
+
+Thirty seconds starts after confirmed DOWN health, including existing probe
+failure hysteresis and native detection time. It is not a detection SLA or a
+promise of recovery exactly thirty seconds after packet loss. A fifteen-second
+fault that heals before confirmed loss persists for thirty seconds does not
+admit automatic backup selection. Native verification and the second healthy
+backup observation add bounded work after the delay.

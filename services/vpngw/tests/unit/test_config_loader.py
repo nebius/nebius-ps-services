@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -505,7 +506,8 @@ def test_merge_peer_configs_can_prefer_peer_values(sample_config: dict) -> None:
 
 
 @pytest.mark.parametrize("ha", [False, True])
-def test_probe_projection_is_local_and_does_not_mutate_source(sample_config, ha):
+@pytest.mark.parametrize("workload_probe", [False, True])
+def test_probe_projection_is_local_and_does_not_mutate_source(sample_config, ha, workload_probe):
     cfg = deepcopy(sample_config)
     cfg["gateway_group"].update(instance_count=2, external_ips=[["203.0.113.10"], ["203.0.113.20"]])
     if ha:
@@ -528,6 +530,10 @@ def test_probe_projection_is_local_and_does_not_mutate_source(sample_config, ha)
         }
         for tunnel in (first, second)
     }
+    if workload_probe:
+        network = ipaddress.IPv4Network(cfg["connections"][0]["remote_prefixes"][0])
+        for probe in cfg["gateway"]["tunnel_probes"].values():
+            probe["target_ip"] = str(network.network_address + 1)
     original = deepcopy(cfg)
     validated = validate_config(cfg)
     plan = merge_with_peer_configs(validated.model_dump(mode="python"), [])
@@ -535,6 +541,10 @@ def test_probe_projection_is_local_and_does_not_mutate_source(sample_config, ha)
     for instance, tunnel in zip(plan.per_instance, (first, second), strict=True):
         rendered = yaml.safe_load(instance.config_yaml)
         assert set(rendered["gateway"]["tunnel_probes"]) == {tunnel["name"]}
+        assert (
+            rendered["gateway"]["tunnel_probes"][tunnel["name"]]["target_ip"]
+            == cfg["gateway"]["tunnel_probes"][tunnel["name"]]["target_ip"]
+        )
         assert "tunnel_probes" not in rendered.get("vm_ha", {})
 
 

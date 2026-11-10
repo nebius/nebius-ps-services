@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import subprocess
+from copy import deepcopy
 from dataclasses import replace
 
 import pytest
 
 from nebius_vpngw.agent.vm_ha.tunnel_observation import path_health, scoped_ike_ids
+from nebius_vpngw.agent.vm_ha.tunnel_runtime import NativeTunnelEffects
 from nebius_vpngw.agent.vm_ha.tunnels import (
+    STATE_NAME,
     Authority,
     Health,
     TunnelController,
@@ -68,6 +72,9 @@ class Effects:
     def probe_preferred(self, policy, target, authority):
         self.calls.append(("probe", target))
         return self.health[target]
+
+    def probe_backup(self, policy, target, authority):
+        return self.probe_preferred(policy, target, authority)
 
     def observe(self, policy, target, *, selected):
         return self.health[target]
@@ -1882,3 +1889,255 @@ def test_bgp_selection_retains_currently_learned_admitted_coverage(tmp_path):
     assert effects.verify(policy, None) is Health.DOWN
     path.write_text("{}")
     assert effects.verify(policy, None) is Health.UNKNOWN
+
+
+class RecoveryClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+def recovery_selector(tmp_path, effects, clock, records=None, cfg=None):
+    return TunnelController(
+        cfg or config(),
+        tmp_path / "state.json",
+        effects,
+        preferred_probe=effects.probe_preferred,
+        backup_probe=effects.probe_preferred,
+        static_recovery_observations={} if records is None else records,
+        monotonic=clock,
+    )
+
+
+def recovery_tick(selector, clock, second, *, wall_offset=1000):
+    clock.now = float(second)
+    selector.tick(AUTH, wall_offset + second)
+
+
+def test_ha_static_backup_waits_thirty_seconds_then_requires_fresh_confirmations(tmp_path):
+    effects, clock = Effects(), RecoveryClock()
+    effects.health["preferred"] = Health.DOWN
+    selector = recovery_selector(tmp_path, effects, clock)
+    for second in range(30):
+        recovery_tick(selector, clock, second)
+    assert effects.calls == []
+    assert selector.state["operation"] is None
+    recovery_tick(selector, clock, 30)
+    assert effects.calls == [("probe", "backup")]
+    assert selector.state["operation"] is None
+    for second in range(31, 40):
+        recovery_tick(selector, clock, second)
+    assert selector.state["operation"]["result"] == "verified"
+    assert selector.state["selected"] == {"site": "backup"}
+    assert selector.state["episode"]["deadline"] == 1030
+    assert selector.state["episode"]["exhausted"]
+    assert effects.calls == [
+        ("probe", "backup"),
+        ("probe", "backup"),
+        ("suspend", "site"),
+        ("activate", "backup"),
+    ]
+
+
+def test_ha_static_late_backup_recovers_after_long_remote_failure_without_budget_reset(tmp_path):
+    effects, clock = Effects(), RecoveryClock()
+    effects.health.update(preferred=Health.DOWN, backup=Health.DOWN)
+    cfg = config()
+    home = config("bgp")["connections"][0]
+    home["name"] = "home"
+    home["remote_prefixes"] = ["10.2.0.0/16"]
+    for tunnel in home["tunnels"]:
+        tunnel["name"] = f"home-{tunnel['name']}"
+        tunnel["remote_public_ip"] = "198.51.100.1"
+        effects.health[tunnel["name"]] = Health.HEALTHY
+    cfg["connections"].append(home)
+    selector = recovery_selector(tmp_path, effects, clock, cfg=cfg)
+    for second in range(181):
+        recovery_tick(selector, clock, second)
+    assert selector.state["operation"] is None
+    assert not any(call[0] in {"activate", "suspend", "fence"} for call in effects.calls)
+    effects.health["backup"] = Health.HEALTHY
+    for second in range(181, 195):
+        recovery_tick(selector, clock, second)
+    assert selector.state["selected"] == {"site": "backup"}
+    assert selector.state["operation"]["phase"] == "succeeded"
+    assert selector.state["health"]["home"] == Health.HEALTHY.value
+    assert selector.state["episode"]["started"] == 1000
+    assert selector.state["episode"]["deadline"] == 1030
+    assert not any(call == ("fence",) or "home" in call[1:] for call in effects.calls)
+    assert effects.current == AUTH
+
+
+@pytest.mark.parametrize("interrupt", ["healthy", "unknown", "gap", "rollback", "restart"])
+def test_ha_static_delay_requires_continuous_monotonic_current_evidence(tmp_path, interrupt):
+    effects, clock = Effects(), RecoveryClock()
+    effects.health["preferred"] = Health.DOWN
+    selector = recovery_selector(tmp_path, effects, clock)
+    for second in range(20):
+        recovery_tick(selector, clock, second)
+    if interrupt in {"healthy", "unknown"}:
+        effects.health["preferred"] = Health(interrupt)
+        recovery_tick(selector, clock, 20)
+        effects.health["preferred"] = Health.DOWN
+        resumed = 21
+    elif interrupt == "gap":
+        resumed = 31
+    elif interrupt == "rollback":
+        resumed = 10
+    else:
+        selector = recovery_selector(tmp_path, effects, clock)
+        resumed = 20
+    for second in range(resumed, resumed + 30):
+        recovery_tick(selector, clock, second)
+    assert selector.state["operation"] is None
+    assert effects.calls == []
+
+
+def test_ha_static_accepted_effect_resumes_after_restart_with_own_deadline(tmp_path):
+    effects, clock = Effects(), RecoveryClock()
+    effects.health["preferred"] = Health.DOWN
+    selector = recovery_selector(tmp_path, effects, clock)
+    for second in range(36):
+        recovery_tick(selector, clock, second)
+    operation_id = selector.state["operation"]["id"]
+    assert selector.state["operation"]["deadline"] == 1064
+    for second in range(36, 40):
+        selector = recovery_selector(tmp_path, effects, clock)
+        recovery_tick(selector, clock, second)
+    assert selector.state["operation"]["id"] == operation_id
+    assert selector.state["operation"]["result"] == "verified"
+    assert selector.state["selected"] == {"site": "backup"}
+
+
+@pytest.mark.parametrize("fault", ["scope", "authority", "backup-unknown"])
+def test_ha_static_recovery_preserves_native_scope_and_authority_gates(tmp_path, fault):
+    effects, clock = Effects(), RecoveryClock()
+    effects.health["preferred"] = Health.DOWN
+    if fault == "backup-unknown":
+        effects.health["backup"] = Health.UNKNOWN
+    if fault == "scope":
+
+        def unproven(policy, authority):
+            raise TunnelScopeError("scope is unproven")
+
+        effects.suspend = unproven
+    selector = recovery_selector(tmp_path, effects, clock)
+    for second in range(36):
+        recovery_tick(selector, clock, second)
+    if fault == "authority":
+        effects.current = replace(AUTH, epoch="changed")
+    for second in range(36, 45):
+        recovery_tick(selector, clock, second)
+    assert not any(call[0] in {"activate", "fence"} for call in effects.calls)
+    assert selector.state["selected"] == {}
+    if fault == "scope":
+        assert selector.state["operation"]["result"] == "suspension-scope-unproven"
+    if fault == "backup-unknown":
+        assert selector.state["operation"] is None
+
+
+def test_ha_static_selected_path_return_cancels_delay_without_backup_effect(tmp_path):
+    effects, clock = Effects(), RecoveryClock()
+    effects.health.update(preferred=Health.DOWN, backup=Health.DOWN)
+    selector = recovery_selector(tmp_path, effects, clock)
+    for second in range(181):
+        recovery_tick(selector, clock, second)
+    effects.health["preferred"] = Health.HEALTHY
+    for second in range(181, 245):
+        recovery_tick(selector, clock, second)
+    assert selector.state["episode"] is None
+    assert selector.state["selected"] == {}
+    assert selector.state["operation"] is None
+    assert not any(call[0] in {"suspend", "activate", "fence"} for call in effects.calls)
+
+
+def test_ha_static_failed_native_effect_has_reason_and_does_not_renew_deadline(tmp_path):
+    effects, clock = Effects(), RecoveryClock()
+    effects.health["preferred"] = Health.DOWN
+    selector = recovery_selector(tmp_path, effects, clock)
+    for second in range(37):
+        recovery_tick(selector, clock, second)
+    effects.fail_activate = True
+    for second in range(37, 80):
+        recovery_tick(selector, clock, second)
+    operation = selector.state["operation"]
+    assert operation["result"] == "native-effect-failed-restoring"
+    assert operation["phase"] == "restore"
+    assert operation["deadline"] == 1064
+    assert selector.state["episode"]["deadline"] == 1030
+    assert selector.state["sequence"] == 1
+    assert ("fence",) not in effects.calls
+
+
+def test_native_static_backup_route_uses_new_effect_deadline_after_old_episode_expired(tmp_path):
+
+    effects = NativeTunnelEffects(
+        config(),
+        tmp_path,
+        lambda authority: authority == AUTH,
+        active_revalidate=lambda authority: authority == AUTH,
+        routing_lock=tmp_path / "routes.lock",
+        clock=lambda: 1282,
+    )
+    selector = TunnelController(config(), tmp_path / STATE_NAME, effects)
+    selector.bind(AUTH)
+    selector._episode(1000, AUTH)
+    selector.state["episode"]["exhausted"] = True
+    selector._begin(selector.policies["site"], "backup", "automatic-recovery", AUTH, 1281)
+    selector.state["operation"]["phase"] = "activate"
+    selector._save()
+    calls, rendered = [], []
+    effects.suspend = lambda policy, authority: calls.append(("scope", policy.name))
+    effects._swan_config = lambda cfg: rendered.append(cfg)
+
+    def run(argv, timeout):
+        assert timeout > 0
+        calls.append(tuple(argv))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    effects.command_runner = run
+    selector._advance(AUTH, 1282)
+    assert calls == [("scope", "site"), ("ip", "route", "replace", "10.1.0.0/16", "dev", "xfrm1")]
+    assert rendered[0]["_ha_tunnel_selections"] == {"site": "backup"}
+    assert read_state(tmp_path / STATE_NAME)["operation"]["phase"] == "verify"
+    assert selector.state["operation"]["deadline"] == 1310
+    assert selector.state["episode"]["deadline"] == 1030
+
+
+def test_ha_static_multiple_dead_paths_do_not_starve_late_uk_backup(tmp_path):
+
+    cfg = config()
+    second = deepcopy(cfg["connections"][0]["tunnels"][1])
+    second.update(name="uk-b", remote_public_ip="192.0.2.3")
+    cfg["connections"][0]["tunnels"].append(second)
+    effects, clock = Effects(), RecoveryClock()
+    effects.health.update(preferred=Health.DOWN, backup=Health.DOWN)
+    effects.health["uk-b"] = Health.DOWN
+    selector = recovery_selector(tmp_path, effects, clock, cfg=cfg)
+    for second in range(181):
+        recovery_tick(selector, clock, second)
+    assert selector.state["operation"] is None
+    effects.health["uk-b"] = Health.HEALTHY
+    for second in range(181, 205):
+        recovery_tick(selector, clock, second)
+    assert selector.state["selected"] == {"site": "uk-b"}
+    assert selector.state["operation"]["result"] == "verified"
+    assert ("activate", "backup") not in effects.calls
+
+
+@pytest.mark.parametrize("target", [None, "169.254.2.2", "bad-address", "10.1.2.3"])
+def test_native_backup_admission_requires_configured_workload_forwarding_probe(tmp_path, target):
+
+    cfg = config()
+    if target is not None:
+        cfg["gateway"]["tunnel_probes"] = {"backup": {"source_ip": "10.0.0.1", "target_ip": target}}
+    effects = NativeTunnelEffects(
+        cfg, tmp_path, lambda authority: True, active_revalidate=lambda authority: True
+    )
+    calls = []
+    effects.probe_preferred = lambda policy, path, authority: calls.append(path) or Health.HEALTHY
+    result = effects.probe_backup(connection_policies(cfg)[0], "backup", AUTH)
+    assert result is (Health.HEALTHY if target == "10.1.2.3" else Health.UNKNOWN)
+    assert calls == (["backup"] if target == "10.1.2.3" else [])

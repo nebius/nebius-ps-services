@@ -77,6 +77,7 @@ def composed_runtime(tmp_path, monkeypatch):
         runtime,
         SimpleNamespace(routes=SimpleNamespace(), data_plane=SimpleNamespace()),
         clock=lambda: now[0],
+        monotonic=lambda: now[0],
     )
     tunnels.effects = effects
     runtime.tunnel_runtime = tunnels
@@ -97,15 +98,21 @@ def test_static_loss_after_tunnel_check_precedes_generic_owner_repair(tmp_path, 
     assert vm_effects == []
     assert runtime.controller.checkpoints.load().repair_attempt is None
     state = read_state(tmp_path / "tunnel-selection.json")
-    assert state["operation"]["verb"] == "automatic"
+    assert state["operation"] is None
     deadline = state["episode"]["deadline"]
     assert deadline == now[0] + 30
 
     runtime.tunnel_step = tunnels.step
-    for _ in range(5):
+    for _ in range(29):
+        now[0] += 1
+        runtime.step()
+    assert read_state(tmp_path / "tunnel-selection.json")["operation"] is None
+    assert effects.calls == []
+    for _ in range(12):
         now[0] += 1
         runtime.step()
     state = read_state(tmp_path / "tunnel-selection.json")
+    assert state["operation"]["verb"] == "automatic-recovery"
     assert state["selected"] == {"site": "backup"}
     assert state["operation"]["phase"] == "succeeded"
     assert state["episode"]["deadline"] == deadline
@@ -181,5 +188,28 @@ def test_late_loss_exhaustion_never_stacks_generic_repair(tmp_path, monkeypatch)
     runtime.step()
     state = read_state(tmp_path / "tunnel-selection.json")
     assert state["episode"]["exhausted"] and state["episode"]["deadline"] == deadline
+    assert vm_effects == []
+    assert runtime.controller.checkpoints.load().repair_attempt is None
+
+
+def test_late_uk_backup_recovers_without_vm_repair_after_long_remote_outage(tmp_path, monkeypatch):
+    runtime, tunnels, effects, vm_effects, now, _ = composed_runtime(tmp_path, monkeypatch)
+    effects.health.update(preferred=Health.DOWN, backup=Health.DOWN)
+    for _ in range(181):
+        runtime.step()
+        now[0] += 1
+    original = read_state(tmp_path / "tunnel-selection.json")["episode"]
+    assert original["exhausted"]
+    assert vm_effects == []
+    assert runtime.controller.checkpoints.load().repair_attempt is None
+    effects.health["backup"] = Health.HEALTHY
+    for _ in range(15):
+        runtime.step()
+        now[0] += 1
+    state = read_state(tmp_path / "tunnel-selection.json")
+    assert state["selected"] == {"site": "backup"}
+    assert state["operation"]["result"] == "verified"
+    assert state["episode"]["deadline"] == original["deadline"]
+    assert runtime.snapshots.last_snapshot.readiness.promotion_ready
     assert vm_effects == []
     assert runtime.controller.checkpoints.load().repair_attempt is None

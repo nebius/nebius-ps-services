@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import time
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
@@ -244,6 +245,9 @@ class TunnelController(Generic[AuthorityT]):
         *,
         preferred_probe: Callable[[ConnectionPolicy, str, AuthorityT], Health] | None = None,
         preferred_observations: dict[str, Any] | None = None,
+        backup_probe: Callable[[ConnectionPolicy, str, AuthorityT], Health] | None = None,
+        static_recovery_observations: dict[str, Any] | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.cfg = cfg
         self.policies: dict[str, ConnectionPolicy] = {p.name: p for p in connection_policies(cfg)}
@@ -259,6 +263,12 @@ class TunnelController(Generic[AuthorityT]):
         self.preferred_observations = (
             preferred_observations if preferred_observations is not None else {}
         )
+
+        self.backup_probe: Callable[[ConnectionPolicy, str, AuthorityT], Health] | None = (
+            backup_probe
+        )
+        self.static_recovery_observations = static_recovery_observations
+        self.monotonic = monotonic
 
     def _save(self) -> None:
         atomic_write_json(self.path, _envelope(self.state))
@@ -493,6 +503,8 @@ class TunnelController(Generic[AuthorityT]):
             raise ValueError("tunnel clock must be finite")
         started = monotonic()
         if not self.effects.revalidate(authority):
+            if self.static_recovery_observations is not None:
+                self.static_recovery_observations.clear()
             return
         self.bind(authority)
         health: dict[str, str] = {}
@@ -575,7 +587,7 @@ class TunnelController(Generic[AuthorityT]):
                     if policy.mode == "bgp":
                         self.state["selected"].pop(policy.name, None)
                         op.update(verb="release", phase="activate", successes=0)
-                    else:
+                    elif op["requested_verb"] != "automatic-recovery":
                         op.update(phase="restore", successes=0)
                 self._save()
         self._save()
@@ -583,6 +595,9 @@ class TunnelController(Generic[AuthorityT]):
             self.preferred_observations.clear()
             self._advance(authority, now, elapsed_seconds=monotonic() - started)
             return
+        if self.static_recovery_observations is not None:
+            if self._recover_static(authority, health, now):
+                return
         if episode is not None and episode["exhausted"]:
             return
         for policy in self.policies.values():
@@ -598,7 +613,10 @@ class TunnelController(Generic[AuthorityT]):
                     # the VM policy can repair a path under the stale override.
                     self._advance(authority, now, elapsed_seconds=monotonic() - started)
                     return
-            elif health[policy.name] == Health.DOWN.value:
+            elif (
+                health[policy.name] == Health.DOWN.value
+                and self.static_recovery_observations is None
+            ):
                 self.preferred_observations.pop(policy.name, None)
                 current = self.state["selected"].get(policy.name, policy.preferred)
                 alternatives = [p.name for p in policy.paths if p.name != current]
@@ -608,6 +626,77 @@ class TunnelController(Generic[AuthorityT]):
             elif self._preferred_ready(policy, authority, now, health[policy.name]):
                 self._begin(policy, policy.preferred, "automatic-failback", authority, now)
                 return
+
+    def _recover_static(self, authority: AuthorityT, health: dict[str, str], now: float) -> bool:
+        """Admit a fresh usable backup after 30s of continuous selected-path loss.
+
+        Observation is process-local and monotonic. Restart, unknown evidence,
+        missed samples and any authority/selection change restart the delay.
+        The accepted operation remains durable and uses its own bounded deadline.
+        No exhausted episode is renewed, and no VM/cloud effect is available here.
+        """
+        records = self.static_recovery_observations
+        assert records is not None
+        observed_at = self.monotonic()
+        if not math.isfinite(observed_at):
+            records.clear()
+            return False
+        for policy in self.policies.values():
+            if policy.mode != "static" or not policy.eligible:
+                records.pop(policy.name, None)
+                continue
+            if health[policy.name] != Health.DOWN.value or not self.effects.active(authority):
+                records.pop(policy.name, None)
+                continue
+            selected = self.state["selected"].get(policy.name, policy.preferred)
+            binding = (asdict(authority), selected)
+            record = records.get(policy.name)
+            if (
+                record is None
+                or record["binding"] != binding
+                or observed_at < record["last"]
+                or observed_at - record["last"] > 10
+            ):
+                record = {
+                    "binding": binding,
+                    "since": observed_at,
+                    "last": observed_at,
+                    "probe_at": observed_at - 5,
+                    "healthy": {},
+                    "attempted": set(),
+                    "next_path": 0,
+                }
+                records[policy.name] = record
+            record["last"] = observed_at
+            if observed_at - record["since"] < 30:
+                continue
+            if self.backup_probe is None or observed_at - record["probe_at"] < 5:
+                continue
+            record["probe_at"] = observed_at
+            alternatives = [path for path in policy.paths if path.name != selected]
+            path = alternatives[record["next_path"] % len(alternatives)]
+            record["next_path"] += 1
+            # One bounded probe per connection per poll prevents a dead remote
+            # with several alternatives from monopolizing the controller tick.
+            candidate = self.backup_probe(policy, path.name, authority)
+            if candidate is not Health.HEALTHY:
+                record["healthy"].pop(path.name, None)
+                record["attempted"].discard(path.name)
+                continue
+            previous = record["healthy"].get(path.name)
+            confirmations = 1
+            if previous is not None and 0 <= observed_at - previous["at"] <= 30:
+                confirmations = previous["count"] + 1
+            record["healthy"][path.name] = {"at": observed_at, "count": confirmations}
+            if confirmations < 2 or path.name in record["attempted"]:
+                continue
+            if not self.effects.active(authority):
+                records.pop(policy.name, None)
+                return False
+            record["attempted"].add(path.name)
+            self._begin(policy, path.name, "automatic-recovery", authority, now)
+            return True
+        return False
 
     def _preferred_ready(
         self, policy: ConnectionPolicy, authority: AuthorityT, now: float, selected_health: str
@@ -697,7 +786,7 @@ class TunnelController(Generic[AuthorityT]):
             return
         if policy.mode == "bgp" and not self.effects.active(authority):
             return
-        if policy.mode == "static":
+        if policy.mode == "static" and op["requested_verb"] != "automatic-recovery":
             episode = self._episode(now, authority)
             op["deadline"] = min(op["deadline"], episode["deadline"] - 1)
         if current_time() >= op["deadline"]:
@@ -779,6 +868,8 @@ class TunnelController(Generic[AuthorityT]):
             else:
                 self._failed_attempt(policy, current_time())
         except RuntimeError:
+            if op["requested_verb"] == "automatic-recovery":
+                op["result"] = "native-effect-failed-restoring"
             self._failed_attempt(policy, current_time())
         self._save()
 
