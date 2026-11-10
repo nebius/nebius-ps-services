@@ -278,6 +278,7 @@ class TunnelController(Generic[AuthorityT]):
         previous = self.state["authority"]
         if previous == asdict(authority):
             return
+        self._retain_terminal_recovery()
         same_owner = previous is not None and _authority(previous).owner_key == authority.owner_key
         if not same_owner:
             self.state["episode"] = None
@@ -449,6 +450,30 @@ class TunnelController(Generic[AuthorityT]):
         )
         return str(self.state["operation"]["id"])
 
+    def _retain_terminal_recovery(self) -> None:
+        operation = self.state["operation"]
+        if (
+            operation is None
+            or operation["requested_verb"] != "automatic-recovery"
+            or operation["phase"] not in {"failed", "succeeded"}
+            or operation["result"] == "authority-changed"
+        ):
+            return
+        operation_id = operation["id"]
+        if len(operation_id) != 64 or any(c not in "0123456789abcdef" for c in operation_id):
+            raise CorruptStateError("Static recovery operation identity is malformed")
+        receipt = self.path.parent / "static-recovery-results" / f"{operation_id}.json"
+        if receipt.is_symlink() or receipt.parent.is_symlink():
+            raise CorruptStateError("Static recovery receipt path is unsafe")
+        if receipt.exists():
+            saved = read_state(receipt)
+            if saved["authority"] != self.state["authority"] or saved["operation"] != operation:
+                raise CorruptStateError("Static recovery terminal receipt changed")
+            return
+        # Same strict envelope, immutable operation identity and exact terminal
+        # state. Retain the actual result before a new operation can replace it.
+        atomic_write_json(receipt, _envelope(self.state))
+
     def _begin(
         self,
         policy: ConnectionPolicy,
@@ -461,6 +486,7 @@ class TunnelController(Generic[AuthorityT]):
         requested_target: str | None = None,
         unchanged: bool = False,
     ) -> None:
+        self._retain_terminal_recovery()
         self.state["sequence"] += 1
         operation_id = (
             operation_id
@@ -663,7 +689,7 @@ class TunnelController(Generic[AuthorityT]):
                     "last": observed_at,
                     "probe_at": observed_at - 5,
                     "healthy": {},
-                    "attempted": set(),
+                    "attempted": {},
                     "next_path": 0,
                 }
                 records[policy.name] = record
@@ -675,26 +701,67 @@ class TunnelController(Generic[AuthorityT]):
             record["probe_at"] = observed_at
             alternatives = [path for path in policy.paths if path.name != selected]
             path = alternatives[record["next_path"] % len(alternatives)]
-            record["next_path"] += 1
+            attempt = record["attempted"].get(path.name)
+            if attempt is not None:
+                operation = self.state["operation"]
+                if operation is None or operation["id"] != attempt["operation"]:
+                    receipt = (
+                        self.path.parent
+                        / "static-recovery-results"
+                        / f"{attempt['operation']}.json"
+                    )
+                    operation = read_state(receipt)["operation"]
+                if (
+                    operation is None
+                    or operation["phase"] != "failed"
+                    or operation["result"]
+                    not in {"native-recovery-retained", "previous-path-restored"}
+                    or attempt["count"] >= 3
+                ):
+                    record["next_path"] += 1
+                    continue
+                if attempt["terminal_at"] is None:
+                    attempt["terminal_at"] = observed_at
+                    record["healthy"].pop(path.name, None)
+                if observed_at - attempt["terminal_at"] < 30 * attempt["count"]:
+                    record["next_path"] += 1
+                    continue
+                if not self.effects.authority_restored(policy, operation["previous"], authority):
+                    record["healthy"].pop(path.name, None)
+                    record["next_path"] += 1
+                    continue
             # One bounded probe per connection per poll prevents a dead remote
             # with several alternatives from monopolizing the controller tick.
             candidate = self.backup_probe(policy, path.name, authority)
+            proof_at = self.monotonic()
+            if not math.isfinite(proof_at) or proof_at < observed_at:
+                records.pop(policy.name, None)
+                continue
+            record["probe_at"] = proof_at
             if candidate is not Health.HEALTHY:
                 record["healthy"].pop(path.name, None)
-                record["attempted"].discard(path.name)
+                record["next_path"] += 1
                 continue
             previous = record["healthy"].get(path.name)
             confirmations = 1
-            if previous is not None and 0 <= observed_at - previous["at"] <= 30:
+            if previous is not None and 0 <= proof_at - previous["at"] <= 30:
                 confirmations = previous["count"] + 1
-            record["healthy"][path.name] = {"at": observed_at, "count": confirmations}
-            if confirmations < 2 or path.name in record["attempted"]:
+            record["healthy"][path.name] = {"at": proof_at, "count": confirmations}
+            if confirmations < 2:
+                # Confirm this path next, instead of waiting a topology-sized
+                # rotation that can outlive every admissible proof window.
                 continue
             if not self.effects.active(authority):
                 records.pop(policy.name, None)
                 return False
-            record["attempted"].add(path.name)
             self._begin(policy, path.name, "automatic-recovery", authority, now)
+            record["attempted"][path.name] = {
+                "count": 1 if attempt is None else attempt["count"] + 1,
+                "operation": self.state["operation"]["id"],
+                "terminal_at": None,
+            }
+            record["healthy"].pop(path.name, None)
+            record["next_path"] += 1
             return True
         return False
 

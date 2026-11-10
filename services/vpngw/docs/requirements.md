@@ -3803,17 +3803,23 @@ REQ-033 where they conflict; their remaining safety obligations remain active.
   For explicit VM-HA automatic Static selection, confirmed selected-path loss
   instead starts a per-connection 30-second monotonic observation delay. Require
   continuous current-authority DOWN evidence and two fresh usable alternate-path
-  confirmations at least five seconds apart before selection. Require existing
-  configured encrypted probes into remote workload destination coverage. Inner
-  peer responses or established SAs alone never admit automatic backup movement. UNKNOWN, health,
+  confirmations at least five seconds apart before selection. Default admission
+  uses authenticated native SA/kernel identity plus assigned-source/interface-bound
+  inner gateway reachability. This is a tunnel-path heuristic, not workload or
+  remote-owner proof. No workload VM or configured workload probe is required.
+  Existing explicit probes remain optional. UNKNOWN, health,
   observation gaps over ten seconds, clock rollback, process restart, or changed
   authority/selection reset the delay. The existing persisted exhausted episode
   is retained as evidence and never renewed. A late usable remote backup may
   admit a new bounded 29-second connection-only operation after that episode,
   including after a 180-second remote outage. Preserve exact suspension/kernel
   scope, writer locks, ownership and route guards, durable effect resumption,
-  bounded cleanup and healthy unrelated forwarding. A failed candidate is not
-  retried while continuously healthy without a new non-healthy observation.
+  bounded cleanup and healthy unrelated forwarding. After terminal proven rollback,
+  require fresh restoration proof, a 30s/60s cooldown and two new path proofs for
+  bounded re-admission, at most three attempts per candidate in a continuous
+  observed loss window. Preserve terminal receipts and never replace pending
+  cleanup or retry scope rejection. Confirmation scheduling must support all
+  supported path counts without topology-sized proof expiry.
   Ordinary gateways, manual tunnel requests and BGP retain the existing policy.
 - AC-006: At path-episode expiry, transfer only with fresh candidate coverage
   for every required destination, rechecked before transfer. Cold Static

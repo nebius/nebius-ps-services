@@ -290,24 +290,24 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             return Health.UNKNOWN
 
     def probe_backup(self, policy: ConnectionPolicy, target: str, authority: AuthorityT) -> Health:
-        """Backup admission requires forwarding proof into the remote destination.
+        """Prove tunnel-path reachability, not remote workload forwarding.
 
-        An authenticated SA or an inner peer response can belong to a passive
-        remote gateway. Neither admits automatic workload route movement.
+        The default uses the existing assigned-source/interface-bound inner-peer
+        ping after exact native SA/kernel proof. A reachable inner peer is the
+        selected failover heuristic, including when no workload VM exists.
         """
+        observed = self.probe_preferred(policy, target, authority)
+        if observed is not Health.HEALTHY:
+            return observed
         probe = self.cfg.get("gateway", {}).get("tunnel_probes", {}).get(target)
-        if not isinstance(probe, dict):
-            return Health.UNKNOWN
-        try:
-            destination = ipaddress.IPv4Address(probe["target_ip"])
-            if not any(
-                destination in ipaddress.IPv4Network(prefix, strict=False)
-                for prefix in policy.destinations
-            ):
-                return Health.UNKNOWN
-        except (KeyError, ValueError, TypeError):
-            return Health.UNKNOWN
-        return self.probe_preferred(policy, target, authority)
+        if probe is None:
+            # The default inner-peer path already issued a fresh native ping.
+            return observed if self.active(authority) else Health.UNKNOWN
+        # Optional configured probes have hysteresis that can be cached for the
+        # configured interval. Every confirmation additionally needs a distinct
+        # source/interface-bound ping, never two counts of that cached result.
+        observed = self.observe_readonly(policy, target, selected=False)
+        return observed if self.active(authority) else Health.UNKNOWN
 
     def probe_preferred(
         self, policy: ConnectionPolicy, target: str, authority: AuthorityT

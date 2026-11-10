@@ -15081,83 +15081,59 @@ update_req = UpdateSubnetRequest(
 
 ### VM-HA Static backup recovery after prolonged remote loss
 
-The explicit HA adapter supplies a process-local Static recovery observation
-map to the existing durable `TunnelController`. This ports the usable-backup
-route-selection principle from origin's `da868ab` and `b9b739c` without importing
-its superseded route writer or weakening upstream's connection-scoped native
-teardown. Observations bind the complete authority and currently selected path.
-They use monotonic time, require 30 seconds of uninterrupted confirmed loss,
-and discard uncertainty, gaps over ten seconds and clock rollback. Restart
-conservatively starts a new observation delay. Persisted wall-clock episode
-exhaustion is never cleared or extended to grant another budget.
+The explicit HA adapter supplies per-connection, process-local Static recovery
+observations to the existing durable `TunnelController`. This ports origin's
+`da868ab` / `b9b739c` usable-backup selection principle without its superseded
+route writer. Observations bind the complete authority and current selected
+path. Confirmed DOWN health must persist for thirty monotonic seconds. Health,
+UNKNOWN, observation gaps over ten seconds, clock rollback, process restart or
+changed authority/selection conservatively restart that delay. The existing
+persisted thirty-second episode is never cleared or extended to grant authority.
 
-After the delay, one existing bounded owner-only cold-path probe per connection
-per poll obtains fresh native SA/kernel identity and reachability evidence. A
-configured `gateway.tunnel_probes` target inside the connection’s remote workload
-coverage is mandatory. Missing probes and inner-peer-only probes return UNKNOWN
-without initiation or route movement. An authenticated SA or an inner peer that
-answers while its gateway is passive cannot qualify this backup. Probe sources
-must be assigned locally and the remote workload must route replies through the
-working VPN path. Existing source assignment, interface binding and hysteresis
-checks remain in force. The candidate build alone is insufficient for deployments
-without these configured workload probes. Two healthy samples at
-least five seconds apart admit `automatic-recovery` through the existing
-persisted operation. Its own 29-second deadline bounds selection and verification
-instead of clipping to the earlier expired episode. Selection intent precedes
-native activation and routes. Suspension still proves the exact connection's
-IKE and kernel scope, activation still holds the routing lock and revalidates
-current ownership before each route write, and cleanup remains durable across
-restart. No cloud, VM promotion, global forwarding, Home policy or FRR restart
-port is introduced. Unknown observations never select a candidate. A failed
-candidate is held until a fresh non-healthy observation allows a later health
-transition, avoiding an endless same-evidence mutation retry. Native effect
-failures retain a sanitized `native-effect-failed-restoring` result while the
-existing cleanup state remains outstanding.
+One bounded alternate-path probe per connection per poll uses the original
+owner-only native admission. The default requires exact authenticated IKE/CHILD,
+selectors and kernel/XFRM identity, an already assigned local inner source, and
+an interface/source-bound ping to the remote gateway's inner address. No workload
+VM is discovered, provisioned, required or assumed to exist. Reachable inside
+connectivity is the explicitly chosen failover heuristic. It proves gateway
+`tunnel-path-reachable`, not remote workload forwarding or remote active-owner
+status. A remote standby may answer its inner address before enabling forwarding.
+A passive path that cannot answer remains unavailable and is probed again later,
+including after a long remote outage and later UK gateway failover.
 
-A remote backup that first becomes usable after a 180-second outage is therefore
-eligible even though the original 30-second path episode remains exhausted.
-The accepted operation can resume after a process restart without restarting
-the failure delay or manufacturing authority. Ordinary single-VM callers do not
-supply this observation map and retain their existing behavior. BGP and explicit
-manual tunnel-request admission are unchanged. Live bidirectional qualification
-and Home/owner continuity remain required before claiming S01 recovery is fixed.
+Existing explicit `gateway.tunnel_probes` configuration remains optional and
+compatible. When present it retains its configured source, target and hysteresis,
+with an additional distinct native ping per confirmation so a cached hysteresis
+record cannot be counted twice. No configuration delta or new endpoint is needed
+for the default gateway-only behavior. These probes never change Home policy,
+add source aliases, impersonate workload addresses or introduce a cross-site HA
+API. Two healthy proofs at least five seconds apart admit `automatic-recovery`.
+A first healthy alternative keeps the next probe slot for its second proof,
+avoiding stale confirmations in supported larger topologies while retaining
+bounded work per poll. UNKNOWN, failed or stale observations discard that proof.
 
+The accepted operation uses its own bounded twenty-nine-second deadline instead
+of clipping to an expired episode. It persists selection intent before native
+activation and route changes. Original exact IKE/kernel suspension scope,
+writer exclusion, ownership checks before route writes and durable cleanup
+remain unchanged. No VM/cloud transfer, global forwarding or service restart
+port is added. Native effect failure records the sanitized result
+`native-effect-failed-restoring`. Pending cleanup is never replaced or replayed.
 
-Example configuration delta, using existing fields and deployment-specific
-reachable workload addresses:
+A transient effect failure permits re-admission only after terminal rollback,
+fresh original-authority restoration proof, a thirty-second first or sixty-second
+second cooldown and two new path proofs. At most three attempts per candidate
+are admitted in a continuous process-local observed loss window. Scope rejection
+and unknown rollback never admit such a retry. Exact terminal operation states
+are retained in their existing checksummed envelope under operation-ID-named
+`static-recovery-results` files before replacement with a new operation. Restart
+retains accepted-operation resume and conservatively starts a new observation
+delay. This is separate from renewing an exhausted episode or replaying a request.
 
-```yaml
-gateway:
-  tunnel_probes:
-    site-preferred:
-      source_ip: 169.254.10.1
-      target_ip: 192.168.1.10
-      interval_seconds: 5
-      timeout_seconds: 1
-      failure_threshold: 3
-      recovery_threshold: 2
-    site-backup:
-      source_ip: 169.254.10.5
-      target_ip: 192.168.1.10
-      interval_seconds: 5
-      timeout_seconds: 1
-      failure_threshold: 3
-      recovery_threshold: 2
-```
-
-These addresses are examples, not defaults. The source must already be assigned
-on its exact XFRM interface and covered by the negotiated selectors. Before
-applying, prove actual path-bound reachability to the remote workload, its reply
-route through the active peer, and the existing workload security-group/firewall
-admission. Do not add source aliases, impersonate workload VM addresses or change
-Home policy to make a probe pass. The schema and per-member compiler already
-validate selector/destination coverage and project each probe to its local
-member. Changing these supported configuration fields creates a genuine new
-compiled generation and requires the normal deployment path.
-
-Thirty seconds starts after confirmed DOWN health, including existing probe
-failure hysteresis and native detection time. It is not a detection SLA or a
-promise of recovery exactly thirty seconds after packet loss. A fifteen-second
-fault that heals before confirmed loss persists for thirty seconds does not
-admit automatic backup selection. Native verification and the second healthy
-backup observation add bounded work after the delay.
+Thirty seconds begins after confirmed DOWN, including existing health hysteresis
+and native detection time. It is not a packet-loss detection SLA or recovery
+exactly thirty seconds after first loss. A fifteen-second fault that heals before
+confirmed loss persists for thirty seconds does not admit backup selection.
+Ordinary single-VM, BGP and explicit manual request behavior are unchanged.
+Live gateway reachability, independent campaign traffic and Home/owner continuity
+still require separate qualification before claiming S01 recovery is fixed.
