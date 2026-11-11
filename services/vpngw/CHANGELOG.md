@@ -14,6 +14,15 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Wait briefly (bounded backoff) for the guest writer lock during the ordinary
+  runtime handoff instead of failing instantly when the agent momentarily holds it
+  during a reconcile cycle. A one-shot operator `apply` no longer aborts with
+  "Ordinary runtime handoff is unavailable" on transient lock contention; agent-side
+  callers keep the non-blocking (skip-this-cycle) behavior via the default
+  `mutation_lock()`. (#259)
+
 ## [nebius-vpngw-v0.6.4] - 2026-11-09
 
 ### Fixed
