@@ -14,6 +14,16 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Tolerate `list_by_account` read-after-write latency during managed authorized-key
+  enrollment. After a confirmed create (and for an expected existing key), poll the
+  account's keys with bounded backoff before treating an under-count as fatal, so
+  ordinary route-writer enrollment no longer aborts with "managed authorized key did
+  not reread exactly" on a lagging IAM list (observed deterministically in
+  eu-south-1). The exactly-one and exact-identity checks are unchanged, and an excess
+  count still fails fast. (#257)
+
 ## [nebius-vpngw-v0.6.4] - 2026-11-09
 
 ### Fixed
