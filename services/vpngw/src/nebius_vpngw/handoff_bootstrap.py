@@ -25,6 +25,8 @@ SOURCES = (
     ("nebius_vpngw.deploy.replacement_cloud", "deploy/replacement_cloud.py"),
     ("nebius_vpngw.deploy.ordinary_route_policy", "deploy/ordinary_route_policy.py"),
     ("nebius_vpngw.deploy.ordinary_route_ownership", "deploy/ordinary_route_ownership.py"),
+    ("nebius_vpngw.deploy.ordinary_route_plan", "deploy/ordinary_route_plan.py"),
+    ("nebius_vpngw.deploy.ordinary_route_conversion", "deploy/ordinary_route_conversion.py"),
     ("nebius_vpngw.ordinary_route_binding", "ordinary_route_binding.py"),
     ("nebius_vpngw.agent.ordinary_route_authority", "agent/ordinary_route_authority.py"),
     ("nebius_vpngw.agent.vm_ha_controller", "agent/vm_ha_controller.py"),

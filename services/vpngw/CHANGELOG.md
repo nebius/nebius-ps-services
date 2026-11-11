@@ -14,6 +14,15 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Include `deploy/ordinary_route_plan` and `deploy/ordinary_route_conversion` in
+  the remote handoff source bundle. `ordinary_route_ownership` (already bundled)
+  imports both from `validate()` once the gateway carries a route transaction, so
+  without them the guest `inspect` raised `ModuleNotFoundError` and the operator
+  saw an opaque `interrupted`. Ordered after `ordinary_route_ownership`, which
+  they import at module scope.
+
 ## [nebius-vpngw-v0.6.4] - 2026-11-09
 
 ### Fixed
