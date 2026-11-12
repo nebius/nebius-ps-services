@@ -201,7 +201,7 @@ def action(request: dict) -> dict:
     }[request["action"]]
     if set(request) != expected:
         raise ValueError("Expanded ordinary route handoff request")
-    with operations.mutation_lock():
+    with operations.mutation_lock(wait=operations.HANDOFF_LOCK_WAIT):
         owner = RouteAuthority()
         if request["action"] == "inspect":
             return owner.snapshot()

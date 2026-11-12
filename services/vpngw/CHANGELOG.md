@@ -14,6 +14,28 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Tolerate `list_by_account` read-after-write latency during managed authorized-key
+  enrollment. After a confirmed create (and for an expected existing key), poll the
+  account's keys with bounded backoff before treating an under-count as fatal, so
+  ordinary route-writer enrollment no longer aborts with "managed authorized key did
+  not reread exactly" on a lagging IAM list (observed deterministically in
+  eu-south-1). The exactly-one and exact-identity checks are unchanged, and an excess
+  count still fails fast. (#257)
+- Wait briefly (bounded backoff) for the guest writer lock during the ordinary
+  runtime handoff instead of failing instantly when the agent momentarily holds it
+  during a reconcile cycle. A one-shot operator `apply` no longer aborts with
+  "Ordinary runtime handoff is unavailable" on transient lock contention; agent-side
+  callers keep the non-blocking (skip-this-cycle) behavior via the default
+  `mutation_lock()`. (#259)
+- Include `deploy/ordinary_route_plan` and `deploy/ordinary_route_conversion` in
+  the remote handoff source bundle. `ordinary_route_ownership` (already bundled)
+  imports both from `validate()` once the gateway carries a route transaction, so
+  without them the guest `inspect` raised `ModuleNotFoundError` and the operator
+  saw an opaque `interrupted`. Ordered after `ordinary_route_ownership`, which
+  they import at module scope. (#261)
+
 ## [nebius-vpngw-v0.6.4] - 2026-11-09
 
 ### Fixed

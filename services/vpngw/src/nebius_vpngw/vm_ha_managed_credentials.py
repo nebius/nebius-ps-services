@@ -10,6 +10,7 @@ import os
 import secrets
 import stat
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from copy import deepcopy
@@ -57,6 +58,12 @@ _PENDING_KEY_NAME = ".private-key.pending.pem"
 _JOURNAL_NAME = ".enrollment.json"
 _JOURNAL_VERSION = 1
 _IAM_PAGE_SIZE = 1000
+# list_by_account is not read-your-writes consistent: a just-created (or
+# already-committed) authorized key may be absent from the next list. Poll with
+# bounded backoff before treating an under-count as fatal.
+_KEY_READBACK_TIMEOUT = 15.0
+_KEY_READBACK_INITIAL_DELAY = 0.5
+_KEY_READBACK_MAX_DELAY = 2.0
 _AT_FDCWD = -100
 _LINUX_RENAME_NOREPLACE = 1
 _DARWIN_RENAME_EXCL = 0x00000004
@@ -690,6 +697,27 @@ def _list_service_account_keys(service: Any, service_account_id: str) -> tuple[A
     )
 
 
+def _await_service_account_key_count(
+    service: Any, service_account_id: str, *, minimum: int
+) -> tuple[Any, ...]:
+    """List authorized keys, tolerating ``list_by_account`` read-after-write lag.
+
+    A just-created or already-committed authorized key is not always reflected by
+    the next ``list_by_account`` call (eventual consistency), so poll with bounded
+    backoff until at least ``minimum`` keys are visible. Returns as soon as the
+    count reaches ``minimum`` (callers still observe and reject any excess), or at
+    the deadline, whichever comes first.
+    """
+    items = _list_service_account_keys(service, service_account_id)
+    deadline = time.monotonic() + _KEY_READBACK_TIMEOUT
+    delay = _KEY_READBACK_INITIAL_DELAY
+    while len(items) < minimum and time.monotonic() < deadline:
+        time.sleep(min(delay, max(0.0, deadline - time.monotonic())))
+        delay = min(delay * 2, _KEY_READBACK_MAX_DELAY)
+        items = _list_service_account_keys(service, service_account_id)
+    return items
+
+
 def _require_exact_key(
     item: Any,
     *,
@@ -739,6 +767,9 @@ def _reconcile_authorized_key(
 
     completed = cloud.completed("authorized-key") if cloud is not None else None
     items = _list_service_account_keys(service, service_account_id)
+    if (action == "reuse" or completed is not None) and len(items) < 1:
+        # The key is expected to already exist; tolerate list read-after-write lag.
+        items = _await_service_account_key_count(service, service_account_id, minimum=1)
     if len(items) > 1:
         raise VMHAManagedCredentialError("managed service account has unexpected authorized keys")
     if action == "reuse" or completed is not None:
@@ -775,7 +806,7 @@ def _reconcile_authorized_key(
             completed = cloud.mutate("authorized-key", request, service.create)
     except Exception as error:
         raise VMHAManagedCredentialError("managed authorized-key creation failed") from error
-    reread = _list_service_account_keys(service, service_account_id)
+    reread = _await_service_account_key_count(service, service_account_id, minimum=1)
     if len(reread) != 1:
         raise VMHAManagedCredentialError("managed authorized key did not reread exactly")
     return _require_exact_key(

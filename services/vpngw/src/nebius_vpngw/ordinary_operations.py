@@ -25,6 +25,9 @@ from typing import Any
 JOURNAL = Path("/var/lib/nebius-vpngw/ordinary/operation.json")
 BOOT = Path("/proc/sys/kernel/random/boot_id")
 ROUTING_LOCK = Path("/run/nebius-vpngw/fix-routes.lock")
+# A one-shot operator handoff waits briefly for the guest writer lock instead of
+# failing instantly when the agent momentarily holds it during a reconcile cycle.
+HANDOFF_LOCK_WAIT = 10.0
 SCHEMA = "nebius-vpngw.ordinary-operation.v1"
 MANAGEMENT = (
     "nebius-vpngw-fix-routes.timer",
@@ -439,14 +442,30 @@ def wait_quiet(manager: Manager, admission: Callable[[], Any]) -> None:
 
 
 @contextlib.contextmanager
-def mutation_lock() -> Iterator[None]:
-    """Guest-side admission, including callers streamed to older guest packages."""
+def mutation_lock(*, wait: float = 0.0) -> Iterator[None]:
+    """Guest-side admission, including callers streamed to older guest packages.
+
+    Agent-side callers keep the default non-blocking behavior (skip this cycle when
+    another holder is active). A one-shot operator handoff may pass ``wait`` to poll
+    briefly for the lock with bounded backoff instead of failing instantly when the
+    agent holds it during a reconcile cycle.
+    """
     import fcntl
 
     ROUTING_LOCK.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     fd = os.open(ROUTING_LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        deadline = time.monotonic() + wait
+        delay = 0.05
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(min(delay, max(0.0, deadline - time.monotonic())))
+                delay = min(delay * 2, 0.5)
         require_idle()
         yield
     finally:

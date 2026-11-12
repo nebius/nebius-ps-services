@@ -541,6 +541,48 @@ def test_failed_key_create_retains_protected_resume_material(tmp_path: Path) -> 
     assert os.getuid() == journal.stat().st_uid == pending.stat().st_uid
 
 
+class _LaggingKeyService(_KeyService):
+    """``list_by_account`` omits a just-created key for the first ``lag`` reads that
+    follow the create, reproducing the read-after-write lag observed live in
+    eu-south-1 (the create is confirmed complete, but the next list does not yet
+    reflect it)."""
+
+    def __init__(self, lag: int) -> None:
+        super().__init__()
+        self._lag = lag
+
+    def list_by_account(self, request: object) -> SimpleNamespace:
+        if self.create_requests and self._lag > 0:
+            self._lag -= 1
+            return SimpleNamespace(wait=lambda: SimpleNamespace(items=[], next_page_token=""))
+        return super().list_by_account(request)
+
+
+def test_post_create_reread_tolerates_list_read_after_write_lag() -> None:
+    service = _LaggingKeyService(lag=3)
+    labels = vm_ha_ownership_labels(project_id="project-a", gateway_name="gateway-a")
+    public_key = "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----"
+
+    with patch("time.sleep", lambda *_a, **_k: None):
+        key_id = managed._reconcile_authorized_key(
+            service,
+            action="create",
+            project_id="project-a",
+            service_account_id="service-account-a",
+            key_name="gateway-a-vm-ha-runtime-key",
+            labels=labels,
+            public_key=public_key,
+            expected_key_id=None,
+            cloud=None,
+        )
+
+    # The create succeeds and the lagging list eventually reflects it, so enrollment
+    # converges instead of hard-failing on the first (stale) re-read; and it is
+    # created exactly once (no duplicate create, no spurious failure).
+    assert key_id == "auth-public-key-a"
+    assert len(service.create_requests) == 1
+
+
 def test_reuse_rejects_expiring_managed_authorized_key(tmp_path: Path) -> None:
     source = managed_vm_ha_credential_path(
         project_id="project-a", gateway_name="gateway-a", home=tmp_path
