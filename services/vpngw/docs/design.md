@@ -8335,6 +8335,17 @@ Cloud observations and local commands share the 30-second cleanup deadline.
 Unknown scope, changed authority or incomplete readback prevents forwarding
 admission. This does not create or renew a path-recovery episode.
 
+Static activation replaces its destination routes through one `ip -batch` child
+under the routing writer. A fresh full authority observation admits the batch;
+another checks authority after it. The existing effect deadline and three-second
+native command limit bound execution. Prefix count does not multiply expensive
+cloud, readiness and route-context collection inside the ten-second restore
+budget. A batch error remains a failed attempt, not proof of complete routes.
+Before repeating suspension, activation uses the existing independent
+`authority_restored` proof of canonical native policy, loaded connections and
+every destination route. A completed effect replay therefore retains native IKE
+retries. Unknown or partial evidence follows the ordinary scoped suspension path.
+
 Component repair admission and replay both require exact current ownership and
 verified retained route publication; neither depends on the native path health
 being repaired. If the defect disappears before deferred dispatch, retire its

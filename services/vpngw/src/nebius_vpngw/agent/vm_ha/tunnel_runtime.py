@@ -10,6 +10,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import asdict, replace
@@ -695,6 +696,10 @@ class NativeTunnelEffects(Generic[AuthorityT]):
 
     def activate(self, policy: ConnectionPolicy, target: str | None, authority: AuthorityT) -> None:
         if policy.mode == "static":
+            if target is not None and self.authority_restored(policy, target, authority):
+                # A completed native effect can precede its state-machine save.
+                # Retain native retries rather than canceling them on replay.
+                return
             # Also handles replay and restoration: no stale responder survives.
             self.suspend(policy, authority)
         with self.locked(authority):
@@ -702,10 +707,18 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             if policy.mode == "static":
                 self._swan_config(cfg)
                 path = next(p for p in policy.paths if p.name == target)
-                for destination in sorted(policy.destinations):
+                # One bounded native effect under the routing writer. A full
+                # authority snapshot per prefix can exhaust restoration's 10s
+                # budget before even a small route set is installed.
+                with tempfile.NamedTemporaryFile(mode="w", dir=self.state_dir) as batch:
+                    for destination in sorted(policy.destinations):
+                        batch.write(f"route replace {destination} dev {path.interface}\n")
+                    batch.flush()
                     if not self.revalidate(authority):
                         raise RuntimeError("HA tunnel route authority changed")
-                    self.run(("ip", "route", "replace", destination, "dev", path.interface))
+                    self.run(("ip", "-batch", batch.name))
+                if not self.revalidate(authority):
+                    raise RuntimeError("HA tunnel route authority changed after installation")
             else:
                 if not self.active(authority):
                     raise RuntimeError("BGP tunnel policy requires active forwarding authority")

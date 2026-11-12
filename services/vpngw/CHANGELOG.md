@@ -14,6 +14,12 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Batch static tunnel route activation under bounded ownership admission so
+  repeated full authority observations per prefix cannot exhaust restoration.
+  Retain native IKE recovery when replay proves policy and routes already restored.
+
 ## [nebius-vpngw-v0.6.4] - 2026-11-09
 
 ### Fixed
