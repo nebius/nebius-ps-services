@@ -81,7 +81,10 @@ def deletions(
         if kind == "state":
             spi = number(entry.get("spi"))
             if spi == 0:
-                raise ValueError("kernel SA lacks an exact SPI")
+                # A kernel acquisition placeholder has no installed SA or
+                # deletable SPI. Keep the full ownership checks above, but
+                # let it expire after native traps and policies are unloaded.
+                continue
             if (
                 sum(
                     state.get("src") == src
