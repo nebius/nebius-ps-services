@@ -296,6 +296,10 @@ use a backup. Automatic tunnel failback requires 60 seconds of continuous health
 observations; unknown evidence resets that period, and manual overrides take
 precedence. Tunnel failback does not move VM ownership. Destination protection
 remains in force when no path is usable.
+Static activation installs destination routes as one bounded native batch under
+the routing writer, with fresh authority checks before and after installation.
+Route count therefore does not repeat the full ownership/readiness snapshot for
+each prefix. Replaying an already restored policy retains native IKE recovery.
 FRR rendering follows the same BGP defaults as the public schema, including
 disabled graceful restart; explicit customer settings are preserved.
 The daemon also disables separate policy-table registration so a restart cannot

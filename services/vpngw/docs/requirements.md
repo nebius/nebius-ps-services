@@ -3725,6 +3725,10 @@ REQ-033 where they conflict; their remaining safety obligations remain active.
   Preserve healthy forwarding, two healthy confirmations and 60s continuous
   health reset. Persist exhaustion/final selection and resume interrupted
   restoration without a new budget. Path expiry alone never fences an owner.
+  Static route installation must not multiply full authority collection by the
+  number of destination prefixes. Admit a bounded native route batch under the
+  routing writer and recheck authority after it. Replaying already restored
+  policy and routes retains native IKE recovery rather than suspending it again.
 - AC-006: At path-episode expiry, transfer only with fresh candidate coverage
   for every required destination, rechecked before transfer. Cold Static
   readiness is insufficient. Without such proof keep the safe owner and native

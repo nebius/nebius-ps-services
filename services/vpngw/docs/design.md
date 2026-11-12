@@ -8335,6 +8335,29 @@ Cloud observations and local commands share the 30-second cleanup deadline.
 Unknown scope, changed authority or incomplete readback prevents forwarding
 admission. This does not create or renew a path-recovery episode.
 
+Static activation replaces its destination routes through one `ip -batch` child
+under the routing writer. A fresh full authority observation admits the batch;
+another checks authority after it. The existing effect deadline and three-second
+native command limit bound execution. Prefix count does not multiply expensive
+cloud, readiness and route-context collection inside the ten-second restore
+budget. A batch error remains a failed attempt, not proof of complete routes.
+Before repeating suspension, activation uses the existing independent
+`authority_restored` proof of canonical native policy, loaded connections and
+every destination route. A completed effect replay therefore retains native IKE
+retries. Unknown or partial evidence follows the ordinary scoped suspension path.
+Kernel acquisition placeholders with SPI zero are not installed ESP SAs. After
+validating their interface, endpoints, mode and request ID, scoped teardown leaves
+them to expire while unloading native traps and removing exact owned policies.
+It never emits a state deletion for SPI zero or treats the placeholder as encrypted
+path health. Unknown ownership still blocks teardown before any mutation.
+
+Fenced activation may retain completed standby-restoration history for its exact
+cluster, node and generation. The private authorization and promotion receipt
+must pass metadata, shape, identity and receipt-binding validation and remain
+unchanged during collection. Only COMPLETED is historical. Active, blocked,
+foreign or unavailable records still inhibit activation. This observation never
+removes a receipt, releases a lock or bypasses current forwarding exclusion.
+
 Component repair admission and replay both require exact current ownership and
 verified retained route publication; neither depends on the native path health
 being repaired. If the defect disappears before deferred dispatch, retire its

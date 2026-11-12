@@ -78,7 +78,6 @@ def test_scoped_deletions_preserve_unrelated_kernel_objects(kernel_scope):
         ("proto", "ah"),
         ("reqid", 0),
         ("reqid", True),
-        ("spi", 0),
         ("spi", 2**32),
         ("mark", "0x1/0xffffffff"),
         ("ctx", "unknown"),
@@ -205,3 +204,24 @@ def test_text_policy_rejects_multiple_templates_before_cleanup():
 """
     with pytest.raises(ValueError, match="ambiguous XFRM policy template"):
         xfrm_records(raw, policy=True)
+
+
+def test_scoped_acquisition_placeholder_does_not_block_policy_cleanup(kernel_scope):
+    kernel_scope[1][0]["spi"] = 0
+    assert deletions(*kernel_scope) == (
+        ("ip", "xfrm", "policy", "delete", "index", "9", "dir", "out", "if_id", "100"),
+    )
+
+
+@pytest.mark.parametrize("field,value", [("src", "203.0.113.1"), ("reqid", 0), ("mark", 0)])
+def test_acquisition_placeholder_still_requires_proven_scope(kernel_scope, field, value):
+    kernel_scope[1][0].update(spi=0)
+    kernel_scope[1][0][field] = value
+    with pytest.raises(ValueError):
+        deletions(*kernel_scope)
+
+
+def test_scoped_acquisition_placeholder_has_no_state_delete(kernel_scope):
+    kernel_scope[1][0]["spi"] = "0x00000000"
+    kernel_scope[2].clear()
+    assert deletions(*kernel_scope) == ()

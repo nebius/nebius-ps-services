@@ -86,11 +86,30 @@ def require_authority(request: dict, *, active_unlock: bool = False) -> str:
             "standby-replacement.inhibition.json",
             "accepted-cloud-operation.json",
             "rearm-cloud-operation.json",
-            "standby-restoration-authorization.json",
             "standby-auto-healing-recovery.json",
         )
     ):
         raise RuntimeError("activation repair has another inhibition owner")
+    restoration = STATE / "standby-restoration-authorization.json"
+    if restoration.exists() or restoration.is_symlink():
+        from .agent.vm_ha.restoration import RestorationPhase, StandbyRestorationStore
+
+        store = StandbyRestorationStore(STATE)
+        protected = ha_repair.read_json(restoration)
+        receipt = ha_repair.read_json(store.receipt_path)
+        record = store.load()
+        if (
+            record is None
+            or record.to_dict() != protected
+            or ha_repair.read_json(store.receipt_path) != receipt
+            or record.phase is not RestorationPhase.COMPLETED
+            or record.cluster_id != request["lock"]["cluster_id"]
+            or record.owner_node_id != request["lock"]["node_id"]
+            or record.generation_id != request["lock"]["generation_id"]
+        ):
+            raise RuntimeError("activation repair has unfinished or foreign restoration")
+        # This exact receipt-bound completion is history, not another writer.
+        # Keep the record and all current operation/forwarding fences intact.
     return boot
 
 

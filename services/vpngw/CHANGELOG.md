@@ -14,6 +14,19 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Let proven zero-SPI kernel acquisition placeholders expire after scoped trap
+  and policy teardown. These placeholders no longer block tunnel restoration,
+  and cleanup never emits an SPI-based deletion for them.
+
+- Batch static tunnel route activation under bounded ownership admission so
+  repeated full authority observations per prefix cannot exhaust restoration.
+  Retain native IKE recovery when replay proves policy and routes already restored.
+- Permit exact fenced activation with completed standby-restoration history only
+  after private-file validation and durable promotion-receipt binding. Active,
+  blocked, foreign and unverified restoration records remain inhibiting.
+
 ## [nebius-vpngw-v0.6.4] - 2026-11-09
 
 ### Fixed
