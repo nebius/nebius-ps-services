@@ -8345,6 +8345,11 @@ Before repeating suspension, activation uses the existing independent
 `authority_restored` proof of canonical native policy, loaded connections and
 every destination route. A completed effect replay therefore retains native IKE
 retries. Unknown or partial evidence follows the ordinary scoped suspension path.
+Kernel acquisition placeholders with SPI zero are not installed ESP SAs. After
+validating their interface, endpoints, mode and request ID, scoped teardown leaves
+them to expire while unloading native traps and removing exact owned policies.
+It never emits a state deletion for SPI zero or treats the placeholder as encrypted
+path health. Unknown ownership still blocks teardown before any mutation.
 
 Fenced activation may retain completed standby-restoration history for its exact
 cluster, node and generation. The private authorization and promotion receipt
