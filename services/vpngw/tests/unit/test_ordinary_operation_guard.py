@@ -693,3 +693,41 @@ def test_pending_guard_leaves_daemon_waiting_and_rejects_forced_reload(
     with pytest.raises(ops.OperationBlocked):
         agent.reload(force_reconcile=True)
     reconcile.assert_not_called()
+
+
+def test_handoff_mutation_lock_waits_out_transient_contention(store, monkeypatch):
+    # A one-shot operator handoff must not fail instantly when the agent momentarily
+    # holds the guest writer lock during a reconcile cycle: with wait>0 it polls
+    # (bounded backoff) and acquires once the holder releases.
+    import fcntl
+
+    clock = [0.0]
+    monkeypatch.setattr(ops.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(ops.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay))
+    monkeypatch.setattr(ops, "require_idle", lambda: None)
+    attempts: list[int] = []
+
+    def flaky(_fd: int, _operation: int) -> None:
+        attempts.append(_operation)
+        if len(attempts) < 3:
+            raise BlockingIOError(11, "Resource temporarily unavailable")
+
+    monkeypatch.setattr(fcntl, "flock", flaky)
+    with ops.mutation_lock(wait=5.0):
+        pass
+    assert len(attempts) == 3
+
+
+def test_mutation_lock_default_fails_fast_on_contention(store, monkeypatch):
+    # Default (agent-side) callers keep the non-blocking behavior: fail immediately
+    # when another holder is active, so a busy cycle is skipped rather than blocked.
+    import fcntl
+
+    monkeypatch.setattr(ops, "require_idle", lambda: None)
+
+    def busy(_fd: int, _operation: int) -> None:
+        raise BlockingIOError(11, "Resource temporarily unavailable")
+
+    monkeypatch.setattr(fcntl, "flock", busy)
+    with pytest.raises(BlockingIOError), ops.mutation_lock():
+        pytest.fail("acquired a contended lock without waiting")
