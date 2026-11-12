@@ -8346,6 +8346,13 @@ Before repeating suspension, activation uses the existing independent
 every destination route. A completed effect replay therefore retains native IKE
 retries. Unknown or partial evidence follows the ordinary scoped suspension path.
 
+Fenced activation may retain completed standby-restoration history for its exact
+cluster, node and generation. The private authorization and promotion receipt
+must pass metadata, shape, identity and receipt-binding validation and remain
+unchanged during collection. Only COMPLETED is historical. Active, blocked,
+foreign or unavailable records still inhibit activation. This observation never
+removes a receipt, releases a lock or bypasses current forwarding exclusion.
+
 Component repair admission and replay both require exact current ownership and
 verified retained route publication; neither depends on the native path health
 being repaired. If the defect disappears before deferred dispatch, retire its
