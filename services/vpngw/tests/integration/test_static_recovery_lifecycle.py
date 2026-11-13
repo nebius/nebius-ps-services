@@ -38,7 +38,7 @@ FAILBACK_SECONDS = 160
 
 
 class Scenario:
-    def __init__(self, nodes, directory, record_property):
+    def __init__(self, nodes, directory, record_property, backup_proof_delay_seconds=0):
         self.gateway, self.peer = nodes
         self.directory = directory
         self.record_property = record_property
@@ -49,6 +49,7 @@ class Scenario:
         self.controller = None
         self.controller_log = None
         self.last_fault_at = 0.0
+        self.backup_proof_delay_seconds = backup_proof_delay_seconds
         self.observations = Path(f"/proc/{self.gateway.process.pid}/root/run/static-recovery.jsonl")
         self.commands = self.observations.with_suffix(".commands.jsonl")
 
@@ -79,7 +80,11 @@ class Scenario:
         self.controller_log = (self.directory / "controller.log").open("w")
         self.controller = self.spawn(
             self.gateway,
-            [sys.executable, "-u", DRIVER, str(self.gateway.config), "/run/static-recovery.jsonl"],
+            [
+                sys.executable, "-u", DRIVER, str(self.gateway.config),
+                "/run/static-recovery.jsonl", "--backup-proof-delay-seconds",
+                str(self.backup_proof_delay_seconds),
+            ],
             self.controller_log,
         )
         for direction, source, target in (
@@ -363,10 +368,10 @@ class Scenario:
 
 
 @pytest.fixture
-def scenario(native_paths, tmp_path, record_property):
+def scenario(native_paths, tmp_path, record_property, request):
     directory = tmp_path / "evidence"
     directory.mkdir()
-    case = Scenario(native_paths[0], directory, record_property)
+    case = Scenario(native_paths[0], directory, record_property, getattr(request, "param", 0))
     try:
         case.start()
         yield case

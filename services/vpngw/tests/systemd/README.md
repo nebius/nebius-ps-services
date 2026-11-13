@@ -9,6 +9,8 @@ site B runs a plain strongSwan responder, independently configured without the
 product renderer or any peer-side gateway controller. Two addresses at site B
 represent primary and backup tunnel endpoints. These tests qualify one gateway's
 Static behavior, not a vendor's remote failover policy or cloud ownership.
+Admission uses the default interface-bound inner-peer probe. Independent workload
+ICMP measures actual packet recovery. No optional workload tunnel probe is configured.
 
 The cases cover primary return before backup qualification, SA-preserving backup
 promotion, both-path failure with either path returning first, both returning,
@@ -19,6 +21,9 @@ stop the losing attempt and leave it locally cold. Later bounded qualification
 of the preferred path remains allowed. Duplicate initiation while a negotiation
 is pending is rejected. Tests never install traps or move routes on behalf of
 the product. Missing implementation is a failure, not an expected-failure mark.
+Configuration contract violations are recorded and asserted after the behavioral
+sequence where possible. An unavailable selected path still stops dependent
+phases, and its last reached milestone remains in the packet summary.
 
 Continuous timestamped bidirectional ICMP runs through faults without the `-w`
 option that can stop ping at its first ICMP error. Reports retain final counters,
@@ -33,6 +38,14 @@ These are tests for proposed behavior. They do not claim that SA-preserving
 promotion or the slow-observation fix has been implemented. Run them red before
 changing the implementation, then require all seven to pass. Docker must be
 running on a Linux kernel with the XFRM support described below.
+
+Run `python3 tests/systemd/run.py --static-recovery-timing-only --report /tmp/static-timing.json`
+for a separate native timing regression. The fixture inserts eleven seconds of
+synchronous work before a real backup proof. The test requires the following
+controller pass to retain the freshly successful proof and original loss window.
+It substitutes no health result or controller clock. This models slow work, not
+actual cloud snapshot performance. The seven ordinary lifecycle cases use no
+injected delay. Cloud authority remains frozen in both lanes.
 
 Run `python3 tests/systemd/run.py` from the service directory. This explicitly
 builds and starts a disposable Ubuntu 24.04 container with systemd as PID 1,

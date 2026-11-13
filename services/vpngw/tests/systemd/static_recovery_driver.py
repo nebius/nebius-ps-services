@@ -82,9 +82,12 @@ def main() -> None:
     parser.add_argument("config", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--seconds", type=float, default=720)
+    parser.add_argument("--backup-proof-delay-seconds", type=float, default=0)
     args = parser.parse_args()
     if os.environ.get("VPNGW_ISOLATED_SYSTEMD_TEST") != "1":
         raise RuntimeError("Only the explicitly enabled disposable fixture is supported")
+    if not 0 <= args.backup_proof_delay_seconds <= 30:
+        raise ValueError("Fixture probe delay must be between zero and thirty seconds")
     cfg = yaml.safe_load(args.config.read_text())
     authority = Authority("native-fixture", "owner", "allocation", "1", 1, "a" * 64)
     state_dir = Path("/var/lib/nebius-vpngw/vm-ha")
@@ -139,13 +142,20 @@ def main() -> None:
         active_revalidate=lambda observed: observed == authority,
         command_runner=native_command,
     )
+
+    def backup_probe(policy, target, observed_authority):
+        # Model slow synchronous work before the genuine native proof. No
+        # health result, clock, SA or controller observation is substituted.
+        time.sleep(args.backup_proof_delay_seconds)
+        return effects.probe_backup(policy, target, observed_authority)
+
     selector = TunnelController(
         cfg,
         state_dir / "tunnel-selection.json",
         effects,
         preferred_probe=effects.probe_preferred,
         preferred_observations={},
-        backup_probe=effects.probe_backup,
+        backup_probe=backup_probe,
         static_recovery_observations={},
     )
     running = True
