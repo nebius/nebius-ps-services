@@ -77,18 +77,18 @@ def test_start_action_reload_and_active_path_recovery(
     case = Scenario(native_paths[0], directory, record_property)
     result = {"trial": trial, "start_action": start_action, "controller_running": False}
     try:
-        original = sa_facts(case.gateway)
-        assert original, "Fixture did not establish its initial SA"
         set_start_action(case.gateway, "none")
         config_path = Path(f"/proc/{case.gateway.process.pid}/root/etc/swanctl/swanctl.conf")
         result["prepared_settings"] = loaded_settings(config_path.read_text())["preferred"]
         assert result["prepared_settings"]["dpd_action"] == "restart"
         assert result["prepared_settings"]["keyingtries"] == "0"
-        time.sleep(1)
-        assert sa_facts(case.gateway) == original, "Preparation changed the established SA"
+        # Removing the fixture's original trap/start action can terminate its
+        # initial SA. Establish the measured SA under none before packet timing.
+        case.gateway.command("swanctl", "--initiate", "--child", "preferred", "--timeout", "5")
         case.start_traffic()
         case.clean(5)
         before = sa_facts(case.gateway)
+        assert before, "Fixture did not establish the measured SA under start_action=none"
         result["before_reload"] = before
         promotion_started = case.mark("start-action-reload", action=start_action)
         set_start_action(case.gateway, start_action)
