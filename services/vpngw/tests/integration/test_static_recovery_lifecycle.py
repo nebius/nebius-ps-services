@@ -261,13 +261,19 @@ class Scenario:
                 and value["phase"] == "intent"
             ):
                 attempts.append(value)
-                assert not value["preexisting_connecting"], (
-                    "Initiation duplicated a pending attempt"
+                self.contract(
+                    not value["preexisting_connecting"],
+                    "Initiation duplicated a pending attempt",
                 )
-        assert any("preferred" in attempt["argv"] for attempt in attempts), (
-            "Controller never tried the primary while selected backup was failing"
+        self.contract(
+            any("preferred" in attempt["argv"] for attempt in attempts),
+            "Controller never tried the primary while selected backup was failing",
         )
-        assert self.latest()["settings"]["backup"]["start_action"] == "trap"
+        self.contract(
+            self.latest()["settings"]["backup"]["start_action"] == "trap",
+            "Failing selected backup did not retain start_action=trap",
+        )
+        self.mark("both-paths-failed-observed")
 
     def finish_on(self, winner):
         sample = self.select(winner)

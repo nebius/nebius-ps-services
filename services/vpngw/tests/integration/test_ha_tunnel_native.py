@@ -316,7 +316,7 @@ def native_paths(tmp_path, request):
                 }
             )
         gateway["connections"].append(connection)
-    if request.param in {"static-probes", "static-lifecycle"}:
+    if request.param == "static-probes":
         gateway["gateway"]["tunnel_probes"] = {
             name: {"source_ip": "10.200.1.1", "target_ip": "10.200.2.1"}
             for name in ("preferred", "backup")
