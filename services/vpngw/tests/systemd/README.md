@@ -59,6 +59,14 @@ are measured rather than rejected. Traffic must recover. Each archived
 and fault-window packet measurements. Loss windows include the adjacent bounding
 replies, and an unrecovered window cannot be reported as zero loss.
 
+Use `--static-recovery-traffic-only` instead of `--static-recovery-only` to
+qualify current traffic recovery without requiring the proposed SA-preservation
+or trap-only policy. The same native faults, qualification gates, packet windows,
+losing-path cleanup and stability checks still run. Contract deviations remain
+in the evidence as observations. This mode does not qualify the proposed contract.
+`--case-filter test_case_7` selects only that case in either lane and records the
+filtered collection, so a partial trial cannot be presented as all seven cases.
+
 Run `python3 tests/systemd/run.py` from the service directory. This explicitly
 builds and starts a disposable Ubuntu 24.04 container with systemd as PID 1,
 then removes its uniquely named container and image. Docker and a Linux kernel
