@@ -192,6 +192,13 @@ class Scenario:
     def select(self, name, *, seconds=RECOVERY_SECONDS):
         def settled(sample):
             operation = sample["operation"]
+            if (
+                operation is not None
+                and operation["target"] == name
+                and operation["phase"] == "failed"
+                and operation["result"] == "suspension-scope-unproven"
+            ):
+                pytest.fail("Recovery stopped at terminal suspension-scope-unproven")
             return (
                 sample["selected"] == name
                 and sample["health"].get("site") == "healthy"
