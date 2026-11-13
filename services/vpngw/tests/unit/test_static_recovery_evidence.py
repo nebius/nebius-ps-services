@@ -1,5 +1,6 @@
 """Evidence regressions: a running packet source must not hide the outage tail."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -97,8 +98,9 @@ def test_plain_peer_uses_standard_responder_config_for_both_paths():
     assert [interface["name"] for interface in interfaces] == ["xfrm0", "xfrm1"]
 
 
-def test_snapshot_accepts_text_xfrm_policy_from_json_flag_and_redacts_settings(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("json_output", [False, True], ids=["text-fallback", "native-json"])
+def test_snapshot_accepts_both_xfrm_formats_and_redacts_settings(
+    tmp_path, monkeypatch, json_output
 ):
     policy = (
         "src 10.0.0.0/24 dst 10.1.0.0/24\n"
@@ -106,6 +108,26 @@ def test_snapshot_accepts_text_xfrm_policy_from_json_flag_and_redacts_settings(
         "\ttmpl src 192.0.2.1 dst 192.0.2.2 proto esp reqid 1 mode tunnel\n"
         "\tif_id 0x64\n"
     )
+    if json_output:
+        policy = json.dumps(
+            [
+                {
+                    "src": "10.0.0.0/24",
+                    "dst": "10.1.0.0/24",
+                    "dir": "out",
+                    "if_id": 100,
+                    "tmpl": [
+                        {
+                            "src": "192.0.2.1",
+                            "dst": "192.0.2.2",
+                            "proto": "esp",
+                            "reqid": 1,
+                            "mode": "tunnel",
+                        }
+                    ],
+                }
+            ]
+        )
     config = tmp_path / "swanctl.conf"
     config.write_text(
         "connections {\n  preferred {\n    keyingtries = 0\n  }\n}\n"
@@ -125,5 +147,5 @@ def test_snapshot_accepts_text_xfrm_policy_from_json_flag_and_redacts_settings(
     )
     evidence = static_recovery_driver.snapshot(selector, SimpleNamespace(run=run), 0)
     assert int(evidence["policies"][0]["reqid"]) == 1
-    assert int(evidence["policies"][0]["if_id"], 0) == 100
+    assert int(str(evidence["policies"][0]["if_id"]), 0) == 100
     assert evidence["settings"] == {"preferred": {"keyingtries": "0"}}
