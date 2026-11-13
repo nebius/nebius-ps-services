@@ -68,6 +68,7 @@ def snapshot(selector: TunnelController, effects: NativeTunnelEffects, started: 
         "selected": selector.state["selected"].get("site", "preferred"),
         "health": selector.state["health"],
         "preferred_qualification": selector.preferred_observations,
+        "static_recovery_observations": getattr(selector, "static_recovery_observations", None),
         "operation": operation,
         "sas": sas,
         "settings": loaded_settings(SWANCTL_CONF.read_text()),

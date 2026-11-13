@@ -21,6 +21,8 @@ import pytest
 from test_ha_tunnel_native import native_paths as native_paths
 from tests.systemd.static_recovery_evidence import child_signatures, packet_report
 
+from nebius_vpngw.ipsec_observation import command as ipsec_command
+
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
@@ -41,6 +43,7 @@ class Scenario:
         self.directory = directory
         self.record_property = record_property
         self.events = []
+        self.contract_failures = []
         self.blocked = set()
         self.traffic = []
         self.controller = None
@@ -53,6 +56,15 @@ class Scenario:
         value = {"event": event, "at": time.time(), **fields}
         self.events.append(value)
         return value["at"]
+
+    def contract(self, condition, message):
+        if condition:
+            return
+        self.contract_failures.append(message)
+        self.mark("contract-failed", message=message)
+
+    def verify_contract(self):
+        assert not self.contract_failures, "\n".join(self.contract_failures)
 
     def spawn(self, endpoint, argv, output):
         return subprocess.Popen(
@@ -204,16 +216,28 @@ class Scenario:
         observed = self.wait(lambda sample: bool(child_signatures(sample, "backup")))
         before = child_signatures(observed, "backup")
         self.mark("backup-established", signatures=sorted(before))
-        assert self.initial_settings["backup"]["dpd_action"] == "restart", (
-            "Backup was created without the recovery policy required for SA-preserving promotion"
+        self.contract(
+            self.initial_settings["backup"]["dpd_action"] == "restart",
+            "Backup was created without dpd_action=restart required for SA-preserving promotion",
         )
-        assert self.initial_settings["backup"]["keyingtries"] == "0"
+        self.contract(
+            self.initial_settings["backup"]["keyingtries"] == "0",
+            "Backup was created without keyingtries=0",
+        )
         sample = self.select("backup")
-        assert sample["settings"]["backup"]["start_action"] == "trap"
-        assert sample["settings"]["backup"]["dpd_action"] == "restart"
-        assert sample["settings"]["backup"]["keyingtries"] == "0"
-        assert child_signatures(sample, "backup") == before, "Promotion recreated or added a CHILD"
+        for setting, expected in (
+            ("start_action", "trap"), ("dpd_action", "restart"), ("keyingtries", "0")
+        ):
+            self.contract(
+                sample["settings"]["backup"][setting] == expected,
+                f"Promoted backup did not have {setting}={expected}",
+            )
+        self.contract(
+            child_signatures(sample, "backup") == before,
+            "Promotion recreated or added a CHILD",
+        )
         self.clean()
+        self.mark("backup-carrying-traffic")
         self.assert_cold("preferred")
 
     def both_fail(self):
@@ -240,7 +264,13 @@ class Scenario:
 
     def finish_on(self, winner):
         sample = self.select(winner)
-        assert sample["settings"][winner]["start_action"] == "trap"
+        # Trap-only promotion was requested for the backup. The preferred
+        # connection retains its configured native trap/start behavior.
+        expected_start = "trap" if winner == "backup" else "trap|start"
+        self.contract(
+            sample["settings"][winner]["start_action"] == expected_start,
+            f"Selected {winner} did not have start_action={expected_start}",
+        )
         self.clean()
         loser = "backup" if winner == "preferred" else "preferred"
         self.assert_cold(loser)
@@ -253,6 +283,7 @@ class Scenario:
                 assert current["selected"] == "backup"
 
             self.hold(10, backup_remains_selected)
+        self.verify_contract()
 
     @staticmethod
     def assert_stable(sample, winner, loser):
@@ -260,6 +291,25 @@ class Scenario:
         assert not sample["sas"].get(loser), "Losing path restarted after demotion"
 
     def close(self):
+        # Read-only, key-free observations from both independent sites. These
+        # commands never repair routes, SAs or configuration to advance a test.
+        diagnostics = {}
+        for name, endpoint in (("gateway", self.gateway), ("peer", self.peer)):
+            commands = {
+                "sas": ipsec_command(),
+                "states": ("ip", "xfrm", "state", "list", "nokeys"),
+                "policies": ("ip", "-s", "xfrm", "policy"),
+                "routes": ("ip", "-j", "-4", "route", "show", "table", "all"),
+                "xfrm_stat": ("cat", "/proc/net/xfrm_stat"),
+            }
+            diagnostics[name] = {}
+            for label, argv in commands.items():
+                try:
+                    result = endpoint.command(*argv)
+                    diagnostics[name][label] = result.stdout
+                except (AssertionError, OSError, subprocess.SubprocessError) as error:
+                    diagnostics[name][label] = {"error": type(error).__name__}
+        (self.directory / "native-final.json").write_text(json.dumps(diagnostics, indent=2))
         # Preserve all packets, including leading/trailing losses, even on a red test.
         for process, output, _path in self.traffic:
             if process.poll() is None:
@@ -283,7 +333,11 @@ class Scenario:
             (self.directory / "controller.jsonl").write_bytes(self.observations.read_bytes())
         if self.commands.exists():
             (self.directory / "commands.jsonl").write_bytes(self.commands.read_bytes())
-        summary = {"events": self.events, "directions": {}}
+        summary = {
+            "events": self.events,
+            "contract_failures": self.contract_failures,
+            "directions": {},
+        }
         for _process, _output, path in self.traffic:
             report = packet_report(path.read_text())
             report.pop("replies")
@@ -316,6 +370,7 @@ def test_case_1_primary_returns_before_backup_qualifies(scenario):
     scenario.clean()
     scenario.assert_cold("backup")
     scenario.hold(10, lambda sample: scenario.assert_stable(sample, "preferred", "backup"))
+    scenario.verify_contract()
 
 
 def test_case_2_primary_stays_down_backup_promoted_without_sa_recreation(scenario):
