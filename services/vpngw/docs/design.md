@@ -8848,6 +8848,18 @@ filesystem and scheduling latency remain subject to measured qualification.
 Focused regression and native Static/BGP VICI/kernel crash counterfactuals pass.
 Installed-artifact and live gateway crash-replay qualification remain pending.
 
+The controller emits key-free `VPNGW_TUNNEL_DIAGNOSTIC` JSON lines to stderr,
+captured by systemd without changing CLI JSON stdout. Each line carries a process
+ID, process-local sequence and real monotonic timestamp. Every tunnel step records
+start, finish and skip gates. Static recovery records continuity resets, delay and
+retry waits, native backup proof, inner-peer ping return code or exception type,
+confirmations and admission. Authority refusals identify boolean gate failures.
+Per-CHILD kernel proof rejections are distinguished from the final path result so
+rekey overlap cannot be mistaken for an aggregate failure. Events contain no raw
+configuration, command output, key material or exception messages. The sink is
+best effort and never consumes injected decision clocks or changes recovery
+policy. Missing sequence numbers or an interrupted step expose observation gaps.
+
 A daemon can automatically restart before the recovery owner observes a failed
 unit. Detect lost loaded configuration using the shared complete VICI
 connection and shared-key identifier inventory, compared with the canonical

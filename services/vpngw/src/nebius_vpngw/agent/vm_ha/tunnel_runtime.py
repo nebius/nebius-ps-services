@@ -38,6 +38,7 @@ from ..strongswan_renderer import (
 from ..vm_ha_checkpoint import controller_checkpoint_from_dict
 from ..vm_ha_controller import ActionKind, ControllerAction, DataPlaneMode
 from . import kernel_teardown
+from .diagnostics import diagnostic
 from .runtime import (
     CommandRunner,
     _advertised_bgp_prefixes,
@@ -286,7 +287,15 @@ class NativeTunnelEffects(Generic[AuthorityT]):
     def _path_health(self, policy: ConnectionPolicy, target: str, *, selected: bool) -> Health:
         try:
             return self.observer.observe(self._observed_policy(policy), target, selected=selected)
-        except (OSError, RuntimeError, ValueError, KeyError, TypeError):
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
+            diagnostic(
+                "path-health",
+                connection=policy.name,
+                target=target,
+                reason="observer-unavailable",
+                health=Health.UNKNOWN.value,
+                error_type=type(error).__name__,
+            )
             return Health.UNKNOWN
 
     def probe_backup(self, policy: ConnectionPolicy, target: str, authority: AuthorityT) -> Health:
@@ -298,22 +307,57 @@ class NativeTunnelEffects(Generic[AuthorityT]):
         """
         observed = self.probe_preferred(policy, target, authority)
         if observed is not Health.HEALTHY:
+            diagnostic(
+                "backup-confirmation-result",
+                connection=policy.name,
+                target=target,
+                reason="initial-probe-not-healthy",
+                health=observed.value,
+            )
             return observed
         probe = self.cfg.get("gateway", {}).get("tunnel_probes", {}).get(target)
         if probe is None:
             # The default inner-peer path already issued a fresh native ping.
-            return observed if self.active(authority) else Health.UNKNOWN
+            active = self.active(authority)
+            diagnostic(
+                "backup-confirmation-result",
+                connection=policy.name,
+                target=target,
+                reason="fresh-inner-peer" if active else "authority-after-probe",
+                health=observed.value if active else Health.UNKNOWN.value,
+            )
+            return observed if active else Health.UNKNOWN
         # Optional configured probes have hysteresis that can be cached for the
         # configured interval. Every confirmation additionally needs a distinct
         # source/interface-bound ping, never two counts of that cached result.
         observed = self.observe_readonly(policy, target, selected=False)
-        return observed if self.active(authority) else Health.UNKNOWN
+        active = self.active(authority)
+        diagnostic(
+            "backup-confirmation-result",
+            connection=policy.name,
+            target=target,
+            reason="fresh-configured-probe" if active else "authority-after-probe",
+            health=observed.value if active else Health.UNKNOWN.value,
+        )
+        return observed if active else Health.UNKNOWN
 
     def probe_preferred(
         self, policy: ConnectionPolicy, target: str, authority: AuthorityT
     ) -> Health:
         """Bounded owner-only initiation/probe; never change workload route selection."""
-        if policy.mode != "static" or not self.active(authority):
+        diagnostic("backup-probe-started", connection=policy.name, target=target)
+        if policy.mode != "static":
+            diagnostic(
+                "backup-probe-refused", connection=policy.name, target=target, reason="not-static"
+            )
+            return Health.UNKNOWN
+        if not self.active(authority):
+            diagnostic(
+                "backup-probe-refused",
+                connection=policy.name,
+                target=target,
+                reason="inactive-authority-before-lock",
+            )
             return Health.UNKNOWN
         descriptor = (
             None
@@ -324,10 +368,22 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             if descriptor is not None:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if not self.active(authority):
+                diagnostic(
+                    "backup-probe-refused",
+                    connection=policy.name,
+                    target=target,
+                    reason="inactive-authority-under-lock",
+                )
                 return Health.UNKNOWN
             cfg = self._effective(authority)
             inventory = authorized_configuration(cfg)
             if target not in inventory.connections:
+                diagnostic(
+                    "backup-probe-refused",
+                    connection=policy.name,
+                    target=target,
+                    reason="target-not-authorized",
+                )
                 return Health.UNKNOWN
             tunnel = next(
                 tunnel
@@ -339,30 +395,77 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             source, peer = tunnel.get("inner_local_ip"), tunnel.get("inner_remote_ip")
             if probe is None:
                 if not source or not peer or not tunnel.get("inner_cidr"):
+                    diagnostic(
+                        "backup-probe-refused",
+                        connection=policy.name,
+                        target=target,
+                        reason="missing-inner-addresses",
+                    )
                     return Health.UNKNOWN
                 network = ipaddress.ip_network(tunnel["inner_cidr"], strict=False)
                 if (
                     ipaddress.ip_address(source) not in network
                     or ipaddress.ip_address(peer) not in network
                 ):
+                    diagnostic(
+                        "backup-probe-refused",
+                        connection=policy.name,
+                        target=target,
+                        reason="inner-addresses-outside-network",
+                    )
                     return Health.UNKNOWN
             self.effect_deadline = self.clock() + 5
             health = self._path_health(policy, target, selected=False)
+            diagnostic(
+                "backup-native-health",
+                connection=policy.name,
+                target=target,
+                health=health.value,
+                reason="before-initiation",
+            )
             if health is Health.DOWN:
                 if not self.active(authority):
+                    diagnostic(
+                        "backup-probe-refused",
+                        connection=policy.name,
+                        target=target,
+                        reason="authority-before-initiation",
+                    )
                     return Health.UNKNOWN
                 # keyingtries=1 and start_action=none bound the explicit attempt;
                 # no trap or native autonomous restart is enabled for this path.
                 self.run(("swanctl", "--initiate", "--child", target, "--timeout", "1"))
                 health = self._path_health(policy, target, selected=False)
+                diagnostic(
+                    "backup-native-health",
+                    connection=policy.name,
+                    target=target,
+                    health=health.value,
+                    reason="after-initiation",
+                )
             if health is not Health.HEALTHY:
+                diagnostic(
+                    "backup-probe-result",
+                    connection=policy.name,
+                    target=target,
+                    reason="native-health-not-healthy",
+                    health=health.value,
+                )
                 return health
             if probe is not None:
                 # Managed VPN peers need not answer their synthetic inner IP.
                 # The configured probe already enforces assigned source, exact
                 # XFRM interface, timeout and existing health hysteresis.
                 health = self.observe(policy, target, selected=False)
-                return health if self.active(authority) else Health.UNKNOWN
+                active = self.active(authority)
+                diagnostic(
+                    "backup-probe-result",
+                    connection=policy.name,
+                    target=target,
+                    reason="configured-probe" if active else "authority-after-configured-probe",
+                    health=health.value if active else Health.UNKNOWN.value,
+                )
+                return health if active else Health.UNKNOWN
             path = next(path for path in policy.paths if path.name == target)
             addresses = json.loads(
                 self.run(("ip", "-j", "-4", "address", "show", "dev", path.interface))
@@ -370,14 +473,43 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             if not any(
                 a.get("local") == source for row in addresses for a in row.get("addr_info", [])
             ):
+                diagnostic(
+                    "backup-probe-refused",
+                    connection=policy.name,
+                    target=target,
+                    reason="inner-source-not-assigned",
+                )
                 return Health.UNKNOWN
+            diagnostic("inner-ping-started", connection=policy.name, target=target)
             self.run(("ping", "-n", "-c", "1", "-I", path.interface, "-I", source, "-W", "1", peer))
-            return (
-                self.observe(policy, target, selected=False)
-                if self.active(authority)
-                else Health.UNKNOWN
+            diagnostic("inner-ping-returned", connection=policy.name, target=target)
+            # Preserve the existing authority-before-final-observation order.
+            if self.active(authority):
+                health = self.observe(policy, target, selected=False)
+                diagnostic(
+                    "backup-probe-result",
+                    connection=policy.name,
+                    target=target,
+                    reason="after-inner-ping",
+                    health=health.value,
+                )
+                return health
+            diagnostic(
+                "backup-probe-refused",
+                connection=policy.name,
+                target=target,
+                reason="authority-after-inner-ping",
             )
-        except (RuntimeError, OSError, ValueError, TypeError, KeyError, StopIteration):
+            return Health.UNKNOWN
+        except (RuntimeError, OSError, ValueError, TypeError, KeyError, StopIteration) as error:
+            diagnostic(
+                "backup-probe-result",
+                connection=policy.name,
+                target=target,
+                reason="exception",
+                error_type=type(error).__name__,
+                health=Health.UNKNOWN.value,
+            )
             return Health.UNKNOWN
         finally:
             self.effect_deadline = None
@@ -404,12 +536,21 @@ class NativeTunnelEffects(Generic[AuthorityT]):
         limit = 3.0
         if self.effect_deadline is not None:
             limit = min(limit, self.effect_deadline - self.clock())
+        ping = bool(argv) and argv[0] == "ping"
         if limit <= 0:
+            if ping:
+                diagnostic("inner-ping-command", reason="deadline-exhausted")
             raise RuntimeError("HA tunnel effect deadline exhausted")
         try:
             result = (self.command_runner or _run_command)(argv, limit)
-        except (OSError, subprocess.SubprocessError, TimeoutError):
+        except (OSError, subprocess.SubprocessError, TimeoutError) as error:
+            if ping:
+                diagnostic(
+                    "inner-ping-command", reason="exception", error_type=type(error).__name__
+                )
             raise RuntimeError("HA tunnel native observation or effect is unavailable") from None
+        if ping:
+            diagnostic("inner-ping-command", reason="returned", returncode=result.returncode)
         if result.returncode != 0:
             raise RuntimeError("HA tunnel native command failed")
         return result.stdout
@@ -1249,6 +1390,42 @@ class ControllerTunnelRuntime:
                 )
             )
         ):
+            try:
+                reasons = []
+                for reason, failed in (
+                    ("apply-locked", snapshot.apply_locked),
+                    ("service-unhealthy", not preparing and not snapshot.readiness.service_healthy),
+                    ("sample-incomplete", not preparing and not snapshot.readiness.sample_complete),
+                    ("local-defects", not preparing and bool(snapshot.readiness.local_defects)),
+                    ("transfer-inhibited", snapshot.transfer_inhibited),
+                    ("transfer-intent", snapshot.transfer_intent is not None),
+                    ("emergency-active-only", snapshot.emergency_active_only),
+                    ("standby-replacement-inhibited", snapshot.standby_replacement_inhibited),
+                    ("pending-action", pending is not None and not activation_retry),
+                    (
+                        "not-active-mode",
+                        snapshot.data_plane_mode is not DataPlaneMode.ACTIVE
+                        and not resuming_fenced
+                        and not preparing,
+                    ),
+                    (
+                        "attachment-not-exact",
+                        not snapshot.cloud.local_attachment_exact(snapshot.local_node_id),
+                    ),
+                    (
+                        "preparation-continuity-invalid",
+                        preparation and checkpoint.ownership_continuity_invalidated,
+                    ),
+                    (
+                        "preparation-boot-mismatch",
+                        preparation and snapshot.guard_boot_id != snapshot.boot_id,
+                    ),
+                ):
+                    if failed:
+                        reasons.append(reason)
+                diagnostic("authority-refused", reasons=reasons)
+            except Exception:
+                diagnostic("authority-refused", reason="diagnostic-flags-unavailable")
             return None
         peer = snapshot.peer_heartbeat
         if (
@@ -1258,6 +1435,19 @@ class ControllerTunnelRuntime:
             or snapshot.peer_received_at is None
             or not 0 <= snapshot.now - snapshot.peer_received_at < 10
         ):
+            reasons = []
+            if peer is None:
+                reasons.append("peer-unavailable")
+            else:
+                if not peer.tunnel_capability:
+                    reasons.append("peer-no-tunnel-capability")
+                if peer.generation_id != snapshot.local_generation_id:
+                    reasons.append("peer-generation-mismatch")
+            if snapshot.peer_received_at is None:
+                reasons.append("peer-receipt-unavailable")
+            elif not 0 <= snapshot.now - snapshot.peer_received_at < 10:
+                reasons.append("peer-receipt-stale")
+            diagnostic("authority-refused", reasons=reasons)
             return None
         authority = Authority(
             snapshot.cluster_id,
@@ -1268,7 +1458,9 @@ class ControllerTunnelRuntime:
             snapshot.local_generation_id,
         )
         if preparation and (not preparing or state["authority"] != asdict(authority)):
+            diagnostic("authority-refused", reason="preparation-authority-mismatch")
             return None
+        diagnostic("authority-accepted")
         return authority
 
     def revalidate(self, authority: Authority) -> bool:
@@ -1316,12 +1508,29 @@ class ControllerTunnelRuntime:
         return True
 
     def step(self) -> None:
+        started = time.monotonic()
+        diagnostic("step-started", started_monotonic=started)
+        try:
+            self._step()
+        except Exception as error:
+            diagnostic("step-failed", error_type=type(error).__name__)
+            raise
+        finally:
+            diagnostic(
+                "step-finished",
+                started_monotonic=started,
+                elapsed_seconds=time.monotonic() - started,
+            )
+
+    def _step(self) -> None:
         from ..vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
 
         if not connection_policies(self.cfg):
+            diagnostic("step-skipped", reason="no-policies")
             return
         descriptor = _acquire_rearm_lock(self.state_dir / REARM_LOCK_PATH.name, timeout_seconds=0.0)
         if descriptor is None:
+            diagnostic("step-skipped", reason="rearm-lock-busy")
             return
         try:
             # Apply owns generation adoption and passive materialization. A
@@ -1330,6 +1539,7 @@ class ControllerTunnelRuntime:
             # strict inhibition under the lock; never infer authority from a
             # cached status or bypass the snapshot's retirement checks.
             if self.controller.snapshots.providers.apply_lock_operation_id() is not None:
+                diagnostic("step-skipped", reason="apply-locked")
                 return
             selector = TunnelController(
                 self.cfg,
@@ -1366,6 +1576,7 @@ class ControllerTunnelRuntime:
             authority = self.authority()
             self._consume_request(selector, authority)
             if authority is None:
+                diagnostic("step-skipped", reason="authority-unavailable")
                 snapshot = self.controller.snapshots.last_snapshot
                 if (
                     snapshot is not None
@@ -1387,7 +1598,9 @@ class ControllerTunnelRuntime:
                     selector.state["episode"]["healthy_since"] = None
                     selector._save()
                 self.restart_pending = False
+            diagnostic("selector-tick-started")
             selector.tick(authority, self.clock())
+            diagnostic("selector-tick-finished")
             effective = effective_config(self.cfg, selector.state, authority)
             # Export expectations follow exactly the rendered operational policy.
             exports = dict(self.base_exports)
