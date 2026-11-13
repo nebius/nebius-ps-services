@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 from test_static_recovery_lifecycle import Scenario
 from test_static_recovery_lifecycle import native_paths as native_paths
-from tests.systemd.static_recovery_evidence import bounded_packet_window
 from tests.systemd.static_recovery_driver import loaded_settings
+from tests.systemd.static_recovery_evidence import bounded_packet_window
 
 from nebius_vpngw.agent.vm_ha.tunnel_observation import parse_sas
 from nebius_vpngw.ipsec_observation import command as ipsec_command
