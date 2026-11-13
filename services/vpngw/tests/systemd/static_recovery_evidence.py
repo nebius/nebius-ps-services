@@ -82,3 +82,23 @@ def child_signatures(snapshot: dict, name: str) -> set[tuple]:
                 )
             )
     return signatures
+
+
+def bounded_packet_window(report, start, end):
+    replies = report["replies"]
+    preceding = [row for row in replies if row[0] <= start]
+    following = [row for row in replies if row[0] >= end]
+    if not preceding or not following:
+        return {"complete": False}
+    first, last = preceding[-1], following[0]
+    enclosed = [row for row in replies if first[1] <= row[1] <= last[1]]
+    gaps = []
+    for previous, current in zip(enclosed, enclosed[1:], strict=False):
+        gaps.append(current[0] - previous[0])
+    return {
+        "complete": True,
+        "measurement_start_at": first[0],
+        "measurement_end_at": last[0],
+        "unanswered_between_bounding_replies": last[1] - first[1] + 1 - len(enclosed),
+        "maximum_reply_gap_seconds": max(gaps, default=0),
+    }

@@ -5,7 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 from tests.systemd import static_recovery_driver
-from tests.systemd.static_recovery_evidence import child_signatures, packet_report
+from tests.systemd.static_recovery_evidence import (
+    bounded_packet_window,
+    child_signatures,
+    packet_report,
+)
 from tests.systemd.static_recovery_peer import peer_config, peer_interfaces
 
 
@@ -48,6 +52,19 @@ def test_icmp_error_is_not_mistaken_for_success():
     )
     assert report["unique_replies"] == 0
     assert report["unanswered"] == 1
+
+
+def test_packet_window_counts_loss_at_both_measurement_boundaries():
+    report = {"replies": [(1.0, 1), (1.6, 4), (2.0, 6), (2.2, 7)]}
+    measured = bounded_packet_window(report, 1.1, 1.9)
+    assert measured["complete"] is True
+    assert measured["unanswered_between_bounding_replies"] == 3
+    assert measured["maximum_reply_gap_seconds"] == pytest.approx(0.6)
+
+
+def test_packet_window_without_recovery_cannot_report_zero_loss():
+    report = {"replies": [(1.0, 1), (1.2, 2)]}
+    assert bounded_packet_window(report, 1.1, 2.0) == {"complete": False}
 
 
 def test_extra_child_changes_signature_even_when_ike_and_reqid_match():

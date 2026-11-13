@@ -87,6 +87,14 @@ class Scenario:
             ],
             self.controller_log,
         )
+        self.start_traffic()
+        self.wait(lambda sample: sample["selected"] == "preferred", seconds=15)
+        self.clean(5)
+        self.assert_cold("backup")
+        self.initial_settings = self.latest()["settings"]
+        self.mark("baseline-qualified")
+
+    def start_traffic(self):
         for direction, source, target in (
             ("outbound", self.gateway, self.peer),
             ("inbound", self.peer, self.gateway),
@@ -113,11 +121,6 @@ class Scenario:
                 output,
             )
             self.traffic.append((process, output, path))
-        self.wait(lambda sample: sample["selected"] == "preferred", seconds=15)
-        self.clean(5)
-        self.assert_cold("backup")
-        self.initial_settings = self.latest()["settings"]
-        self.mark("baseline-qualified")
 
     def reports(self):
         reports = []

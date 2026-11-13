@@ -47,6 +47,18 @@ It substitutes no health result or controller clock. This models slow work, not
 actual cloud snapshot performance. The seven ordinary lifecycle cases use no
 injected delay. Cloud authority remains frozen in both lanes.
 
+Run `python3 tests/systemd/run.py --static-start-action-only --report /tmp/start-action.json`
+for an exploratory native A/B comparison. Two interleaved trials per setting
+reload an established SA from `none` to either `trap` or `trap|start`, observe
+bidirectional ICMP, block the active outer path for twenty seconds, then measure
+recovery. Both variants retain `dpd_action=restart` and `keyingtries=0`.
+No product controller runs in this lane. It isolates strongSwan reload behavior
+from controller qualification, scoped teardown and route movement. SA changes
+are measured rather than rejected. Traffic must recover. Each archived
+`start-action-comparison.json` retains exact SA identities and separate reload
+and fault-window packet measurements. Loss windows include the adjacent bounding
+replies, and an unrecovered window cannot be reported as zero loss.
+
 Run `python3 tests/systemd/run.py` from the service directory. This explicitly
 builds and starts a disposable Ubuntu 24.04 container with systemd as PID 1,
 then removes its uniquely named container and image. Docker and a Linux kernel
