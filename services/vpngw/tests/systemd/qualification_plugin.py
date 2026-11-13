@@ -40,6 +40,9 @@ def pytest_runtest_logreport(report) -> None:
     _state.setdefault("durations_seconds", {}).setdefault(report.nodeid, {})[report.when] = (
         report.duration
     )
+    for key, value in report.user_properties:
+        if key == "static_lifecycle_packets":
+            _state.setdefault("static_lifecycle_packets", {})[report.nodeid] = json.loads(value)
     if report.when == "call":
         for driver in ("restart_driver", "owner_driver"):
             streams = {

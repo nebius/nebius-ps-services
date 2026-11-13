@@ -1,5 +1,39 @@
 # Isolated systemd and networkd regressions
 
+## Static recovery lifecycle contract
+
+Run `python3 tests/systemd/run.py --static-recovery-only --report /tmp/static-recovery.json`
+from the service directory for the seven test-first lifecycle cases. They use
+exactly two sites: site A runs the product tunnel controller and native effects;
+site B runs a plain strongSwan responder, independently configured without the
+product renderer or any peer-side gateway controller. Two addresses at site B
+represent primary and backup tunnel endpoints. These tests qualify one gateway's
+Static behavior, not a vendor's remote failover policy or cloud ownership.
+
+The cases cover primary return before backup qualification, SA-preserving backup
+promotion, both-path failure with either path returning first, both returning,
+neither returning, and remote initiation of the preferred path followed by the
+existing 60-second failback qualification. Promotion must use `trap`, preserve
+the validated SA set, and retain selected-path recovery settings. Demotion must
+stop the losing attempt and leave it locally cold. Later bounded qualification
+of the preferred path remains allowed. Duplicate initiation while a negotiation
+is pending is rejected. Tests never install traps or move routes on behalf of
+the product. Missing implementation is a failure, not an expected-failure mark.
+
+Continuous timestamped bidirectional ICMP runs through faults without the `-w`
+option that can stop ping at its first ICMP error. Reports retain final counters,
+individual reply gaps, controller commands, SA identities and transition times.
+The JSON report includes per-case packet summaries, and a sibling
+`.packets.tar.gz` retains the raw evidence even on failure. It excludes generated
+credential/configuration files. This focused lane has a one-hour execution bound
+and uses accelerated fixture retransmission timing, with no change to product
+timing. Ordinary runs skip it unless the disposable fixture is explicitly enabled.
+
+These are tests for proposed behavior. They do not claim that SA-preserving
+promotion or the slow-observation fix has been implemented. Run them red before
+changing the implementation, then require all seven to pass. Docker must be
+running on a Linux kernel with the XFRM support described below.
+
 Run `python3 tests/systemd/run.py` from the service directory. This explicitly
 builds and starts a disposable Ubuntu 24.04 container with systemd as PID 1,
 then removes its uniquely named container and image. Docker and a Linux kernel

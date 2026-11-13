@@ -31,6 +31,7 @@ def main() -> None:
     parser.add_argument("--modernization-only", action="store_true")
     parser.add_argument("--package-migration-only", action="store_true")
     parser.add_argument("--historical-package-upgrades", action="store_true")
+    parser.add_argument("--static-recovery-only", action="store_true")
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--candidate-wheel", type=Path)
     parser.add_argument("--release-wheels", type=Path)
@@ -60,6 +61,7 @@ def main() -> None:
                 args.ingress_only,
                 args.modernization_only,
                 args.package_migration_only,
+                args.static_recovery_only,
             )
         ):
             parser.error("historical qualification is a separate fixture lane")
@@ -73,6 +75,8 @@ def main() -> None:
         if not args.candidate_wheel or not args.candidate_wheel.is_file():
             parser.error("support-bundle qualification requires an existing --candidate-wheel")
         tests = ["/workspace/tests/integration/test_support_bundle_native.py"]
+    elif args.static_recovery_only:
+        tests = ["/workspace/tests/integration/test_static_recovery_lifecycle.py"]
     elif args.package_migration_only:
         tests = ["/workspace/tests/integration/test_runtime_modernization.py"]
     elif args.modernization_only:
@@ -212,6 +216,8 @@ def main() -> None:
             "qualification_plugin",
             *tests,
         ]
+        if args.static_recovery_only:
+            command.remove("-x")  # Keep results for all seven test-first cases.
         with evidence.with_suffix(".collection.log").open("x") as log:
             run(*command, "--collect-only", stdout=log, stderr=subprocess.STDOUT, timeout=60)
         declared = json.loads(
@@ -243,9 +249,25 @@ def main() -> None:
             )
         with evidence.with_suffix(".log").open("x") as log:
             # Keep the entire diagnostic stream, including subprocess timeouts.
-            run(*command, stdout=log, stderr=subprocess.STDOUT, timeout=2400)
+            run(
+                *command, stdout=log, stderr=subprocess.STDOUT,
+                timeout=3600 if args.static_recovery_only else 2400,
+            )
     finally:
         if created:
+            if args.static_recovery_only:
+                try:
+                    packets = subprocess.run(
+                        ["docker", "exec", name, "tar", "-C", "/tmp", "-czf", "-",
+                         "static-recovery-evidence"],
+                        capture_output=True, timeout=60,
+                    )
+                    if packets.returncode == 0:
+                        with evidence.with_suffix(".packets.tar.gz").open("xb") as archive:
+                            archive.write(packets.stdout)
+                except (OSError, subprocess.SubprocessError) as error:
+                    # Evidence export failure must not prevent container cleanup.
+                    evidence.with_suffix(".packets-error.txt").write_text(type(error).__name__)
             captured = subprocess.run(
                 ["docker", "exec", name, "cat", "/tmp/qualification.json"],
                 check=False,

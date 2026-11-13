@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 import yaml
 from test_strongswan_sessions import Endpoint, run
+from tests.systemd.static_recovery_peer import install_peer, peer_interfaces
 
 from nebius_vpngw.agent.vm_ha.tunnel_observation import parse_sas, xfrm_records
 from nebius_vpngw.ipsec_observation import command as ipsec_command
@@ -257,7 +258,8 @@ def native_paths(tmp_path, request):
     behind_nat = request.param == "static-nat"
     advertise = request.param != "bgp-no-advertise"
     suffix = uuid.uuid4().hex[:6]
-    namespaces = [f"ha-{suffix}-{i}" for i in range(3)]
+    count = 2 if request.param == "static-lifecycle" else 3
+    namespaces = [f"ha-{suffix}-{i}" for i in range(count)]
     nodes = []
     logs = []
     psk = secrets.token_hex(32)
@@ -287,6 +289,8 @@ def native_paths(tmp_path, request):
         ("site", ["preferred", "backup"], mode, "10.200.2.1/32"),
         ("other", ["unrelated"], "bgp" if mixed_static else "static", "10.201.2.1/32"),
     ]:
+        if request.param == "static-lifecycle" and name == "other":
+            continue
         connection = {
             "name": name,
             "routing_mode": routing,
@@ -312,11 +316,13 @@ def native_paths(tmp_path, request):
                 }
             )
         gateway["connections"].append(connection)
-    if request.param == "static-probes":
+    if request.param in {"static-probes", "static-lifecycle"}:
         gateway["gateway"]["tunnel_probes"] = {
             name: {"source_ip": "10.200.1.1", "target_ip": "10.200.2.1"}
             for name in ("preferred", "backup")
         }
+    if request.param == "static-lifecycle":
+        gateway["defaults"]["dpd"] = {"interval_seconds": 1, "timeout_seconds": 3}
     configs = [gateway]
     for connection in gateway["connections"]:
         peer = {
@@ -350,6 +356,8 @@ def native_paths(tmp_path, request):
             run("ip", "netns", "add", namespace)
             run("ip", "netns", "exec", namespace, "ip", "link", "set", "lo", "up")
         for peer_index, network in [(1, "192.0.2"), (2, "198.51.100")]:
+            if peer_index >= len(namespaces):
+                continue
             left, right = f"g{suffix}{peer_index}", f"p{suffix}{peer_index}"
             run("ip", "link", "add", left, "type", "veth", "peer", "name", right)
             for node_index, link, host in [(0, left, 1), (peer_index, right, 2)]:
@@ -408,7 +416,11 @@ def native_paths(tmp_path, request):
             prefix = ("ip", "netns", "exec", namespace)
             address = cfg["gateway"]["local_prefixes"][0]
             run(*prefix, "ip", "address", "add", address, "dev", "lo")
-            for endpoint in collect_tunnel_state(cfg)[2]:
+            if request.param == "static-lifecycle" and index > 0:
+                endpoints = peer_interfaces(cfg)
+            else:
+                endpoints = collect_tunnel_state(cfg)[2]
+            for endpoint in endpoints:
                 device = (
                     "eth1"
                     if index == 0 and endpoint["remote_public_ip"] == "198.51.100.2"
@@ -448,6 +460,11 @@ def native_paths(tmp_path, request):
             settings.write_text(
                 "charon {\n load_modular = yes\n reuse_ikesa = no\n install_routes = "
                 + ("no" if index == 0 or cfg["gateway"].get("local_asn") else "yes")
+                + (
+                    "\n retransmit_timeout = 0.5\n retransmit_base = 1.5\n retransmit_tries = 3\n"
+                    if request.param == "static-lifecycle"
+                    else "\n"
+                )
                 + """
  plugins {
   include /etc/strongswan.d/charon/*.conf
@@ -508,7 +525,10 @@ os.execv('/usr/sbin/charon-systemd',['/usr/sbin/charon-systemd'])
                 )
             )
         for node in nodes[1:]:
-            drive(node, "peer")
+            if request.param == "static-lifecycle":
+                install_peer(node)
+            else:
+                drive(node, "peer")
         drive(nodes[0], "materialize")
         for node, cfg in zip(nodes, configs, strict=True):
             if cfg["gateway"].get("local_asn"):
