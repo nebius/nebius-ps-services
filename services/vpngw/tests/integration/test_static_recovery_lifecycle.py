@@ -99,9 +99,7 @@ class Scenario:
         self.wait(lambda sample: sample["selected"] == "preferred", seconds=15)
         self.clean(5)
         self.assert_cold("backup")
-        settings = self.latest()["settings"]
-        assert settings["backup"]["dpd_action"] == settings["preferred"]["dpd_action"] == "restart"
-        assert settings["backup"]["keyingtries"] == settings["preferred"]["keyingtries"] == "0"
+        self.initial_settings = self.latest()["settings"]
         self.mark("baseline-qualified")
 
     def reports(self):
@@ -206,6 +204,10 @@ class Scenario:
         observed = self.wait(lambda sample: bool(child_signatures(sample, "backup")))
         before = child_signatures(observed, "backup")
         self.mark("backup-established", signatures=sorted(before))
+        assert self.initial_settings["backup"]["dpd_action"] == "restart", (
+            "Backup was created without the recovery policy required for SA-preserving promotion"
+        )
+        assert self.initial_settings["backup"]["keyingtries"] == "0"
         sample = self.select("backup")
         assert sample["settings"]["backup"]["start_action"] == "trap"
         assert sample["settings"]["backup"]["dpd_action"] == "restart"

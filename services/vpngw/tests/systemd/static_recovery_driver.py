@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml
 
 from nebius_vpngw.agent.strongswan_renderer import SWANCTL_CONF
-from nebius_vpngw.agent.vm_ha.tunnel_observation import parse_sas
+from nebius_vpngw.agent.vm_ha.tunnel_observation import parse_sas, xfrm_records
 from nebius_vpngw.agent.vm_ha.tunnel_runtime import NativeTunnelEffects, _run_command
 from nebius_vpngw.agent.vm_ha.tunnels import Authority, TunnelController
 from nebius_vpngw.ipsec_observation import command as ipsec_command
@@ -72,7 +72,7 @@ def snapshot(selector: TunnelController, effects: NativeTunnelEffects, started: 
         "sas": sas,
         "settings": loaded_settings(SWANCTL_CONF.read_text()),
         "routes": json.loads(effects.run(("ip", "-j", "-4", "route", "show"))),
-        "policies": json.loads(effects.run(("ip", "-j", "xfrm", "policy"))),
+        "policies": xfrm_records(effects.run(("ip", "-j", "xfrm", "policy")), policy=True),
     }
 
 

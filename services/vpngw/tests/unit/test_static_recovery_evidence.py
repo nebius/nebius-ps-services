@@ -1,6 +1,9 @@
 """Evidence regressions: a running packet source must not hide the outage tail."""
 
+from types import SimpleNamespace
+
 import pytest
+from tests.systemd import static_recovery_driver
 from tests.systemd.static_recovery_evidence import child_signatures, packet_report
 from tests.systemd.static_recovery_peer import peer_config, peer_interfaces
 
@@ -92,3 +95,35 @@ def test_plain_peer_uses_standard_responder_config_for_both_paths():
     interfaces = peer_interfaces(config)
     assert [interface["if_id"] for interface in interfaces] == [100, 101]
     assert [interface["name"] for interface in interfaces] == ["xfrm0", "xfrm1"]
+
+
+def test_snapshot_accepts_text_xfrm_policy_from_json_flag_and_redacts_settings(
+    tmp_path, monkeypatch
+):
+    policy = (
+        "src 10.0.0.0/24 dst 10.1.0.0/24\n"
+        "\tdir out priority 1\n"
+        "\ttmpl src 192.0.2.1 dst 192.0.2.2 proto esp reqid 1 mode tunnel\n"
+        "\tif_id 0x64\n"
+    )
+    config = tmp_path / "swanctl.conf"
+    config.write_text(
+        "connections {\n  preferred {\n    keyingtries = 0\n  }\n}\n"
+        "secrets {\n  test {\n    secret = must-not-be-exported\n  }\n}\n"
+    )
+    monkeypatch.setattr(static_recovery_driver, "SWANCTL_CONF", config)
+    monkeypatch.setattr(static_recovery_driver, "parse_sas", lambda _raw: [])
+
+    def run(argv):
+        if argv == ("ip", "-j", "xfrm", "policy"):
+            return policy
+        return "[]"
+
+    selector = SimpleNamespace(
+        state={"operation": None, "selected": {}, "health": {"site": "healthy"}},
+        preferred_observations={},
+    )
+    evidence = static_recovery_driver.snapshot(selector, SimpleNamespace(run=run), 0)
+    assert int(evidence["policies"][0]["reqid"]) == 1
+    assert int(evidence["policies"][0]["if_id"], 0) == 100
+    assert evidence["settings"] == {"preferred": {"keyingtries": "0"}}
