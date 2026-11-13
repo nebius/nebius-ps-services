@@ -1972,7 +1972,7 @@ def test_ha_static_late_backup_recovers_after_long_remote_failure_without_budget
     assert effects.current == AUTH
 
 
-@pytest.mark.parametrize("interrupt", ["healthy", "unknown", "gap", "rollback", "restart"])
+@pytest.mark.parametrize("interrupt", ["healthy", "unknown", "rollback", "restart"])
 def test_ha_static_delay_requires_continuous_monotonic_current_evidence(tmp_path, interrupt):
     effects, clock = Effects(), RecoveryClock()
     effects.health["preferred"] = Health.DOWN
@@ -1984,8 +1984,6 @@ def test_ha_static_delay_requires_continuous_monotonic_current_evidence(tmp_path
         recovery_tick(selector, clock, 20)
         effects.health["preferred"] = Health.DOWN
         resumed = 21
-    elif interrupt == "gap":
-        resumed = 31
     elif interrupt == "rollback":
         resumed = 10
     else:
@@ -2368,18 +2366,97 @@ def test_static_confirmation_spacing_starts_after_native_probe_completion(tmp_pa
     assert selector.state["operation"]["requested_verb"] == "automatic-recovery"
 
 
-def test_static_sample_gap_discards_first_confirmation_and_restarts_loss_delay(tmp_path):
+def test_static_poll_gap_retains_loss_but_expires_stale_confirmation(tmp_path):
     effects, clock = Effects(), RecoveryClock()
     effects.health["preferred"] = Health.DOWN
     selector = recovery_selector(tmp_path, effects, clock)
     for second in range(31):
         recovery_tick(selector, clock, second)
     assert selector.state["operation"] is None
-    for second in range(50, 85):
-        recovery_tick(selector, clock, second)
+    recovery_tick(selector, clock, 80)
+    record = selector.static_recovery_observations["site"]
+    assert record["since"] == 0
+    assert record["healthy"]["backup"] == {"at": 80, "count": 1}
     assert selector.state["operation"] is None
     recovery_tick(selector, clock, 85)
     assert selector.state["operation"]["requested_verb"] == "automatic-recovery"
+
+
+@pytest.mark.parametrize("slow_phase", ["selected-observation", "backup-probe"])
+def test_static_slow_synchronous_passes_preserve_loss_and_fresh_proofs(tmp_path, slow_phase):
+    effects, clock = Effects(), RecoveryClock()
+    effects.health["preferred"] = Health.DOWN
+    selector = recovery_selector(tmp_path, effects, clock)
+    proofs = []
+
+    def observe(policy, target, *, selected):
+        if slow_phase == "selected-observation":
+            clock.now += 11
+        return effects.health[target]
+
+    def probe(policy, target, authority):
+        if slow_phase == "backup-probe":
+            clock.now += 11
+        proofs.append(clock.now)
+        return Health.HEALTHY
+
+    effects.observe = observe
+    selector.backup_probe = probe
+    for _ in range(100):
+        selector.tick(AUTH, 1000 + clock.now)
+        if selector.state["operation"] is not None:
+            break
+        clock.now += 1
+
+    assert len(proofs) == 2
+    assert 5 <= proofs[1] - proofs[0] <= 30
+    assert selector.state["operation"]["requested_verb"] == "automatic-recovery"
+    assert selector.state["operation"]["deadline"] == 1000 + clock.now + 29
+    assert selector.state["episode"]["deadline"] == 1030
+    assert selector.state["episode"]["exhausted"] is True
+    expected_since = 11 if slow_phase == "selected-observation" else 0
+    assert selector.static_recovery_observations["site"]["since"] == expected_since
+
+
+@pytest.mark.parametrize("selected_health", [Health.HEALTHY, Health.UNKNOWN])
+def test_static_rechecks_selected_health_after_slow_backup_proof(tmp_path, selected_health):
+    effects, clock = Effects(), RecoveryClock()
+    effects.health["preferred"] = Health.DOWN
+    selector = recovery_selector(tmp_path, effects, clock)
+    for second in range(31):
+        recovery_tick(selector, clock, second)
+
+    def probe(policy, target, authority):
+        clock.now += 11
+        effects.health["preferred"] = selected_health
+        return Health.HEALTHY
+
+    selector.backup_probe = probe
+    recovery_tick(selector, clock, 35)
+    assert selector.state["operation"] is None
+    assert selector.state["health"]["site"] == selected_health.value
+    assert "site" not in selector.static_recovery_observations
+
+
+def test_static_confirmation_can_expire_during_final_authority_check(tmp_path):
+    effects, clock = Effects(), RecoveryClock()
+    effects.health["preferred"] = Health.DOWN
+    selector = recovery_selector(tmp_path, effects, clock)
+    for second in range(31):
+        recovery_tick(selector, clock, second)
+    calls = 0
+
+    def active(authority):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            clock.now += 31
+        return effects.revalidate(authority)
+
+    effects.active = active
+    recovery_tick(selector, clock, 35)
+    assert selector.state["operation"] is None
+    assert selector.static_recovery_observations["site"]["healthy"]["backup"]["count"] == 1
 
 
 def test_static_retry_requires_fresh_restoration_proof_after_terminal_cleanup(tmp_path):

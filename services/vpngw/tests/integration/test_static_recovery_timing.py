@@ -42,3 +42,16 @@ def test_slow_backup_proof_survives_the_next_controller_pass(scenario):
     assert record.get("healthy", {}).get("backup", {}).get("count", 0) >= 1, (
         "The next pass discarded a fresh successful backup proof"
     )
+    admitted = scenario.wait(
+        lambda sample: sample["operation"] is not None
+        and sample["operation"]["requested_verb"] == "automatic-recovery",
+        seconds=60,
+    )
+    assert 27 <= admitted["operation"]["deadline"] - admitted["at"] <= 30, (
+        "Slow probe work consumed the newly admitted operation's execution budget"
+    )
+    scenario.mark("slow-proof-recovery-admitted")
+    scenario.select("backup")
+    scenario.clean(5)
+    scenario.assert_cold("preferred")
+    scenario.mark("slow-proof-traffic-recovered")

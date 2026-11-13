@@ -15097,9 +15097,11 @@ The explicit HA adapter supplies per-connection, process-local Static recovery
 observations to the existing durable `TunnelController`. This ports origin's
 `da868ab` / `b9b739c` usable-backup selection principle without its superseded
 route writer. Observations bind the complete authority and current selected
-path. Confirmed DOWN health must persist for thirty monotonic seconds. Health,
-UNKNOWN, observation gaps over ten seconds, clock rollback, process restart or
-changed authority/selection conservatively restart that delay. The existing
+path. Confirmed DOWN observations must span thirty monotonic seconds. Health,
+UNKNOWN, clock rollback, process restart or changed authority/selection restart
+that delay. A slow pass or scheduling gap alone does not erase the observed loss
+window. On resumption, admission still needs current selected-path DOWN evidence
+and two fresh alternate-path proofs. The existing
 persisted thirty-second episode is never cleared or extended to grant authority.
 
 One bounded alternate-path probe per connection per poll uses the original
@@ -15123,10 +15125,19 @@ API. Two healthy proofs at least five seconds apart admit `automatic-recovery`.
 A first healthy alternative keeps the next probe slot for its second proof,
 avoiding stale confirmations in supported larger topologies while retaining
 bounded work per poll. UNKNOWN, failed or stale observations discard that proof.
+Successful backup proofs carry their own completion timestamp and count. The
+next probe starts at least five seconds after completion, and both proofs must
+remain within thirty seconds at admission, including final validation time.
+Selected-path health and active authority are rechecked after synchronous probing.
+A stale confirmation restarts proof counting without restarting the loss window
+or discarding bounded-attempt history. A pause with no sampled health is not
+treated as evidence that the selected path recovered.
 
 The accepted operation uses its own bounded twenty-nine-second deadline instead
 of clipping to an expired episode. It persists selection intent before native
-activation and route changes. Original exact IKE/kernel suspension scope,
+activation and route changes. Its wall-clock admission time includes monotonic
+elapsed work since tick entry, so slow probing does not consume that new budget.
+Original exact IKE/kernel suspension scope,
 writer exclusion, ownership checks before route writes and durable cleanup
 remain unchanged. No VM/cloud transfer, global forwarding or service restart
 port is added. Native effect failure records the sanitized result

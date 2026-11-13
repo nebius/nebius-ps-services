@@ -529,6 +529,7 @@ class TunnelController(Generic[AuthorityT]):
         if not math.isfinite(now):
             raise ValueError("tunnel clock must be finite")
         started = monotonic()
+        tick_started_at = self.monotonic()
         if not self.effects.revalidate(authority):
             if self.static_recovery_observations is not None:
                 diagnostic("static-recovery-reset", reason="tick-authority-revalidation")
@@ -624,7 +625,7 @@ class TunnelController(Generic[AuthorityT]):
             self._advance(authority, now, elapsed_seconds=monotonic() - started)
             return
         if self.static_recovery_observations is not None:
-            if self._recover_static(authority, health, now):
+            if self._recover_static(authority, health, now, tick_started_at):
                 return
         if episode is not None and episode["exhausted"]:
             return
@@ -655,19 +656,25 @@ class TunnelController(Generic[AuthorityT]):
                 self._begin(policy, policy.preferred, "automatic-failback", authority, now)
                 return
 
-    def _recover_static(self, authority: AuthorityT, health: dict[str, str], now: float) -> bool:
+    def _recover_static(
+        self, authority: AuthorityT, health: dict[str, str], now: float, tick_started_at: float
+    ) -> bool:
         """Admit a fresh usable backup after 30s of continuous selected-path loss.
 
         Observation is process-local and monotonic. Restart, unknown evidence,
-        missed samples and any authority/selection change restart the delay.
+        explicit health changes and any authority/selection change restart the delay.
         The accepted operation remains durable and uses its own bounded deadline.
         No exhausted episode is renewed, and no VM/cloud effect is available here.
         """
         records = self.static_recovery_observations
         assert records is not None
         observed_at = self.monotonic()
-        if not math.isfinite(observed_at):
+        if not math.isfinite(observed_at) or not math.isfinite(tick_started_at):
             diagnostic("static-recovery-reset", reason="nonfinite-clock")
+            records.clear()
+            return False
+        if observed_at < tick_started_at:
+            diagnostic("static-recovery-reset", reason="clock-backwards-during-observation")
             records.clear()
             return False
         for policy in self.policies.values():
@@ -700,8 +707,6 @@ class TunnelController(Generic[AuthorityT]):
                 reset = "binding-changed"
             elif observed_at < record["last"]:
                 reset = "clock-backwards"
-            elif observed_at - record["last"] > 10:
-                reset = "sample-gap"
             if reset is not None:
                 diagnostic(
                     "static-recovery-reset",
@@ -816,6 +821,7 @@ class TunnelController(Generic[AuthorityT]):
                 records.pop(policy.name, None)
                 continue
             record["probe_at"] = proof_at
+            record["last"] = proof_at
             diagnostic(
                 "static-recovery-probe-result",
                 connection=policy.name,
@@ -841,6 +847,18 @@ class TunnelController(Generic[AuthorityT]):
                 # Confirm this path next, instead of waiting a topology-sized
                 # rotation that can outlive every admissible proof window.
                 continue
+            selected_health = self.effects.observe(policy, selected, selected=True)
+            if selected_health is not Health.DOWN:
+                diagnostic(
+                    "static-recovery-reset",
+                    connection=policy.name,
+                    reason="selected-changed-before-admission",
+                    health=selected_health.value,
+                )
+                health[policy.name] = selected_health.value
+                records.pop(policy.name, None)
+                self._save()
+                continue
             if not self.effects.active(authority):
                 diagnostic(
                     "static-recovery-reset",
@@ -850,7 +868,21 @@ class TunnelController(Generic[AuthorityT]):
                 )
                 records.pop(policy.name, None)
                 return False
-            self._begin(policy, path.name, "automatic-recovery", authority, now)
+            admitted_at = self.monotonic()
+            if not math.isfinite(admitted_at) or admitted_at < proof_at:
+                records.pop(policy.name, None)
+                continue
+            if previous is None or admitted_at - previous["at"] > 30:
+                record["healthy"][path.name]["count"] = 1
+                diagnostic(
+                    "static-recovery-wait",
+                    connection=policy.name,
+                    target=path.name,
+                    reason="confirmation-expired-before-admission",
+                )
+                continue
+            admission_now = now + admitted_at - tick_started_at
+            self._begin(policy, path.name, "automatic-recovery", authority, admission_now)
             diagnostic(
                 "static-recovery-admitted",
                 connection=policy.name,

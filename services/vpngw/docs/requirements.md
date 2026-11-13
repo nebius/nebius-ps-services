@@ -3807,9 +3807,14 @@ REQ-033 where they conflict; their remaining safety obligations remain active.
   uses authenticated native SA/kernel identity plus assigned-source/interface-bound
   inner gateway reachability. This is a tunnel-path heuristic, not workload or
   remote-owner proof. No workload VM or configured workload probe is required.
-  Existing explicit probes remain optional. UNKNOWN, health,
-  observation gaps over ten seconds, clock rollback, process restart, or changed
-  authority/selection reset the delay. The existing persisted exhausted episode
+  Existing explicit probes remain optional. UNKNOWN, health, clock rollback,
+  process restart, or changed authority/selection reset the delay. Elapsed poll
+  time alone does not reset the observed loss window. Backup proof freshness is
+  independent: require two successful proofs at least five seconds apart and
+  within thirty seconds at admission. Recheck selected-path DOWN health and
+  active authority after synchronous probe work. A stale proof restarts only
+  confirmation counting. Start the new operation's execution budget at admission,
+  excluding time already spent observing and probing. The existing persisted exhausted episode
   is retained as evidence and never renewed. A late usable remote backup may
   admit a new bounded 29-second connection-only operation after that episode,
   including after a 180-second remote outage. Preserve exact suspension/kernel
