@@ -4,7 +4,6 @@ import json
 import subprocess
 from copy import deepcopy
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
@@ -2097,17 +2096,12 @@ def test_native_static_backup_route_uses_new_effect_deadline_after_old_episode_e
 
     def run(argv, timeout):
         assert timeout > 0
-        assert tuple(argv[:2]) == ("ip", "-batch")
-        assert Path(argv[2]).read_text().splitlines() == [
-            "route replace 10.1.0.0/16 dev xfrm1"
-        ]
         calls.append(tuple(argv))
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     effects.command_runner = run
     selector._advance(AUTH, 1282)
-    assert calls[0] == ("scope", "site")
-    assert len(calls) == 2
+    assert calls == [("scope", "site"), ("ip", "route", "replace", "10.1.0.0/16", "dev", "xfrm1")]
     assert rendered[0]["_ha_tunnel_selections"] == {"site": "backup"}
     assert read_state(tmp_path / STATE_NAME)["operation"]["phase"] == "verify"
     assert selector.state["operation"]["deadline"] == 1310
