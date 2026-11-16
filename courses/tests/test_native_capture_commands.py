@@ -228,7 +228,14 @@ raise SystemExit(7 if os.environ['FAILURE']=='client' else 0)
         text=True,
         timeout=15,
     )
-    assert result.returncode == expected, result.stderr
+    if result.returncode != expected:
+        evidence = [result.stdout, result.stderr]
+        job = tmp_path / "results" / lab / "jobs/123"
+        for path in sorted(job.rglob("*")):
+            if path.is_file() and (path.name == "result.json" or path.suffix in {".log", ".txt"}):
+                evidence.append(f"{path.relative_to(job)}:\n{path.read_text(errors='replace')}")
+        pytest.fail("Unexpected native capture exit code: " + str(result.returncode)
+                    + "\n" + "\n".join(evidence))
     assert (tmp_path / "server-stopped").exists()
     with pytest.raises(ProcessLookupError):
         os.kill(int((tmp_path / "server-ready").read_text()), 0)

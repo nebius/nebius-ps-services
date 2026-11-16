@@ -4,6 +4,10 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Keep commit contract checks aligned with the Implement loop reference that
+  owns source-drift retention guidance; verify both preservation and retained
+  integration evidence.
+
 - Remove the execution owner's remaining Git timeout. Long commit hooks use
   observed execution, bounded complete output and descendant cleanup before
   result parsing or recovery; seal-message bytes remain exact.

@@ -151,10 +151,12 @@ def _terraform_versions_block() -> str:
 
 def _terraform_providers_block(*, preconfigured_static: bool = False) -> str:
     if preconfigured_static:
-        return ('provider "nebius" {\n'
-                f"  module_name = var.{_PROVIDER_VAR_MODULE_NAME}\n"
-                f"  parent_id   = var.{_PROVIDER_VAR_PARENT_ID}\n"
-                "}\n")
+        return (
+            'provider "nebius" {\n'
+            f"  module_name = var.{_PROVIDER_VAR_MODULE_NAME}\n"
+            f"  parent_id   = var.{_PROVIDER_VAR_PARENT_ID}\n"
+            "}\n"
+        )
     return (
         'provider "nebius" {\n'
         f"  module_name = var.{_PROVIDER_VAR_MODULE_NAME}\n"

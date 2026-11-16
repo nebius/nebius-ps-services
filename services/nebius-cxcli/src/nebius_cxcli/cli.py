@@ -36747,7 +36747,9 @@ def _create_or_recreate_runtime_auth_profile(
     from .preconfigured_auth import enabled as static_auth_enabled
 
     if static_auth_enabled():
-        raise RuntimeError("Preconfigured static authentication cannot bootstrap or rotate IAM credentials")
+        raise RuntimeError(
+            "Preconfigured static authentication cannot bootstrap or rotate IAM credentials"
+        )
     _capture_runtime_auth_operator_environment()
     with _runtime_auth_project_lock(project_id=project_id, client_name=client_name):
         existing = _runtime_auth_cache_material(project_id=project_id, client_name=client_name)

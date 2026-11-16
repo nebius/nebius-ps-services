@@ -364,8 +364,9 @@ def init_nebius_sdk(
         if profile or config_file or workload_identity is not None or require_renewable_auth:
             raise RuntimeError("This operation cannot use preconfigured-static authentication")
         static = preconfigured_auth.load(parent_id)
-        return preconfigured_auth.client(static, endpoint=endpoint,
-                                         user_agent_prefix=NEBIUS_SDK_USER_AGENT_PREFIX)
+        return preconfigured_auth.client(
+            static, endpoint=endpoint, user_agent_prefix=NEBIUS_SDK_USER_AGENT_PREFIX
+        )
     if workload_identity is not None:
         from .workload_identity import workload_identity_sdk
 

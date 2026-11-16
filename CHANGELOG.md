@@ -6,6 +6,8 @@ project folder.
 
 ## [Unreleased]
 
+- Include native course capture evidence in failing lifecycle-test diagnostics.
+
 - Run current-branch commit-push, workflow statistics and task-acceptance
   regressions in the skills CI workflow.
 
@@ -13,6 +15,7 @@ project folder.
   waivers, shared merge/release authority, exact-candidate CI and recovery.
   Keep enrollment and effect workflows as deployment templates until separately
   authorized activation; ordinary protected merge and release remain available.
+  Validate ordinary and prepared broker profiles independently in CI.
 
 - Repair fork Required CI discovery when GitHub omits both run and commit PR
   associations. Resolve a unique current fork/ref with shared check-suite
