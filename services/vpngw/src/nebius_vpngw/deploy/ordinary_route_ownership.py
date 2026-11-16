@@ -210,6 +210,16 @@ class RouteJournal(Journal):
         state = self.snapshot()
         return state["bindings"] if state else {}
 
+    def retire_settled(self, expected: dict, parent: dict) -> None:
+        from .ordinary_replan import require_child_settled
+
+        if self._lock is None or self.state != expected:
+            raise RuntimeError("Route owner changed before retirement")
+        require_child_settled("routes", self.state, parent)
+        self.archive()
+        self.state["transaction"] = None
+        self.save()
+
     def transaction(self) -> dict | None:
         state = self.snapshot()
         return state["transaction"] if state else None

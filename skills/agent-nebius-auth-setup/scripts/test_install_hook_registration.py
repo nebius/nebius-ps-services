@@ -904,11 +904,11 @@ class AgentNebiusAuthHookInstallRegistrationTest(unittest.TestCase):
         self.assertIn("unchanged shared runtime", second.stdout)
         self.assertIn("files: unchanged 3", second.stdout)
         self.assertIn("files: unchanged 4", second.stdout)
-        self.assertIn("files: unchanged 7", second.stdout)
+        self.assertIn("files: unchanged 8", second.stdout)
         self.assertIn("registrations: unchanged 1", second.stdout)
         self.assertIn("registrations: unchanged 2", second.stdout)
         self.assertIn(
-            "Summary: files updated 0, unchanged 28; registrations unchanged 11",
+            "Summary: files updated 0, unchanged 29; registrations unchanged 11",
             second.stdout,
         )
         self.assertTrue(

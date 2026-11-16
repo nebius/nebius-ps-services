@@ -1,0 +1,51 @@
+{
+  "skill_name": "sdlc-workflow-test",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Outside any active product SDLC run, explicitly use $sdlc-workflow-test to plan a disposable regression check after its runtime instructions moved into references. Explain the required reads, the preserved 16-phase golden path, prerequisites for lightweight versus live three-tier checks, evidence limits and cleanup. Plan only; do not execute verification commands or change files.",
+      "expected_output": "An external-verifier plan preserves the full golden path and routes reads through the shared invariants, lightweight runtime reference, document-delivery contract and verification checklist. It identifies the additional host, live-ownership, three-tier and schema reads needed before stateful or live operations, keeps verification in owned disposable locations, and makes no claim that planning proves runtime behavior.",
+      "files": [],
+      "assertions": [
+        "The plan keeps the verifier outside product SDLC phases and uses only owned disposable verification locations.",
+        "The plan preserves all 16 phases in the order defined by the lightweight runtime reference, including required failure and continuation exercises.",
+        "Required common reads remain mandatory; live ownership, three-tier instructions and evidence schemas are loaded when their operations require them.",
+        "Static checks, disposable installation and native live evidence remain distinct; unexecuted checks are not reported as passing.",
+        "Cleanup is scoped to recorded ownership, and planning does not mutate project state, installed skills, hooks or external systems."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "We are inside an active product SDLC run with an existing coordinator. Use $sdlc-workflow-test as the next implementation phase to fix the product feature and then continue this run. Explain how you would handle this request without executing commands or changing files.",
+      "expected_output": "Explain that sdlc-workflow-test is an explicitly invoked external verifier, not an implementation phase or a replacement for the current coordinator. Route product implementation and continuation back to that coordinator and its appropriate phase. Any separate verifier campaign would require an outside-workflow disposable context; do not start one as part of this request.",
+      "files": [],
+      "assertions": [
+        "The response declines using the verifier as a normal product SDLC phase and identifies the existing coordinator as the continuation owner.",
+        "The response does not start a nested verifier campaign, replace the coordinator or invent a completed phase.",
+        "The proposed handling preserves current run state and does not install skills or hooks, create fixtures, execute product changes or charge repair budgets."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "For an authorized $sdlc-workflow-test --create-live-test trial, review the initial fixture request for offline mocked credential propagation. Explain the test-data and worker-assignment requirements without launching or changing the trial.",
+      "expected_output": "The review requires exact not-a-secret mock values in patched environments and expected-call assertions, copied into affected assignments before dispatch. Runtime credentials keep their declared handling.",
+      "files": [],
+      "assertions": [
+        "The mock input and expected assertion use the same explicit not-a-secret placeholder.",
+        "Affected assignments repeat the constraint before dispatch.",
+        "Mock values never replace actual runtime credentials or change application acceptance."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "An authorized $sdlc-workflow-test --create-live-test trial stopped when a mock credential literal matched sensitive-content screening. Explain how to preserve the failed evidence and validate corrected fixture guidance without altering the active trial or weakening the guard.",
+      "expected_output": "Retain the original failure, use separate disposable copies to compare placeholder behavior and test outcomes, preserve credential screening, and require a fresh trial for changed initial guidance.",
+      "files": [],
+      "assertions": [
+        "The unchanged guard accepts the explicit placeholder but still rejects realistic credential literals.",
+        "An isolated counterfactual preserves test assertions and does not mutate product-owned state.",
+        "The failed trial remains failed; runtime or delivery is not claimed from offline controls."
+      ]
+    }
+  ]
+}

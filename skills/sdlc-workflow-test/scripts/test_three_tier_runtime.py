@@ -87,6 +87,18 @@ class InventoryFixture:
 
 
 class RuntimeInventoryTests(unittest.TestCase):
+    def test_configured_mapping_cannot_replace_actual_published_port(self):
+        fixture = InventoryFixture()
+        web = fixture.records[("container", "web")]
+        web["HostConfig"] = {"PortBindings": {
+            "8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": ""}],
+        }}
+        web["NetworkSettings"]["Ports"] = {"8000/tcp": []}
+        result = fixture.observe()
+        self.assertEqual(result["outcome"], "FAIL")
+        self.assertEqual(result["predicates"][-1]["name"], "web.loopback_binding")
+        self.assertNotIn("resources", result)
+
     def test_relationships_select_current_image_without_listing_historical_images(self):
         fixture = InventoryFixture()
         result = fixture.observe()
@@ -304,6 +316,19 @@ class RuntimeInventoryTests(unittest.TestCase):
         advice = recommended_fix("sdlc-evaluate", "browser environment unavailable")
         self.assertIn("Playwright", advice)
         self.assertNotIn("Docker", advice)
+
+    def test_continuation_does_not_match_the_uat_owner(self):
+        from three_tier_reporting import recommended_fix
+
+        advice = recommended_fix(
+            "public companion automatic aggregation and original-folder continuation",
+            "Frozen execution basis digest rejected before aggregate acceptance.",
+        )
+        self.assertNotIn("Playwright", advice)
+        self.assertIn("owner", advice)
+        for source in ("sdlc-uat-tests", "uat-before-restart", "run-browser-stage"):
+            with self.subTest(source=source):
+                self.assertIn("Playwright", recommended_fix(source, "assertion failed"))
 
     def test_unrun_browser_mentions_do_not_change_failure_owner(self):
         from three_tier_reporting import recommended_fix

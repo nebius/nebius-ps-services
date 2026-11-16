@@ -138,7 +138,9 @@ This separation allows a future API layer to reuse the same core logic.
 
 - Tag releases with a project prefix to avoid collisions in this shared repo.
 - Format: `nebius-acc-vMAJOR.MINOR.PATCH` (SemVer).
-- Use `release.sh` for prep/publish to keep the changelog and tag format consistent.
+- GitHub Release operations belong to the publish-release skill. This project is
+  not enrolled in the shared Actions release coordinator; publication remains
+  unavailable until separately configured. No project-local publisher remains.
 
 ## Future API Layer
 

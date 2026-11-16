@@ -15,6 +15,93 @@ import public_workflow_trial as trial
 
 
 class NativeAppServerTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix", "private native launches require POSIX")
+    def test_native_child_creates_private_candidates_without_changing_parent_mask(self):
+        program = '''
+import json,pathlib,sys
+request=json.loads(sys.stdin.readline())
+pathlib.Path('candidate.json').write_text('{}\\n')
+print(json.dumps({'id':request['id'],'result':{}}),flush=True)
+sys.stdin.read()
+'''
+        prior = os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                server = native.NativeServer([sys.executable, '-c', program], Path(directory),
+                                             None, lambda event: None)
+                try:
+                    server.request('initialize', {})
+                    candidate = Path(directory).resolve() / 'candidate.json'
+                    self.assertEqual(candidate.stat().st_mode & 0o777, 0o600)
+                    from workflow_state import read
+                    self.assertEqual(read(candidate), {})
+                    self.assertEqual(os.umask(0o022), 0o022)
+                finally:
+                    server.close()
+                self.assertTrue(server.cleanup_verified)
+        finally:
+            os.umask(prior)
+
+    @staticmethod
+    def spawn_event(status="failed", item_id="private-item"):
+        return {"method": "item/completed", "params": {
+            "threadId": "private-root", "item": {
+                "type": "collabAgentToolCall", "tool": "spawnAgent", "id": item_id,
+                "senderThreadId": "private-root", "receiverThreadIds": ["private-child"],
+                "status": status, "prompt": "SECRET_PROMPT", "model": "SECRET_MODEL",
+                "agentsStates": {"private-child": {"message": "SECRET_OUTPUT"}},
+            }}}
+
+    def test_launch_diagnostics_retain_rejection_and_prestart_child_without_content(self):
+        trace = native.LaunchTrace()
+        trace.observe(self.spawn_event(), "private-root", 12)
+        trace.children({"private-child": "active"}, 20)
+        value = trace.result(1, False)
+        self.assertEqual([row["kind"] for row in value["events"]], ["spawn", "child"])
+        self.assertEqual(value["events"][0]["status"], "failed")
+        self.assertEqual(value["events"][0]["children_sha256"],
+                         [value["events"][1]["child_sha256"]])
+        self.assertTrue(value["absence_is_inconclusive"])
+        self.assertFalse(value["observer_complete"])
+        for secret in ("private-root", "private-child", "private-item", "SECRET_PROMPT",
+                       "SECRET_MODEL", "SECRET_OUTPUT", "agentsStates", "prompt"):
+            self.assertNotIn(secret, json.dumps(value))
+        self.assertNotIn("task", json.dumps(value))  # No timing-derived task mapping.
+
+    def test_unrelated_and_missing_spawn_observations_remain_inconclusive(self):
+        trace = native.LaunchTrace()
+        trace.observe(self.spawn_event(), "unrelated-root", 5)
+        trace.observe(self.spawn_event(), None, 10)
+        value = trace.result(0, True)
+        self.assertEqual(value["events"], [])
+        self.assertTrue(value["absence_is_inconclusive"])
+
+    def test_launch_metadata_rejects_malformed_values_and_bounds_retention(self):
+        trace = native.LaunchTrace()
+        trace.observe({"method": []}, "private-root", 1)
+        trace.observe(self.spawn_event(status=["SECRET_STATUS"]), "private-root", 2)
+        trace.children({"private-child": "SECRET_STATUS"}, 3)
+        self.assertEqual(trace.malformed, 3)
+        for index in range(trace.LIMIT + 3):
+            trace.observe(self.spawn_event(item_id=str(index)), "private-root", index)
+        value = trace.result(2, False)
+        self.assertEqual(len(value["events"]), trace.LIMIT)
+        self.assertEqual(value["overflow_events"], 3)
+        self.assertNotIn("SECRET_STATUS", json.dumps(value))
+
+    def test_interactive_request_is_observed_but_never_approved(self):
+        trace = native.LaunchTrace()
+        server = native.NativeServer.__new__(native.NativeServer)
+        server.pending = (json.dumps({"method": "SECRET_METHOD", "id": 3,
+                                      "params": {"prompt": "SECRET_REQUEST"}}) + "\n").encode()
+        server.notify = lambda event: trace.observe(event, "private-root", 1)
+        server.send = mock.Mock()
+        with self.assertRaisesRegex(ValueError, "unsupported interactive request"):
+            server.receive(0)
+        self.assertEqual(server.send.call_args.args[0]["error"]["code"], -32601)
+        self.assertEqual(trace.result(0, False)["unsupported_interactions"], 1)
+        self.assertNotIn("SECRET", json.dumps(trace.result(0, False)))
+
     @unittest.skipUnless(hasattr(os, "fork"), "process groups require POSIX")
     def test_cleanup_proves_descendant_exit_after_leader_exits(self):
         program = '''
@@ -84,7 +171,7 @@ for line in sys.stdin:
                 server.close()
             self.assertTrue(server.cleanup_verified)
 
-    def invoke_protocol(self, status):
+    def invoke_protocol(self, status, events=()):
         program = '''
 import json,sys
 for line in sys.stdin:
@@ -94,9 +181,10 @@ for line in sys.stdin:
  if method=='thread/start':result={'thread':{'id':'root-native'}}
  print(json.dumps({'id':e['id'],'result':result}),flush=True)
  if method=='turn/start':
+  for event in EVENTS: print(json.dumps(event),flush=True)
   print(json.dumps({'method':'turn/completed','params':{'threadId':'unrelated','turn':{'status':'completed'}}}),flush=True)
   print(json.dumps({'method':'turn/completed','params':{'threadId':'root-native','turn':{'status':STATUS}}}),flush=True)
-'''.replace("STATUS", repr(status))
+'''.replace("STATUS", repr(status)).replace("EVENTS", repr(events))
         original = subprocess.Popen
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -113,6 +201,25 @@ for line in sys.stdin:
         self.assertEqual(value["exit_code"], 0)
         self.assertNotIn("private objective", json.dumps(value))
         self.assertNotIn("root-native", json.dumps(value))
+
+    def test_public_invocation_wires_bounded_spawn_diagnostics(self):
+        event = self.spawn_event()
+        event["params"]["threadId"] = "root-native"
+        event["params"]["item"]["senderThreadId"] = "root-native"
+        value = self.invoke_protocol("failed", [event])
+        self.assertEqual(value["launch_diagnostics"]["events"][0]["status"], "failed")
+        self.assertNotIn("SECRET", json.dumps(value))
+        self.assertTrue(value["cleanup_verified"])
+
+    def test_malformed_interactive_request_keeps_failed_native_receipt(self):
+        value = self.invoke_protocol("completed", [{
+            "id": 3, "method": "item/completed", "params": None,
+            "private_payload": "SECRET_REQUEST",
+        }])
+        self.assertFalse(value["observer_complete"])
+        self.assertEqual(value["launch_diagnostics"]["unsupported_interactions"], 1)
+        self.assertTrue(value["cleanup_verified"])
+        self.assertNotIn("SECRET", json.dumps(value))
 
     def test_failed_turn_exits_without_timeout_or_false_completion(self):
         value = self.invoke_protocol("failed")

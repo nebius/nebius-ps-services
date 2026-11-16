@@ -123,6 +123,7 @@ from lib.sdlc_policy import (  # noqa: E402 — verified bootstrap precedes runt
     git_policy_reason,
     mcp_policy_reason,
     spec_warning_or_denial,
+    steering_readiness_reason,
     validate_write_targets,
 )
 from lib.sdlc_state import (  # noqa: E402 — verified bootstrap precedes runtime imports
@@ -153,13 +154,9 @@ def _command_starts_with_write(command: str) -> bool:
 
 
 def _log_event(
-    payload: dict[str, Any], decision: dict[str, Any], reason: str | None
+    payload: dict[str, Any], decision: dict[str, Any], reason: str | None, active
 ) -> None:
     cwd = payload.get("cwd") or "."
-    try:
-        active, _, _, _ = load_active_state(cwd, session_id=payload.get("session_id"))
-    except json.JSONDecodeError:
-        active = None
     if active is None:
         return
     event = {
@@ -177,17 +174,17 @@ def _log_event(
     append_jsonl(active.history_dir / "hook-events.jsonl", event)
 
 
-def _deny(payload: dict[str, Any], reason: str) -> dict[str, Any]:
+def _deny(payload: dict[str, Any], reason: str, *, active) -> dict[str, Any]:
     decision = deny(reason)
-    _log_event(payload, decision, reason)
+    _log_event(payload, decision, reason, active)
     return decision
 
 
 def _allow(
-    payload: dict[str, Any], decision: dict[str, Any] | None = None
+    payload: dict[str, Any], decision: dict[str, Any] | None = None, *, active
 ) -> dict[str, Any]:
     result = decision if decision is not None else allow()
-    _log_event(payload, result, None)
+    _log_event(payload, result, None, active)
     return result
 
 
@@ -200,12 +197,14 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     tool_input = payload.get("tool_input") or {}
     command = _tool_text(tool_input)
 
+    active = None
     try:
         active, _, current_state, _ = load_active_state(cwd, session_id=payload.get("session_id"))
     except json.JSONDecodeError:
         return _deny(
             payload,
             "Blocked: active SDLC state is corrupt and must be repaired before mutating actions.",
+            active=active,
         )
 
     if tool_name == "Skill":
@@ -214,7 +213,11 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
         if internal and (active is None or payload.get("is_subagent")
                          or active.execution_role not in {"project", "coordinator"}
                          or not active.execution_identity_valid):
-            return _deny(payload, "Internal SDLC skill requires verified workflow context and coordinator ownership.")
+            return _deny(payload, "Internal SDLC skill requires verified workflow context and coordinator ownership.", active=active)
+        if selected in {"sdlc-create-plan", "sdlc-prepare-execution", "sdlc-implement-plan"}:
+            reason = steering_readiness_reason(active, current_state)
+            if reason:
+                return _deny(payload, reason, active=active)
         return allow()
 
     if active is None:
@@ -225,18 +228,18 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     if tool_name == "Bash":
         danger = dangerous_shell_reason(command)
         if danger:
-            return _deny(payload, danger)
+            return _deny(payload, danger, active=active)
         git_reason = git_policy_reason(command, project_root, active)
         if git_reason:
-            return _deny(payload, git_reason)
+            return _deny(payload, git_reason, active=active)
         if _command_starts_with_write(command):
             targets = extract_obvious_command_paths(command, cwd)
             target_reason = validate_write_targets(targets, project_root, active)
             if target_reason:
-                return _deny(payload, target_reason)
+                return _deny(payload, target_reason, active=active)
         if contains_secret(command):
-            return _deny(payload, "Blocked: shell command appears to contain a secret.")
-        return _allow(payload)
+            return _deny(payload, "Blocked: shell command appears to contain a secret.", active=active)
+        return _allow(payload, active=active)
 
     if tool_name in {"apply_patch", "Edit", "Write"}:
         if tool_name == "apply_patch":
@@ -244,19 +247,19 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
         else:
             path = tool_input.get("file_path")
             if not isinstance(path, str) or not path:
-                return _deny(payload, "Write tool requires one explicit file path.")
+                return _deny(payload, "Write tool requires one explicit file path.", active=active)
             targets = [resolve_path(path, cwd)]
             field = "content" if tool_name == "Write" else "new_string"
             if not isinstance(tool_input.get(field), str):
-                return _deny(payload, "Write tool requires explicit text content.")
+                return _deny(payload, "Write tool requires explicit text content.", active=active)
             command = tool_input[field]
         target_reason = validate_write_targets(
             targets, project_root, active, allow_global_agents=True
         )
         if target_reason:
-            return _deny(payload, target_reason)
+            return _deny(payload, target_reason, active=active)
         if contains_secret(command):
-            return _deny(payload, "Blocked: patch appears to contain a secret.")
+            return _deny(payload, "Blocked: patch appears to contain a secret.", active=active)
         spec_decision = spec_warning_or_denial(
             command, targets, project_root, current_state
         )
@@ -268,17 +271,18 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
                 return _deny(
                     payload,
                     spec_decision["hookSpecificOutput"]["permissionDecisionReason"],
+                    active=active,
                 )
-            return _allow(payload, spec_decision)
-        return _allow(payload)
+            return _allow(payload, spec_decision, active=active)
+        return _allow(payload, active=active)
 
     if tool_name.startswith("mcp__"):
         reason = mcp_policy_reason(tool_name, tool_input, cwd, project_root, active)
         if reason:
-            return _deny(payload, reason)
-        return _allow(payload)
+            return _deny(payload, reason, active=active)
+        return _allow(payload, active=active)
 
-    return _allow(payload)
+    return _allow(payload, active=active)
 
 
 def main() -> int:

@@ -167,12 +167,14 @@ def resources(
     configuration_sha256: str,
     artifact_sha256: str,
     bootstraps: dict,
+    retained_disks: dict | None = None,
 ) -> dict:
     """Freeze all new ordinary members, without resolving any creation by name."""
     from nebius.api.nebius.common.v1 import GetByNameRequest
     from nebius.api.nebius.compute.v1 import DiskServiceClient
     from nebius.api.nebius.vpc.v1 import AllocationServiceClient
 
+    from .provisioning_inventory import matches
     from .provisioning_journal import requests_from_plan
     from .security_groups import effective_ids
     from .vm_ha_cloud import nebius_request_error_code_is, vm_ha_request_kwargs
@@ -212,27 +214,41 @@ def resources(
 
     disk_service, allocation_service = DiskServiceClient(sdk), AllocationServiceClient(sdk)
     reused_allocations = set()
+    retained_disks = retained_disks or {}
+    used_disks = set()
     for index in indices:
         guest = f"{spec.name}-{index}"
         disk_name = guest + "-boot"
+        disk_request = manager._build_boot_disk_create_request(disk_name, provisioning, image_id)
+        retained = retained_disks.get(disk_name)
+        disk = None
         try:
-            disk_service.get_by_name(
+            disk = disk_service.get_by_name(
                 GetByNameRequest(parent_id=manager.project_id, name=disk_name),
                 **vm_ha_request_kwargs(),
             ).wait()
         except Exception as error:
             if not nebius_request_error_code_is(error, "NOT_FOUND"):
                 raise RuntimeError("Boot disk absence could not be proven") from error
-        else:
-            raise RuntimeError("A new guest requires its own recorded boot disk creation")
         disk_key = "disk:" + guest
-        planned.append(
-            Request.freeze(
-                disk_key, manager._build_boot_disk_create_request(disk_name, provisioning, image_id)
-            )
-        )
+        if retained is not None:
+            if (
+                disk is None or disk.metadata.id != retained.metadata.id
+                or not matches(disk, disk_request)
+                or disk.status.read_write_attachment or disk.status.read_only_attachments
+            ):
+                raise RuntimeError("Retained boot disk cannot satisfy the current desired member")
+            disk_id = disk.metadata.id
+            used_disks.add(disk_name)
+            observed[disk_id] = snapshot("disk", disk)
+            references = []
+        else:
+            if disk is not None:
+                raise RuntimeError("A new guest requires its own recorded boot disk creation")
+            disk_id = "@" + disk_key
+            planned.append(Request.freeze(disk_key, disk_request))
+            references = [Reference("spec.boot_disk.existing_disk.id", disk_key, "disk")]
         addresses = {}
-        references = [Reference("spec.boot_disk.existing_disk.id", disk_key, "disk")]
         if network.subnet.startswith("@"):
             references.append(
                 Reference("spec.network_interfaces.0.subnet_id", "gateway-subnet", "subnet")
@@ -296,11 +312,13 @@ def resources(
                 )
             addresses[label] = identifier
         request = manager._build_instance_create_request(
-            guest, provisioning, "@" + disk_key, [addresses["public"]], [addresses["private"]]
+            guest, provisioning, disk_id, [addresses["public"]], [addresses["private"]]
         )
         planned.append(
             Request.freeze("compute:" + guest, request, references=tuple(references), guest=guest)
         )
+    if used_disks != set(retained_disks):
+        raise RuntimeError("Current desired configuration would abandon a retained boot disk")
     plan = {
         "project_id": manager.project_id,
         "gateway_name": spec.name,

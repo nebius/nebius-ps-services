@@ -132,6 +132,47 @@ class InventoryRecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(target.TargetError, "changed after admission"):
             self.resolve()
 
+    def test_interposed_completion_remains_observable_without_restoring_authority(self):
+        control = owner._load_control(self.run, "FEAT-001")
+        payload = owner._load_event(self.run, "FEAT-001", control["current_event_id"])
+        payload.update(component="second runtime", independent_blocker_evidence="A separate service network differs.",
+                       evidence_digests={"inventory": "f" * 64})
+        event = owner.record_failure_event(self.run, payload)["event"]
+        classification = owner.classify_failure(self.run, "FEAT-001", event["event_id"])["classification"]
+        child = owner.begin_remediation(self.run, "FEAT-001", classification["classification_id"],
+            "localized", "Restore the second service network.", "evidence/diagnosis.json")["attempt"]
+        completed = owner.complete_remediation(self.run, "FEAT-001", child["dispatch_id"],
+            "succeeded", "evidence/recovery.json")["control"]
+        self.assertEqual(completed["current_event_id"], control["current_event_id"])
+        self.failed[0][0]["sha256"] = "f" * 64
+        control_path = self.run / "repairs/FEAT-001/repair-control.json"
+        before = control_path.read_bytes()
+        result = self.resolve()
+        self.assertEqual(result[0]["dispatch_id"], child["dispatch_id"])
+        self.assertEqual(control_path.read_bytes(), before)
+        replay = owner.complete_remediation(self.run, "FEAT-001", child["dispatch_id"],
+            "succeeded", "evidence/recovery.json")
+        self.assertFalse(replay["updated"])
+        self.assertEqual(control_path.read_bytes(), before)
+        self.state["runtime_recoveries"] = result
+        self.complete()
+        self.assertEqual(self.resolve(), result)
+        receipt = self.run / "repairs/FEAT-001/resumptions" / (completed["resumptions"][child["dispatch_id"]] + ".json")
+        self.assertIn(str(receipt.relative_to(Path(self.state["run_root"]))),
+                      {entry["path"] for entry in result[0]["evidence"]})
+        current = owner._load_control(self.run, "FEAT-001")
+        orphaned = json.loads(control_path.read_text())
+        orphaned["resumptions"] = {}
+        private_json(control_path, orphaned)
+        with self.assertRaises(target.TargetError):
+            self.resolve()
+        private_json(control_path, current)
+        value = json.loads(receipt.read_text())
+        value["completed_context"]["active_blocker"]["active_seconds"] += 1
+        private_json(receipt, value)
+        with self.assertRaises(target.TargetError):
+            self.resolve()
+
     def test_fabricated_success_without_completion_journal_is_rejected(self):
         self.complete()
         journal = self.run / "repairs/FEAT-001/repair-journal.jsonl"

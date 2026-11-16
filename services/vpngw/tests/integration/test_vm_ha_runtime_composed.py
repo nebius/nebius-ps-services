@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -307,8 +309,9 @@ def test_two_node_takeover_effects_are_ordered_and_crash_replay_is_idempotent(
     ports.close()
 
 
+@pytest.mark.parametrize("mixed", [False, True])
 def test_clean_owner_bootstrap_materializes_passive_before_promotion(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mixed: bool
 ) -> None:
     """Production renderers cannot skip the passive bootstrap boundary."""
 
@@ -327,6 +330,12 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
     config = _bgp_config()
     tunnel = config["connections"][0]["tunnels"][0]
     tunnel.update(remote_public_ip="192.0.2.10", psk="fixture-secret")
+    if mixed:
+        static = copy.deepcopy(config["connections"][0])
+        static.update(name="static", routing_mode="static", remote_prefixes=["10.77.0.0/16"])
+        static["tunnels"][0].update(name="static-tunnel", remote_public_ip="192.0.2.20")
+        static["bgp"] = {"enabled": False}
+        config["connections"].append(static)
     vm_ha = {
         "node": {"node_id": "node-a"},
         "generation": {"generation_id": "a" * 64},
@@ -344,8 +353,11 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
     monkeypatch.setattr(
         agent_main, "VM_HA_MATERIALIZATION_PATH", state_dir / "materialization.json"
     )
-    lock_fd = os.open(state_dir / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600)
-    monkeypatch.setattr(agent_main, "acquire_routing_lock", lambda **kwargs: lock_fd)
+    monkeypatch.setattr(
+        agent_main,
+        "acquire_routing_lock",
+        lambda **kwargs: os.open(state_dir / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600),
+    )
     monkeypatch.setattr(agent_main, "_boot_id", lambda: "boot-a")
     monkeypatch.setattr(agent_main, "VM_HA_STATE_DIR", state_dir)
     monkeypatch.setattr(agent_main, "_read_vm_ha_config", lambda path=config_path: vm_ha)
@@ -381,7 +393,14 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
         lambda cfg: (_ for _ in ()).throw(AssertionError("active routes escaped passive mode")),
     )
 
-    monkeypatch.setattr(strongswan_module, "STRONGSWAN_CONF_DIR", tmp_path / "strongswan.d")
+    monkeypatch.setattr(
+        strongswan_module, "STRONGSWAN_CONF_DIR", tmp_path / "strongswan.d" / "charon"
+    )
+    (tmp_path / "strongswan.conf").write_text(
+        "charon {\n plugins {\n include strongswan.d/charon/*.conf\n }\n}\ninclude strongswan.d/*.conf\n"
+    )
+    monkeypatch.setattr(strongswan_module, "RUNTIME_RECEIPT", state_dir / "strongswan-runtime.json")
+    monkeypatch.setattr(strongswan_module, "_daemon_uses_default_config", lambda pid, root: True)
     monkeypatch.setattr(strongswan_module, "IPSEC_CONF", tmp_path / "ipsec.conf")
     monkeypatch.setattr(strongswan_module, "SWANCTL_CONF", tmp_path / "swanctl.conf")
     monkeypatch.setattr(strongswan_module, "NETPLAN_DIR", tmp_path / "netplan")
@@ -409,11 +428,35 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
         lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
 
-    # Native process execution now uses the bounded command adapter in HA too.
-    monkeypatch.setattr(
-        "nebius_vpngw.agent.local_commands._bounded_run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
+    # Simulated process boundary: real Agent and renderers, no native/live effects.
+    process = {"pid": 100, "invocation": 1, "next_ike": 1}
+    sessions = {}
+    commands = []
+
+    def execute(argv, **kwargs):
+        commands.append(argv)
+        stdout = ""
+        if argv[:2] == ["systemctl", "show"]:
+            stdout = (
+                f"MainPID={process['pid']}\nInvocationID={process['invocation']:032x}\n"
+                "ActiveState=active\n"
+            )
+        elif argv == ["systemctl", "restart", "strongswan"]:
+            process["pid"] += 1
+            process["invocation"] += 1
+            sessions.clear()
+        elif argv == ["netplan", "apply"]:
+            sessions.clear()
+        elif argv[:2] == ["swanctl", "--load-all"]:
+            content = (tmp_path / "swanctl.conf").read_text().partition("secrets {")[0]
+            for name in re.findall(r"^  ([\w-]+) \{$", content, re.M):
+                if name not in sessions:
+                    sessions[name] = process["next_ike"]
+                    process["next_ike"] += 1
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("nebius_vpngw.agent.local_commands._bounded_run", execute)
+    monkeypatch.setattr(strongswan_module, "bounded", execute)
     materialized_endpoints: list[dict[str, object]] = []
     agent = agent_main.Agent()
 
@@ -433,6 +476,18 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
     assert record["boot_id"] == "boot-a"
     assert record["generation_id"] == "a" * 64
     assert passive_effects == ["firewall:True", "hygiene"]
+    if mixed:
+        assert "static-tunnel {" not in (tmp_path / "swanctl.conf").read_text()
+        original_sessions = dict(sessions)
+        original_pid = process["pid"]
+        assert original_sessions
+        for _ in range(2):
+            (state_dir / "materialization.json").unlink()
+            agent.reload()
+            assert process["pid"] == original_pid
+            assert sessions == original_sessions
+            assert "static-tunnel {" not in (tmp_path / "swanctl.conf").read_text()
+        assert sum(command == ["netplan", "apply"] for command in commands) == 1
 
     ready_passive = policy.decide(
         _snapshot(

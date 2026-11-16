@@ -5,41 +5,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import importlib.util
-import re
-import subprocess
 import sys
-import time
 
-DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS = 120
-CAPABILITY_SUITE_TIMEOUT_SECONDS = {
-    "worktree": 900,
-    "execution": 900,
-    "three-tier": 900,
-    "task-waves": 900,
-    # Real owned-origin setup measured 259s for the verifier aggregate.
-    "verifier": 600,
-    # Complete both-host hook regression run measured 214s.
-    "hooks": 600,
-    # Unchanged dispatch suite measured 259 seconds on the qualification host.
-    "dispatch": 600,
-}
+OBSERVATION_INTERVAL_SECONDS = 30
 
 
-def parse_unittest_results(output: str) -> tuple[set[str], set[str]]:
-    passed: set[str] = set()
-    skipped: set[str] = set()
-    pattern = re.compile(r"^(test_[A-Za-z0-9_]+).*\.\.\.\s+(ok|skipped\b.*)$")
-    ansi_escape = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-    for line in output.splitlines():
-        match = pattern.match(ansi_escape.sub("", line).strip())
-        if not match:
-            continue
-        name, outcome = match.groups()
-        if outcome == "ok":
-            passed.add(name)
-        else:
-            skipped.add(name)
-    return passed, skipped
+def scheduler():
+    path = Path(__file__).resolve().parents[2] / "worktree/scripts/workflow_verification.py"
+    previous = sys.modules.get("workflow_verification")
+    if previous is not None:
+        if Path(getattr(previous, "__file__", "")).resolve() != path.resolve():
+            raise ImportError("conflicting verification scheduler")
+        return previous
+    spec = importlib.util.spec_from_file_location("workflow_verification", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 @dataclass(frozen=True)
@@ -47,7 +29,7 @@ class SuiteSpec:
     name: str
     command: list[str]
     cwd: Path
-    timeout: int
+    observation_interval_seconds: int = OBSERVATION_INTERVAL_SECONDS
 
 
 @dataclass(frozen=True)
@@ -58,12 +40,14 @@ class SuiteResult:
     passed: frozenset[str]
     skipped: frozenset[str]
     failed: tuple[str, ...]
+    groups: tuple[dict, ...] = ()
+    inventory: frozenset[str] = frozenset()
 
     @property
     def outcome(self) -> str:
         return {
             0: "PASS",
-            124: "TIMEOUT",
+            126: "NOT_RUN",
             127: "START_FAILED",
             125: "EXECUTION_UNPROVEN",
             130: "INTERRUPTED",
@@ -137,12 +121,27 @@ def suite_catalog(skills_root: Path) -> dict[str, SuiteSpec]:
                     str(skills_root / "worktree/scripts" / name)
                     for name in (
                         "test_workflow_execution.py",
+                        "test_workflow_projects.py",
+                        "test_workflow_readiness.py",
+                        "test_workflow_statistics.py",
+                        "test_workflow_overhead.py",
+                        "test_workflow_process.py",
+                        "test_workflow_native_stream.py",
+                        "test_workflow_verification.py",
+                        "test_workflow_corrections.py",
+                        "test_workflow_diagnostics.py",
+                        "test_workflow_automatic.py",
                         "test_workflow_waves.py",
                         "test_workflow_design_revision.py",
+                        "test_workflow_test_revision.py",
+                        "test_workflow_revision_retirement.py",
+                        "test_workflow_plan_revision.py",
                         "test_workflow_objectives.py",
                         "test_workflow_spec_bootstrap.py",
                         "test_workflow_program.py",
                         "test_workflow_qualification.py",
+                        "test_workflow_uat.py",
+                        "test_workflow_delivery_admission.py",
                         "test_workflow_delivery.py",
                         "test_workflow_handoffs.py",
                         "test_workflow_security.py",
@@ -160,12 +159,20 @@ def suite_catalog(skills_root: Path) -> dict[str, SuiteSpec]:
             [sys.executable, "scripts/test-worktree-manager.py", "-v"],
             skills_root / "worktree",
         ),
+        "publication-current": (
+            [sys.executable, "commit/scripts/test_commit_push_current.py", "-v"],
+            skills_root,
+        ),
         "git-promotion": (
             [sys.executable, "scripts/test-git-promotion.py", "-v"],
             skills_root / "worktree",
         ),
         "implement": (
             [sys.executable, "implement/scripts/test_implement_contract.py", "-v"],
+            skills_root,
+        ),
+        "task-acceptance": (
+            [sys.executable, "worktree/scripts/test_workflow_task_acceptance.py", "-v"],
             skills_root,
         ),
         "task-waves": (
@@ -175,14 +182,9 @@ def suite_catalog(skills_root: Path) -> dict[str, SuiteSpec]:
         "hooks": (
             [
                 sys.executable,
-                str(
-                    skills_root
-                    / "sdlc-start"
-                    / "assets"
-                    / "hooks"
-                    / "tests"
-                    / "test_sdlc_hooks.py"
-                ),
+                "-m", "unittest", "discover", "-s",
+                str(skills_root / "sdlc-start/assets/hooks/tests"),
+                "-p", "test_*.py",
                 "-v",
             ],
             skills_root,
@@ -288,6 +290,8 @@ def suite_catalog(skills_root: Path) -> dict[str, SuiteSpec]:
                 "unittest",
                 "-v",
                 "sdlc-workflow-test/scripts/test_three_tier_objective.py",
+                "sdlc-workflow-test/scripts/test_three_tier_task_acceptance.py",
+                "sdlc-workflow-test/scripts/test_three_tier_statistics.py",
                 "sdlc-workflow-test/scripts/test_three_tier_browser.py",
                 "sdlc-workflow-test/scripts/test_three_tier_lifecycle.py",
                 "sdlc-workflow-test/scripts/test_three_tier_runtime.py",
@@ -303,11 +307,11 @@ def suite_catalog(skills_root: Path) -> dict[str, SuiteSpec]:
     return {
         name: SuiteSpec(
             name,
-            command,
+            # Preserve verbose outcome lines when product summaries write to
+            # stderr during a test. unittest retains captured failure output.
+            [*command, "--buffer"],
             cwd,
-            CAPABILITY_SUITE_TIMEOUT_SECONDS.get(
-                name, DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS
-            ),
+            OBSERVATION_INTERVAL_SECONDS,
         )
         for name, (command, cwd) in suites.items()
     }
@@ -315,6 +319,54 @@ def suite_catalog(skills_root: Path) -> dict[str, SuiteSpec]:
 
 def capability_catalog() -> dict[str, tuple[str, tuple[tuple[str, str], ...]]]:
     return {
+        "execution.task-acceptance": (
+            "Frozen task checks, source-bound evidence and deferred obligations",
+            tuple(("task-acceptance", test) for test in (
+                "test_missing_policy_fails_before_execution_allocation",
+                "test_implement_does_not_require_container_skill_identity",
+                "test_executed_receipt_binds_staged_and_historical_tree",
+                "test_text_success_and_changed_source_cannot_finish",
+                "test_failed_assertion_is_immutable_and_cannot_be_deferred",
+                "test_deferred_subset_does_not_run_future_criteria_and_replays_without_effects",
+                "test_interrupted_execution_fences_existing_quiescence_owner",
+                "test_prelaunch_reservation_failure_is_quiescent_and_cannot_rerun",
+                "test_partial_deferred_reservation_retains_failed_trial_for_every_criterion",
+                "test_subset_then_full_resolution_runs_only_remaining_checks",
+                "test_pending_consumer_does_not_prevent_independent_dispatch",
+                "test_environment_retry_consumes_real_classified_budget_and_preserves_failure",
+                "test_retry_publication_failure_completes_counted_remediation",
+                "test_historical_final_snapshot_does_not_acquire_future_debt",
+                "test_missing_or_changed_basis_is_not_zero_debt",
+                "test_missing_undispatched_replanned_basis_cannot_erase_deferred_debt",
+                "test_same_plan_refresh_cannot_change_acceptance_policy",
+                "test_history_requires_valid_journal_but_not_uncompleted_future_basis",
+                "test_cleanup_uses_known_id_even_after_container_is_renamed",
+                "test_daemon_failure_is_not_cleanup_proof",
+                "test_oversized_container_evidence_is_bounded_before_host_copy",
+                "test_container_receipt_archive_rejects_nonregular_or_oversized_members",
+                "test_docker_client_cleanup_uncertainty_fences_every_exit",
+            )) + (("hooks", "test_pretool_denies_publication_when_acceptance_basis_is_missing"),
+                  ("execution", "test_phase_cannot_start_an_early_uat_campaign"),
+                  ("execution", "test_delivery_qualification_cannot_omit_prepared_execution"),
+                  ("three-tier", "test_original_tdd_rejects_changed_frozen_acceptance_policy")),
+        ),
+        "optional.uat": (
+            "Optional UAT readiness and independent implementation admission",
+            (("execution", "test_default_is_not_requested_even_with_an_environment_elsewhere"),
+             ("execution", "test_partial_scope_returns_pending_without_runtime_or_provisioning"),
+             ("execution", "test_missing_environment_stays_pending_for_each_explicit_backend"),
+             ("execution", "test_core_phase_is_admitted_without_uat_plan_environment_or_runner"),
+             ("execution", "test_failed_core_check_cannot_be_admitted_as_pending_uat"),
+             ("execution", "test_recovering_old_cleanup_does_not_resurrect_repaired_defect"),
+             ("hooks", "test_pretool_allows_requested_pending_uat_without_environment")),
+        ),
+        "automatic.projects": (
+            "Automatic project isolation, shared limits, delivery and publication",
+            (("execution", "test_two_sdlc_siblings_continue_from_original_folders"),
+             ("execution", "test_siblings_share_repository_across_owners"),
+             ("execution", "test_aggregate_then_continue_after_removal"),
+             ("publication-current", "test_clean_ahead_push_and_replay")),
+        ),
         "source.obligations": (
             "Complete document-package obligation coverage",
             tuple(
@@ -552,6 +604,12 @@ def capability_catalog() -> dict[str, tuple[str, tuple[tuple[str, str], ...]]]:
         "evaluation.observability-contract": (
             "Bounded observability evaluation contract",
             (
+                ("execution", "test_initial_immutable_dedup_and_status_never_writes"),
+                ("execution", "test_owner_overlap_acceptance_and_serial_barrier"),
+                ("execution", "test_recovered_attempt_has_a_start_but_old_termination_is_unknown"),
+                ("execution", "test_prestart_retry_worker_recovery_and_observed_overlap"),
+                ("three-tier", "test_retention_preserves_reports_outside_disposable_home"),
+                ("three-tier", "test_handwritten_success_without_owner_history_is_rejected"),
                 (
                     "observability",
                     "test_observability_is_limited_to_predefined_operational_criteria",
@@ -577,6 +635,23 @@ def capability_catalog() -> dict[str, tuple[str, tuple[tuple[str, str], ...]]]:
         "repair.control-contract": (
             "Evidence-guided repair-control contract",
             (
+                ("repair-control", "test_worker_recovery_accepts_exact_counted_same_assignment_routes"),
+                ("repair-control", "test_worker_recovery_rejects_uncharged_wrong_route_and_wrong_lifecycle"),
+                ("repair-control", "test_worker_recovery_rejects_wrong_receipt_commit_and_current_fingerprints"),
+                ("repair-control", "test_worker_recovery_rejects_completed_and_superseded_dispatch"),
+                ("repair-control", "test_worker_recovery_redeems_fourth_dispatch_without_counting_again"),
+                ("repair-control", "test_exhausted_observation_replay_is_atomic"),
+                ("repair-control", "test_diagnostic_time_rejects_malformed_and_changed_replay"),
+                ("repair-control", "test_diagnostic_intervals_charge_union"),
+                ("execution", "test_structural_feedback_requires_complete_acceptance"),
+                ("execution", "test_two_corrections_do_not_renew_on_candidate_changes"),
+                ("execution", "test_missing_readiness_blocks_before_execution_effects"),
+                ("execution", "test_unchanged_steering_and_checkpoint_converge"),
+                ("execution", "test_fabricated_pointer_without_owner_archive_is_rejected"),
+                ("execution", "test_no_effective_tool_restrictions_falls_back_serially"),
+                ("execution", "test_interrupted_accounting_cannot_admit_diagnosis"),
+                ("execution", "test_diagnostics_share_native_pool_without_wave_fairness"),
+                ("repair-control", "test_worker_recovery_rejects_dispatch_receipt_tampering"),
                 (
                     "execution",
                     "test_integrated_failed_wave_correction_preserves_failure_and_blocks_bypass",
@@ -713,6 +788,11 @@ def capability_catalog() -> dict[str, tuple[str, tuple[tuple[str, str], ...]]]:
         "execution.sessions-recovery": (
             "Worker sessions and interrupted recovery",
             (
+                ("execution", "test_unclassified_blocked_recovery_requires_sdlc_authority_only"),
+                ("execution", "test_recovery_rechecks_failure_arriving_after_interruption_authorization"),
+                ("execution", "test_blocked_recovery_rechecks_completed_dispatch_before_transfer"),
+                ("execution", "test_second_blocked_attempt_requires_current_owner_authority"),
+                ("execution", "test_recovery_rejects_legacy_authorization_without_binding"),
                 ("execution", "test_both_seals_recover_full_message_after_commit"),
                 ("execution", "test_both_seals_retry_before_commit_once"),
                 (
@@ -762,6 +842,62 @@ def capability_catalog() -> dict[str, tuple[str, tuple[tuple[str, str], ...]]]:
                 ),
             ),
         ),
+        "execution.test-revision": (
+            "Guarded late TDD repair with retained failure and fresh assignments",
+            (
+                ("execution", "test_late_test_revision_preserves_failure_and_dispatches_fresh_assignment"),
+                ("execution", "test_revision_releases_stopped_shared_worker_before_replacement"),
+                ("execution", "test_replacement_promotion_has_no_retained_worker_blocker"),
+                ("execution", "test_archive_recovers_staged_binary_untracked_ignored_modes_links_and_history"),
+                ("execution", "test_archive_recovers_index_resolve_undo_objects"),
+                ("execution", "test_split_index_is_retained_without_losing_external_index_state"),
+                ("execution", "test_retirement_rejects_an_unbound_coordinator"),
+                ("execution", "test_interrupted_removal_resumes_from_verified_archive"),
+                ("execution", "test_interrupted_archive_publication_reuses_exact_snapshot"),
+                ("execution", "test_interrupted_release_resumes_after_exact_absence"),
+                ("execution", "test_live_writer_and_archive_bounds_preserve_candidate"),
+                ("execution", "test_terminal_replay_verifies_archive_without_mutating_capacity"),
+                ("execution", "test_archive_tampering_prevents_removal"),
+                ("execution", "test_unsafe_candidate_files_are_retained"),
+                ("execution", "test_changed_review_bytes_criteria_and_symlinks_are_rejected_before_staging"),
+                ("execution", "test_interrupted_commit_resumes_without_second_commit"),
+                ("three-tier", "test_pending_test_revision_is_observable_but_not_a_runtime_target"),
+                ("three-tier", "test_pending_test_revision_tdd_output_is_observed_before_sealing"),
+                ("three-tier", "test_pending_test_tdd_observation_rejects_changed_scope_and_checkpoint"),
+            ),
+        ),
+        "execution.plan-revision": (
+            "Classified integrated command correction and terminal retention",
+            (
+                ("execution", "test_plan_recovery_runs_before_future_tasks_without_product_commit"),
+                ("execution", "test_corrective_wave_completes_after_interposed_worker_repair"),
+                ("three-tier", "test_interposed_completion_remains_observable_without_restoring_authority"),
+                ("repair-control", "test_interposed_repair_completion_restores_counted_parent"),
+                ("repair-control", "test_interposed_repair_rejects_failed_broader_and_tampered_continuation"),
+                ("repair-control", "test_interposed_completion_recovers_atomic_publication_without_recharge"),
+                ("repair-control", "test_interposed_nested_and_fourth_dispatch_preserve_all_budgets"),
+                ("repair-control", "test_interposed_failure_replay_cannot_reset_or_reactivate_a_blocker"),
+                ("repair-control", "test_interposed_observation_preserves_nested_budgets_and_mutation_fence"),
+                ("repair-control", "test_interposed_observation_rejects_unlinked_or_mutated_lineage"),
+                ("repair-control", "test_interposed_observation_rejects_reordered_chain_and_changed_commit"),
+                ("hooks", "test_stop_rejects_missing_or_unresolved_repair_continuation"),
+                ("hooks", "test_stop_accepts_owner_resumed_repair_with_current_pointers"),
+                ("execution", "test_missing_review_and_changed_criteria_block_replan"),
+                ("execution", "test_tampered_failed_receipt_blocks_plan_retirement"),
+                ("execution", "test_review_drift_blocks_corrective_dispatch"),
+                ("execution", "test_terminal_cancellation_retains_integrated_wave_unchanged"),
+                ("execution", "test_nonterminal_replan_still_rejects_unresolved_integration"),
+                ("execution", "test_second_counted_plan_repair_preserves_both_failed_waves"),
+                ("three-tier", "test_integrated_failure_classifier_observation_preserves_owner_state"),
+                ("three-tier", "test_integrated_failure_classifier_rejects_changed_authority_and_live_writers"),
+                ("three-tier", "test_interposed_integrated_failure_classifier_observation_is_read_only"),
+                ("three-tier", "test_interposed_classifier_still_requires_quiescence_and_clean_target"),
+                ("three-tier", "test_corrective_preparation_observation_preserves_reviewed_replan"),
+                ("three-tier", "test_corrective_preparation_rejects_incomplete_or_changed_owner_proofs"),
+                ("three-tier", "test_corrective_tdd_observation_preserves_reviewed_replan_and_sealed_tests"),
+                ("three-tier", "test_corrective_tdd_observation_rejects_dirty_or_changed_owner_proofs"),
+            ),
+        ),
         "execution.secret-gate": (
             "Secret-safe result persistence",
             (
@@ -774,6 +910,12 @@ def capability_catalog() -> dict[str, tuple[str, tuple[tuple[str, str], ...]]]:
         "execution.sequential-fallback": (
             "Sequential ephemeral Codex fallback",
             (
+                ("dispatch", "test_worker_prompt_contains_exact_task_validation_without_discovery"),
+                ("dispatch", "test_task_validation_rejects_changed_or_missing_frozen_evidence"),
+                ("dispatch", "test_task_validation_uses_assignment_basis_after_current_plan_changes"),
+                ("dispatch", "test_missing_task_validation_returns_structured_error_before_spawn"),
+                ("dispatch", "test_task_validation_rejects_hash_consistent_foreign_plan"),
+                ("execution", "test_native_handoff_exposes_real_frozen_checks_at_worker_git_root"),
                 ("dispatch", "test_dispatches_fresh_ephemeral_workers_sequentially"),
                 (
                     "dispatch",
@@ -790,7 +932,7 @@ def capability_catalog() -> dict[str, tuple[str, tuple[tuple[str, str], ...]]]:
             (
                 ("execution", "test_worker_must_be_armed_before_start"),
                 ("execution", "test_arm_start_heartbeat_and_watch_liveness"),
-                ("execution", "test_prestart_mutation_and_timeout_fail_closed"),
+                ("execution", "test_prestart_mutation_fails_but_delayed_start_continues"),
                 (
                     "execution",
                     "test_confirmed_prestart_requeue_allows_a_fresh_arm",
@@ -799,7 +941,7 @@ def capability_catalog() -> dict[str, tuple[str, tuple[tuple[str, str], ...]]]:
                     "execution",
                     "test_prestart_scope_violations_use_scope_error",
                 ),
-                ("execution", "test_progress_does_not_bypass_maximum_runtime"),
+                ("execution", "test_five_day_work_keeps_ownership_and_accepts_late_heartbeat"),
                 ("dispatch", "test_terminal_watch_interrupts_worker"),
             ),
         ),
@@ -828,7 +970,7 @@ def capability_catalog() -> dict[str, tuple[str, tuple[tuple[str, str], ...]]]:
                 ),
             ),
         ),
-        "interop.outer-lease-v4": (
+        "interop.outer-lease-v5": (
             "Managed outer-worktree lease lifecycle",
             (
                 ("task-waves", "test_pending_blocks_before_terminal_writes"),
@@ -1096,6 +1238,16 @@ def capability_catalog() -> dict[str, tuple[str, tuple[tuple[str, str], ...]]]:
                 ("verifier", "test_report_is_private"),
                 ("verifier", "test_verification_root_is_private"),
                 ("verifier", "test_flat_fixture_is_rejected_without_conversion"),
+                ("verifier", "test_failed_static_prerequisite_skips_fixture_and_suites"),
+                ("verifier", "test_changed_catalog_preserves_owned_context_and_cleanup"),
+                ("verifier", "test_restore_context_requires_original_hash_and_all_other_identities"),
+                ("verifier", "test_restore_context_rejects_wrong_original_and_foreign_path"),
+                ("verifier", "test_restore_context_rejects_replaced_directory"),
+                ("verifier", "test_restore_context_rejects_changed_scope_or_live_evidence"),
+                ("verifier", "test_restore_context_replays_interrupted_receipt_update"),
+                ("verifier", "test_restore_context_rejects_live_fixture_and_dirty_project"),
+                ("verifier", "test_restore_context_cli_uses_the_owned_archive"),
+                ("verifier", "test_restore_context_rejects_symlinked_live_boundary"),
                 ("verifier", "test_dirty_fixture_fails_without_mutation"),
                 (
                     "verifier",
@@ -1156,8 +1308,8 @@ def capability_catalog() -> dict[str, tuple[str, tuple[tuple[str, str], ...]]]:
                     "test_document_program_tests_are_required_and_cannot_be_skipped",
                 ),
                 ("verifier", "test_merge_checklist_uses_protected_delivery_authority"),
-                ("verifier", "test_timeout_retains_completed_test_identifiers"),
-                ("verifier", "test_cleanup_drain_timeout_is_unproven_and_verifies_group_absence"),
+                ("verifier", "test_interruption_retains_completed_test_identifiers"),
+                ("verifier", "test_cleanup_uncertainty_preserves_completed_cases_without_admission"),
                 ("verifier", "test_cleanup_timeout_preserves_prior_results_and_stops_later_suites"),
                 (
                     "verifier",
@@ -1170,6 +1322,16 @@ def capability_catalog() -> dict[str, tuple[str, tuple[tuple[str, str], ...]]]:
                 ("verifier", "test_unbound_checkpoint_is_reconciled_only_when_exact"),
                 ("verifier", "test_resigned_checkpoint_cannot_delete_retained_report"),
                 ("verifier", "test_custom_context_bound_manifest_is_removed"),
+                ("verifier", "test_completed_cleanup_retires_full_native_ledger_before_next_launch"),
+                ("verifier", "test_live_native_process_preserves_ledger_until_exit"),
+                ("verifier", "test_native_history_publication_failure_preserves_active_ledger"),
+                ("verifier", "test_native_history_publication_is_verified_before_retirement"),
+                ("verifier", "test_native_history_retirement_replays_after_publication"),
+                ("verifier", "test_native_history_drift_before_unlink_is_preserved"),
+                ("verifier", "test_native_history_archive_conflict_preserves_both_records"),
+                ("verifier", "test_unknown_native_absence_does_not_retire_history"),
+                ("verifier", "test_native_history_archive_symlink_is_rejected"),
+                ("verifier", "test_native_inventory_rejects_legacy_duplicate_and_unbounded_rows"),
                 (
                     "verifier",
                     "test_missing_native_launcher_proof_blocks_started_product",
@@ -1190,85 +1352,37 @@ def capability_catalog() -> dict[str, tuple[str, tuple[tuple[str, str], ...]]]:
     }
 
 
-def run_command(args, *, cwd, env, timeout):
-    """Own descendants on every exit; progress contains no subprocess output."""
-    owner_path = (
-        Path(__file__).resolve().parents[2] / "worktree/scripts/workflow_process.py"
-    )
-    spec = importlib.util.spec_from_file_location("verifier_owned_process", owner_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("Owned process support is unavailable")
-    owner = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(owner)
-    group = owner.OwnedProcessGroup()
-    child = None
-    stdout = stderr = ""
-    code = 127
-    started = time.monotonic()
-    try:
-        child = subprocess.Popen(
-            args,
-            cwd=str(cwd),
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            process_group=group.id,
-        )
-        while True:
-            remaining = timeout - (time.monotonic() - started)
-            if remaining <= 0:
-                code = 124
-                break
-            try:
-                stdout, stderr = child.communicate(timeout=min(30, remaining))
-                code = child.returncode
-                break
-            except subprocess.TimeoutExpired:
-                elapsed = time.monotonic() - started
-                print(f"  suite running: {elapsed:.0f}s / {timeout}s", flush=True)
-    except KeyboardInterrupt:
-        code = 130
-    except OSError:
-        code = 127
-    finally:
-        try:
-            group.close(grace=0.05)
-            if child is not None:
-                stdout, stderr = child.communicate(timeout=5)
-        finally:
-            group.verify_absent()
-    return subprocess.CompletedProcess(args, code, stdout=stdout, stderr=stderr)
+def execute_all(specs, env, *, on_result=None, memory_probe=None):
+    owner = scheduler()
+    groups = owner.groups_for_commands([(s.name, s.command, s.cwd) for s in specs], Path(__file__).resolve().parents[2])
+    group_by_id = {g.id: g for g in groups}
+    capabilities = capability_catalog()
+    def validate_inventory(frozen):
+        by_suite = {spec.name: set() for spec in specs}
+        for group_id, ids in frozen.items():
+            by_suite[group_by_id[group_id].suite].update(ids)
+        for _, requirements in capabilities.values():
+            for suite, method in requirements:
+                if suite in by_suite and not any(name.rsplit(".", 1)[-1] == method for name in by_suite[suite]):
+                    raise ValueError("required capability is absent from exact inventory: " + suite + ":" + method)
+    rows = owner.schedule(groups, env, on_result=on_result, validate_inventory=validate_inventory, memory_probe=memory_probe,
+                          observation_interval_seconds=min((s.observation_interval_seconds for s in specs), default=30),
+                          on_checkpoint=lambda row: print("Verification " + str(row), flush=True))
+    results = []
+    for spec in specs:
+        selected = [row for row in rows if row["suite"] == spec.name]
+        outcomes = {name: status for row in selected for name, status in row["outcomes"].items()}
+        statuses = {row["status"] for row in selected}
+        code = (125 if "EXECUTION_UNPROVEN" in statuses else 1 if "FAIL" in statuses
+                else 127 if "START_FAILED" in statuses else 130 if "INTERRUPTED" in statuses else 126 if "NOT_RUN" in statuses else 0)
+        results.append(SuiteResult(spec.name, code,
+            sum((row["observation"] or {}).get("elapsed_seconds", 0) for row in selected),
+            frozenset(name for name, status in outcomes.items() if status == "passed"),
+            frozenset(name for name, status in outcomes.items() if status == "skipped"),
+            tuple(sorted(name for name, status in outcomes.items() if status not in {"passed", "skipped"})),
+            tuple(selected), frozenset(name for row in selected for name in (row["inventory"] or []))))
+    return results
 
 
-def execute(spec: SuiteSpec, env: dict[str, str]) -> SuiteResult:
-    started = time.monotonic()
-    try:
-        completed = run_command(
-            spec.command, cwd=spec.cwd, env=env, timeout=spec.timeout
-        )
-    except (OSError, RuntimeError, subprocess.TimeoutExpired):
-        return SuiteResult(
-            spec.name, 125, time.monotonic() - started, frozenset(), frozenset(), ()
-        )
-    output = (completed.stderr or "") + (completed.stdout or "")
-    passed, skipped = parse_unittest_results(output)
-    failed = tuple(
-        sorted(
-            set(
-                re.findall(
-                    r"^(?:FAIL|ERROR): (test_[A-Za-z0-9_]{1,120})(?:\s|$)",
-                    output,
-                    re.MULTILINE,
-                )
-            )
-        )
-    )
-    return SuiteResult(
-        spec.name,
-        completed.returncode,
-        time.monotonic() - started,
-        frozenset(passed),
-        frozenset(skipped),
-        failed,
-    )
+def execute(spec, env):
+    return execute_all([spec], env)[0]

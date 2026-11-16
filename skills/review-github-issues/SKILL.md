@@ -187,6 +187,15 @@ apply only to accepted work; other dispositions proceed to step 7.
    Never include plan content, claim implementation is complete, or promise
    delivery.
 
+## PR lifecycle caller
+
+Read `review-pr/references/pr-lifecycle.md` from the installed sibling skill when an
+outer authorized PR workflow requests linked-issue assessment. Return independent
+criterion evidence and dispositions read-only to that owner; do not write a new
+plan or infer closure from PR closure alone. A rejected PR can leave a valid issue
+open. Verified resolution after merge may use the owner's explicit closure
+fallback. Standalone triage retains its planning and effect ownership below.
+
 ## Idempotency
 
 - Bind identity to the GitHub host, repository and issue number, with API IDs

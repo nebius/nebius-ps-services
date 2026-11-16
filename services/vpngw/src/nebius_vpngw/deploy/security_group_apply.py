@@ -209,6 +209,42 @@ class AttachmentJournal(Journal):
         transaction = self.read_transaction()
         return transaction if transaction and transaction["phase"] != "complete" else None
 
+    def retire_settled(self, expected: dict, parent: dict) -> None:
+        from .ordinary_replan import require_child_settled
+
+        if self._lock is None or self.state != expected:
+            raise RuntimeError("Attachment owner changed before retirement")
+        require_child_settled("attachments", self.state, parent)
+        self.archive()
+        self.state["transaction"] = None
+        self.save()
+
+    def retire_predecessor(self, expected: dict, parent: dict) -> None:
+        """Caller has independently verified the settled ordinary request prefix."""
+        from .attachment_settlement import require_original
+
+        if self._lock is None or self.state != expected or self.snapshot() != expected:
+            raise RuntimeError("Attachment predecessor changed before retirement")
+        require_original(parent, expected, expected)
+        if any(record["status"] not in {"settled", "rejected"} for record in expected["transaction"]["operations"].values()):
+            raise RuntimeError("Attachment predecessor still has unresolved cloud requests")
+        self.archive()
+        self.state["transaction"] = None
+        self.save()
+
+    def retire_ha_predecessor(self, expected: dict, command: Any, parent: dict) -> None:
+        """The settlement owner has verified native gate release and retained HA."""
+        from .ha_attachment_replan import require_original
+
+        if self._lock is None or self.state != expected or self.snapshot() != expected:
+            raise RuntimeError("HA attachment predecessor changed before retirement")
+        require_original(command, parent, expected, expected)
+        if any(record["status"] not in {"settled", "rejected"} for record in expected["transaction"]["operations"].values()):
+            raise RuntimeError("HA attachment predecessor still has unresolved requests")
+        self.archive()
+        self.state["transaction"] = None
+        self.save()
+
     def begin(
         self, plan: dict, *, scope: str, approval: str, operation_id: str | None = None
     ) -> None:

@@ -76,6 +76,15 @@ class HeartbeatPublisher:
         self.threads: list[threading.Thread] = []
 
     def progress(self, phase: str, invalidates_health: bool = False) -> None:
+        with self.lock:
+            if self.stop.is_set():
+                return
+            if not invalidates_health and not self.health_transition:
+                # Advisory phase changes do not revoke a health sample. Keep
+                # controller observations independent of a bounded network send;
+                # only actual health transitions must drain that publication.
+                self.phase = phase
+                return
         if not self.publication_gate.acquire(timeout=3.0):
             raise RuntimeError("heartbeat publication did not quiesce")
         try:

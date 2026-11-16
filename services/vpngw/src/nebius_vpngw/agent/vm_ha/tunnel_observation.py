@@ -88,7 +88,18 @@ def xfrm_records(raw: str, *, policy: bool) -> list[dict[str, Any]]:
                 raise ValueError("ambiguous XFRM socket policy")
             continue
         record: dict[str, Any] = {"src": endpoints[1], "dst": endpoints[2]}
-        for key in ("if_id", "reqid", "spi", "dir", "mode", "proto", "index", "mark", "ctx"):
+        for key in (
+            "if_id",
+            "reqid",
+            "spi",
+            "dir",
+            "mode",
+            "proto",
+            "index",
+            "priority",
+            "mark",
+            "ctx",
+        ):
             match = re.search(r"\b" + key + r"\s+(\S+)", block)
             if match:
                 value = match[1]

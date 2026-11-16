@@ -51,6 +51,8 @@ Define success before implementation by creating tests that prove the current fe
   must be written in the registered integration worktree before implementation.
 - Acceptance criteria need unit, integration, component, contract, or regression coverage.
 - Existing tests must be mapped to SDLC acceptance criteria.
+- A counted active-task `TEST_DEFECT` requires guarded test revision after the
+  original TDD seal; follow the late-repair path below.
 
 ## When Not To Use
 
@@ -69,13 +71,15 @@ Define success before implementation by creating tests that prove the current fe
 
 ## Required Reads
 
-- `../worktree/references/document-delivery.md` for source coverage, phase/slice
-  identities, shared-skill caller contracts and protected completion policy.
+- `../sdlc-start/references/state-schema.md` for the root checkpoint fields;
+  phase output labels belong in `current_phase`, not the run's `status`.
 
-- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
-  assignment/ownership and evidence to the current immutable execution basis.
-  Before preparation, bind evidence to the accepted objective and applicable
-  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+- `../worktree/references/workflow-invariants.md` for shared ownership,
+  evidence, failure and conditional-read rules.
+- `../worktree/references/workflow-contract.md` for execution lifecycle operations.
+- Read `../worktree/references/document-delivery.md` when accepted inputs include
+  a source manifest/program, this phase handles SLICE/source coverage or phase
+  barriers, or it handles delivery admission, phase exit or protected completion.
 
 - Locked plan.
 - Feature and requirement blocks.
@@ -87,12 +91,14 @@ Define success before implementation by creating tests that prove the current fe
 
 - Tests, fixtures, or mocks required by the plan.
 - Test evidence showing expected red or already-green state.
-- Local state transition to `tests_red` or `tests_ready`.
+- Local checkpoint with `current_phase: tests_red` or `tests_ready` and
+  `status: running`.
 
 ## Process
 
 - Identify acceptance criteria that can be tested.
-- Change cwd to the recorded integration worktree and re-observe its Git root,
+- Use `integration_worktree / project_scope` as the authoring cwd (the integration
+  root when scope is `.`). Re-observe the recorded integration Git root,
   common directory, branch, exact recorded HEAD, and cleanliness. Fail with
   `WORKTREE_CONFLICT` on drift; never write tests in the project checkout.
 - Choose the smallest useful test level first.
@@ -104,14 +110,49 @@ Define success before implementation by creating tests that prove the current fe
 - Write tests that fail for missing behavior when implementation is absent.
 - Avoid over-mocking real behavior.
 - Run focused tests and record evidence.
+- For initial TDD, publish the outcome in `current_phase`: `tests_red` for missing
+  behavior, or `tests_ready` when the reviewed tests already pass. Keep the root
+  `status` as `running` and set `next_recommended_skill` to
+  `sdlc-implement-plan`. Write the same fields into `current-state.json` and its
+  new immutable checkpoint, then update `checkpoints/latest.json`. Preserve
+  prior checkpoints and repair counters. During authoring, use
+  `current_phase: sdlc-tdd` with `status: running`. Never put `tests_red`,
+  `tests_ready` or another phase output label in the root `status` field.
+  Classified late test repair follows its separate route below.
 - Leave the integration changes uncommitted. `sdlc-implement-plan` seals the
-  TDD base exactly once before it creates worker branches.
+  initial TDD base exactly once before it creates worker branches. This initial
+  authoring rule does not authorize reopening a sealed base.
+
+### Classified Late Test Repair
+
+For an active unmerged worker wave, consume the classifier's `test_revision`
+route and counted localized dispatch. Read the exact private transition and
+review contract in the `Late Test Revision` section of
+`../sdlc-prepare-execution/references/execution-plane.md`.
+Stop every allocated native writer, prove termination and release runtime leases.
+Select only existing tracked tests or test-only fixtures/configuration required
+by the proven cause; preserve accepted criteria and independent harnesses.
+
+Prepare the revision through the execution owner before writing. Author only its
+frozen files in the registered integration checkout. Review exact before/after
+bytes, document why assertions and accepted behavior remain intact, and create
+the private review receipt. Seal through `seal-test-revision`; never commit
+directly, change an assignment, reopen `seal-tdd` or relabel the cause as design.
+
+Return to planning for an appended corrective task and fresh execution basis.
+Preserve the failed worker candidate and original TDD evidence. Reacquire
+preparation and TDD observations at the new basis, record the remaining expected
+red or already-green state, and rerun every invalidated downstream gate. When
+fixture-only correction cannot run without unfinished product code, record that
+specific expected red boundary; verify the original failure after fresh worker
+implementation. A review or sealed fixture alone never constitutes acceptance.
 
 ## Idempotency
 
 - Do not duplicate tests.
 - Reuse existing tests that already match criteria.
-- If implementation already exists and tests pass, record `tests_already_green`.
+- If implementation already exists and tests pass, record `tests_already_green`
+  in the test evidence and publish the `tests_ready` checkpoint above.
 
 ## Failure Handling
 

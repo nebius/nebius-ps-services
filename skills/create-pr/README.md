@@ -37,7 +37,7 @@ and GitHub steps.
 - When invoked from Agentic SDLC, checks local UAT evidence and summarizes
   requirements, features, validation, tests, evaluation, and UAT in the PR body.
 - In an active unmanaged Agentic SDLC run, switches to publication-only mode: it requires
-  a clean exact promoted SHA with passing UAT and does not stage, commit, merge,
+  a clean exact promoted SHA with verified implementation admission and does not stage, commit, merge,
   repair, or otherwise change that SHA. Push and CLI PR creation use one direct
   action with explicit ref and head arguments.
 - When Agentic SDLC local state is available, records the PR URL and readiness
@@ -110,7 +110,7 @@ Explicit merge intent only -> merge-pr -> actual merge and result CI
    diff and affected callers before pushing with an explicit refspec. Safe repairs
    require fresh validation and review.
 7. Open or reuse the PR with the requested title and body.
-8. For active Agentic SDLC runs, require passing UAT, reverify the recorded
+8. For active Agentic SDLC runs, require implementation admission and honest optional UAT status, reverify the recorded
    remote-default branch and HEAD, and publish only the exact promoted SHA;
    route any branch or default drift back through the coordinator.
 9. Keep repairing available branch-caused check failures when safe, or mark a
@@ -193,3 +193,13 @@ to create-pr, and merge/issue-state verification to merge-pr. GitHub performs
 native issue closure on default-branch merge when enabled. A partial fix or mere
 issue mention never qualifies. Each delivery owner retains its explicit authority;
 review does not start implementation, PR creation or merge.
+
+## Enrolled repository automation
+
+Shared Actions authority: enrolled repositories route laptop and hosted requests through one merge/release controller; PR lifetime waivers are durable policy, not labels. See the skill contract and sibling merge-pr automation-authority reference.
+
+UAT follows the [shared optional policy](../worktree/references/optional-uat.md).
+Requested campaigns wait for a meaningful ready scope. An existing test environment
+uses its project harness directly; container/Nebius campaigns require explicit
+skill selection. Missing optional prerequisites leave a handoff without blocking
+implementation or eligible publication. Actual failures and cleanup remain owned.

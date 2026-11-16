@@ -70,13 +70,13 @@ Evaluate observed product behavior against real-world acceptance criteria.
 
 ## Required Reads
 
-- `../worktree/references/document-delivery.md` for source coverage, phase/slice
-  identities, shared-skill caller contracts and protected completion policy.
-
-- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
-  assignment/ownership and evidence to the current immutable execution basis.
-  Before preparation, bind evidence to the accepted objective and applicable
-  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+- `../worktree/references/workflow-invariants.md` for shared ownership,
+  evidence, failure and conditional-read rules.
+- Read `../worktree/references/workflow-contract.md` before this phase performs
+  execution planning, reconciliation or any execution lifecycle operation.
+- Read `../worktree/references/document-delivery.md` when accepted inputs include
+  a source manifest/program, this phase handles SLICE/source coverage or phase
+  barriers, or it handles delivery admission, phase exit or protected completion.
 
 - Requirement block.
 - Live Experiment Environment section in `docs/requirements.md`.

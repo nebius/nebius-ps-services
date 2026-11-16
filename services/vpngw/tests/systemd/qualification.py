@@ -10,7 +10,10 @@ SHARED = (
     "test_runtime_modernization.py",
 )
 ORDINARY = ("test_ordinary_systemd_jobs.py", "test_ordinary_transport.py")
-HA = ("test_ha_tunnel_native.py",)
+HA = (
+    "test_ha_tunnel_native.py", "test_ha_daemon_reload_native.py",
+    "test_repair_idle_handoff_native.py",
+)
 
 
 def topologies(selection: str) -> tuple[str, ...]:

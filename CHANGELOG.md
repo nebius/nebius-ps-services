@@ -6,6 +6,27 @@ project folder.
 
 ## [Unreleased]
 
+- Isolate Implement and SDLC verifier unit fixtures from ambient host-memory
+  measurements while retaining regression coverage for unknown and critical memory admission.
+  Align repeated hook-installation assertions with the added policy test module.
+
+- Increase the bounded VPNGW native-suite allowance for its expanded case set
+  in PR and release CI, while retaining individual recovery deadlines and
+  per-phase qualification timings.
+
+- Preserve graceful profiler exit status in native course server jobs while
+  independently rejecting watchdog expiry and errors. Include fixture evidence
+  in failing lifecycle-test diagnostics.
+
+- Run current-branch commit-push, workflow statistics and task-acceptance
+  regressions in the skills CI workflow.
+
+- Add the disabled GitHub AI automation controller, lifetime PR live-test
+  waivers, shared merge/release authority, exact-candidate CI and recovery.
+  Keep enrollment and effect workflows as deployment templates until separately
+  authorized activation; ordinary protected merge and release remain available.
+  Validate ordinary and prepared broker profiles independently in CI.
+
 - Repair fork Required CI discovery when GitHub omits both run and commit PR
   associations. Resolve a unique current fork/ref with shared check-suite
   provenance validation, preserve same-head rerun updates and fail-closed
@@ -19,8 +40,10 @@ project folder.
   for all other workflows. Document policy ownership, readback and fail-closed
   rollback; preserve branch protection and fork approval requirements.
 
-- Register AI Support Agent boundary checks with scoped CI and protected merge
-  completion tracking; keep public builds independent of private deployments.
+- Rename the planned application root to `agents/agent-execution-platform/`
+  and leave it empty until implementation begins. Remove the preliminary
+  AI Support Agent scaffolding. Retain its registered CI identity as a retirement
+  validator until existing protected-merge completion receipts settle.
 
 - Keep image publication outputs tied to the independently verified registry digest.
 

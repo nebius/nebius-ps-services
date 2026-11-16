@@ -15,6 +15,11 @@ from nebius_vpngw.deploy.vm_ha_package import VMHAAgentPackageError
 pytestmark = pytest.mark.usefixtures("runtime_migration_guest")
 
 
+@pytest.fixture(autouse=True)
+def request_inspection_deadline(monkeypatch):
+    monkeypatch.setattr(ordinary_remote, "DEADLINE", time.monotonic() + 600)
+
+
 @pytest.mark.parametrize(
     ("fault", "reason"),
     (
@@ -24,6 +29,7 @@ pytestmark = pytest.mark.usefixtures("runtime_migration_guest")
         ("receipt", "HA handoff package receipt is unverified"),
     ),
 )
+
 def test_handoff_package_rejections_preserve_safe_reason(tmp_path, fault, reason):
     from nebius_vpngw.deploy.ordinary_apply import sha
 

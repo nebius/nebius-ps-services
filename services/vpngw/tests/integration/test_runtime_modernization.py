@@ -488,6 +488,10 @@ def test_autorestarted_daemon_reloads_current_authorized_configuration(
     tmp_path, mode, partial_config
 ):
     """Exercise the bounded HA component effect; cloud admission is tested separately."""
+    from types import SimpleNamespace
+
+    import yaml
+
     from nebius_vpngw.agent.strongswan_renderer import (
         STRONGSWAN_CONF_DIR,
         SWANCTL_CONF,
@@ -496,6 +500,7 @@ def test_autorestarted_daemon_reloads_current_authorized_configuration(
         authorized_configuration,
     )
     from nebius_vpngw.agent.vm_ha.runtime import SystemDataPlaneRuntime
+    from nebius_vpngw.agent.vm_ha.tunnel_runtime import ControllerTunnelRuntime
     from nebius_vpngw.agent.vm_ha_controller import (
         ActionKind,
         ControllerAction,
@@ -550,9 +555,25 @@ def test_autorestarted_daemon_reloads_current_authorized_configuration(
     command("systemctl", "daemon-reload")
     old_forwarding = command("sysctl", "-n", "net.ipv4.ip_forward").stdout.strip()
     state = tmp_path / "data-plane.json"
-    state.write_text(json.dumps({"schema": "nebius-vpngw/vm-ha-data-plane-v1", "mode": mode}))
+    state.write_text(
+        json.dumps({"schema": "nebius-vpngw/vm-ha-data-plane-v1", "boot_id": "boot", "mode": mode})
+    )
     (tmp_path / "guard.json").write_text(
-        json.dumps({"guard_boot_id": "boot", "data_plane_mode": mode})
+        json.dumps(
+            {
+                "schema": "nebius-vpngw/vm-ha-status-v1",
+                "guard_boot_id": "boot",
+                "data_plane_mode": mode,
+                "node_id": "node",
+                "allocation_id": "allocation",
+                "generation_id": "a" * 64,
+                "digests": {
+                    "configuration": "a" * 64,
+                    "static_routes": "b" * 64,
+                    "bgp_policy": "c" * 64,
+                },
+            }
+        )
     )
     runtime = SystemDataPlaneRuntime(
         state_path=state,
@@ -561,13 +582,39 @@ def test_autorestarted_daemon_reloads_current_authorized_configuration(
         expected_bgp_policy_digest="a" * 64,
         routing_lock_path=tmp_path / "routing.lock",
     )
-    runtime.ipsec_configuration_provider = lambda: authorized_configuration(cfg)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(cfg))
+
+    def fixture_cloud_authority(current):
+        assert current == action
+
+    # Compose the real local proof and kernel preparer. Only provider admission
+    # remains a fixture input; a missing callback must never stand in for it.
+    ControllerTunnelRuntime(
+        config_path,
+        tmp_path,
+        None,
+        SimpleNamespace(
+            data_plane=runtime,
+            routes=SimpleNamespace(),
+            require_repair_authority=fixture_cloud_authority,
+        ),
+    )
 
     def pid():
         return command("systemctl", "show", "strongswan", "-p", "MainPID", "--value").stdout.strip()
 
+    created_interface = False
     try:
         command("systemctl", "stop", "strongswan")
+        # The standalone fixture owns its network setup. Establish the same
+        # managed interface required by the product's exact kernel proof before
+        # loading trap policies or declaring the daemon-crash trial.
+        links = json.loads(command("ip", "-j", "link", "show").stdout)
+        assert all(link["ifname"] != "xfrm0" for link in links)
+        command("ip", "link", "add", "xfrm0", "type", "xfrm", "if_id", "100")
+        created_interface = True
+        command("ip", "link", "set", "xfrm0", "up")
         runtime_conf.parent.mkdir(parents=True, exist_ok=True)
         runtime_conf.write_text(files[runtime_conf])
         _write_secret_file(SWANCTL_CONF, files[SWANCTL_CONF])
@@ -643,6 +690,8 @@ def test_autorestarted_daemon_reloads_current_authorized_configuration(
     finally:
         command("sysctl", "-w", "net.ipv4.ip_forward=" + old_forwarding)
         command("systemctl", "stop", "strongswan")
+        if created_interface:
+            command("ip", "link", "delete", "xfrm0")
         if old_file is None:
             SWANCTL_CONF.unlink(missing_ok=True)
         else:

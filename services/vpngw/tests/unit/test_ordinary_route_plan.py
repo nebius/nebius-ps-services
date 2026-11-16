@@ -58,14 +58,17 @@ def world(tmp_path, monkeypatch):
 
         return NS(wait=wait)
 
-    monkeypatch.setattr(vpc, "RouteServiceClient", lambda sdk: NS(create=mutate, delete=mutate))
     monkeypatch.setattr(
-        common,
-        "OperationServiceClient",
+        vpc,
+        "RouteServiceClient",
         lambda sdk: NS(
-            get=lambda request, **kwargs: NS(
-                wait=lambda: next(op for op in state.operations.values() if op.id == request.id)
-            )
+            create=mutate,
+            delete=mutate,
+            operation_service=lambda: NS(
+                get=lambda request, **kwargs: NS(
+                    wait=lambda: next(op for op in state.operations.values() if op.id == request.id)
+                )
+            ),
         ),
     )
 
@@ -363,3 +366,43 @@ def test_dynamic_summary_withdrawal_restores_static_coverage_before_retirement(w
         "DeleteRouteRequest",
     ]
     assert {r.spec.destination.cidr for r in state.routes.values()} == {"192.168.1.0/25"}
+
+
+@pytest.mark.parametrize("interruption", ["after-verified", "before-verified", "uncertain"])
+def test_settled_route_prefix_retires_without_submitting_obsolete_remainder(world, monkeypatch, interruption):
+    from nebius_vpngw.apply_approval import digest
+    from nebius_vpngw.deploy.apply_plan import CommandPlan, Effect
+    from nebius_vpngw.deploy.ordinary_route_plan import intent
+
+    state, journal, _policy, plan, observe = world
+    approved = plan(("192.168.1.0/24", "192.168.2.0/24"))
+    route_effect = Effect("routes", "ordinary-routes", "apply", ("table",), digest(intent(approved)), "a" * 64, True)
+    parent = CommandPlan("project", "gateway", "b" * 64, "c" * 64, (route_effect,))
+    save = journal.save
+
+    def interrupt():
+        save()
+        tx = journal.state["transaction"]
+        if interruption == "after-verified" and tx["verified"] or interruption == "before-verified" and journal.state["bindings"]:
+            raise OSError("injected route prefix interruption")
+
+    monkeypatch.setattr(journal, "save", interrupt)
+    state.lost = interruption == "uncertain"
+    with pytest.raises((OSError, TimeoutError)):
+        execute(object(), journal, approved, approval=parent.approval, observe=observe)
+    monkeypatch.setattr(journal, "save", save)
+    before = journal.snapshot()
+    assert len(before["transaction"]["operations"]) == 1
+    assert len(state.effects) == 1
+    with journal:
+        if interruption == "after-verified":
+            journal.retire_settled(before, {"approval": parent.approval, "plan": parent.mapping()})
+            assert journal.state["transaction"] is None
+            assert journal.state["bindings"] == before["bindings"]
+        else:
+            with pytest.raises(RuntimeError, match="durable-intent-changed"):
+                journal.retire_settled(before, {"approval": parent.approval, "plan": parent.mapping()})
+            assert journal.state == before
+    assert len(state.effects) == 1
+    # The unsubmitted second create remains absent from both cloud and history.
+    assert len(state.routes) == 1

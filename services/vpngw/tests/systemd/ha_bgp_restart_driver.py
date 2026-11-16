@@ -250,9 +250,18 @@ def run():
     selector.bind(authority)
     assert ports.routes.readiness().promotion_ready, "fixture baseline is not healthy"
     selector.request("failover", "backup", authority, time.time())
-    selector.tick(authority, time.time())
-    selector.state["operation"]["phase"] = "verify" if scenario == "verify" else "activate"
-    selector.state["operation"]["successes"] = 1
+    if scenario == "late-readback":
+        # Crash at durable admission, before the first selection effect. This
+        # scenario needs timely native completion before delaying its readback;
+        # pre-applying and rewinding the selection would consume the same request
+        # budget twice. Other scenarios retain their after-effect checkpoint.
+        assert selector.state["operation"]["phase"] == "activate"
+        assert selector.state["operation"]["successes"] == 0
+        assert selector.state["selected"] == {}
+    else:
+        selector.tick(authority, time.time())
+        selector.state["operation"]["phase"] = "verify" if scenario == "verify" else "activate"
+        selector.state["operation"]["successes"] = 1
     if scenario == "release":
         selector.state["operation"].update(verb="release", result="target-failed-restoring-policy")
     selector._save()
@@ -261,7 +270,7 @@ def run():
     # Product restart workflow: install guard, passive Agent materialization,
     # controller route reconciliation/activation, then selector verification.
     ports.data_plane.install_guard(replace(action, kind=ActionKind.INSTALL_COLD_START_GUARD))
-    if scenario == "missing-protection":
+    if scenario in {"missing-protection", "expired"}:
         # Declared fixture fault: model an upgrade that has never installed the
         # new destination guard. The product is already forwarding-fenced and
         # must recreate protection through its own origination action.
@@ -283,14 +292,77 @@ def run():
             check=True,
             capture_output=True,
         )
+    # The enclosing VM controller observes more native state after the selector
+    # returns. Measure terminal completion at that boundary, not at the later
+    # readback; a late observer cannot retroactively expire a completed request.
+    native_tick = TunnelController.tick
+    completion = {}
+    native_verify = tunnels.effects.verify
+    verification_delayed = False
+
+    def delayed_verification(policy, target):
+        nonlocal verification_delayed
+        operation = read_state(selector.path).get("operation")
+        if (
+            scenario == "slow-verify"
+            and not verification_delayed
+            and operation is not None
+            and operation["phase"] == "verify"
+            and operation["successes"] >= 1
+        ):
+            # Delay an observation inside the native selector. Its original
+            # clock input, request deadline and product state remain unchanged.
+            time.sleep(max(0, original_deadline - time.time()) + 0.1)
+            verification_delayed = True
+        return native_verify(policy, target)
+
+    if scenario == "slow-verify":
+        tunnels.effects.verify = delayed_verification
+
+    def record_completion(controller, authority, now):
+        result = native_tick(controller, authority, now)
+        completed_at = time.time()
+        operation = controller.state.get("operation")
+        if (
+            not completion
+            and operation is not None
+            and operation["id"] == operation_id
+            and operation["phase"] in {"succeeded", "failed"}
+        ):
+            completion.update(
+                completed_at=completed_at,
+                phase=operation["phase"],
+                result=operation["result"],
+            )
+        return result
+
+    TunnelController.tick = record_completion
     started = time.monotonic()
-    limit = started + 35
+    # Request expiry releases the override, but its durable policy cleanup still
+    # needs native verification. Bound the whole observation separately without
+    # changing the original request deadline or the caller's 60-second limit.
+    limit = started + 50
+    expiry_injected = False
+    readback_delayed = False
     steps = []
     while time.monotonic() < limit:
+        if scenario == "expired" and not expiry_injected and steps:
+            if steps[-1]["tunnel_phase"] == "verify":
+                # Model scheduling delay, not a new request or a renewed budget.
+                time.sleep(max(0, original_deadline - time.time()) + 0.05)
+                expiry_injected = True
         status = runtime.step()
+        if scenario == "late-readback" and completion and not readback_delayed:
+            assert completion["phase"] == "succeeded"
+            assert completion["completed_at"] < original_deadline
+            # Delay only the observer after actual native completion. Keep the
+            # operation, its deadline and every product action unchanged.
+            time.sleep(max(0, original_deadline - time.time()) + 0.1)
+            readback_delayed = True
         state = read_state(selector.path)
+        observed_at = time.time()
         # Retain existing observations for a failed trial without adding native
-        # polls or changing its deadline, state or recovery inputs.
+        # polls or changing its request deadline, state or recovery inputs.
         steps.append(
             {
                 "state": status["state"],
@@ -299,6 +371,8 @@ def run():
                 "pending": status["pending_operation_id"],
                 "tunnel_phase": state["operation"]["phase"],
                 "tunnel_result": state["operation"].get("result"),
+                "deadline_remaining": original_deadline - observed_at,
+                "successes": state["operation"]["successes"],
             }
         )
         print(json.dumps({"restart_step": steps[-1]}), file=sys.stderr, flush=True)
@@ -307,9 +381,27 @@ def run():
         if ports.data_plane.mode() is not DataPlaneMode.ACTIVE:
             assert state["operation"]["phase"] not in {"succeeded", "failed"}
         elif state["operation"]["phase"] in {"succeeded", "failed"}:
+            assert completion
+            assert completion["phase"] == state["operation"]["phase"]
+            assert completion["result"] == state["operation"]["result"]
+            completed_at = completion["completed_at"]
+            assert completed_at <= observed_at
             assert ports.routes.readiness().promotion_ready
             ports.data_plane.destination_protection.verify()
-            expected = {} if scenario in {"release", "failed-selected"} else {"site": "backup"}
+            restored = scenario in {"release", "failed-selected", "expired", "slow-verify"} or (
+                completed_at >= original_deadline
+            )
+            assert state["operation"]["phase"] == ("failed" if restored else "succeeded")
+            assert state["operation"]["result"] == (
+                "normal-policy-restored" if restored else "verified"
+            )
+            if scenario == "expired":
+                assert expiry_injected and completed_at >= original_deadline
+            if scenario == "slow-verify":
+                assert verification_delayed and completed_at >= original_deadline
+            if scenario == "late-readback":
+                assert readback_delayed and completed_at < original_deadline <= observed_at
+            expected = {} if restored else {"site": "backup"}
             assert state["selected"] == expected, state["selected"]
             assert (
                 tunnels.effects.verify(
@@ -318,11 +410,17 @@ def run():
                 is Health.HEALTHY
             )
             assert "net.ipv4.ip_forward=0" in events and "net.ipv4.ip_forward=1" in events
+            assert time.monotonic() < limit, "native restart observation deadline exhausted"
             print(
                 json.dumps(
                     {
                         "scenario": scenario,
                         "phase": state["operation"]["phase"],
+                        "result": state["operation"]["result"],
+                        "original_deadline": original_deadline,
+                        "completed_at": completed_at,
+                        "observed_at": observed_at,
+                        "verification_delayed": verification_delayed,
                         "selected": state["selected"],
                         "active": True,
                     }

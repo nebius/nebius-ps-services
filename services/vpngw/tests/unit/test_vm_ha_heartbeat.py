@@ -150,6 +150,83 @@ def test_cloud_effect_keeps_local_health_but_dataplane_effect_invalidates():
     assert len(sent) == 2
 
 
+@pytest.mark.parametrize("phase", ["observing", "idle", "effect"])
+def test_phase_only_progress_does_not_wait_for_network_publication(phase):
+    now, sent = [100.0], []
+    entered, release, updated = threading.Event(), threading.Event(), threading.Event()
+
+    def send(value, remaining):
+        entered.set()
+        assert release.wait(2)
+        sent.append(value)
+
+    pub = publisher(now, sent, send=send)
+    pub.collect()
+    sample = pub.local
+    sender = threading.Thread(target=pub.publish)
+    sender.start()
+    assert entered.wait(1)
+
+    def progress():
+        pub.progress(phase)
+        updated.set()
+
+    updater = threading.Thread(target=progress)
+    updater.start()
+    try:
+        # Network publication may use its whole allowance. An advisory phase
+        # change must leave the controller free to verify its repair meanwhile.
+        assert updated.wait(0.25)
+        assert pub.phase == phase and pub.local is sample
+        assert pub.generation == 0 and not pub.health_transition
+        assert sender.is_alive()
+    finally:
+        release.set()
+        updater.join(2)
+        sender.join(2)
+    assert not updater.is_alive() and not sender.is_alive()
+    assert len(sent) == 1 and sent[0].evidence.serving
+
+
+@pytest.mark.parametrize("entering", [True, False])
+def test_health_transition_still_drains_admitted_publication(entering):
+    now, sent = [100.0], []
+    entered, release, updated = threading.Event(), threading.Event(), threading.Event()
+
+    def send(value, remaining):
+        entered.set()
+        assert release.wait(2)
+        sent.append(value)
+
+    pub = publisher(now, sent, send=send)
+    if not entering:
+        pub.progress("effect", True)
+    pub.collect()
+    generation = pub.generation
+    sender = threading.Thread(target=pub.publish)
+    sender.start()
+    assert entered.wait(1)
+
+    def progress():
+        pub.progress("effect" if entering else "idle", entering)
+        updated.set()
+
+    updater = threading.Thread(target=progress)
+    updater.start()
+    try:
+        assert not updated.wait(0.05)
+        assert pub.generation == generation
+    finally:
+        release.set()
+        updater.join(2)
+        sender.join(2)
+    assert updated.is_set() and not updater.is_alive() and not sender.is_alive()
+    assert pub.generation == generation + 1 and pub.local is None
+    assert pub.health_transition is entering
+    pub.publish()
+    assert sent[-1].evidence.state == "unknown" and not sent[-1].evidence.serving
+
+
 def test_shutdown_waits_for_admitted_send_and_rejects_late_collection():
     now, sent = [100.0], []
     entered, release = threading.Event(), threading.Event()
@@ -319,6 +396,8 @@ def identity_runtime(tmp_path):
     from nebius_vpngw.agent.main import DefaultVMHAControllerRuntime
     from nebius_vpngw.agent.vm_ha.store import _envelope
     from nebius_vpngw.agent.vm_ha.tunnels import empty_state
+    from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_to_dict
+    from nebius_vpngw.agent.vm_ha_controller import ControllerCheckpoint
 
     runtime = object.__new__(DefaultVMHAControllerRuntime)
     runtime.boot_id = "boot"
@@ -359,7 +438,9 @@ def identity_runtime(tmp_path):
             "mode": "active",
             "operation_id": "prepare",
         },
-        "controller-checkpoint.json": {"ownership_incarnation": 1},
+        "controller-checkpoint.json": controller_checkpoint_to_dict(
+            ControllerCheckpoint(ownership_incarnation=1)
+        ),
         "standby-auto-healing-policy.json": {"phase": "committed", "updated_at": 100.0},
         "tunnel-selection.json": state,
     }
@@ -372,6 +453,145 @@ def identity_runtime(tmp_path):
 
     save()
     return runtime, records, save
+
+
+def recovered_checkpoint(*, passive=True, observations=2, healthy_since=100.0):
+    from nebius_vpngw.agent.vm_ha_controller import (
+        ControllerCheckpoint,
+        DataPlaneMode,
+        HAState,
+        RepairAttempt,
+    )
+
+    return ControllerCheckpoint(
+        state=HAState.NORMAL if passive else HAState.ACTIVE,
+        ownership_incarnation=1,
+        repair_attempt=RepairAttempt(
+            operation_id="repair",
+            owner_node_id="owner",
+            allocation_id="allocation",
+            ownership_epoch="epoch",
+            ownership_incarnation=1,
+            generation_id="generation",
+            boot_id="boot",
+            failure_fingerprint=("daemon-missing",),
+            started_at=80.0,
+            deadline_at=200.0,
+            healthy_since=healthy_since,
+            healthy_observations=observations,
+            repair_mode=DataPlaneMode.PASSIVE if passive else DataPlaneMode.ACTIVE,
+        ),
+    )
+
+
+@pytest.mark.parametrize("passive", [True, False])
+@pytest.mark.parametrize("phase", ["collect", "publish"])
+def test_completed_repair_retirement_preserves_fresh_health(tmp_path, passive, phase):
+    from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_to_dict
+
+    runtime, records, save = identity_runtime(tmp_path)
+    checkpoint = recovered_checkpoint(passive=passive)
+    records["controller-checkpoint.json"] = controller_checkpoint_to_dict(checkpoint)
+    mode = "passive" if passive else "active"
+    records["guard.json"]["data_plane_mode"] = mode
+    records["data-plane.json"]["mode"] = mode
+    save()
+    now, sent = [160.0], []
+
+    def retire():
+        records["controller-checkpoint.json"] = controller_checkpoint_to_dict(
+            replace(checkpoint, repair_attempt=None)
+        )
+        save()
+
+    def sample(deadline):
+        if phase == "collect":
+            retire()
+        return LocalReadiness(
+            True, True, True, True, serving_ready=not passive, protection_ready=True
+        )
+
+    pub = publisher(
+        now,
+        sent,
+        identity=runtime._health_identity,
+        service_identity=runtime._service_health_identity,
+        sample=sample,
+    )
+    pub.collect()
+    if phase == "publish":
+        retire()
+    before = (tmp_path / "controller-checkpoint.json").read_bytes()
+    pub.publish()
+    assert sent[-1][0].evidence.state == "healthy"
+    assert sent[-1][0].evidence.serving is not passive
+    assert sent[-1][0].service_healthy
+    assert (tmp_path / "controller-checkpoint.json").read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["one-observation", "no-healthy-time", "repairing", "exhausted", "wrong-mode", "pending"],
+)
+def test_unconfirmed_repair_retirement_still_invalidates_health_identity(tmp_path, change):
+    from nebius_vpngw.agent.vm_ha.models import DigestSet
+    from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_to_dict
+    from nebius_vpngw.agent.vm_ha_controller import (
+        ActionKind,
+        ControllerAction,
+        DataPlaneMode,
+        HAState,
+    )
+
+    runtime, records, save = identity_runtime(tmp_path)
+    checkpoint = recovered_checkpoint(
+        observations=1 if change == "one-observation" else 2,
+        healthy_since=None if change == "no-healthy-time" else 100.0,
+    )
+    if change in {"repairing", "exhausted"}:
+        checkpoint = replace(
+            checkpoint,
+            state=HAState.REPAIRING if change == "repairing" else HAState.REPAIR_EXHAUSTED,
+        )
+    if change == "wrong-mode":
+        checkpoint = replace(
+            checkpoint,
+            repair_attempt=replace(checkpoint.repair_attempt, repair_mode=DataPlaneMode.ACTIVE),
+        )
+    if change == "pending":
+        checkpoint = replace(
+            checkpoint,
+            pending_action=ControllerAction(
+                kind=ActionKind.ENTER_PASSIVE,
+                operation_id="pending",
+                boot_id="boot",
+                target_node_id="owner",
+                allocation_id="allocation",
+                ownership_epoch="epoch",
+                generation_id="generation",
+                digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
+                ownership_incarnation=1,
+            ),
+        )
+    records["controller-checkpoint.json"] = controller_checkpoint_to_dict(checkpoint)
+    save()
+    before = runtime._health_identity()
+    records["controller-checkpoint.json"] = controller_checkpoint_to_dict(
+        replace(checkpoint, repair_attempt=None)
+    )
+    save()
+    assert runtime._health_identity() != before
+
+
+def test_malformed_checkpoint_cannot_be_normalized_as_completed_repair(tmp_path):
+    from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_to_dict
+
+    runtime, records, save = identity_runtime(tmp_path)
+    records["controller-checkpoint.json"] = controller_checkpoint_to_dict(recovered_checkpoint())
+    del records["controller-checkpoint.json"]["repair_attempt"]["generation_id"]
+    save()
+    with pytest.raises(ValueError, match="repair attempt"):
+        runtime._health_identity()
 
 
 def test_diagnostic_record_updates_do_not_starve_healthy_collection(tmp_path):

@@ -28,7 +28,7 @@ Nebius Security Groups attached to the gateway VMs. See [SSH access](#ssh-access
 - [SSH access](#ssh-access)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
-- [Release & Versioning](#release--versioning)
+- [Versioning](#versioning)
 - [Project Structure](#project-structure)
 
 ## Quick Start Guide
@@ -158,6 +158,175 @@ state formats, VM/allocation identities, SSH trust, and HA ownership rules are
 preserved. An older agent can be upgraded even when it lacks the new ordinary
 confirmation capability. An actual update may interrupt VPN traffic.
 
+If an interrupted HA transaction belongs to a different configuration or release,
+apply reports the specific mismatch and the repair command before changing
+credentials or gateway software. VM-HA convergence preserves that cause and
+recovery guidance instead of reporting only an unclassified preparation failure.
+
+Ordinary-to-HA conversion binds package reservations to the approved operation
+before staging. Settled route creation receipts remain with their route owner;
+they are not treated as Compute or allocation identities. Brief IAM readback
+delays and route-lock contention use bounded observation, while conflicting
+identities and unfinished writers still require reconciliation. Handoff failures
+retain their specific reason and repair prerequisites through nested recovery
+errors, including the affected member and safe package-preparation detail.
+
+First conversion initializes the canonical HA lock directories after excluding
+existing writers. Package verification can then use the same locks as HA repair,
+without creating controller state or activating certificates ahead of activation.
+
+During HA activation, a busy routing writer can temporarily prevent configuration
+verification. The command waits within its existing observation deadline without
+spending a corrective attempt. If proof remains unavailable, it reports pending
+work with the same-operation resume command and conditional repair guidance.
+
+If automatic HA activation recovery uses all three corrective attempts, or the
+same correction has already failed against unchanged evidence, the command
+explains that blocker and provides the retained-VM repair command. Retrying does
+not reset the correction allowance; ownership and submitted work must still be
+reconciled before reconstruction.
+
+For a complete software rebuild on the existing gateway VMs, install the desired
+CLI release and [uv](https://docs.astral.sh/uv/getting-started/installation/) on the
+computer running the command, then run:
+
+```bash
+nebius-vpngw apply --local-config-file my-vpn.config.yaml --repair
+```
+
+Repair lists the existing VM and disk identities and asks for confirmation
+(default: No). It stops VPN traffic across the selected deployment, replaces the
+managed VPNGW, strongSwan and FRR packages even when their versions are unchanged,
+and reconstructs configuration, services and managed HA node certificates.
+Service units and helper scripts are recreated and verified before activation.
+Repair allows normal service shutdown to finish, then independently checks that
+all managed writers have stopped before reconstructing their state.
+Repair preserves writer-lock identities and restores private managed certificate
+storage, including when a single gateway is later converted to HA. Unsafe or
+foreign-owned directories remain blockers with actionable recovery guidance.
+Ubuntu, VM and disk identities, IP allocations, SSH access and external peer
+credentials are retained. Repair has no overall outage limit. VPN traffic can
+remain interrupted for the entire rebuild; the two-minute target applies to
+normal apply operations, not this last-resort reconstruction.
+
+Repair uses the current operator authentication; verify its access to the selected
+deployment. The `--sa` impersonation option is supported only for ordinary apply
+and is omitted from suggested repair commands. Configuration, project, region
+and SSH identity selections are retained.
+
+Repair has no `--dry-run` or manual approval-digest option. Old product checkpoints
+and package records do not authorize the rebuild; repair establishes fresh
+exclusion and retains its own progress outside the reset directories. Before each
+Python package mutation, including resume, it rechecks current shared consumers
+using the rebuilt distro parser without loading damaged local packages. An
+obsolete journal with invalid JSON or a malformed transaction field does not
+block reconstruction; recognizable accepted cloud effects still must settle. An
+interruption leaves the gateways inhibited where needed. Rerun the same command
+to continue. A different artifact or configuration requires a new confirmation
+and settlement of the preceding work. Running repair again after completion
+performs another rebuild. Use ordinary `apply` for subsequent configuration
+updates and unchanged verification.
+
+After a completed repair, `apply` can replace a missing standby through its
+normal approval flow. Retained repair evidence does not count as cloud resource
+drift; the serving VM, allocations and route ownership must still match.
+Subsequent normal apply retains the recorded replacement VM and disk identities
+so explicit destruction can still identify retained predecessor disks. Names
+alone never authorize deletion, and old deployment actions are not replayed.
+Completed replacement history also permits later host-only recovery and safe
+replanning when it still matches the current VMs and disks. Active replacement
+work or incomplete ownership evidence must be resolved first.
+
+Repair handles predecessor settlement and retirement after its own confirmation.
+A separate ordinary apply is unnecessary. Exact retained VM ownership and the
+outcomes of previously accepted requests must still be verifiable.
+
+Settled cloud failures retain their receipts and do not permanently block a
+confirmed repair retry. Uncertain requests are settled under their original
+identity before a new attempt. A changed-release repair also restores any
+preceding temporary quarantine before downloading its new packages.
+After a repair-owned boot, temporary SSH transport failures are retried within
+a bounded readiness window. Host identity and authentication failures still stop
+with their actual cause.
+If a package worker is still running after a CLI interruption, the resumed command
+waits for guest deployment exclusion before continuing the same recorded work.
+For an interrupted HA handoff, confirmed repair can release an idle worker after
+verifying its original identity and every submitted request's completed outcome.
+It preserves the evidence without executing obsolete activation steps. Active
+work still receives bounded waiting; unknown ownership or process state reports
+the prerequisite to resolve before resuming repair.
+Repair retains copied default and unrelated routes without adopting them as
+VPN-owned routes while it settles the preceding route transaction. After an
+interrupted single-to-HA conversion, it carries verified ordinary route ownership
+into the rebuilt HA configuration so activation can complete the route handoff.
+The approved predecessor can retain its ordinary ownership labels until that
+handoff; changed route identity or conflicting HA labels still block activation.
+Unknown operations and conflicting ownership remain explicit blockers.
+If explicit destruction is later needed, it also checks native repair history
+for disks retained by earlier standby replacements. Only records connected to
+the same deployment's exact VM and disk identities grant cleanup authority;
+unrelated or unproved resources remain blocked.
+Its activation checks recognize the verified repair boot guard and keep that
+protection active until reconstruction completes.
+Package-start policy scripts remain on the gateway; approval records contain
+only their digest and mode, so an existing policy does not prevent activation.
+Repair restores the original package-start policy before planning ordinary
+activation, while keeping service startup inhibited. Resuming activation preserves
+the ordinary transaction's own temporary policy.
+The route timer remains inhibited until repair finishes. Ordinary activation
+recognizes that verified repair guard; repair completion removes it, starts the
+timer and confirms it is active.
+
+Managed HA apply and repair use the selected operator SDK authentication and the
+independently authenticated managed runtime credentials. They do not require a
+separate CLI impersonation token. Ordinary `apply --sa` retains its explicit
+service-account token flow.
+
+The admission changes apply across the routing and deployment combinations:
+
+| Behavior | Single Static | Single BGP | HA Static | HA BGP |
+| --- | --- | --- | --- | --- |
+| Check only relevant Python dependencies and shared consumers | Yes | Yes | Yes | Yes |
+| Rebuild retained VMs with one repair confirmation | Yes | Yes | Yes | Yes |
+| Settle incomplete repair during explicit destroy | Yes | Yes | Yes | Yes |
+| Preserve a specific HA preparation cause and recovery action | N/A | N/A | Yes | Yes |
+
+Signed Ubuntu package repositories must remain reachable. A repository refresh
+failure reports DNS, outbound access and repository configuration as prerequisites;
+it does not imply that a checkpoint or digest is invalid.
+
+`pair apply --repair` applies this workflow to both regional sides with one
+confirmation and the existing regional activation barriers. Repair completion
+verifies local software and forwarding authority; use status and encrypted
+workload checks to verify connectivity to the external peer. Unavailable SSH,
+cloud operations, disk space or package sources can still prevent completion.
+
+If an irrecoverable VM-local problem prevents repair, the fallback is explicit
+teardown and fresh deployment with the same YAML:
+
+```bash
+nebius-vpngw destroy --local-config-file my-vpn.config.yaml
+nebius-vpngw apply --local-config-file my-vpn.config.yaml
+nebius-vpngw status --local-config-file my-vpn.config.yaml
+```
+
+Destroy deletes the gateway VMs and boot disks, including their contents. It
+retains public IP allocations, network containers, peer configuration and the
+local YAML. Keep the lifecycle and trust files so the product can verify and
+reprovision its resources. Fresh deployment retains the verified public allocation
+identities and starts new runtime authority; old apply-lock and route-handoff
+records remain historical. Destroy settles recorded cloud operations, fences the
+exact Compute targets, removes receipt-owned repair quarantine and retires the
+old repair record. An apply that stopped before publishing a fresh lifecycle
+can also be retired after exact terminal absence is verified; its planned
+creation tokens are never treated as VM identities. Broken guest packages and
+unreachable SSH do not block this
+path once Compute fencing is proven. Missing permissions, uncertain identity or
+unresolved provider operations must be corrected first; recreating VMs cannot
+bypass them or repair unavailable external package sources.
+The outage continues until the new gateways and VPN traffic are verified.
+Teardown following an incomplete repair is still under qualification.
+
 Ubuntu 24.04 gateways use `charon-systemd` under `strongswan.service` and the
 pinned VICI client. Package planning refreshes authenticated metadata in a
 temporary workspace, preserving system APT indexes and installed packages.
@@ -165,12 +334,37 @@ Normal `apply` also modernizes unchanged configurations;
 see [strongSwan modernization and recovery](docs/strongswan-modernization.md)
 for startup inhibition, interrupted-package resume, recovery authority and
 qualification boundaries.
+HA observation retries only transient failures of the exact cloud read or page,
+including recognized HTTP 52x gateway failures reported by the SDK as `UNKNOWN`,
+within the existing deadline. Other `UNKNOWN` errors remain failures.
+It does not replay uncertain mutations or extend
+ownership authority from cached observations. Interrupted completion reuses the
+original promotion receipt; delayed cleanup cannot authorize another transfer or
+restart a former owner without its separate restoration permission.
+
+On mixed BGP/Static standbys, passive materialization removes only Static
+responders and sessions. It preserves the running strongSwan daemon and BGP
+sessions when private runtime evidence proves the same process, startup settings
+and previously applied networking configuration. Missing or changed evidence
+keeps the normal restart path. If the daemon or its startup settings change
+during policy loading, materialization fails even after a restart; a retry cannot
+turn contradictory runtime evidence into success. Static cold readiness requires
+complete connection and session inventories; healthy BGP alone cannot establish it.
+
 Failed HA releases with completed package operations can receive a corrective
 artifact through the same `apply` command after exact lock, fence and ownership
-proof. The new transaction preserves failed history and requires a fresh
-approval; unfinished package work still resumes its original artifact.
+proof, including when member activation failed before owner release. The new
+transaction preserves the original journal phases and operator startup policy
+and requires a fresh approval; unfinished package work still resumes its
+original artifact.
+An exact current-boot local passive intent may remain pending under the retained
+fence. Corrective recovery preserves its checkpoint for the activated controller
+to replay; it does not clear the intent or authorize ownership changes. Foreign
+or competing controller work still blocks recovery.
 Interrupted service stops require native settlement proof, and corrective
 activation rechecks the exact approved cloud snapshot before proceeding.
+Recovery fingerprints installed source with a separate bounded read allowance;
+configuration and authority records retain their stricter size limit.
 Resuming interrupted package work retains its exact native package checkpoint
 while restoring startup inhibition; re-inhibition revokes any activation token.
 Python package checkpoints also retain the complete admitted manifest. A new HA
@@ -179,7 +373,7 @@ a previously used staging path. Resume preserves the original checkpoint and
 exact installed-file checks; this does not reset exhausted repair attempts or
 permit a different artifact to take over unfinished package work.
 HA activation uses required readiness checks without fixed diagnostic sleeps.
-During an approved `apply` or `vm-ha` activation, proven local service,
+During an approved `apply` activation, proven local service,
 configuration and package failures share up to three automatic corrective
 attempts across the command and both members. Recovery retains the exact approved
 artifact, configuration, credentials and policy. Two minutes is a soft recovery
@@ -195,7 +389,11 @@ Compute evidence still stops before SSH; identity, fencing and ownership checks
 remain mandatory. Access denial, invalid credentials after bounded refresh,
 malformed evidence and confirmed drift remain blockers.
 
-If fresh authority remains unavailable, `apply` and `vm-ha` report `pending`
+After approved HA Compute changes, retained package handoffs use freshly verified
+SSH authority for the same member and address. Original operation receipts,
+boot identity, configuration checks and exact host pins remain enforced.
+
+If fresh authority remains unavailable, `apply` reports `pending`
 with a nonzero exit and unknown readiness. Rerun the same command to observe and
 resume its retained operation, using the original configuration and artifact.
 Keep the command receipts and repair history. Completed effects are rechecked;
@@ -206,6 +404,27 @@ healthy, fully materialized services are not restarted for that continuation.
 JSON diagnostics retain `failure` and report `latest_failure` separately, so a
 historical timeout cannot conceal the current blocker. These mechanisms do not
 change how an already-active gateway behaves during a cloud outage.
+
+An unavailable cloud read in the HA tunnel selector defers that tunnel pass
+without selecting a repair or discarding admitted intent. The VM controller
+still requires a fresh ownership snapshot and retains its existing fail-closed
+behavior if that observation also fails. Cached evidence never authorizes a
+tunnel effect; identity conflicts and access denial remain blockers.
+
+An admitted HA local repair keeps its original five-second deadline through
+the two required healthy observations. Each confirmation uses fresh cloud and
+local evidence. Competing tunnel selection waits until those confirmations
+complete, preserving the remaining allowance and the final second reserved for
+a verified forwarding fence. Unavailable or expired verification invokes that
+fence before ordinary lock-taking teardown. A completed repair or already
+fenced member does not inherit an expired verification deadline. Treating a
+member as already fenced requires fresh kernel confirmation; the recorded
+guard intent alone is insufficient.
+
+Advisory controller phase updates do not wait for heartbeat network sends.
+Dataplane health transitions still drain any admitted publication and invalidate
+the old sample before effects or subsequent health collection. This keeps
+confirmation work independent of transport latency without changing its deadline.
 
 SSH loss or Ctrl-C detaches the observer. The admitted package phase continues
 under its existing guest owner, with startup inhibition retained. Reattachment
@@ -227,7 +446,20 @@ Foreign files, ambiguous ownership, changed authority or exhausted corrective
 attempts remain explicit blockers. No blanket package repair, lock deletion,
 forced process termination or unattended background activation is performed.
 
-When `vm-ha --rotate-mtls` or `--standby-auto-healing enabled` finds a valid
+Completed standby-restoration history does not block a later activation when its
+exact promotion receipt and the installed cluster, allocation and member pair
+validate. The history stays intact; current apply locks, configuration and boot
+fences still authorize activation. Active, blocked, malformed or foreign
+restoration evidence remains a blocker.
+
+If package installation completed but activation failed, a corrected artifact
+can use the guarded `apply` successor workflow. Preview binds the old package
+journals and a fresh package plan. After approval, the product preserves the
+failed journals, proves fencing and package completion, and reserves a new
+operation before replacing its native transaction. Partial package work still
+requires its original artifact; activation is never marked complete to bypass it.
+
+When `apply --rotate-mtls` or `--standby-auto-healing enabled` finds a valid
 installed runtime missing a required capability, it can propose a retained-pair
 upgrade and the requested operation together. One approval covers both; a
 verified prerequisite is not repeated after interruption. This path requires
@@ -268,6 +500,18 @@ Bounded daemon configuration recovery also covers warm BGP standbys, with fresh
 non-owner evidence and forwarding fenced throughout. Cold Static standbys remain
 inactive. Recovery checks both loaded connections and credential identifiers;
 path selection defers local daemon defects to the component recovery owner.
+Before reloading a restarted HA daemon, that owner removes forgotten kernel
+objects only for authorized paths whose connection and IKE sessions are both
+absent from complete native inventories. It preserves surviving sessions and
+rekey overlaps. Cleanup shares the original repair deadline and writer, checks
+local authority before each exact deletion, and rechecks cloud/peer authority
+before loading. Missing credentials alone never permit kernel teardown.
+The admitted data-plane effect owns the boot guard; routine status publication
+preserves its node, allocation, generation and digests for later repair checks.
+Cleanup removes lower-precedence trap policies before negotiated policies and
+removes all scoped policies before SAs. Unknown priority, ambiguous overlap, or
+new or returning kernel objects stop cleanup. A completed fenced attempt remains
+recorded even when its observation deadline expires during return.
 Deferred repair rechecks the same retained route authority as its initial
 admission. Inconsistent native observations retain protected forwarding without
 granting configuration-writer readiness or renewing the recovery attempt.
@@ -333,10 +577,9 @@ nebius-vpngw apply --local-config-file my-vpn.config.yaml \
 Use the same wheel and configuration for preview and execution. Potentially
 disruptive changes require an interactive confirmation that defaults to **No**,
 or the exact digest from that preview. A changed predecessor invalidates approval;
-review a new preview before retrying. HA migration and other lifecycle operations
-retain their existing effect-specific approvals; direct `apply` may require both
-the lifecycle digest and the disruption digest. The `vm-ha` command retains its
-existing combined review and approval workflow.
+review a new preview before retrying. HA apply uses `--approve <digest>` for its combined typed plan. Existing
+effect-specific apply flags remain available for their exact operations; do not
+combine them with `--approve`. Single-VM apply retains `--approve-disruption`.
 
 Ordinary apply saves the original effect plan in a private command envelope before
 starting guest, route or attachment changes. Rerunning the same command resumes only
@@ -379,11 +622,17 @@ resuming an interrupted apply. Preserve the selected pending key and the exact
 IAM operation receipts; a matching Service Account name does not prove that the
 approved operation created it. Credential publication must verify the selected
 account and authorized key before removing temporary enrollment files.
+After key creation completes, a temporarily empty key inventory receives up to
+three fresh reads within one cumulative 30-second allowance, bounded by any
+shorter enclosing deadline. These reads never repeat key creation. Conflicting
+identity, additional keys, malformed responses and denied access still block.
+If exact readback remains unavailable, keep the selected key and operation
+receipts and resume the same command.
 
 If an attachment request was conclusively rejected before effects, `apply --dry-run`
 can propose a new request for the same desired attachments. Review its new digest
-with `--approve-disruption`. The original command, guest inhibition and settled
-member operations remain in force; the rejected request is archived. This path
+with `--approve` for HA or `--approve-disruption` for Single. The original command,
+guest inhibition and settled member operations remain in force; the rejected request is archived. This path
 requires a single recorded submission and fresh full Compute request parity except
 for the resource revision. An HA owner additionally requires the exact revision
 and before/after specifications already prepared on both guests. An unexplained
@@ -406,11 +655,45 @@ inhibition has not been proven, including after a failed or disconnected command
 Completed and pending effects come from the current command's receipts, without
 borrowing completion from a historical command. A dry-run with planned changes
 reports `blocked` with `dry_run: true` and the approval digest; no effects execute.
-Existing exit codes and default text output are preserved. Failure results
-recommend status inspection instead of assuming an uncertain operation can replay.
+Existing exit codes and result fields are preserved. Failures include one concise
+reason, immediate next action, a configuration-specific `apply --repair` command
+and its prerequisites. Unknown causes are identified as unknown; raw provider or
+SSH errors are not printed. JSON includes the same optional `recovery` details
+before a pair child publishes its report. Failed independent pair readiness
+invalidates terminal health while preserving the completed effect receipts.
+Malformed YAML, invalid encoding or structure, schema errors and configuration
+read failures identify the configuration prerequisite before deployment.
+Help and declined confirmation are not deployment failures. Failure results
+recommend inspecting or resuming the original owner before replaying uncertain work.
 Ordinary deployment errors distinguish changed predecessor evidence from failed
-local verification. These diagnostics do not authorize replay of an uncertain
+local verification. Dependency failures identify resolver, package metadata,
+shared requirement, wheel availability and integrity blockers; guest failures
+retain their bounded reason codes through package-preparation wrappers.
+Replacement failures resume the canonical saved bundle with the selected YAML,
+project and region. These diagnostics do not authorize replay of an uncertain
 cloud operation or weaken the original approval.
+
+A changed configuration at an eligible reuse-only HA pre-host checkpoint can
+retire its settled parent command through `apply`. Exact cloud, route, credential,
+SSH and guest evidence must agree, every prerequisite owner must be complete or
+absent, and no package reservation may remain. Settlement has its own approval;
+apply then observes current state and requests separate approval for the fresh
+deployment plan. It preserves completed child histories and archives the old
+lifecycle when publishing the approved successor. Dry-run and declined approval
+perform no settlement. Apply reconciles the retained operation before presenting
+the successor plan.
+Settlement stops maintenance timers and drains their workers before stopping the
+HA controller, so scheduled routing work cannot restart its dependencies during
+the approved stop. Original service requests and writer-exclusion checks remain
+authoritative when resuming settlement.
+Changed-generation successor reservation accepts only the exact predecessor or
+approved successor lock. If the gateway ends a request without a usable response,
+the command reports that its outcome is unknown and supplies resume and repair
+guidance. Establish the original request's outcome and exclude active workers
+before starting repair.
+Other eligible changed-intent paths are described below. Partial VM creation,
+route-table conversion and changed-generation attachment work remain blocked
+when their original owners cannot prove settlement.
 
 Staged VM replacement also participates in the command envelope. It completes
 only after fresh service, ownership and exact-resource cleanup verification.
@@ -527,6 +810,13 @@ reinstalling packages, rewriting config, or restarting services. Compatible Pyth
 dependencies are retained. When a dependency change is required on an existing
 gateway, local `uv` resolves and downloads an exact compatible wheel set before
 approval; the plan lists those changes and rejects conflicts with retained software.
+Dependency verification covers VPNGW's current and proposed dependency closures
+and its installer. Changes to unrelated Python packages do not invalidate the
+plan. Shared dependency changes still check installed consumers immediately
+before installation.
+Within one invocation, identical package-resolution inputs reuse verified wheel
+files. Host inventory, deployment authority and approval checks still refresh;
+cached package preparation never authorizes a deployment effect.
 Selected distro-provided dependencies are installed without removing their
 package-manager-owned files. HA replacement plans inspect only retained members;
 a newly created replacement is not compared with the retired VM's boot state.
@@ -542,6 +832,134 @@ sessions are separate connectivity evidence. Failure exits nonzero, identifies
 completed/failed/unattempted gateways, and stops later deployments. A failed update
 may have changed the failed gateway; it is not rolled back automatically. Inspect
 its service/cloud-init logs and current state, then review a fresh plan.
+Brief contention with the ordinary agent's routing lock waits within the existing
+observation or handoff deadline. Inspection refreshes the complete evidence after
+waiting. Deadline expiry, invalid evidence and conflicting operations still stop
+the command; waiting never repeats an installation or an accepted route effect.
+Pre-upgrade route inspection carries the selected command's owner and lock code
+to the guest, including when its installed package predates that lock API.
+The streamed admission bundle also validates saved route plans and their exact
+provider-operation receipts before any package change.
+During standby recovery, an acknowledged rearm request can precede the Compute
+state change. `apply` observes the original request and exact owner progress
+within its existing deadline. If progress cannot be established or observation
+expires, it reports pending work with resume and repair prerequisites.
+
+`apply` failures include a plain-language reason, a technical reason
+code, the immediate next action, and a quoted `apply --repair` command with its
+prerequisites. JSON includes the same optional `recovery` details before a pair
+child publishes its result. Regional package failures retain the member number
+and an optional classified `cause_code` without copying raw child error text.
+Advice preserves the effective configuration, project,
+region and access selectors; after conversion, it names the generated HA YAML.
+An interrupted HA apply retains exit code 130, including interruptions reported
+by its deployment engine, and provides the retained-operation resume guidance.
+Conversion prerequisites also include repair guidance. A conflicting or
+unpublished candidate never becomes the repair target. A verified existing HA
+candidate with incorrect permissions is the repair target after its mode is
+fixed; the resume command retains the source and output needed for that fix.
+An unknown cause is reported as unknown. Help, declined confirmation and successful
+no-ops do not produce failure advice.
+Runtime identity checks distinguish provider timeouts, unavailable connections,
+DNS errors and denied access from invalid credentials. Failed dry-runs do not
+report started deployment effects.
+After an explicit destroy and fresh apply, completed guest installation records
+are archived only after the new VM's creation authority and clean runtime are
+verified. Unfinished records still require their original recovery path.
+Repair worker observation expiry reports pending work and the same repair resume
+command. A blocked worker reports its reconciliation prerequisite; neither case
+recommends deleting VMs to bypass retained work.
+Repair uses protected HA lifecycle evidence to validate a retained ordinary VM
+after interrupted HA conversion. It keeps the existing SSH pin and exact VM
+identity; missing or changed authority reports the prerequisite before confirmation.
+
+For changed ordinary apply intent, a settled predecessor can be retired without
+executing its remaining unsubmitted steps. This currently admits unused child
+plans and conclusively completed guest work with unused or complete local owners.
+A partial route plan is also eligible when every submitted VPN route request has
+its exact successful operation receipt and verified ownership; its unsubmitted
+remainder is archived without execution. Lost route acknowledgements require a
+separate settlement approval: reconcile only the submitted request identities,
+verify their cloud results, then review predecessor retirement and the fresh
+plan. This requires the original workstation route reservation. Partial private
+route-table conversions retain their infrastructure-owner checkpoint.
+Ordinary Security Group updates can likewise settle their submitted requests
+under separate approval. Recovery verifies the original complete Compute request,
+exact guest identity and retained SSH pins, and leaves unsubmitted member updates
+untouched. A conclusively rejected single-attempt request can be archived after
+independent no-effect verification; recovery never retries that obsolete request
+with new authority. An attachment-only HA command can also settle while retaining
+the installed generation and exact shared-allocation owner. Recovery proves both
+original guest gates and ownership-continuity receipts, releases the serving
+owner's gate before the standby lock, and verifies HA health before archival.
+An uncertain serving-owner update must still match its exact prepared before or
+after revision and full specification before recovery can replay its request.
+Lost release replies retain their original native receipts. A combined HA apply
+whose runtime activation completed can use this recovery after independently
+verifying its original lifecycle, credential and SSH receipts, both completed
+package workers, and installed package files, dependencies and assets. Completed
+runtime histories remain intact for the separately approved successor. Partial
+runtime activation and attachments that have not started remain with the
+lifecycle recovery owner.
+All six local owners are excluded during settlement and retirement,
+including provisioning, SSH trust and replacement owners with no current work.
+The product verifies the exact VMs and every participating owner, asks approval
+for archival and any retained route-reservation transfer, then builds a fresh
+deployment plan for separate approval. Dry-run and declined approval leave the
+predecessor intact. Active writers, other uncertain provider requests and
+incomplete package work remain with their original owners; never delete their checkpoints.
+A saved broad dependency manifest is retained as predecessor evidence, while the
+new plan recomputes the managed dependency closure.
+
+An untouched HA or ordinary provisioning plan can also be retired after a
+configuration or artifact change. Every child owner must be absent or belong
+to completed historical work, with no package reservation or active lifecycle
+for that command. Retirement preserves those histories and requires its own
+approval before the fresh deployment plan is presented.
+
+If only managed credential enrollment has started, apply can separately settle
+its submitted IAM requests before retiring the obsolete command. It retains the
+original private key, repairs an interrupted pairing of that key's local metadata,
+and verifies the resulting partial IAM graph through its original receipts.
+Unsubmitted IAM actions require the fresh deployment approval. Every other child
+must be unused or unrelated completed work, with no active lifecycle or package
+owner for this command. Dry-run and declined confirmation leave it unchanged.
+
+An ordinary deployment interrupted before any VM creation was submitted can
+separately settle its original infrastructure requests. Apply first verifies that
+the planned VMs are absent, completed IAM and SSH prerequisites still match, and
+every participating owner is idle. It preserves successful creation receipts
+without completing the obsolete plan. The fresh plan can reuse an exact,
+unattached boot disk only when it still satisfies the current desired settings;
+it must account for every retained creation. Remaining VM and software work
+requires the fresh deployment approval. Submitted VM creation, other unfinished
+children, and a desired plan that would abandon resources remain blocked.
+
+Changed HA configuration can also replace a host-only interrupted activation
+after both members have completed the old package work. Apply proves the old
+installed generation against the original package manifests, retains exact VM,
+allocation, route and credential identities, and inspects every local child and
+background package worker. It first requests approval to archive the predecessor
+and stop its writers under their existing locks. It then prepares the current
+configuration and dependency closure for a separate deployment approval. An
+interrupted settlement resumes its own recorded operations. The successor binds
+the new generation to the exact prior locks and owner-adoption receipt; it never
+marks obsolete activation steps complete. Corrective and settlement SSH requests
+wait within the existing operation deadline, including native package contention.
+Uncertain cloud requests, incomplete
+packages, identity changes and unresolved child operations remain blocked with
+recovery guidance. Final-candidate live qualification is still pending.
+
+Controller observation distinguishes semantic progress from repeated heartbeats
+or unchanged status text. Progress may extend observation beyond the normal
+120-second interruption target while the observation deadline permits. A pending
+operation includes its resume command; an observation timeout does not prove
+that the controller failed or that repair is safe to start.
+When resuming standby-policy enablement after an accepted Start, VM-HA first
+observes that original recovery and stable two-member authority, then prepares
+the remaining policy plan. It preserves the original operation and checks
+approval again under the deployment lock. A changed owner or conflicting
+recovery record cannot authorize policy effects.
 
 For ordinary static tunnels sharing an identical remote prefix on the same VM,
 the last enabled tunnel in resolved configuration order remains the forwarding
@@ -651,11 +1069,19 @@ before checking dependency sources. Unselected documentation or platform extras
 do not block reapply; active direct URL dependencies still require a separately
 built wheel set.
 
-After an ordinary apply publishes managed SSH trust, `vm-ha` can import that
+After an ordinary apply publishes managed SSH trust, `apply` can import that
 exact identity into the HA deployment as part of its approved migration. The
 displayed plan includes managed trust publication and is revalidated before
 execution. Existing trust repair and destructive recreation still require their
 explicit workflows.
+
+An interrupted migration reuses its verified SSH publication, even after later
+approved Compute changes. Resume still checks the current VM identities and the
+exact published trust; it does not regenerate keys or replace the saved receipt.
+Any unfinished package handoff resumes its original reserved worker independently
+of that completed SSH prerequisite. It retains the active lifecycle transaction's
+approval even when later Compute progress changes a new preview digest. Changed
+package requests still require reconciliation and receive specific repair guidance.
 
 For an absent standby that needs a product-generated SSH key, approval binds the
 generation intent alongside the exact retained trust. Dry-run does not save a
@@ -881,7 +1307,7 @@ active member; a new VM becomes the passive member. VM-HA remains opt-in.
 | Local configuration | Preserves the ordinary source and writes a separate explicit two-member candidate. |
 | Remote peer | Requires additional passive-member tunnel configuration through the peer's own management workflow. |
 
-Use `vm-ha` as the preferred entry point. The walkthrough below separates
+Use `apply` as the preferred entry point. The walkthrough below separates
 configuration preparation from deployment approval so that you can review the
 complete plan. Migration can interrupt VPN traffic during activation; review its
 reported impact and schedule an appropriate maintenance window.
@@ -921,7 +1347,7 @@ needs no infrastructure change: it establishes the managed SSH receipt needed
 to retain that VM safely during migration. If the dry run reports that receipt
 is missing, it cannot create it; follow the actual ordinary apply enrollment
 workflow in [VM-HA SSH trust and mTLS](#vm-ha-ssh-trust-and-mtls).
-`vm-ha` stops before the wizard or passive-IP reservation when this prerequisite
+`apply` stops before the wizard or passive-IP reservation when this prerequisite
 is absent. Complete any required ordinary infrastructure replacement separately
 before starting conversion.
 
@@ -930,7 +1356,7 @@ before starting conversion.
 Run the conversion interactively against the ordinary source:
 
 ```bash
-nebius-vpngw vm-ha -c my-vpn.config.yaml
+nebius-vpngw apply --convert-to-ha -c my-vpn.config.yaml
 ```
 
 The wizard derives a passive counterpart for each existing tunnel and guides you
@@ -951,31 +1377,31 @@ The ordinary source and existing environment references are preserved. Existing
 conflicting candidate files are not overwritten.
 
 **Saving the candidate and deploying it are separate approvals.** After saving,
-the same `vm-ha` invocation continues planning and may ask to proceed with the
+the same `apply` invocation continues planning and may ask to proceed with the
 HA deployment. To follow the separate preview step below, answer **No** to that
-deployment confirmation. The candidate remains saved; an action-required result
-and exit code `3` are expected. If all inputs are ready, you can instead review
+deployment confirmation. The candidate remains saved; a cancelled result
+and exit code `0` are expected. If all inputs are ready, you can instead review
 and accept that deployment plan in the same invocation.
 
 Make the agreed PSKs for the new tunnels available through the candidate's
 environment references before validation and deployment. The wizard asks for
 variable names, not secret values. Missing new secrets can stop planning after
 the candidate was saved; load them securely and continue with the candidate.
-An ordinary-input `vm-ha --dry-run` cannot create a missing candidate or collect
+An ordinary-input `apply --convert-to-ha --dry-run` cannot create a missing candidate or collect
 these wizard inputs.
 
 ### 4. Preview and approve the migration
 
 ```bash
 nebius-vpngw validate-config my-vpn.vm-ha.config.yaml
-nebius-vpngw vm-ha -c my-vpn.vm-ha.config.yaml --dry-run
+nebius-vpngw apply -c my-vpn.vm-ha.config.yaml --dry-run
 ```
 
 Review the proposed resources, effects and VPN impact. Copy the complete
 `Approval digest:` from this preview into:
 
 ```bash
-nebius-vpngw vm-ha -c my-vpn.vm-ha.config.yaml --approve <approval-digest>
+nebius-vpngw apply -c my-vpn.vm-ha.config.yaml --approve <approval-digest>
 ```
 
 This approval binds the current plan and artifact. Changed configuration,
@@ -985,27 +1411,15 @@ shared-address ownership, routes and standby readiness before reporting health.
 Managed runtime credentials and per-VM mTLS identities are handled by approved
 convergence; the candidate-preparation phase does not create them.
 
-If using `apply` directly instead, obtain its own migration preview and digest:
-
-```bash
-nebius-vpngw apply -c my-vpn.vm-ha.config.yaml --dry-run
-nebius-vpngw apply -c my-vpn.vm-ha.config.yaml \
-  --approve-vm-ha-migration <migration-digest>
-```
-
-Use the `Plan digest:` shown under the ordinary-to-HA migration plan. If this
-preview also prints `Disruption plan digest:`, append
-`--approve-disruption <disruption-digest>` for noninteractive execution, or review
-the interactive disruption confirmation. The `vm-ha` approval above covers its
-combined plan and must not be substituted for this apply migration digest.
 First-time conversion does not use `--recover-vm-ha-migration`,
-`--replace-failed-vm-ha-passive` or `--recreate-gw`.
+`--replace-failed-vm-ha-passive` or `--recreate-gw`. Use the combined `--approve`
+digest shown by the current preview.
 
 ### 5. Verify the two-member deployment
 
 ```bash
 nebius-vpngw status -c my-vpn.vm-ha.config.yaml
-nebius-vpngw vm-ha -c my-vpn.vm-ha.config.yaml --dry-run
+nebius-vpngw apply -c my-vpn.vm-ha.config.yaml --dry-run
 ```
 
 Confirm a healthy owner and ready passive, matching generations, expected tunnel
@@ -1013,8 +1427,16 @@ and routing health, and the shared allocation on the expected owner. Independent
 test VPN traffic in both directions. A plan-ready result is not a healthy result;
 these passive checks do not prove that failover has been exercised.
 
-Use the explicit HA candidate for subsequent HA operations. Retain the original
-ordinary file as source history; do not apply it as an ad hoc rollback after HA
+Use the explicit HA candidate for subsequent HA operations. Repeating
+`apply --convert-to-ha` against the unchanged original YAML follows its protected
+`<source>.ha-conversion.json` locator to the same candidate, including a custom
+output path and subsequent legitimate HA edits. Repeating it against HA YAML is
+also idempotent. The locator records provenance; lifecycle and cloud evidence
+remain authoritative for resource ownership. A changed original source or
+conflicting deployment scope stops with recovery guidance. `--force` may repair
+permissions on an exact verified candidate; it never overwrites foreign intent.
+Plain `apply` on Single YAML retains Single intent and does not follow the locator.
+Retain the original ordinary file as source history; do not apply it as an ad hoc rollback after HA
 activation has started. Preserve the candidate's lifecycle sidecar, SSH trust and
 runtime credential files.
 
@@ -1024,10 +1446,21 @@ Stop any earlier operator process, preserve the configuration, artifact and
 recovery records, then follow [Recovery and replacement](#recovery-and-replacement).
 An unchanged valid checkpoint may resume normally. Only use a recovery or
 failed-passive replacement approval when the current preview offers that exact
-operation. `--approve-vm-ha-migration` approves the initial conversion;
-`--recover-vm-ha-migration` is a separate approval for eligible interrupted states.
+operation. The current HA plan exposes one `--approve DIGEST` covering its exact
+migration or recovery effects. Existing operation-specific apply approval flags
+remain available, but cannot be combined with `--approve`.
 
 ### VM-HA lifecycle details
+
+`apply` is the single public convergence command for Single and HA deployments.
+The former `vm-ha` command has been removed without an alias. Conversion requires
+`--convert-to-ha`; `--output/-o` and `--force/-f` apply only to conversion.
+`--rotate-mtls` and `--standby-auto-healing enabled|disabled` are explicit HA
+maintenance actions. These actions and `--repair` are mutually exclusive.
+Routine HA apply verifies, reconciles and safely restores a supported standby;
+the guest controller retains automatic failover and healing ownership. Repair
+reconstructs the managed VPN software on retained Single or HA VMs with one
+default-No confirmation; it has no dry-run mode or overall outage limit.
 
 Material VM-HA planning is read-only, classifies destructive and VPN-traffic
 impact independently, and requires one existing deployable wheel. Set
@@ -1052,7 +1485,7 @@ standby-restoration authorization; an active or unreadable authorization fails
 closed and preserves the prior receipt. A missing, ambiguous,
 incompatible, or changed artifact returns typed rebuild or selection guidance.
 If it changes after convergence starts, the result explicitly says effects may
-have begun and the next `vm-ha` run resumes from durable checkpoints.
+have begun and the next `apply` run resumes from durable checkpoints.
 
 New VM-HA activations initialize automatic standby restoration as explicitly
 `enabled`. When a former owner later takes over under a newer configuration,
@@ -1152,7 +1585,7 @@ path. Replacement policy adoption belongs only to the current replacement transa
 the later upgrade preserves the existing policy and cannot reuse historical replacement authority.
 If a retained pair is already stopped and locked at a host-only upgrade step,
 `apply --dry-run` can propose an exact repaired-artifact recovery. Approve its
-disruption digest with `apply --approve-disruption DIGEST`. Both current-boot
+combined digest with `apply --approve DIGEST`. Both current-boot
 fences, cloud identities, package postconditions and reciprocal credential trust
 must verify before the repaired build resumes normal activation. The lifecycle
 retains the previous artifact and interrupted step; no VM, disk, IP or credential
@@ -1203,7 +1636,7 @@ An acknowledged policy must exactly match the replacement's existing journal
 binding. A historical failed service state is retained for diagnosis; recovery
 still requires a successful current stop and guard, zero service PIDs, no pending
 jobs, and a current-boot forwarding-off fence before installing either package.
-Review the normal `vm-ha --dry-run` plan with the repaired wheel selected and
+Review the normal `apply --dry-run` plan with the repaired wheel selected and
 approve its exact digest. This recovery interrupts traffic: it retains the owner
 inhibition and standby lock, fences and stops both hosts, installs the exact wheel
 non-owner-first, and verifies installed source before resuming the original
@@ -1211,8 +1644,16 @@ transaction. It preserves VM, disk, IP and credential identities. A durable audi
 retains the original artifact and policy history; interrupted recovery accepts
 only the approved successor artifact. Earlier clients reject this extended record.
 No manual journal or artifact-pin edits are supported.
-A missing standby does not restart a serving owner when fresh allocation and local
-NIC reads still prove its ownership. Absence is reported as unknown and cannot
+A missing standby does not restart a serving owner when its installed live-peer
+replacement capability covers both the HA and rearm controllers, and fresh
+allocation and local NIC reads still prove ownership. Both controllers consume the
+exact current peer identity from managed mTLS. Older installed owners require the
+explicit owner-upgrade plan before replacement; its approval reports the possible
+traffic interruption. A final health-verification failure reports that consecutive
+fresh observations did not confirm healthy HA; inspect `status`, resolve the
+reported prerequisites, then resume with the same configuration. The failure also
+includes the applicable `apply --repair` command.
+Absence is reported as unknown and cannot
 replace the stopped-former-owner proof required for a takeover. During mTLS trust
 overlap, the exact replacement transaction identifies the current peer; repeated
 replacements do not infer Compute identity from certificate epoch ordering.
@@ -1233,10 +1674,10 @@ For planned maintenance, change the durable two-member policy with the same
 role-neutral command:
 
 ```bash
-nebius-vpngw vm-ha --local-config-file my-vpn.vm-ha.config.yaml \
+nebius-vpngw apply --local-config-file my-vpn.vm-ha.config.yaml \
   --standby-auto-healing disabled
 # Stop and maintain the passive VM only after the command reports maintenance-ready.
-nebius-vpngw vm-ha --local-config-file my-vpn.vm-ha.config.yaml \
+nebius-vpngw apply --local-config-file my-vpn.vm-ha.config.yaml \
   --standby-auto-healing enabled
 ```
 
@@ -1265,11 +1706,16 @@ ordinary standby rearm and planned
 failover/failback, but it does not disable automatic owner-loss failover or
 weaken promotion fencing. The rearm service remains enabled and is still the
 sole Compute-start writer. If a bare invocation reports
+`rearm-cloud-observation-unavailable`, the rearm service remains running and
+reobserves cloud state on its next cycle without granting a new Start or
+changing its recovery checkpoint. This includes a missing standby VM; run
+`apply` with the same configuration to plan its supported replacement.
+If a bare invocation reports
 `standby-auto-healing-policy-invalid`, rerun with the explicit
 `--standby-auto-healing enabled` option to plan or resume the exact
 approval-bound recovery. The one exception is an exact completed non-owner
 replacement whose fresh member still has only its default initialized policy:
-bare `vm-ha` treats that as apply-owned replacement convergence, installs the
+bare `apply` treats that as apply-owned replacement convergence, installs the
 current agent on the required members, and adopts either the retained owner's
 acknowledged enabled decision or its exact deterministic initial enabled
 decision on the replacement before that member's control services start. For
@@ -1300,7 +1746,7 @@ ordinary starts instead of guessing. Re-enable the policy
 after maintenance when the current owner is healthy. If the non-owner is still
 stopped, the exact plan explicitly includes standby recovery: the owner
 persists a single-use, authority-bound recovery intent, the existing rearm
-service starts only that exact stopped member, and `vm-ha` waits for fresh
+service starts only that exact stopped member, and `apply` waits for fresh
 standby readiness before committing `enabled` on both members. The CLI never
 starts Compute directly. Ownership, allocation, target revision, policy, or
 writer drift fails closed and requires a fresh plan.
@@ -1330,7 +1776,9 @@ tombstone, reconcile apply-owned drift, observe controller progress, or ask the
   text mode asks `Create the missing non-owner VM now? [y/N]` and explicit `y`
   performs the exact replacement in the same invocation. JSON, noninteractive,
   and dry-run output retain the exact `active-standby-replacement` digest and
-  `--approve DIGEST` automation contract. These VM-HA-owned plans use the
+  `--approve DIGEST` automation contract. Completed corrective recovery history
+  remains preserved when a later missing standby is replaced; it does not
+  require another corrective recovery. These VM-HA-owned plans use the
   `vm-ha-required` classification. Cloud-confirmed member absence takes precedence over
   any stale configured public IP, so the missing non-owner is not probed over
   SSH before this replacement is planned. If that absent member's original
@@ -1338,7 +1786,7 @@ tombstone, reconcile apply-owned drift, observe controller progress, or ask the
   includes a managed identity rotation. Only product-managed trust plus default
   product key storage is eligible; explicit `VPNGW_SSH_KNOWN_HOSTS_FILE` or
   `VPNGW_SSH_HOST_KEYS_DIR` ownership is never modified. If either override is
-  present when a checkpointed rotation resumes, `vm-ha` reports
+  present when a checkpointed rotation resumes, `apply` reports
   `replacement-ssh-identity-unavailable` and directs the operator to restore
   the product-managed invocation environment. If its exact managed trust
   predecessor is unavailable instead, the same reason directs the operator to
@@ -1383,9 +1831,9 @@ tombstone, reconcile apply-owned drift, observe controller progress, or ask the
   deleted member uses explicit operator-owned SSH trust or key storage and its
   matching private key is unavailable, planning stops before approval or
   mutation with `replacement-ssh-identity-unavailable`. Restore that original
-  private key and rerun `vm-ha`; this trust prerequisite is never reported as
+  private key and rerun `apply`; this trust prerequisite is never reported as
   an authentication failure. Running plain `apply` in either case performs no
-  replacement and directs the operator to `vm-ha`, which owns the exact
+  replacement and directs the operator to `apply`, which owns the exact
   creation approval.
 
 One additional apply-owned recovery is supported for the recurring
@@ -1410,7 +1858,7 @@ VPN traffic may be briefly interrupted and that no gateway VM or disk is
 deleted.
 
 If exact cloud authority proves that a non-owner still reports active
-forwarding, `vm-ha` observes the existing controller-owned safety fence instead
+forwarding, `apply` observes the existing controller-owned safety fence instead
 of treating the state as an apply plan or an ambiguous dead end. The controller
 operation must target that reporting non-owner before the facade accepts it.
 The controller disables non-owner forwarding; traffic incorrectly using that
@@ -1419,12 +1867,17 @@ performs no apply, rearm, route, allocation, promotion, or direct forwarding
 effect, so it does not request approval. Repeated unchanged evidence stops
 safely and directs the operator to both controller service journals.
 
-`--output-format json` emits one
-`nebius-vpngw/vm-ha-result-v1` object on stdout; progress stays on stderr.
-In text mode, a healthy run ends with only `VM-HA is healthy now.` because the
-preceding progress already identifies the verified work. The JSON result keeps
-the full classification, health, effective config, passive verification scope,
-and `failover_tested=false` fields for automation.
+`apply --output-format json` emits one `nebius-vpngw.apply-result.v1` object
+on stdout; progress stays on stderr. Existing configuration, local-runtime,
+connectivity and authority evidence remains separate. The optional `ha` object
+adds health, classification, effective configuration, actions, impact, typed
+approval and passive verification scope with `failover_tested=false`. Text output
+summarizes the same result and prints failure/recovery advice once. A healthy
+controller observation alone does not prove configuration parity: regular HA
+apply also runs the canonical desired-state planner. Intentional healing-disabled
+maintenance can converge without enabling healing. Remote-peer connectivity
+failures remain visible separately from local convergence.
+
 Progress names each authoritative inspection, approval/lock check, apply or
 rearm action, VM-HA control-service restart, bounded wait, and verification
 phase. On an interactive terminal, a running phase uses an animated spinner,
@@ -1449,9 +1902,9 @@ journals instead of incorrectly reporting an authentication failure. Success
 proves two agreeing fresh samples of the current active/standby state; it does
 not exercise failover.
 
-Direct explicit VM-HA `apply` keeps the same finite Nebius SDK request and
+HA `apply` keeps the same finite Nebius SDK request and
 retry policy. If that budget ends in `DEADLINE_EXCEEDED`, it stops with a
-concise timeout plus `vm-ha` recovery guidance instead of SDK retry or Python
+concise timeout plus conditional `apply --repair` recovery guidance instead of SDK retry or Python
 tracebacks. Ordinary non-HA apply output and errors are unchanged.
 
 A manual failover or failback request cannot supersede a transfer whose durable
@@ -1462,13 +1915,13 @@ monitor also preserve their shared `/run/nebius-vpngw` runtime directory across
 service stops and restarts so controller recovery cannot invalidate the guard's
 routing lock.
 
-The candidate-preparation phase of `vm-ha` never converts in place, asks for
+The candidate-preparation phase of `apply --convert-to-ha` never converts in place, asks for
 credential paths, or creates credentials or IAM resources. Its summary shows the
 future managed source under
 `~/.config/nebius-vpngw/credentials/<project>/<gateway>/nebius-credentials.json`.
 Only exactly approved convergence through the apply engine resolves the operator
 home, creates or reuses that credential, and installs a separate protected copy
-on each VM. This can follow candidate publication in the same `vm-ha` invocation.
+on each VM. This can follow candidate publication in the same `apply` invocation.
 No CA, certificate, or TLS private-key path belongs in YAML: `apply` generates an
 independent self-signed identity on each VM and exchanges only exact public leaf
 certificates over pinned SSH.
@@ -1496,8 +1949,7 @@ manual review. Comments are canonicalized only in the new candidate; the
 source stays byte-for-byte unchanged.
 
 Use [Preview and approve the migration](#4-preview-and-approve-the-migration)
-for the command sequence and the distinction between the combined `vm-ha`
-approval, direct apply migration approval and disruption approval.
+for the command sequence and the combined HA `apply --approve` contract.
 
 Apply stages the passive before the retained active, installs and verifies the
 current agent package on both members in that same order before the first lock
@@ -1514,7 +1966,7 @@ apply locks and preserves existing locks. Correct the reported problem and
 rerun the same `apply` command; no diagnostic flag or separate recovery command
 is required. This reporting does not change regular single-VM apply.
 SSH authentication, transport and early connection-close failures use fixed
-diagnostics. The `vm-ha` command also preserves the member and safe reason when
+diagnostics. The `apply` command also preserves the member and safe reason when
 apply convergence, standby owner refresh, or artifact recovery encounters a
 package failure. Migration handoff reports failed package checks the same way.
 Guarded package failures retain the first step (predecessor inspection,
@@ -1534,7 +1986,12 @@ VM provisioning path or repeat its final provisioning transition.
 Each VM-HA cloud effect is bound to an exhaustive path-level observation guard,
 and an accepted SDK operation is persisted before its bounded wait so restart
 resumes the same operation rather than submitting a new identity. The accepted
-receipt clears only after explicit terminal success; terminal failure or an
+operation is read through the service that created it. Provisioning, replacement
+and managed credential recovery likewise retain the original service and receipt;
+an unavailable lookup does not authorize a fresh creation request.
+HA route recovery uses the originating VPC Route service and validates the
+returned operation identity. The receipt clears only after explicit terminal
+success; terminal failure or an
 unavailable success status remains durable and blocks. When the current Nebius
 operation API reports the exact typed `UNIMPLEMENTED` code for lookup, the
 adapter resubmits only the same idempotent request, requires the same operation
@@ -1835,6 +2292,10 @@ a path-level event. Required-coverage loss starts the persisted recovery episode
 described below; expiry alone neither fences nor transfers a healthy owner.
 Two healthy observations confirm recovery; sixty seconds of continuous health
 resets consumed recovery.
+Retiring that completed repair history preserves independently fresh heartbeat
+readiness. The sampler validates the full checkpoint and excludes only confirmed
+completed repair bookkeeping from its identity comparison; pending effects,
+unconfirmed repairs, ownership, configuration and fencing remain exact.
 Protected forwarding during recovery verification does not admit configuration
 writers. The controller requests agent reconciliation only after its status also
 passes the agent's current-boot readiness gate.
@@ -1853,11 +2314,16 @@ owns local repair, and every promotion retains the strict Compute-stop, detach,
 attach, ownership-reread, route-receipt, and forwarding sequence. `status`
 reports repair progress, readiness reasons, redundancy, and phase timings.
 
+During initial BGP acquisition, a newly learned prefix can make an empty route
+plan obsolete before verification. The controller keeps that action pending
+and builds a fresh plan on its next cycle, without recording the old plan as
+complete. It rechecks allocation ownership and any approved migration route
+before changes; foreign routes and conflicting ownership still block recovery.
+
 ```bash
 nebius-vpngw apply --local-config-file vm-ha.config.yaml
 nebius-vpngw status --local-config-file vm-ha.config.yaml
-nebius-vpngw vm-ha --rotate-mtls --local-config-file vm-ha.config.yaml --dry-run
-nebius-vpngw vm-ha --local-config-file vm-ha.config.yaml
+nebius-vpngw apply --rotate-mtls --local-config-file vm-ha.config.yaml --dry-run
 nebius-vpngw failover vm --local-config-file vm-ha.config.yaml
 nebius-vpngw failback vm --local-config-file vm-ha.config.yaml
 ```
@@ -1871,7 +2337,7 @@ owner, verifies three fresh authenticated rounds, prunes the old identities,
 and resumes idempotently after interruption. Certificates use a fixed
 year-9999 validity sentinel; there is no scheduled renewal or rotation.
 
-`vm-ha --rotate-mtls` first inspects rotation and any required prerequisites.
+`apply --rotate-mtls` first inspects rotation and any required prerequisites.
 When no prerequisite upgrade is needed, its preview explains that VPN traffic
 is expected to remain available while failover and rearm are paused until
 completion. A prerequisite upgrade has its own reviewed traffic impact and
@@ -1929,7 +2395,7 @@ conspicuous, while verified identity and explanatory details remain neutral.
 Action prints the exact shell-quoted command for the current config, for example:
 
 ```console
-nebius-vpngw vm-ha --local-config-file gateway.config.yaml --standby-auto-healing enabled
+nebius-vpngw apply --local-config-file gateway.config.yaml --standby-auto-healing enabled
 ```
 
 Cloud identities, operation records, raw
@@ -1957,14 +2423,14 @@ to that exact transfer before its first effect, so rearm does not require the
 deliberately stopped peer's heartbeat to remain newer than 30 seconds. It
 resumes only its own idempotent Compute start, and has no
 authority to stop Compute, move the allocation, change VPC routes or firewall
-state, or enable forwarding. `vm-ha` is the role-neutral explicit retry:
+state, or enable forwarding. `apply` is the role-neutral explicit retry:
 it targets whichever exact member is currently the non-owner through that
 owner-side reconciler and returns only after fresh current-boot
 `standby_ready` evidence less than 10 seconds old is available. Automatic rearm
 never changes ownership. Retryable or ambiguous provider failures retain one
 logical operation identity for five total submissions separated by 5, 15, 30,
 and 60 seconds; a permanent failure or exhausted retry budget closes the
-authorization as blocked. `vm-ha` can reopen only that same exact blocked
+authorization as blocked. `apply` can reopen only that same exact blocked
 receipt under the unchanged committed-enabled policy. A crash after cloud
 acceptance is recovered only by exact terminal operation lookup. Apply,
 removal, retry submission, and rearm share one writer lock, so maintenance
@@ -1993,6 +2459,11 @@ Explicit `--output-format json` instead returns the existing
 `nebius-vpngw/vm-ha-planned-transfer-result-v1` record with
 `outcome: already-owner`. Neither path disables forwarding or writes a transfer
 request. Ambiguous or unhealthy same-owner evidence fails without mutation.
+Recognized temporary SSH status-read failures are retried within the existing
+preparation deadline, with fresh member and ownership checks. Persistent
+unavailability reports that preparation is unverified and gives status/retry
+guidance. Authentication, host-key and identity failures still stop immediately;
+transfer requests are never retried by this observer.
 If the same planned command is repeated after its first transfer effect, it
 reattaches only when the unchanged exact request still predates and matches the
 same-direction durable lineage. The command reuses that request's original
@@ -2080,7 +2551,7 @@ The command keeps its authenticated Nebius client open through both terminal
 cutover and restored-standby verification. Those independent cloud rereads do
 not reuse a client whose preparation lifetime has already ended.
 
-A pre-cutover controller failure remains controller-owned: `vm-ha` observes and
+A pre-cutover controller failure remains controller-owned: `apply` observes and
 reports that transition without submitting a standby-start retry. After a
 committed cutover, the same command may invoke the sole-start writer to restore
 the exact non-owner as standby.
@@ -2093,10 +2564,10 @@ displayed elapsed value still measures total command time. Restoration phases
 come from current rearm and Compute evidence even when a mixed-version member
 cannot provide detailed cutover progress. If restoration fails after a safe
 cutover, the error reports cutover, restoration, and total elapsed time
-separately before directing the operator to `vm-ha`.
+separately before directing the operator to `apply`.
 If only the CLI's restoration observation deadline expires while the durable
 rearm state remains in progress, the command exits nonzero and says background
-restoration continues. `vm-ha` is needed only if later status reports a blocked
+restoration continues. `apply` is needed only if later status reports a blocked
 recovery.
 
 Terminal SSH, agent-status, and cloud reads are observers, not transfer
@@ -2116,7 +2587,7 @@ well-formed drift still fails immediately. If exact reproof remains in progress
 at the deadline, the command reports that cutover is not yet verified instead
 of claiming that the controller operation failed.
 Run `status` with the same local config before retrying the transfer; use
-`vm-ha` only when status reports a blocked recovery. Permanent, malformed, or
+`apply` only when status reports a blocked recovery. Permanent, malformed, or
 contradictory terminal evidence still fails immediately.
 
 Automation that consumes the former sorted request or no-op JSON can opt in
@@ -2167,12 +2638,12 @@ cloud and agent rereads. A cutover failure exits nonzero without either success
 line. A post-cutover rearm failure exits nonzero, explicitly says cutover
 succeeded but standby restoration failed, and distinguishes an observation
 timeout with continuing background recovery from a closed failure that directs
-the operator to `vm-ha`. Persistent terminal-observer loss instead reports the
+the operator to `apply`. Persistent terminal-observer loss instead reports the
 affected milestone as not yet verified, never emits a late success line, and
 directs the operator to `status`. The already-owner no-op requires an exact
 healthy owner/standby pair and follows the selected text or JSON output format.
 
-Before `vm-ha` can report healthy or a planned VM transfer can publish its
+Before `apply` can report healthy or a planned VM transfer can publish its
 request, each current controller must advertise
 `vm-ha-standby-restoration-v2`. The configuration-independent installed-agent
 capability document advertises the same feature for standby-policy recovery.
@@ -2211,6 +2682,13 @@ cancel takeover. Its peer boot and sequence must exactly match the durable
 replay high-water mark; if a crash advances replay state before the matching
 heartbeat is persisted, restart discards the older cache and blocks transfer
 until fresh exact parity arrives.
+Normal authenticated receive publishes replay state and its matching heartbeat
+under one store lock, so concurrent policy checks cannot observe a partially
+published pair. Interrupted writes still fail closed; this does not extend
+heartbeat freshness or relax activation and ownership checks.
+The running receiver retains validated sequences and retired boot identities
+across failed writes or replay-file loss. A failed publication never supplies
+accepted parity; a fresh heartbeat must complete durable publication first.
 `status` adds a resource-identity-free redundancy summary with standby readiness
 and the closed rearm phase/failure plus a supported action. Internal preparation,
 detection or repair, common-cutover, and redundancy-restoration durations remain
@@ -2734,6 +3212,9 @@ does not deploy the gateways or prove connectivity.
 For BGP cold startup, each HA owner reports `origination.required=true` and
 `origination.ready=true` while forwarding remains fenced. The pair releases
 both regional origination barriers before waiting for remote-route convergence.
+If a barrier file changes during publication, the child discards that observation
+and rereads it within the existing operation deadline. Only a complete release
+matching that invocation and the child's receipt can let it continue.
 
 Use `--profile-a` and `--profile-b` when the regions use separate operator CLI
 credentials. The pair saves these profile names and selects each for network
@@ -2757,6 +3238,9 @@ waits. Each child retains its own credential, package, lifecycle and route recei
 A surviving child retains the pair writer lock after a coordinator disconnect.
 Repeat the same command after prior children have stopped to resume the original
 child journals; interrupted work requires the original configuration and artifact.
+Child reports persist outcome and readiness as plain JSON values, including
+failed and pending results, so reporting cannot hide the regional failure or
+prevent its original journal from being resumed.
 
 Completion independently checks current ownership, forwarding, exact encrypted
 routes and required workload route coverage. Workload connectivity remains unknown
@@ -2827,7 +3311,7 @@ does not publish a partial candidate.
 **Convert an existing ordinary config to explicit VM-HA:**
 
 ```bash
-nebius-vpngw vm-ha --local-config-file <source> [--output <candidate>]
+nebius-vpngw apply --local-config-file <source> [--output <candidate>]
 ```
 
 For ordinary input, interactive text mode runs a two-phase wizard that preserves
@@ -2836,7 +3320,7 @@ default-No confirmation, and writes only a complete schema-valid candidate.
 `--force` may repair only an exact candidate; it never replaces conflicting
 YAML. Same-path, symlink, and source-hardlink destinations are rejected. JSON
 and noninteractive conversion return an actionable result without prompting.
-The same `vm-ha` command then plans and performs approved convergence through
+The same `apply` command then plans and performs approved convergence through
 the existing apply engine.
 
 **Validate config:**
@@ -3168,6 +3652,12 @@ in-progress controller or standby-rearm writer before reporting busy. A CLI
 timeout leaves an outstanding operation; use `status` to inspect its result before
 retrying. Status adds a tunnel-selection table without changing the existing VM
 status table.
+Native health, authority and verification time counts against the original
+tunnel-selection deadline. A late observation cannot complete an expired
+selection; its existing operation restores policy without renewing that deadline.
+Incomplete probe health remains unknown. A candidate-attempt timeout alone does
+not restore the previous path or release a BGP override; confirmed failure or
+the original request expiry is required.
 Concurrent IKE teardown is verified from fresh scoped SA evidence before the
 target is activated; unavailable or shared-SA evidence remains fail-closed.
 Agent reloads use the same writer exclusion and defer while a tunnel operation is
@@ -3311,6 +3801,11 @@ has a calculated maximum of about 20.8 seconds; the customer's DPD interval
 still controls when idle-peer detection begins. `dpd_timeout` applies to IKEv1,
 not IKEv2. A 30-second HA recovery episode starts after confirmed required
 coverage loss, so it is not a 30-second detection promise.
+
+Generated IPsec policy identities remain consistent when a traffic-triggered
+trap and direct initiation negotiate the same tunnel. Applying daemon policy
+requires a successful strongSwan restart before loading connections; an
+unavailable or failed restart leaves the apply incomplete for native recovery.
 
 Optional proactive refresh runs only after complete health and is serialized
 with recovery. Ordinary component repair honors `max_failures_before_restart`;
@@ -3965,37 +4460,38 @@ values printed for that deployment.
 | Situation | Workflow | Scope |
 | --- | --- | --- |
 | Ordinary apply failed | `apply -c gateway.config.yaml --dry-run`, then the reviewed `apply` retry | Reapply through the normal workflow; supply `--approve-disruption` when requested. |
-| An exact journaled HA operation was interrupted | `vm-ha -c gateway.config.yaml --dry-run`, then its approved retry | Resumes eligible checkpoints; interruption alone does not require a migration recovery override. |
-| HA migration or reapply needs explicit recovery approval | `vm-ha`, or `apply --recover-vm-ha-migration DIGEST` | Reconciles the exact interrupted transaction and resumes HA apply. |
-| A newly created passive failed initial bootstrap | `vm-ha`, or `apply --replace-failed-vm-ha-passive DIGEST` | Replaces only the transaction-created passive VM and boot disk before staging/activation. |
-| An established HA cluster's non-owner is stopped or confirmed missing | `vm-ha` | Restores an eligible stopped non-owner or plans an identity-bound missing-standby replacement. Failed SSH alone does not prove a VM is missing. |
+| An exact journaled HA operation was interrupted | `apply -c gateway.config.yaml --dry-run`, then its approved retry | Resumes eligible checkpoints; interruption alone does not require a migration recovery override. |
+| HA migration or reapply needs explicit recovery approval | `apply`, or `apply --recover-vm-ha-migration DIGEST` | Reconciles the exact interrupted transaction and resumes HA apply. |
+| A newly created passive failed initial bootstrap | `apply`, or `apply --replace-failed-vm-ha-passive DIGEST` | Replaces only the transaction-created passive VM and boot disk before staging/activation. |
+| An established HA cluster's non-owner is stopped or confirmed missing | `apply` | Restores an eligible stopped non-owner or plans an identity-bound missing-standby replacement. Failed SSH alone does not prove a VM is missing. |
 | Infrastructure changes require replacing gateway VMs | `apply --recreate-gw` | Uses [staged VM replacement](#vm-replacement-and-recovery), with temporary resources and cutover interruption. |
 | Staged VM replacement was interrupted | `apply --resume-replacement PATH` | Resumes the exact private recovery bundle after the former writer stops. |
 
-First-time conversion uses `--approve-vm-ha-migration DIGEST` when calling `apply`
-directly. That approval does not authorize interrupted migration recovery. See
+First-time conversion uses `apply --convert-to-ha`, then the exact combined
+`--approve DIGEST` plan. An initial conversion approval cannot authorize a changed
+recovery plan. See
 [Migrating one gateway VM to VM-HA](#migrating-one-gateway-vm-to-vm-ha).
 
 ### Preview and approve HA recovery
 
-Prefer `vm-ha` for HA recovery: it identifies the eligible operation and routes
+Prefer `apply` for HA recovery: it identifies the eligible operation and routes
 approval to the existing recovery engine. Material plans require the deployable
 agent wheel described in the [migration prerequisites](#migrating-one-gateway-vm-to-vm-ha).
 Keep the selected wheel unchanged between preview and execution.
 
 ```bash
-nebius-vpngw vm-ha -c gateway.config.yaml --dry-run
+nebius-vpngw apply -c gateway.config.yaml --dry-run
 ```
 
 Review the reported approval kind, impact and effects. When approval is required,
 copy the complete `Approval digest:` value into:
 
 ```bash
-nebius-vpngw vm-ha -c gateway.config.yaml --approve <approval-digest>
+nebius-vpngw apply -c gateway.config.yaml --approve <approval-digest>
 ```
 
-Alternatively, run `vm-ha -c gateway.config.yaml` interactively and review its
-confirmation. Without `--dry-run`, `vm-ha` may repair the deployment; it is not a
+Alternatively, run `apply -c gateway.config.yaml` interactively and review its
+confirmation. Without `--dry-run`, `apply` may repair the deployment; it is not a
 read-only status command. An explicitly safe plan may proceed without a prompt.
 An eligible missing-standby plan creates a new VM and disk while leaving old disks
 untouched. Follow any reported prerequisite or blocked-state guidance instead of
@@ -4009,19 +4505,14 @@ Nebius console. Preview the same command and configuration you intend to execute
 
 | Preview output | Approval option |
 | --- | --- |
-| `Approval digest:` from `vm-ha --dry-run` | `vm-ha --approve DIGEST` |
-| `Plan digest:` under the ordinary-to-HA migration plan from `apply --dry-run` | `apply --approve-vm-ha-migration DIGEST` |
-| `Recovery digest:` from `apply --dry-run` | `apply --recover-vm-ha-migration DIGEST` |
-| `Replacement digest:` under the failed provisioning passive plan from `apply --dry-run` | `apply --replace-failed-vm-ha-passive DIGEST` |
-| `Disruption plan digest:` from an apply preview | `apply --approve-disruption DIGEST` |
+| `Approval digest:` from `apply --dry-run` | `apply --approve DIGEST` |
+| `Disruption plan digest:` from a Single-VM apply preview | `apply --approve-disruption DIGEST` |
 
-Use the digest for the printed operation and option. In particular, do not pass
-the `vm-ha` approval digest as an apply migration/recovery/passive-replacement
-digest. Those lifecycle approvals are separate from disruption approval. Direct
-HA `apply` can require both: if the preview also prints `Disruption plan digest:`,
-append `--approve-disruption <disruption-digest>` to the reviewed recovery command
-for noninteractive execution, or review the interactive disruption confirmation.
-The `vm-ha` approval covers its combined plan without that second apply option.
+Use the digest for the printed operation and option. HA `--approve` binds the
+combined plan, including its lifecycle and interruption effects. Existing
+operation-specific flags remain supported for explicitly selected lifecycle
+recovery, replacement and peer-preparation workflows; they cannot combine with
+`--approve`. No digest is a general override for a failed prerequisite.
 
 Configuration, artifact or observed-state changes can invalidate approval. If a
 digest is rejected as stale, inspect a fresh preview and review its effects again.
@@ -4031,21 +4522,20 @@ lifecycle journal to bypass the check.
 
 ### Recover an interrupted HA migration or reapply
 
-Use this direct apply path only when its preview offers a `Recovery digest:`.
-Examples include two existing VMs without a lifecycle record and narrowly eligible
-interrupted activation or pre-host reapply states. Recovery verifies retained
-identities and resumes the canonical HA workflow; it does not repair an OS or
-delete the gateway VMs and disks.
+Run the same HA configuration through `apply --dry-run`, review the recovery
+kind and effects, then supply the newly emitted `--approve` digest. Unchanged
+approved checkpoints resume through their original operation identities.
+Recovery checks retained identities and uses the canonical HA effect owners;
+it does not replace the Ubuntu VMs or their disks.
 
 ```bash
 nebius-vpngw apply -c gateway.config.yaml --dry-run
-nebius-vpngw apply -c gateway.config.yaml \
-  --recover-vm-ha-migration <recovery-digest>
+nebius-vpngw apply -c gateway.config.yaml --approve <approval-digest>
 ```
 
-Apply the separate disruption approval above when requested. Do not substitute
-`--approve-vm-ha-migration`, `--recreate-gw`, or a replacement digest. An ordinary
-exact-checkpoint retry does not need this flag unless the current plan requests it.
+A changed predecessor may require separate settlement approval before a fresh
+plan can be approved. Follow the reported prerequisite; do not delete lifecycle
+records or substitute a migration, replacement or recreation flag.
 
 ### Replace a failed provisioning passive
 
@@ -4121,7 +4611,7 @@ nebius-vpngw status -c gateway.config.yaml
 For explicit VM HA, also run the read-only inspection:
 
 ```bash
-nebius-vpngw vm-ha -c gateway.config.yaml --dry-run
+nebius-vpngw apply -c gateway.config.yaml --dry-run
 ```
 
 Confirm the expected owner and standby readiness, generation agreement, tunnel
@@ -4372,7 +4862,13 @@ qualification exception. Compare exact counts using `100 * lost < sent`, with
 a positive sent count and complete receiver evidence. Preserve original trial
 verdicts and label any reassessment under this revised policy separately.
 
-The criterion also applies to operation baselines and steady-state recovery.
+The criterion also applies to operation baselines, steady-state recovery, and
+newly declared passive-VM restoration windows. Passive restoration separately
+requires unchanged serving ownership, allocation ownership, managed routes and
+forwarding. Lost probes alone do not identify which component caused the loss;
+missing observations cannot establish that these invariants held. Preserve the
+complete conservatively bounded restoration interval and original trial verdicts.
+Independent native tests with a separately declared zero-loss purpose retain it.
 Operation-specific outage limits, recovery deadlines, BGP/HA health, ownership and
 compatibility checks remain separate requirements. Report transition loss separately.
 A passing sample qualifies only its tested scope; it does not prove an unrun upgrade
@@ -4567,7 +5063,7 @@ This is the **primary defense** against DHCP-added broad APIPA routes.
 
 If status reports `routing-hygiene-not-ready`, allow the next five-minute
 maintenance cycle and rerun status. If the condition persists, redeploy through
-the supported `apply` workflow; `vm-ha` does not repair routing hygiene on
+the supported `apply` workflow; `apply` does not repair routing hygiene on
 an already-running standby.
 
 Passive maintenance never enables forwarding, rewrites sysctls, creates peer
@@ -4894,10 +5390,28 @@ The native lane records the collected case identities, immutable image ID and
 installed dependency inventory before executing the selected tests. Completion
 requires every declared case to pass; an HA selection does not complete the full
 native lane. The qualification report retains full restart and owner-coverage
-driver streams for passed and failed cases without extending their deadlines.
+driver streams for passed and failed cases, plus setup/call/teardown timings.
+The expanded suite has a forty-minute aggregate test budget; individual test
+and product recovery deadlines remain unchanged.
+Native rekey and reauthentication checks wait for replacement identities on both
+peers, with established IKE sessions and installed ESP CHILD SAs on the expected
+XFRM interface, before starting the strict steady-state packet sample. The
+acquisition deadline and zero-loss assertion remain separate and unchanged.
+Native BGP restart checks distinguish timely selection from expired-request
+cleanup. They retain the request identity and deadline, then require verified
+normal routing policy after expiry. A single 50-second observation window fits
+inside the existing 60-second process limit; pending cleanup or late selection
+success fails qualification. Measure native selection completion separately from
+later controller readback, and exercise delayed readback after timely completion.
+The delayed-readback case starts at durable request admission before the first
+selection effect; after-effect restart cases retain their separate checkpoints.
+Fixture setup must not pre-apply and rewind that selection under the same deadline.
 Owner-coverage checks require complete evidence for the expected route condition
 and assert that same immutable sample. Unknown observations and unrelated export
 transitions cannot satisfy the retained-route failure condition.
+Standalone daemon-reload fixtures compose the canonical runtime proof callbacks
+and establish their managed XFRM interfaces before declaring the fault. These
+fixtures exercise native recovery while cloud admission remains a separate proof.
 
 Container results cover package files, dependencies, native package migration,
 service assets, exact predecessor override admission and checkpoint decoding.
@@ -4919,6 +5433,11 @@ trials interrupt the real package process after native unpack or product-wheel
 installation, independently verify quiescence and inhibition, then retry the
 original frozen request without resolving or staging again. The CI package-history
 job preserves the matrix and per-case evidence, including cleanup results.
+The product-wheel interruption records service assets immediately before the
+install and verifies their bytes and file metadata are unchanged afterward.
+Assets already identical to the candidate still need this boundary check.
+Fixture unit tests execute the same composed fault hook, verify its asset
+receipt, and retain negative cases for unrelated installation commands.
 CI retains native service reports and logs on failure as well. Artifact names
 include the workflow attempt so reruns retain earlier evidence.
 Failed package transports also retain bounded staging observations identifying
@@ -4930,6 +5449,10 @@ identical package payloads, dependencies and assets, retained recovery authority
 configuration and startup inhibition. Package reinstallation and documented
 execution metadata changes are allowed; this is package convergence. Both repeat
 observations are retained, and the harness hashes are separate qualification inputs.
+An unchanged checkpoint already using the current schema needs no conversion
+receipt. The harness requires exact predecessor bytes and validates them with the
+current reader before recording that absence. Changed checkpoints still require
+conversion evidence, and receipt changes across a repeat remain failures.
 These trials do not qualify IPsec,
 BGP, forwarding, cloud ownership, VM reboot, or mutation-free full `apply`.
 Final live upgrades use the latest published stable release across SingleVM and
@@ -5110,7 +5633,7 @@ python -m ruff check src tests misc --fix
 python -m mypy
 ```
 
-## Release & Versioning
+## Versioning
 
 - Development and isolated wheel builds require `setuptools>=84.1.0` to exclude
   [GHSA-xmj3-9gf7-h52w](https://github.com/pypa/setuptools/security/advisories/GHSA-xmj3-9gf7-h52w).
@@ -5119,50 +5642,12 @@ python -m mypy
 - Versions are derived from annotated Git tags (`nebius-vpngw-vMAJOR.MINOR.PATCH`) via `setuptools-scm`; no manual edits to `pyproject.toml` are needed. Installed packages use published package metadata, source/editable checkouts prefer live SCM state, and wheel builds keep a package-local `_version.py` only as a fallback for metadata-free environments. Source lookup loads the canonical `pyproject.toml` configuration without writing a version file. When `setuptools-scm` is not installed in a source checkout, runtime version resolution gives `git describe` five seconds before it treats that probe as unavailable and consults package metadata or the generated `_version.py` cache.
 - The repo uses the current `setuptools-scm` `semver-pep440` version scheme and nested `[tool.setuptools_scm.tag]` matching so local lint/test/build runs remain free of deprecated scheme and tag-configuration warnings.
 - Local developer builds should reuse the prepared project virtualenv (`python -m build --wheel --no-isolation` or `make build`) so the output stays stable and avoids transient isolated-build toolchain warnings.
-- The `vpngw` GitHub Actions workflows validate their own YAML in CI and exercise the wheel-build regression test path before release publication, so workflow edits and packaging regressions are checked before tag time.
+- The `vpngw` GitHub Actions workflows validate their own YAML and exercise the wheel-build regression test path in CI.
 - Semantic Versioning policy:
   - **MAJOR:** breaking changes (CLI flags removed/changed, behavior changes that could break scripts).
   - **MINOR:** backward-compatible features (new options, new Nebius resources supported).
   - **PATCH:** bug fixes only (no breaking behavior, no new major capability).
-- Keep `CHANGELOG.md` updated before tagging; the changelog is the human-friendly record of what changed.
-- If you build without a tag, `setuptools-scm` will fall back to `0.0.0`; create a proper `nebius-vpngw-vX.Y.Z` tag before shipping artifacts.
-
-### Release model
-
-- `publish-release.sh` is the local release helper for this service.
-- `vpngw-ci.yml` validates PRs, main pushes and authenticated post-merge results.
-  These lanes build once after unit tests. An ordinary manual dispatch runs the
-  separate integration, coverage and packaging lane; it does not also run the
-  ordinary build job. Release tags use the separate release workflow.
-- `vpngw-release.yml` is the dedicated release workflow for this service and is triggered only by `nebius-vpngw-v*` tags.
-- The local `publish-release.sh --publish X.Y.Z` flow creates the service tag locally and verifies that the tagged source checkout resolves `nebius_vpngw.__version__ == X.Y.Z` before it pushes the tag.
-- The release workflow checks out the tagged commit from `services/vpngw`, runs lint and tests, builds the wheel, verifies the wheel version matches the tag, and publishes the GitHub Release asset.
-
-### Choosing the next SemVer
-
-Bump **MAJOR** if there’s a breaking change (CLI flags or behavior changes that can break scripts).
-Bump **MINOR** for backward-compatible features.
-Bump **PATCH** for fixes only.
-**Current working version (including dev distance):** `python -m setuptools_scm`
-
-### How to create a release for this project
-
-1. On your feature branch (or dedicated release-prep branch), run: `./publish-release.sh --prep X.Y.Z`
-2. Open a PR from that branch and merge it to `main`.
-3. After the PR is merged, switch to `main`, pull the merged commit, and run: `./publish-release.sh --publish X.Y.Z`
-4. GitHub Actions workflow [`vpngw-release.yml`](../../.github/workflows/vpngw-release.yml) runs from that tag and publishes the GitHub Release.
-
-Notes:
-
-- `publish-release.sh --publish` only creates and pushes the annotated tag. It does not build or publish artifacts locally.
-- `--publish` is intended to run only from a clean local `main` that is up to date with `origin/main`. The clean-worktree check is strict and includes untracked files.
-- `--publish` does not require `setuptools-scm` to be installed in your current interpreter; the local tag verification can derive the source-checkout version directly from Git metadata.
-- `publish-release.sh --prep` pushes the current branch, and if that branch has no upstream yet it automatically sets `origin/<current-branch>` as upstream on the first push.
-- `--prep` now also fails before editing `CHANGELOG.md` if the target tag already exists locally or on `origin`, so you do not prepare a duplicate release version.
-- `--prep` preserves markdownlint-safe blank lines between release sections when it moves `Unreleased` notes into the dated release heading.
-- `--publish` now fails locally if the target release section exists but is empty, so you do not push a tag that the release workflow would reject later.
-- `--prep` is idempotent while the target tag does not already exist. You can run it multiple times for the same unreleased version; it keeps `## [Unreleased]` empty and merges any new Unreleased entries into the target tag section without duplication.
-- The script accepts either `X.Y.Z` or `nebius-vpngw-vX.Y.Z`.
+- [CHANGELOG.md](CHANGELOG.md) records the changes in each version.
 
 ### Optional: build a single-file binary (PyInstaller)
 
@@ -5178,10 +5663,9 @@ Notes:
 ├── README.md
 ├── pyproject.toml
 ├── *.config.yaml                         # User configs (git-ignored)
-├── publish-release.sh                    # Release helper (prep changelog commit, then create/push release tag)
 ├── .github/workflows/
 │   ├── vpngw-ci.yml                      # PR/manual CI for this service
-│   └── vpngw-release.yml                 # Tag-driven GitHub Release workflow for nebius-vpngw-v*
+│   └── vpngw-release.yml                 # Reusable isolated release builder
 ├── doc/
 │   └── design.md                         # Detailed design document
 ├── image/

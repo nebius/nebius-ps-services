@@ -416,6 +416,287 @@ def _ordinary_journal(tmp_path: Path, plan: DestroyPlan) -> OrdinaryDestroyJourn
     )
 
 
+@pytest.fixture
+def retained_repair(tmp_path, monkeypatch):
+    from nebius_vpngw import repair_state
+    from nebius_vpngw.deploy import destroy_repair
+    from nebius_vpngw.deploy.repair_cloud import retained_binding
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    plan = _plan()
+    backend = _Backend(plan)
+    instance = SimpleNamespace(
+        metadata=SimpleNamespace(id="compute-0", name="gateway-0", parent_id="project-a"),
+        spec=SimpleNamespace(
+            boot_disk=SimpleNamespace(existing_disk=SimpleNamespace(id="disk-0")),
+            network_interfaces=[
+                SimpleNamespace(
+                    name="eth0",
+                    subnet_id="subnet",
+                    ip_address=SimpleNamespace(allocation_id="private"),
+                    public_ip_address=SimpleNamespace(allocation_id="public"),
+                )
+            ],
+        ),
+    )
+    backend.client, backend.instances = object(), object()
+    backend._get_instance_by_id = lambda target: instance if target in backend.compute else None
+    backend.command_compute_absent = lambda target: target not in backend.compute
+    backend.build_plan = lambda _: plan
+    monkeypatch.setattr(
+        destroy_repair, "settle_resource", lambda *_: backend.events.append("resource-settle")
+    )
+    journal = destroy_repair.journal(plan.project_id, plan.gateway_name)
+    journal.begin(
+        {
+            "project": plan.project_id,
+            "gateway": plan.gateway_name,
+            "configuration": "a" * 64,
+            "artifact": "b" * 64,
+            "ha": False,
+            "targets": [
+                {
+                    "name": "gateway-0",
+                    "compute": "compute-0",
+                    "disk": "disk-0",
+                    "transport": "192.0.2.1",
+                    "binding": repair_state.digest(retained_binding(instance)),
+                }
+            ],
+        }
+    )
+    journal.effect("package-worker", {"worker": "unreachable"}, state="accepted")
+    return plan, backend, journal, instance
+
+
+def test_destroy_settles_repair_before_fence_and_retires_without_ssh(tmp_path, retained_repair):
+    from nebius_vpngw.deploy import destroy_repair
+
+    plan, backend, journal, _ = retained_repair
+    original = journal.load()
+    admission = destroy_repair.inspect(plan, backend)
+
+    def settle(**kwargs):
+        assert kwargs == {"require_success": False}
+        backend.events.append("repair-settle")
+
+    admission.cloud.settle = settle
+    result = DestroyCoordinator(backend, _ordinary_journal(tmp_path, plan), repair=admission).run()
+    assert result.deleted_compute == 1
+    assert backend.events.index("repair-settle") < next(
+        i for i, value in enumerate(backend.events) if value.startswith("submit:compute-stop")
+    )
+    assert journal.load() is None
+    archive = json.loads(
+        (journal.root / "history" / (original["id"] + "-destroyed.json")).read_text()
+    )
+    assert archive == original and archive["effects"]["package-worker"]["state"] == "accepted"
+
+
+@pytest.mark.parametrize("kind", ["compute", "disk"])
+def test_destroy_does_not_adopt_reused_names_when_repair_compute_absent(retained_repair, kind):
+    from nebius_vpngw.deploy import destroy_repair
+
+    plan, backend, journal, _ = retained_repair
+    backend.compute.clear()
+    changed = replace(
+        plan,
+        **{
+            kind if kind == "compute" else "disks": (
+                replace(
+                    (plan.compute if kind == "compute" else plan.disks)[0],
+                    resource_id="replacement",
+                ),
+            )
+        },
+    )
+    with pytest.raises(RuntimeError, match="cannot adopt replacement"):
+        destroy_repair.inspect(changed, backend)
+    assert journal.load() is not None and not backend.events
+
+
+@pytest.mark.parametrize("ha", [False, True])
+def test_completed_repair_does_not_block_authorized_replacement_destruction(
+    tmp_path, retained_repair, ha
+):
+    from nebius_vpngw import repair_state
+    from nebius_vpngw.deploy import destroy_repair
+
+    plan, _backend, journal, _ = retained_repair
+    record = journal.load()
+    record["phase"] = "complete"
+    record["effects"] = {}
+    if ha:
+        record["intent"]["ha"] = True
+        record["intent"]["targets"].append(
+            {
+                "name": "gateway-1",
+                "compute": "retired-peer",
+                "disk": "retired-disk",
+                "transport": "192.0.2.2",
+                "binding": "f" * 64,
+            }
+        )
+    repair_state.publish(journal.path, record)
+    current = replace(
+        plan,
+        topology="vm-ha" if ha else "ordinary",
+        compute=(replace(plan.compute[0], resource_id="replacement"),),
+        disks=(replace(plan.disks[0], resource_id="replacement-disk"),),
+    )
+    backend = _Backend(current)
+    backend.client = object()
+    backend._get_instance_by_id = lambda target: (
+        None
+        if target != "replacement"
+        else pytest.fail("historical authority must not inspect new target")
+    )
+    backend.command_compute_absent = lambda target: target not in backend.compute
+    admission = destroy_repair.inspect(current, backend)
+    DestroyCoordinator(backend, _ordinary_journal(tmp_path, current), repair=admission).run()
+    assert journal.load() is None and not backend.compute
+
+
+def test_public_destroy_resumes_terminal_plan_until_repair_unlink_finishes(
+    tmp_path, monkeypatch, retained_repair
+):
+    from nebius_vpngw.deploy import destroy_repair
+
+    plan, backend, journal, _ = retained_repair
+    monkeypatch.setattr(destroy_module, "NebiusDestroyBackend", lambda *_a, **_k: backend)
+    args = dict(
+        config_path=tmp_path / "config.yaml",
+        config_digest=plan.config_digest,
+        spec=SimpleNamespace(name="gateway", vm_ha=None),
+        project_id="project-a",
+        vm_manager=object(),
+    )
+    original = Path.unlink
+
+    def fail(path, *args, **kwargs):
+        if path == journal.path:
+            raise OSError("interrupted active unlink")
+        return original(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", fail)
+        with pytest.raises(OSError, match="interrupted active unlink"):
+            execute_destroy(**args)
+    store = DestroyReceiptStore(args["config_path"])
+    assert store.read().terminal and destroy_repair.pending_retirement(plan)
+
+    def unexpected(*_):
+        raise AssertionError("must retain original terminal plan")
+
+    backend.build_plan = unexpected
+    assert execute_destroy(**args).already_absent
+    assert journal.load() is None and store.read().plan == plan
+
+
+def test_destroy_rechecks_every_member_after_resource_settlement(
+    tmp_path, retained_repair, monkeypatch
+):
+    from nebius_vpngw.deploy import destroy_repair
+
+    plan, backend, journal, _ = retained_repair
+    admission = destroy_repair.inspect(plan, backend)
+
+    def settle(*_):
+        backend.fenced.clear()
+
+    monkeypatch.setattr(destroy_repair, "settle_resource", settle)
+    with pytest.raises(RuntimeError, match="after final fencing"):
+        DestroyCoordinator(backend, _ordinary_journal(tmp_path, plan), repair=admission).run()
+    assert backend.compute and backend.routes and journal.load() is not None
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+@pytest.mark.parametrize("action", ["start", "update"])
+def test_destroy_settles_original_request_identity_before_final_fencing(
+    tmp_path, retained_repair, monkeypatch, accepted, action
+):
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.compute import v1 as compute
+
+    from nebius_vpngw.deploy import destroy_repair
+    from nebius_vpngw.deploy.replacement_cloud import message_digest
+
+    plan, backend, journal, _ = retained_repair
+    admission = destroy_repair.inspect(plan, backend)
+    keys = []
+    request = (
+        compute.StartInstanceRequest(id="compute-0")
+        if action == "start"
+        else compute.UpdateInstanceRequest(
+            metadata=ResourceMetadata(id="compute-0", resource_version=7),
+            spec=compute.InstanceSpec(),
+        )
+    )
+    original_request = message_digest(request)
+
+    def operation(*, pending=False):
+        def wait(**_):
+            if pending:
+                raise TimeoutError("lost wait")
+
+        return SimpleNamespace(
+            id="accepted-" + action,
+            resource_id="compute-0",
+            sync_wait=wait,
+            successful=lambda: True,
+            done=lambda: True,
+        )
+
+    def submit(_request, **kwargs):
+        keys.append(kwargs["metadata"])
+        if not accepted:
+            raise TimeoutError("lost reply")
+        return SimpleNamespace(wait=lambda: operation(pending=True))
+
+    with pytest.raises(TimeoutError):
+        admission.cloud.mutate("old-" + action, request, submit)
+
+    def replay(request, **kwargs):
+        assert message_digest(request) == original_request
+        keys.append(kwargs["metadata"])
+        backend.events.append("settle-old-" + action)
+        return SimpleNamespace(wait=operation)
+
+    def lookup(*_a, **_k):
+        backend.events.append("settle-old-" + action)
+        return SimpleNamespace(wait=operation)
+
+    def get(request, **_kwargs):
+        assert request.id == "compute-0"
+        # Reconstruct the saved Update against fresh authoritative metadata;
+        # neither its newer revision nor a new idempotency key may be adopted.
+        return SimpleNamespace(
+            wait=lambda: compute.Instance(
+                metadata=ResourceMetadata(
+                    id="compute-0", parent_id="project-a", resource_version=8
+                ),
+                spec=compute.InstanceSpec(),
+            )
+        )
+
+    monkeypatch.setattr(
+        compute,
+        "InstanceServiceClient",
+        lambda _: SimpleNamespace(
+            **{action: replay},
+            get=get,
+            operation_service=lambda: SimpleNamespace(get=lookup),
+        ),
+    )
+    DestroyCoordinator(backend, _ordinary_journal(tmp_path, plan), repair=admission).run()
+    assert journal.load() is None
+    assert backend.events.index("settle-old-" + action) < next(
+        i for i, value in enumerate(backend.events) if value.startswith("submit:compute-stop")
+    )
+    assert len(keys) == (1 if accepted else 2)
+    assert all(key == keys[0] for key in keys)
+
+
 def test_destroy_plan_round_trip_binds_exact_scope() -> None:
     plan = _plan()
 
@@ -1100,6 +1381,71 @@ def _lifecycle(status: VMHALifecycleStatus, plan: DestroyPlan) -> VMHALifecycleS
     )
 
 
+@pytest.mark.parametrize("saved", ["reconstruction-authority.json", "retired/lifecycle.json"])
+def test_destroy_recovers_exact_native_authority_across_repair_lifecycle_reset(
+    tmp_path, monkeypatch, retained_repair, saved
+):
+    from nebius_vpngw import repair_state
+    from nebius_vpngw.deploy import destroy_repair
+
+    old_plan, backend, repair, _ = retained_repair
+    old_record = repair.load()
+    plan = replace(old_plan, topology="vm-ha")
+    previous = _lifecycle(VMHALifecycleStatus.ACTIVE, plan)
+    intent = {
+        **old_record["intent"],
+        "ha": True,
+        "targets": [
+            old_record["intent"]["targets"][0],
+            {
+                "name": "gateway-1",
+                "compute": "compute-1",
+                "disk": "disk-1",
+                "transport": "192.0.2.2",
+                "binding": "f" * 64,
+            },
+        ],
+    }
+    record = {**old_record, "intent": intent}
+    repair_state.publish(repair.path, record)
+    payload = previous.to_dict()
+    if saved == "reconstruction-authority.json":
+        payload = {"intent": repair_state.digest(intent), "state": payload}
+    repair_state.publish(repair.root / "runs" / record["id"] / saved, payload)
+    assert destroy_repair.reconstruction_authority("project-a", "gateway") == previous
+    backend.build_plan = lambda _: plan
+    monkeypatch.setattr(destroy_module, "NebiusDestroyBackend", lambda *_a, **_k: backend)
+    spec = SimpleNamespace(
+        name="gateway",
+        vm_ha=SimpleNamespace(
+            cluster_id=previous.cluster_id,
+            members=tuple(
+                SimpleNamespace(
+                    instance_index=m.instance_index,
+                    node_id=m.node_id,
+                    role=SimpleNamespace(value=m.role),
+                )
+                for m in previous.members
+            ),
+        ),
+    )
+    config = tmp_path / "config.yaml"
+    assert not VMHALifecycleStore(config).path.exists()
+    result = execute_destroy(
+        config_path=config,
+        config_digest=plan.config_digest,
+        spec=spec,
+        project_id="project-a",
+        vm_manager=object(),
+    )
+    assert result.deleted_compute == 1 and repair.load() is None
+    terminal = VMHALifecycleStore(config).read(
+        expected_project_id="project-a", expected_gateway_name="gateway"
+    )
+    assert terminal.status is VMHALifecycleStatus.DESTROYED
+    assert terminal.transaction.approval_kind == "destruction"
+
+
 @pytest.mark.parametrize(
     "status",
     (
@@ -1393,6 +1739,260 @@ def test_vm_ha_destroy_keeps_historical_replacement_disks_in_delete_authority(cy
     )
 
     assert observed == {"disk-0", "disk-current", "disk-retired"}
+
+
+def _repair_disk_history(tmp_path, monkeypatch):
+    from nebius_vpngw import repair_state
+    from nebius_vpngw.deploy import destroy_repair
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    state = _lifecycle(VMHALifecycleStatus.ACTIVE, _plan(topology="vm-ha"))
+    owner = destroy_repair.journal(state.project_id, state.gateway_name)
+    intent = {
+        "project": state.project_id,
+        "gateway": state.gateway_name,
+        "configuration": "a" * 64,
+        "artifact": "b" * 64,
+        "ha": True,
+        "targets": [
+            {
+                "name": member.instance_name,
+                "compute": member.compute_id,
+                "disk": member.disk_id,
+                "transport": member.public_ip,
+                "binding": "c" * 64,
+            }
+            for member in state.members
+        ],
+    }
+
+    def append(snapshot, *, target_intent=None):
+        record = owner.begin(target_intent or intent)
+        path = owner.root / "runs" / record["id"] / "retired" / "lifecycle.json"
+        repair_state.publish(path, snapshot.to_dict())
+        for phase in repair_state.PHASES[1:]:
+            owner.advance(phase)
+        return record, path
+
+    archived = replace(
+        state,
+        transaction=replace(
+            state.transaction,
+            resource_bindings=(
+                ("replacement-compute:gateway-1", "compute-1"),
+                ("replacement-disk:gateway-1", "disk-1"),
+                ("retired-compute:gateway-1", "compute-retired"),
+                ("retired-disk:gateway-1", "disk-retired"),
+            ),
+        ),
+    )
+    first, path = append(archived)
+    return state, owner, intent, append, first, path
+
+
+def test_destroy_recovers_retired_disk_after_repeated_repair(tmp_path, monkeypatch):
+    from nebius_vpngw.deploy import destroy_repair
+
+    state, owner, _intent, append, _first, _path = _repair_disk_history(tmp_path, monkeypatch)
+    append(state)
+    append(state)
+    before = {p: p.read_bytes() for p in owner.root.rglob("*.json")}
+
+    assert destroy_repair.archived_retired_disks(state) == {"disk-retired"}
+    assert before == {p: p.read_bytes() for p in owner.root.rglob("*.json")}
+
+
+@pytest.mark.parametrize("cycle", (1, 2, 10))
+def test_normal_apply_then_repair_keeps_retired_disk_authority(tmp_path, monkeypatch, cycle):
+    from nebius_vpngw.cli import _vm_ha_initial_resource_bindings
+    from nebius_vpngw.deploy import destroy_repair
+    from nebius_vpngw.deploy.vm_ha_lifecycle import (
+        _validate_successor,
+        vm_ha_passive_replacement_binding_key,
+        vm_ha_passive_replacement_cycles,
+    )
+
+    state, _owner, _intent, append, _first, _path = _repair_disk_history(tmp_path, monkeypatch)
+    name = state.members[1].instance_name
+    history = {
+        vm_ha_passive_replacement_binding_key(kind, name, cycle): value
+        for kind, value in {
+            "approval": "d" * 64,
+            "compute": state.members[1].compute_id,
+            "disk": state.members[1].disk_id,
+            "retired-compute": "compute-retired",
+            "retired-disk": "disk-retired",
+        }.items()
+    }
+    previous = replace(
+        state,
+        transaction=replace(
+            state.transaction,
+            resource_bindings=tuple(sorted({**history, "heartbeat-initial-artifact": "e" * 64}.items())),
+            completed_effects=("old-completed-action",),
+        ),
+    )
+    observed = {
+        "members": [
+            {
+                "instance_name": m.instance_name,
+                "present": True,
+                "compute_id": m.compute_id,
+                "boot_disk_id": m.disk_id,
+                "network_interface_name": m.network_interface_name,
+            }
+            for m in state.members
+        ]
+    }
+    bindings = _vm_ha_initial_resource_bindings(observed, previous=previous)
+    assert all(bindings.get(key) == value for key, value in history.items())
+    assert "heartbeat-initial-artifact" not in bindings
+    assert vm_ha_passive_replacement_cycles(bindings, name) == (cycle,)
+    successor = replace(
+        previous,
+        status=VMHALifecycleStatus.PROVISIONING,
+        transaction=replace(
+            previous.transaction,
+            operation_id="new-ordinary-apply",
+            revision=1,
+            predecessor_sha256=previous.record_sha256,
+            resource_bindings=tuple(sorted(bindings.items())),
+            completed_effects=(),
+        ),
+    )
+    _validate_successor(previous, successor)
+    completed = replace(successor, status=VMHALifecycleStatus.ACTIVE)
+    append(completed)
+    append(state)
+    assert destroy_repair.archived_retired_disks(state) == {"disk-retired"}
+    assert not _vm_ha_initial_resource_bindings(
+        observed, previous=replace(previous, status=VMHALifecycleStatus.DESTROYED)
+    ).keys() & history.keys()
+
+
+@pytest.mark.parametrize("change", ("missing", "corrupt", "foreign", "unbound", "unlinked"))
+def test_destroy_never_adopts_unproved_archived_disk(tmp_path, monkeypatch, change):
+    from nebius_vpngw import repair_state
+    from nebius_vpngw.deploy import destroy_repair
+
+    state, owner, _intent, append, first, path = _repair_disk_history(tmp_path, monkeypatch)
+    append(state)
+    if change == "missing":
+        path.unlink()
+    elif change == "corrupt":
+        path.write_text("{damaged")
+    elif change == "foreign":
+        value = VMHALifecycleState.from_dict(json.loads(path.read_text()))
+        repair_state.publish(
+            path,
+            replace(
+                value,
+                cluster_id="another-cluster",
+                allocation_name="gateway-another-cluster-shared-private-ip",
+            ).to_dict(),
+        )
+    elif change == "unbound":
+        value = VMHALifecycleState.from_dict(json.loads(path.read_text()))
+        repair_state.publish(
+            path,
+            replace(
+                value,
+                members=tuple(
+                    replace(m, compute_id="other-" + m.compute_id) for m in value.members
+                ),
+                transaction=replace(value.transaction, resource_bindings=()),
+            ).to_dict(),
+        )
+    else:
+        (owner.root / "history" / (first["id"] + ".json")).unlink()
+
+    assert destroy_repair.archived_retired_disks(state) == frozenset()
+
+
+def test_destroy_repair_history_bridges_only_recorded_replacement(tmp_path, monkeypatch):
+    from nebius_vpngw.deploy import destroy_repair
+
+    old, _owner, intent, append, _first, _path = _repair_disk_history(tmp_path, monkeypatch)
+    changed = replace(old.members[1], compute_id="compute-new", disk_id="disk-new")
+    current = replace(old, members=(old.members[0], changed))
+    bridge = replace(
+        current,
+        transaction=replace(
+            current.transaction,
+            resource_bindings=(
+                ("replacement-compute:gateway-1", "compute-new"),
+                ("replacement-disk:gateway-1", "disk-new"),
+                ("retired-compute:gateway-1", "compute-1"),
+                ("retired-disk:gateway-1", "disk-1"),
+            ),
+        ),
+    )
+    new_intent = {
+        **intent,
+        "targets": [
+            intent["targets"][0],
+            {**intent["targets"][1], "compute": "compute-new", "disk": "disk-new"},
+        ],
+    }
+    append(bridge, target_intent=new_intent)
+    append(current, target_intent=new_intent)
+
+    assert destroy_repair.archived_retired_disks(current) == {"disk-1", "disk-retired"}
+    unrelated = replace(
+        current,
+        members=tuple(replace(m, compute_id="foreign-" + m.compute_id) for m in current.members),
+    )
+    assert destroy_repair.archived_retired_disks(unrelated) == frozenset()
+
+
+def test_destroy_repair_archive_symlink_cannot_grant_ownership(tmp_path, monkeypatch):
+    from nebius_vpngw.deploy import destroy_repair
+
+    state, _owner, _intent, _append, _first, path = _repair_disk_history(tmp_path, monkeypatch)
+    original = path.with_name("original.json")
+    path.rename(original)
+    path.symlink_to(original)
+    with pytest.raises((RuntimeError, OSError)):
+        destroy_repair.archived_retired_disks(state)
+
+
+def test_destroy_plan_includes_archived_repair_disk_and_rejects_foreign_name(tmp_path, monkeypatch):
+    from nebius_vpngw.deploy import destroy_repair
+
+    state, _owner, _intent, append, _first, _path = _repair_disk_history(tmp_path, monkeypatch)
+    append(state)
+    disk = SimpleNamespace(
+        metadata=SimpleNamespace(id="disk-retired", name="gateway-1-boot", resource_version="7")
+    )
+    backend = object.__new__(NebiusDestroyBackend)
+    backend.lifecycle_state = state
+    backend.resolved_predecessor_effect = backend.resolved_predecessor_resource_id = None
+    backend.spec = SimpleNamespace(
+        name="gateway",
+        instance_count=2,
+        vm_spec={"num_nics": 1},
+        vm_ha=SimpleNamespace(cluster_id="cluster-a"),
+    )
+    backend.project_id = "project-a"
+    backend._get_instance_by_name = lambda _name: None
+    backend._get_instance_by_id = lambda _id: None
+    backend._get_disk_by_name = lambda name: disk if name == "gateway-1-boot" else None
+    backend._get_disk_by_id = lambda identifier: disk if identifier == "disk-retired" else None
+    backend._get_allocation_by_name = lambda _name: None
+    backend._get_allocation_by_id = lambda _id: None
+    backend._route_inventory = lambda: ()
+
+    with monkeypatch.context() as original:
+        original.setattr(destroy_repair, "archived_retired_disks", lambda _: frozenset())
+        assert backend.build_plan("a" * 64).blockers == (
+            "unbound VM-HA disk occupies gateway-1-boot",
+        )
+    plan = backend.build_plan("a" * 64)
+    assert not plan.blockers
+    assert [(d.resource_id, d.name) for d in plan.disks] == [("disk-retired", "gateway-1-boot")]
+    disk.metadata.id = "foreign-disk"
+    plan = backend.build_plan("a" * 64)
+    assert plan.blockers and not plan.disks
 
 
 @pytest.mark.parametrize("cycle", (1, 9, 10, 11, 99, 100, 1000))
@@ -1867,8 +2467,8 @@ def test_vm_ha_destroy_does_not_require_apply_runtime_observation(
             assert require_revisions
 
     class Coordinator:
-        def __init__(self, _backend, _journal) -> None:
-            pass
+        def __init__(self, _backend, _journal, *, repair=None) -> None:
+            assert repair is None
 
         def run(self) -> DestroyResult:
             return DestroyResult(
@@ -2069,6 +2669,8 @@ def test_destroyed_vm_ha_lifecycle_requires_exact_retained_public_bindings(
         ("retired-disk:gateway-1", "disk-retired"),
         ("replacement-compute:gateway-1", "compute-replacement"),
         ("route-runtime-id", "route-runtime-stale"),
+        ("apply-lock-cycle", "operation-before-destroy"),
+        ("ordinary-route-source", "{}"),
         ("standby-replacement-disk-name:gateway-1", "gateway-1-boot"),
     ),
 )

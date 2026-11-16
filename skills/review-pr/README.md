@@ -1,5 +1,10 @@
 # Review PR
 
+[The shared PR lifecycle](references/pr-lifecycle.md) aligns contribution assessment,
+status labels, failed-test repair, one replacement PR and independent issue
+completion. Plain review and report-only limits remain binding; issue closure
+requires its own verified resolution and authority.
+
 Ordinary review first assesses the contribution against accepted behavior,
 safety and supported existing-user workflows. After proven safe repairs, the
 root invokes maintain-project-specs for every affected project, then reviews the
@@ -101,3 +106,7 @@ until you update it yourself. Concurrent edits remain your work.
 The [private execution contract](../create-pr/references/private-review.md) defines
 allocation, original authority, recovery and safe cleanup. Candidate tests still
 need restricted execution separate from trusted controls. No public flags change.
+
+## Enrolled repository automation
+
+Shared Actions authority: enrolled repositories route laptop and hosted requests through one merge/release controller; PR lifetime waivers are durable policy, not labels. See the skill contract and sibling merge-pr automation-authority reference.

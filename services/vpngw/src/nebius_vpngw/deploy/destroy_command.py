@@ -61,13 +61,46 @@ def retire(
         if not isinstance(intent, dict):
             raise RuntimeError("Pending HA command lost its runtime authority")
         members = intent.get("members")
-        if members is not None and any(
+        compute_targets = targets
+        if any(target.startswith("create:") for target in targets):
+            from .ha_members import targets as member_targets
+
+            # A failed reprovision can start command admission before publishing
+            # its first lifecycle. Its creation tokens are not Compute identities.
+            terminal_members = {member.instance_name: member for member in state.members}
+            packages = intent.get("packages")
+            if (
+                not isinstance(members, dict)
+                or set(members) != set(terminal_members)
+                or not set(members) <= set(destruction.plan.expected_compute_names)
+                or not isinstance(packages, dict)
+                or packages.get("checkpoint") != state.record_sha256
+                or any(
+                    not isinstance(member, dict)
+                    or set(member)
+                    != {"kind", "node_id", "instance_index", "role", "compute_id", "disk_id"}
+                    or member["kind"] != "created"
+                    or member["compute_id"] != ""
+                    or member["disk_id"] != ""
+                    or type(member["instance_index"]) is not int
+                    or any(
+                        member[key] != getattr(terminal_members[name], key)
+                        for key in ("node_id", "instance_index", "role")
+                    )
+                    for name, member in members.items()
+                )
+                or tuple(sorted(targets)) != member_targets(members)
+            ):
+                raise RuntimeError("Pending creation targets lack exact terminal authority")
+            compute_targets = set()
+        elif members is not None and any(
             member["compute_id"] not in targets for member in members.values()
         ):
             raise RuntimeError("Pending member targets differ from HA authority")
         attachments = intent.get("attachments")
         if attachments is not None and any(
-            member["compute_id"] not in targets for member in attachments["members"].values()
+            member["compute_id"] not in compute_targets
+            for member in attachments["members"].values()
         ):
             raise RuntimeError("Pending attachment intent differs from HA authority")
         scope = package_reservation.recovery_owner(
@@ -85,7 +118,7 @@ def retire(
             if (
                 path != package_reservation.path_for(*scope[:2], host)
                 or reservation is None
-                or reservation["request"]["package"]["target"] not in targets
+                or reservation["request"]["package"]["target"] not in compute_targets
             ):
                 raise RuntimeError("Pending package target differs from HA authority")
         for effect in plan.effects:
@@ -96,7 +129,7 @@ def retire(
                 and effect.owner == "security-groups"
                 and effect.action == "reconcile"
             ):
-                if not set(effect.targets) <= targets:
+                if not set(effect.targets) <= compute_targets:
                     raise RuntimeError("Pending attachment targets differ from HA authority")
             elif (effect.key, effect.owner, effect.action) not in {
                 ("credentials", "managed-credentials", "enroll"),
@@ -107,7 +140,7 @@ def retire(
                 raise RuntimeError("Pending prerequisite requires its owning recovery workflow")
         # Missing, stale or unavailable observations do not revoke an admission.
         for _ in range(2):
-            for target in sorted(targets):
+            for target in sorted(compute_targets):
                 if not backend.command_compute_absent(target):
                     raise RuntimeError("Pending command Compute target is not proven absent")
         predecessor = command.archive()

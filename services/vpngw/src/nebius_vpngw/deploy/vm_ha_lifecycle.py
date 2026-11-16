@@ -27,7 +27,7 @@ from typing import Any, cast
 LIFECYCLE_SCHEMA_V2 = "nebius-vpngw/vm-ha-lifecycle-v2"
 LIFECYCLE_SCHEMA_V3 = "nebius-vpngw/vm-ha-lifecycle-v3"
 LIFECYCLE_SCHEMA = "nebius-vpngw/vm-ha-lifecycle-v4"
-_APPROVAL_KINDS = frozenset({"destruction", "migration", "recovery", "staged-replacement"})
+_APPROVAL_KINDS = frozenset({"destruction", "migration", "recovery", "staged-replacement", "repair"})
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}")
 # The first cycle has its established unsuffixed spelling; later cycles are ASCII integers >= 2.
@@ -285,6 +285,74 @@ def vm_ha_passive_replacement_cycle_for_approval(
     return matches[0] if matches else None
 
 
+def vm_ha_replacement_ownership_bindings(state: VMHALifecycleState | None) -> dict[str, str]:
+    """Keep replacement identities and cycle approvals, never old execution intent."""
+    if state is None or state.transaction is None or state.status is VMHALifecycleStatus.DESTROYED:
+        return {}
+    names = {member.instance_name for member in state.members}
+    pattern = re.compile(
+        rf"(?:passive-replacement(?:-{REPLACEMENT_CYCLE_PATTERN})?-approval"
+        rf"|(?:retired|replacement)(?:-{REPLACEMENT_CYCLE_PATTERN})?-(?:compute|disk)):(.+)"
+    )
+    return {
+        key: value
+        for key, value in state.transaction.resource_bindings
+        if (match := pattern.fullmatch(key)) is not None and match[1] in names
+    }
+
+
+def vm_ha_has_unsettled_replacement(state: VMHALifecycleState) -> bool:
+    """Separate completed ownership history from replacement execution authority.
+
+    A later normal apply retains the five immutable ownership fields per cycle.
+    Only complete, connected history ending at both current member bindings is
+    audit-only. Replacement approvals, effects and other execution metadata still
+    belong to the original replacement owner, never a host-only recovery.
+    """
+    tx = state.transaction
+    if tx is None:
+        return False
+    bindings = dict(tx.resource_bindings)
+    history = vm_ha_replacement_ownership_bindings(state)
+    if any(
+        key.startswith(_PASSIVE_REPLACEMENT_AUDIT_PREFIXES) and key not in history
+        for key in bindings
+    ) or any(
+        effect.startswith(("replace-failed-", "replace-missing-"))
+        for effect in (*tx.completed_effects, *((tx.pending_effect,) if tx.pending_effect else ()))
+    ):
+        return True
+    seen: set[str] = set()
+    for member in state.members:
+        previous: tuple[str, str] | None = None
+        for cycle in vm_ha_passive_replacement_cycles(history, member.instance_name):
+            keys = {
+                kind: vm_ha_passive_replacement_binding_key(kind, member.instance_name, cycle)
+                for kind in ("approval", "retired-compute", "retired-disk", "compute", "disk")
+            }
+            if any(not history.get(key) for key in keys.values()):
+                return True
+            values = {kind: history[key] for kind, key in keys.items()}
+            if (
+                not _DIGEST.fullmatch(values["approval"])
+                or values["approval"] == tx.approval_digest
+                or previous is not None
+                and previous != (values["retired-compute"], values["retired-disk"])
+            ):
+                return True
+            previous = values["compute"], values["disk"]
+            seen.update(keys.values())
+        if previous is not None and (
+            previous != (member.compute_id, member.disk_id)
+            or previous != (
+                bindings.get(f"compute:{member.instance_name}"),
+                bindings.get(f"disk:{member.instance_name}"),
+            )
+        ):
+            return True
+    return seen != set(history)
+
+
 def vm_ha_effective_resource_bindings(
     bindings: Mapping[str, str],
 ) -> dict[str, str]:
@@ -318,6 +386,9 @@ def vm_ha_effective_resource_bindings(
                 "prehost-superseded-",
                 "staged-replacement-",
                 "runtime-created-package-manifests:",
+                # Activation validates retained repair receipts; they are not
+                # cloud resource identities and remain in the full record.
+                "repair-reset:",
             )
         )
         and key not in artifact_keys
@@ -331,6 +402,9 @@ def vm_ha_effective_resource_bindings(
             "runtime-peer-continuation",
             "runtime-peer-continuation-command",
             "runtime-package-manifests",
+            # Creation receipts are validated by ordinary_route_migration and
+            # the route-adoption owner, not observed as a cloud resource ID.
+            "ordinary-route-source",
             "corrective-release-authority",
             "corrective-release-reserved",
             "apply-lock-cycle",
@@ -2278,6 +2352,12 @@ def _validate_successor(
         or successor.gateway_name != previous.gateway_name
     ):
         raise ValueError("VM-HA lifecycle project and gateway scope cannot change")
+    successor_bindings = dict(successor.transaction.resource_bindings)
+    if any(
+        successor_bindings.get(key) != value
+        for key, value in vm_ha_replacement_ownership_bindings(previous).items()
+    ):
+        raise ValueError("VM-HA lifecycle replacement ownership cannot be removed or rebound")
     from .vm_ha_prepared_replacement import validate_successor as validate_prepared_replacement
 
     if validate_prepared_replacement(previous, successor):
@@ -2290,6 +2370,17 @@ def _validate_successor(
         # Destruction retains predecessor bindings as history. A retained
         # corrective authority record does not make this a corrective release.
         _validate_destruction_successor(previous, successor)
+        return
+    if (
+        previous.transaction is not None
+        and previous.status is VMHALifecycleStatus.ACTIVE
+        and successor.status is VMHALifecycleStatus.PROVISIONING
+        and successor.transaction.operation_id != previous.transaction.operation_id
+        and successor.transaction.checkpoint == "missing-standby-replacement-approved"
+    ):
+        # Retained corrective history is not a new corrective release. The
+        # replacement validator preserves it and checks the exact missing peer.
+        _validate_missing_standby_replacement_successor(previous, successor)
         return
     from .vm_ha_corrective import validate_successor as validate_corrective
 
@@ -2333,12 +2424,6 @@ def _validate_successor(
         and successor.status is VMHALifecycleStatus.PROVISIONING
         and successor.transaction.operation_id != previous.transaction.operation_id
     ):
-        if (
-            previous.status is VMHALifecycleStatus.ACTIVE
-            and successor.transaction.checkpoint == "missing-standby-replacement-approved"
-        ):
-            _validate_missing_standby_replacement_successor(previous, successor)
-            return
         if successor.transaction.revision != 1:
             raise ValueError("VM-HA lifecycle replacement transaction must start at revision 1")
         if previous.status is VMHALifecycleStatus.ACTIVE and not previous.has_same_identity(
@@ -3246,7 +3331,10 @@ class VMHALifecycleStore:
                 if (
                     previous.transaction is not None
                     and previous.transaction.operation_id != state.transaction.operation_id
-                    and "corrective-release-authority" in dict(state.transaction.resource_bindings)
+                    and (
+                        "corrective-release-authority" in dict(state.transaction.resource_bindings)
+                        or "prehost-superseded-record" in dict(state.transaction.resource_bindings)
+                    )
                 ):
                     from .vm_ha_corrective import archive
 

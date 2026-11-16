@@ -1,7 +1,7 @@
 """Correlate native Codex tool events with naturally emitted installed hook events.
 
 Read bounded prefixes in place; never copy prompts, tool arguments or transcripts.
-This adapter admits the Codex 0.166.0 rollout event shape only; live
+This adapter admits the Codex 0.167.0 rollout event shape only; live
 qualification remains separate from fixture validation.
 """
 
@@ -99,7 +99,7 @@ def _calls(data: bytes, owner_hash: str) -> dict[tuple[str, str], int]:
                 or not isinstance(identity, str)
                 or hashlib.sha256(identity.encode()).hexdigest() != owner_hash
                 or payload.get("source") != "cli"
-                or payload.get("cli_version") != "0.166.0"
+                or payload.get("cli_version") != "0.167.0"
             ):
                 raise NativeEvidenceError(
                     "Native session identity or event version is unsupported."

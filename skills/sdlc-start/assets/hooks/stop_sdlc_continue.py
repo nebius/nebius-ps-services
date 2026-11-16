@@ -371,7 +371,7 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
     except (json.JSONDecodeError, OSError):
         return "Agentic SDLC repair state is unreadable."
     if (
-        control.get("schema") != "agentic-sdlc/repair-control-v2"
+        control.get("schema") != "agentic-sdlc/repair-control-v3"
         or event.get("schema") != "agentic-sdlc/failure-event-v2"
         or control.get("execution_id") != current_state.get("current_execution")
         or event.get("execution_id") != current_state.get("current_execution")
@@ -382,6 +382,31 @@ def _repair_stop_reason(active, current_state: dict[str, Any]) -> str | None:
         return "Agentic SDLC repair state identity is inconsistent."
     blocker = control["active_blocker"]
     status = str(control.get("status") or "")
+    suspended = control.get("suspended_repairs")
+    resumptions = control.get("resumptions")
+    if (not isinstance(suspended, list) or len(suspended) > 4
+            or not isinstance(resumptions, dict)
+            or any(not isinstance(item, str) or re.fullmatch(r"[0-9a-f]{64}", item) is None
+                   for item in [*suspended, *resumptions, *resumptions.values()])):
+        return "Agentic SDLC repair continuation state is malformed."
+    if suspended and status in {"resolved", "revalidation_required"}:
+        return "Agentic SDLC still has a suspended repair; no terminal or revalidation bypass is allowed."
+    for kind, identities, schema in (
+        ("suspended", suspended, "agentic-sdlc/suspended-repair-v1"),
+        ("resumptions", resumptions.values(), "agentic-sdlc/repair-resumption-v1"),
+    ):
+        for identity in identities:
+            path = control_path.parent / kind / f"{identity}.json"
+            if path.is_symlink() or path.parent.is_symlink():
+                return "Agentic SDLC repair continuation evidence is symlinked."
+            try:
+                value = load_json(path) or {}
+                actual = hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+            except (OSError, ValueError):
+                return "Agentic SDLC repair continuation evidence is unreadable."
+            if (actual != identity or value.get("schema") != schema
+                    or value.get("execution_id") != control["execution_id"]):
+                return "Agentic SDLC repair continuation evidence changed."
     if status in {
         "exhausted",
         "blocked_after_design_remediation",
@@ -752,18 +777,18 @@ def _current_iteration(current_state: dict[str, Any]) -> int:
     )
 
 
-def _max_iterations(current_state: dict[str, Any]) -> int:
-    return int(current_state.get("max_iterations", 200) or 200)
+def _checkpoint_interval_iterations(current_state: dict[str, Any]) -> int:
+    return int(current_state.get("checkpoint_interval_iterations", 200) or 200)
 
 
 def _bound_project(active, run_state: dict[str, Any]) -> str | None:
     # load_active_run has already verified the native session binding, run and
     # immutable objective ancestry. Continuation never reconstructs prompt files.
-    if (run_state.get("schema") != "workflow/run-v2"
+    if (run_state.get("schema") != "workflow/run-v4"
             or run_state.get("owner") != "agentic-sdlc"
             or run_state.get("run_id") != active.run_id):
         return None
-    return str(active.canonical_project_root)
+    return str(run_state.get("logical_project_root") or active.canonical_project_root)
 
 
 def _continuation_prompt(
@@ -831,7 +856,7 @@ def _record_continuation(
         {
             "event": "Stop",
             "turn_id": payload.get("turn_id"),
-            "decision": "continue" if reason != "NO_PROGRESS" else "stop",
+            "decision": "continue",
             "reason": reason,
             "project_id": active.project_id,
             "run_id": active.run_id,
@@ -889,8 +914,8 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
     if repair_reason:
         return stop(repair_reason)
 
-    if _current_iteration(current_state) - int(run_state.get("continuation_window_start", 0)) >= _max_iterations(current_state):
-        return stop("Max SDLC iterations reached; resumable checkpoint. Explicit continue starts another bounded window; failure and no-progress budgets remain.")
+    checkpoint_due = (_current_iteration(current_state) - int(run_state.get("observation_checkpoint_start", 0))
+                      >= _checkpoint_interval_iterations(current_state))
 
     retry_phase = _retry_exceeded(current_state)
     if retry_phase:
@@ -898,10 +923,6 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
 
     digest = _state_digest(active, current_state)
     no_progress = _no_progress_count(active, payload, digest)
-    if no_progress >= 2:
-        _record_continuation(active, payload, digest, no_progress, "NO_PROGRESS")
-        return stop("No progress after Stop continuation.")
-
     project_folder = _bound_project(active, run_state)
     if project_folder is None:
         return stop(
@@ -948,6 +969,12 @@ def evaluate(payload: dict[str, Any]) -> dict[str, Any]:
             return stop("Merge requires an explicit user request in the accepted run completion policy.")
         # Continuation only routes the coordinator. The protected delivery owner
         # independently admits exact source, review, live and GitHub evidence.
+    if checkpoint_due or no_progress >= 2:
+        reason = ("Observation checkpoint: inspect actual worker progress, owned operations and waiting/unknown health. "
+                  "Preserve ownership and continue healthy work; elapsed iterations or unchanged state alone are not failure.")
+        prompt = _continuation_prompt(current_state, COORDINATOR_SKILL, reason, project_folder)
+        _record_continuation(active, payload, digest, no_progress, reason)
+        return continue_with(prompt)
     if next_skill:
         reason = f"state recommends {next_skill}"
         prompt = _continuation_prompt(

@@ -14,6 +14,10 @@ import sys
 
 import owned_git_origin
 
+PHASE_OBSERVATION_PURPOSES = frozenset({
+    "sdlc-classify-failure", "sdlc-tdd", "sdlc-prepare-execution",
+})
+
 
 class TargetError(RuntimeError):
     """The selected workflow checkout cannot be independently verified."""
@@ -156,16 +160,19 @@ def _owned_registration(state: dict, agent: str, *, coordinator_session: str | N
     if agent not in {"codex", "claude"}:
         raise TargetError("Workflow host is invalid.")
     boundary = Path(state["run_root"])
-    project = Path(state["project_root"])
+    repo = Path(state["project_root"])
+    project = Path(state["selected_project_root"])
+    if project != repo / "project-a":
+        raise TargetError("Selected application is outside its fixed registration.")
     home = Path(state["private_root"]) / f"{agent}-home"
     _safe_path(home, boundary)
     owned_git_origin.validate(
-        project,
+        repo,
         boundary,
         state["verification_id"],
         baseline=state["git"]["baseline_sha"],
     )
-    env = owned_git_origin.environment(project)
+    env = owned_git_origin.environment(repo)
     env["CODEX_HOME" if agent == "codex" else "CLAUDE_CONFIG_DIR"] = str(home)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["GIT_OPTIONAL_LOCKS"] = "0"
@@ -209,7 +216,7 @@ def _owned_registration(state: dict, agent: str, *, coordinator_session: str | N
         session_sha = hashlib.sha256(coordinator_session.encode()).hexdigest()
         binding = _private_json(runs / 'bindings' / (session_sha + '.json'), boundary)
         if (binding.get('schema') != 'workflow/session-binding-v1' or binding.get('owner') != 'agentic-sdlc'
-                or binding.get('session_sha256') != session_sha or binding.get('project_root') != str(project)):
+                or binding.get('session_sha256') != session_sha):
             raise TargetError('Recorded coordinator binding does not own this fixture.')
         run_dir = Path(str(binding.get('run_dir', '')))
     if run_dir.parent.parent != runs:
@@ -224,7 +231,7 @@ def _owned_registration(state: dict, agent: str, *, coordinator_session: str | N
     with workflow_imports(Path(__file__).resolve().parents[2]):
         from workflow_objectives import validate_run
         run, objective = validate_run(run_dir, owner='agentic-sdlc')
-    if expected_context is not None and any(workspace.get(key) != value for key, value in expected_context.items()):
+    if expected_context is not None and any(workspace.get(key) != expected_context[key] for key in ("owner", "project_id", "logical_project_root", "git_common_dir")):
         raise TargetError("Cleanup project registration differs from the product owner context.")
     if startup:
         if (startup['run_id'] != run_dir.name or startup['project_id'] != workspace.get('project_id')
@@ -236,16 +243,18 @@ def _owned_registration(state: dict, agent: str, *, coordinator_session: str | N
             raise TargetError("Recorded coordinator identity is invalid.")
         binding = _private_json(runs / 'bindings' / (session_sha + '.json'), boundary)
         if (binding.get('schema') != 'workflow/session-binding-v1' or binding.get('owner') != 'agentic-sdlc'
-                or binding.get('session_sha256') != session_sha or binding.get('project_root') != str(project)
+                or binding.get('session_sha256') != session_sha
                 or binding.get('run_dir') != str(run_dir)):
             raise TargetError('Current coordinator binding does not own the observed run.')
-    identity = {'project_id': workspace.get('project_id'), 'project_root': str(project), 'run_id': run_dir.name}
-    if (workspace.get('schema') != 'workflow/project-v1' or workspace.get('owner') != 'agentic-sdlc'
+    identity = {'project_id': workspace.get('project_id'), 'project_root': run['project_root'], 'run_id': run_dir.name}
+    if (workspace.get('schema') != 'workflow/project-v2' or workspace.get('owner') != 'agentic-sdlc'
             or active.get('schema') != 'workflow/active-run-v1' or active.get('run_id') != run_dir.name
             or lock.get('schema') != 'workflow/coordinator-ownership-v1' or lock.get('owner') != 'agentic-sdlc'
             or any(lock.get(key) != value for key, value in identity.items())
             or run.get('coordinator_session_sha256') != session_sha or lock.get('owner_session_hash') != session_sha
-            or run.get('project_root') != str(project) or workspace.get('project_root') != str(project)
+            or run.get('logical_project_root') != str(project) or workspace.get('logical_project_root') != str(project)
+            or workspace.get('project_root') != run['project_root'] or binding.get('project_root') != run['project_root']
+            or run.get('git_common_dir') != str(repo / '.git') or not run.get('automatic_outer')
             or binding.get('objective_id') != objective['objective_id']
             or current is not None and (current.get('run_id') != run_dir.name or current.get('project_id') != workspace['project_id'])):
         raise TargetError('Hook ownership record does not bind the active workflow.')
@@ -293,7 +302,7 @@ def _validate_historical_basis(
     def basis(fingerprint):
         value = _private_json(run_dir / "bases" / feature / (fingerprint + ".json"), boundary)
         if (canonical(value) != fingerprint
-                or value.get("schema") != "workflow/objective-impact-execution-basis-v2"):
+                or value.get("schema") != "workflow/objective-impact-execution-basis-v3"):
             raise TargetError("Historical execution basis changed.")
         return value
 
@@ -304,6 +313,7 @@ def _validate_historical_basis(
     if changed_plan and phase == "sdlc-tdd":
         settlement_fields |= {
             "plan_digest", "plan_path", "assignment_plan_sha256", "validation_plan_sha256",
+            "task_acceptance_policy", "task_acceptance_policy_sha256",
         }
     if (set(prior) != set(latest)
             or any(prior[key] != latest[key] for key in prior.keys() - settlement_fields)):
@@ -403,6 +413,12 @@ def _validate_original_tdd_replan(state, run_dir, boundary, prior, latest, recor
             return {item.task_id: execution._task_json(item)
                     for item in execution.parse_locked_plan(raw.decode("utf-8"))}
 
+        def acceptance_policy(fingerprint):
+            from workflow_task_acceptance import policy_path, validate
+            definitions = tasks(fingerprint)
+            value = _private_json(policy_path(plans[fingerprint][0]), boundary)
+            return validate(value, list(definitions))
+
         for value in (prior, latest):
             from workflow_validation import digest as validation_digest, plan_path, validate_plan
             definitions = tasks(value["plan_digest"])
@@ -412,6 +428,10 @@ def _validate_original_tdd_replan(state, run_dir, boundary, prior, latest, recor
             validate_plan(checks, list(definitions))
             if validation_digest(checks) != value["validation_plan_sha256"]:
                 raise TargetError("Historical TDD executable validation plan changed.")
+            policy = acceptance_policy(value["plan_digest"])
+            if (policy != value["task_acceptance_policy"]
+                    or validation_digest(policy) != value["task_acceptance_policy_sha256"]):
+                raise TargetError("Historical TDD acceptance policy changed.")
 
         rows = [json.loads(line) for line in _private_bytes(
             execution.journal_path(run_dir, feature, "coordinator"), boundary,
@@ -471,6 +491,9 @@ def _validate_original_tdd_replan(state, run_dir, boundary, prior, latest, recor
             before, after = tasks(cursor), tasks(edge[1])
             if not before.keys() < after.keys() or any(after[key] != value for key, value in before.items()):
                 raise TargetError("Historical TDD replan changed preserved task definitions.")
+            before_policy, after_policy = acceptance_policy(cursor), acceptance_policy(edge[1])
+            if any(after_policy["tasks"].get(key) != value for key, value in before_policy["tasks"].items()):
+                raise TargetError("Historical TDD replan changed preserved task acceptance.")
             cursor = edge[1]
             seen.add(cursor)
             pending = None
@@ -513,14 +536,27 @@ def observe_startup(state: dict, *, skills_root: Path, agent: str, coordinator_s
             state["git"].get("promoted_sha") is not None
             or current.get("current_phase") != "sdlc-start"
             or current.get("status") != "running"
-            or any((run_dir / name).exists() for name in ("execution", "plans"))
+            or (run_dir / "plans").exists()
         ):
             raise TargetError("Workflow startup observation is too late; start a fresh trial.")
+        with workflow_imports(skills_root):
+            from workflow_objectives import validate_run
+            from workflow_interop import load, validate_contract_lease
+            run, _objective = validate_run(run_dir)
+            entries = set(path.name for path in (run_dir / "execution").iterdir())
+            lease = load(run_dir)
+            if entries != {"interop.json"} or lease is None or lease["promoted_head"] is not None or lease["released"]:
+                raise TargetError("Startup execution is not an unused automatic lease.")
+            validate_contract_lease(run_dir, Path(run["project_root"]), run["source_head"])
         project = Path(state["project_root"])
         owned_git_origin.validate(project, Path(state["run_root"]), state["verification_id"],
                                   baseline=state["git"]["baseline_sha"], require_clean=True)
         if _run(["git", "-C", str(project), "rev-parse", "HEAD"], env) != state["git"]["baseline_sha"]:
             raise TargetError("Workflow startup requires the unchanged fixture baseline.")
+        execution_project = Path(run["project_root"])
+        if (_run(["git", "-C", str(execution_project), "status", "--porcelain", "--untracked-files=all"], env)
+                or _run(["git", "-C", str(execution_project), "rev-parse", "HEAD"], env) != state["git"]["baseline_sha"]):
+            raise TargetError("Workflow startup requires an unchanged clean automatic outer.")
         if coordinator_session is None:
             raise TargetError("An explicit native coordinator selector is required for source discovery.")
         script = (
@@ -533,7 +569,7 @@ def observe_startup(state: dict, *, skills_root: Path, agent: str, coordinator_s
         home = Path(state["private_root"]) / f"{agent}-home"
         observed = json.loads(_run([
             sys.executable, "-c", script,
-            str(skills_root / "sdlc-start/assets/hooks/lib"), str(project), str(home), coordinator_session,
+            str(skills_root / "sdlc-start/assets/hooks/lib"), str(state["selected_project_root"]), str(home), coordinator_session,
         ], env))
         expected = {"project_id": workspace["project_id"], "run_id": run_dir.name, "run_dir": str(run_dir)}
         if observed != expected:
@@ -591,6 +627,95 @@ def validate_startup_receipt(state: dict) -> dict:
         raise TargetError("Workflow startup receipt is unavailable or invalid.") from error
 
 
+def _observe_integrated_failure(run_dir, feature, coordinator, boundary):
+    """Observe a retired failed wave without authorizing its corrective work."""
+    import workflow_execution as execution
+    from workflow_objectives import _writers_quiescent
+    from workflow_resources import require_released
+    from workflow_validation import load_plan
+
+    if coordinator.get("active_wave") is not None:
+        raise TargetError("Integrated failure observation retains an active wave.")
+    _writers_quiescent(run_dir)
+    require_released(run_dir)
+    load_plan(run_dir, feature)
+    waves = [_private_json(execution.wave_path(run_dir, feature, name), boundary)
+             for name in coordinator["wave_ids"]]
+    failures = [wave for wave in waves if wave.get("status") == "failed"
+                and not execution._wave_satisfied(run_dir, feature, coordinator, wave["wave_id"])]
+    if not failures or failures[-1].get("integration_head") != coordinator["integration_head"]:
+        raise TargetError("Integrated failure observation has no exact unresolved failed wave.")
+    authority = execution._validated_wave_failure(run_dir, feature, failures[-1])
+    from repair_control import observe_integrated_wave_repair
+    observe_integrated_wave_repair(
+        run_dir, feature, authority["classification_id"], authority["dispatch_id"],
+    )
+
+
+def _observe_corrective_replan(run_dir, feature, coordinator, selected, boundary):
+    """Observe a completed owner replan without advancing its corrective wave."""
+    import workflow_execution as execution
+    from workflow_impact import verify_current
+    from workflow_objectives import _writers_quiescent
+    from workflow_resources import require_released
+    from workflow_validation import load_plan, verify_plan_revision
+
+    if coordinator.get("active_wave") is not None:
+        raise TargetError("Corrective replan retains an active wave.")
+    _writers_quiescent(run_dir)
+    require_released(run_dir)
+    load_plan(run_dir, feature)
+    rows = [json.loads(line) for line in _private_bytes(
+        execution.journal_path(run_dir, feature, "coordinator"), boundary,
+    ).splitlines() if line]
+    if any(not isinstance(row, dict) for row in rows):
+        raise TargetError("Corrective replan has malformed replan history.")
+    replans = [row for row in rows if row.get("event") in {"future_replan_intent", "future_replanned"}]
+    if (len(replans) < 2 or replans[-2].get("event") != "future_replan_intent"
+            or replans[-1].get("event") != "future_replanned"
+            or replans[-2].get("old_digest") != replans[-1].get("old_digest")
+            or replans[-2].get("new_digest") != replans[-1].get("new_digest")
+            or replans[-1].get("new_digest") != coordinator["plan_digest"]
+            or replans[-1].get("old_digest") == coordinator["plan_digest"]):
+        raise TargetError("Corrective replan requires its completed owner replan.")
+    waves = [_private_json(execution.wave_path(run_dir, feature, name), boundary)
+             for name in coordinator["wave_ids"]]
+    failures = [wave for wave in waves if wave.get("status") == "failed"
+                and not execution._wave_satisfied(run_dir, feature, coordinator, wave["wave_id"])]
+    future = next((wave for wave in waves if wave.get("status") == "planned"), None)
+    if not failures or future is None or failures[-1].get("integration_head") != coordinator["integration_head"]:
+        raise TargetError("Corrective replan has no exact failed boundary and future correction.")
+    authority = execution._validated_wave_failure(run_dir, feature, failures[-1], active=True)
+    for wave in failures:
+        prior = execution._validated_wave_failure(run_dir, feature, wave)
+        if any(prior[key] != authority[key] for key in ("blocker_key", "oracle")):
+            raise TargetError("Corrective replan changed failure ownership.")
+    plan = Path(coordinator["plan_path"])
+    tasks = {task.task_id: task for task in execution.parse_locked_plan(
+        _private_bytes(plan, boundary).decode("utf-8"))}
+    if not future.get("task_ids"):
+        raise TargetError("Corrective replan has no corrective tasks.")
+    for task_id in future["task_ids"]:
+        task = tasks[task_id]
+        recorded = _private_json(execution.task_path(run_dir, feature, future["wave_id"], task_id), boundary)
+        if (recorded.get("status") != "planned"
+                or recorded.get("task") != execution._task_json(task)
+                or recorded.get("task_definition_digest") != execution._task_definition_digest(task)
+                or task.diagnosis_id != authority["diagnosis_id"]
+                or task.regression_oracle != authority["oracle"]):
+            raise TargetError("Corrective replan must precede untouched future work.")
+    if authority["classification"] == "PLAN_DEFECT":
+        _, review = verify_plan_revision(run_dir, feature, coordinator, failures[-1])
+        impact, _ = verify_current(run_dir, selected, execution_id=feature)
+        from workflow_objectives import validate_run
+        objective = validate_run(run_dir)[1]["revisions"][-1]["sha256"]
+        if (review["replacement_plan_sha256"] != coordinator["plan_digest"]
+                or review["replacement_validation_plan_sha256"] != coordinator["validation_plan_sha256"]
+                or review["objective_sha256"] != objective
+                or any(review[key] != impact[key] for key in ("requirements_sha256", "design_sha256"))):
+            raise TargetError("Corrective replan does not use the exact reviewed plan.")
+
+
 def _resolve_target(
     state: dict, *, skills_root: Path, agent: str, require_clean: bool,
     worker_task: str | None, assignment_digest: str | None,
@@ -598,7 +723,7 @@ def _resolve_target(
 ) -> dict[str, str]:
     if phase_observation is not None and (
         not isinstance(phase_observation, str)
-        or phase_observation not in {"sdlc-classify-failure", "sdlc-tdd"}
+        or phase_observation not in PHASE_OBSERVATION_PURPOSES
         or worker_task is not None or assignment_digest is not None
     ):
         raise TargetError("Phase observation requires a supported root coordinator purpose.")
@@ -611,7 +736,14 @@ def _resolve_target(
         raise TargetError("Worker target requires an exact task and assignment digest.")
     manifest, workspace, active, lock, run_dir, current, env = _registration(state, agent)
     boundary = Path(state["run_root"])
-    project = Path(state["project_root"])
+    repo = Path(state["project_root"])
+    from workflow_objectives import validate_run
+    from workflow_projects import get as project_record
+    run, _objective = validate_run(run_dir)
+    project = Path(run["git_root"])
+    selected = Path(run["project_root"])
+    admission = project_record(run_dir)
+    delivered = admission is not None and admission["state"] == "cleaned"
     run_id = run_dir.name
     feature = current.get("current_execution")
     # Classification and documented TDD output must be observable before sealing.
@@ -620,11 +752,16 @@ def _resolve_target(
     # always clean, so this exception cannot qualify a dirty promoted deployment.
     observation_checkpoints = {
         "sdlc-classify-failure": {"sdlc-classify-failure"},
+        "sdlc-prepare-execution": {"sdlc-prepare-execution", "execution_prepared"},
         "sdlc-tdd": {"sdlc-tdd", "tests_red", "tests_ready"},
     }
+    # Preparation adds recovery-state observation, not another dirty checkpoint.
+    # Retain normal authoring inspection for historical receipt validation;
+    # fresh preparation receipts still explicitly require a clean target.
     unsealed_checkpoints = (
         {"sdlc-tdd", "sdlc-update-documents", "align"}
-        if phase_observation is None else observation_checkpoints[phase_observation]
+        if phase_observation in {None, "sdlc-prepare-execution"}
+        else observation_checkpoints[phase_observation]
     )
     require_clean = require_clean or not (
         current.get("status") == "running"
@@ -644,9 +781,13 @@ def _resolve_target(
     from workflow_impact import verify_execution, canonical_digest
     from workflow_execution import describe_status, watch_task
     from workflow_resources import verify as verify_runtime
-    basis = verify_execution(run_dir, feature, coordinator['plan_digest'], project)
+    if delivered:
+        from workflow_automatic import historical_execution
+        basis = historical_execution(run_dir, feature)
+    else:
+        basis = verify_execution(run_dir, feature, coordinator['plan_digest'], selected)
     basis_sha256 = canonical_digest(basis)
-    status = describe_status(run_dir, feature)
+    status = coordinator if delivered else describe_status(run_dir, feature)
     for key in (
         "execution_id",
         "status",
@@ -664,55 +805,85 @@ def _resolve_target(
         or coordinator.get("execution_id") != feature
         or coordinator.get("project_root") != str(project)
         or coordinator.get("git_root") != str(project)
-        or coordinator.get("selected_project_root") != str(project)
-        or coordinator.get("project_scope") != "."
+        or coordinator.get("selected_project_root") != str(selected)
+        or coordinator.get("project_scope") != "project-a"
     ):
         raise TargetError("Execution belongs to another workflow project or feature.")
 
     def git(path: Path, *arguments: str) -> str:
         return _run(["git", "-C", str(path), *arguments], env)
 
-    common = Path(git(project, "rev-parse", "--git-common-dir"))
+    common = Path(git(repo, "rev-parse", "--git-common-dir"))
     common = (
-        (project / common).resolve() if not common.is_absolute() else common.resolve()
+        (repo / common).resolve() if not common.is_absolute() else common.resolve()
     )
     if coordinator.get("git_common_dir") != str(common):
         raise TargetError("Execution Git common directory is foreign.")
-    registry = _registry(project, env)
+    registry = _registry(repo, env)
     worker_assignment = None
     worker_assignment_path = None
     integration = run_dir / "worktrees" / feature / "integration"
     if coordinator.get("integration_worktree") != str(integration):
         raise TargetError("Integration path is not the exact owned location.")
-    if git(project, "branch", "--show-current") != coordinator["base_branch"]:
+    if not delivered and git(project, "branch", "--show-current") != coordinator["base_branch"]:
         raise TargetError("Project promotion branch changed.")
-    if git(project, "status", "--porcelain=v1"):
+    if git(repo if delivered else project, "status", "--porcelain=v1"):
         raise TargetError("Project checkout is dirty.")
     if coordinator["status"] == "done":
-        target, expected = project, coordinator["promoted_head"]
-        branch = coordinator["base_branch"]
+        target = repo if delivered else project
+        expected = git(repo, "rev-parse", "HEAD") if delivered else coordinator["promoted_head"]
+        branch = git(repo, "branch", "--show-current") if delivered else coordinator["base_branch"]
+        if delivered:
+            from workflow_automatic import verify_delivery
+            proof = verify_delivery(run_dir)
+            git(repo, "merge-base", "--is-ancestor", proof["delivered_head"], expected)
         if (
             integration.exists()
             or str(integration) in registry
-            or git(project, "branch", "--list", coordinator["integration_branch"])
+            or git(repo, "branch", "--list", coordinator["integration_branch"])
         ):
             raise TargetError("Completed execution retains integration resources.")
-        if state["git"]["promoted_sha"] not in {None, expected}:
+        if state["git"]["promoted_sha"] not in {None, coordinator["promoted_head"]}:
             raise TargetError("Recorded lifecycle promotion differs from execution.")
     else:
-        pending_classifier = (
+        pending_revision = (
+            current.get("status") == "running"
+            and (
+                (phase_observation == "sdlc-classify-failure"
+                 and current.get("current_phase") == "sdlc-classify-failure"
+                 and coordinator["status"] in {"design_revision_pending", "test_revision_pending"})
+                or (phase_observation == "sdlc-tdd"
+                    and current.get("current_phase") in observation_checkpoints["sdlc-tdd"]
+                    and coordinator["status"] == "test_revision_pending")
+            )
+        )
+        if pending_revision:
+            from workflow_revision import observe_pending_revision
+            observe_pending_revision(run_dir, feature)
+        integrated_failure = (
             phase_observation == "sdlc-classify-failure"
             and current.get("status") == "running"
             and current.get("current_phase") == "sdlc-classify-failure"
-            and coordinator["status"] == "design_revision_pending"
+            and coordinator["status"] == "repair_required"
         )
-        if pending_classifier:
-            from workflow_design_revision import observe_pending_revision
-            observe_pending_revision(run_dir, feature)
+        if integrated_failure:
+            _observe_integrated_failure(run_dir, feature, coordinator, boundary)
+            require_clean = True
+        corrective_replan = (
+            phase_observation in {"sdlc-prepare-execution", "sdlc-tdd"}
+            and current.get("status") == "running"
+            and current.get("current_phase") in observation_checkpoints[phase_observation]
+            and coordinator["status"] == "repair_required"
+        )
+        if corrective_replan:
+            _observe_corrective_replan(run_dir, feature, coordinator, selected, boundary)
+            # Re-observe the existing sealed tests at the exact failed commit.
+            # Test authoring requires the separate typed revision owner.
+            require_clean = True
         if (
             (coordinator["status"]
              not in {"prepared", "tdd_sealed", "waves_running", "integrated", "sealed"}
-             and not pending_classifier)
+             and not pending_revision and not integrated_failure and not corrective_replan)
             or coordinator["promoted_head"] is not None
             or state["git"]["promoted_sha"] is not None
             or git(project, "rev-parse", "HEAD") != coordinator["base_head"]
@@ -727,11 +898,15 @@ def _resolve_target(
             or registration.get("HEAD") != expected
         ):
             raise TargetError("Integration worktree is unregistered or stale.")
+    if coordinator.get("authoring_checkpoints") and not delivered:
+        from workflow_candidate import _verify_history
+        _verify_history(run_dir, feature, coordinator, target)
     if worker_task is not None:
         wave_id = coordinator.get("active_wave")
+        worker_phase = current.get("current_phase")
         if (
             current.get("status") != "running"
-            or current.get("current_phase") != "sdlc-implement-plan"
+            or worker_phase not in {"sdlc-implement-plan", "sdlc-validate-codes"}
             or coordinator.get("status") != "waves_running"
             or not isinstance(wave_id, str)
             or re.fullmatch(r"WAVE-[0-9]{3,}", wave_id) is None
@@ -753,6 +928,12 @@ def _resolve_target(
             raise TargetError("Worker runtime target failed its live scope guard.")
         if worker_assignment.get('basis_sha256') != basis_sha256:
             raise TargetError('Runtime worker belongs to a stale execution basis.')
+        if worker_phase == "sdlc-validate-codes":
+            from workflow_reconcile import observe_worker_repair
+            repair = observe_worker_repair(run_dir, feature, wave_id, worker_task)
+            if (repair["assignment_digest"] != assignment_digest
+                    or repair["repair_authority"]["classification"] != "VALIDATION_DEFECT"):
+                raise TargetError("Worker validation runtime requires its active counted repair.")
         verify_runtime(run_dir.parents[2], worker_assignment_path,
                        'sdlc-three-tier-' + state['verification_id'])
         target = run_dir / "worktrees" / feature / "waves" / wave_id / worker_task
@@ -762,7 +943,7 @@ def _resolve_target(
         registration = registry.get(str(target), {})
         if (
             worker_assignment.get("worktree") != str(target)
-            or worker_assignment.get("scope_cwd") != str(target)
+            or worker_assignment.get("scope_cwd") != str(target / "project-a")
             or worker_assignment.get("git_common_dir") != str(common)
             or registration.get("branch") != f"refs/heads/{branch}"
             or registration.get("HEAD") != expected
@@ -790,7 +971,7 @@ def _resolve_target(
         or (require_clean and git(target, "status", "--porcelain=v1"))
     ):
         raise TargetError("Execution target live Git identity or cleanliness changed.")
-    git(project, "merge-base", "--is-ancestor", state["git"]["baseline_sha"], expected)
+    git(repo, "merge-base", "--is-ancestor", state["git"]["baseline_sha"], expected)
     if (
         _private_json(manifest.parent / "active-run.json", boundary) != active
         or _private_json(manifest.parent / "active.lock", boundary) != lock
@@ -802,7 +983,8 @@ def _resolve_target(
     ):
         raise TargetError("Workflow ownership changed during target inspection.")
     return {
-        "path": str(target),
+        "path": str(target / "project-a"),
+        "checkout_root": str(target),
         "head": expected,
         "branch": branch,
         "run_id": run_id,
@@ -810,6 +992,93 @@ def _resolve_target(
         "phase": current["current_phase"],
         "basis_sha256": basis_sha256,
     }
+
+
+def browser_revalidation(state, target, *, skills_root, agent, binding=None, require_complete=False):
+    """Observe counted evaluation authority; never advance repair or phase state."""
+    try:
+        with workflow_imports(skills_root):
+            sys.path.insert(0, str(skills_root / "sdlc-classify-failure/scripts"))
+            import repair_control as owner
+            _manifest, _project, _active, _lock, run_dir, current, _env = _registration(state, agent)
+            feature = target.get("execution_id")
+            if (not isinstance(feature, str) or re.fullmatch(r"(?:FEAT|SLICE)-[0-9]{3,}", feature) is None
+                    or target.get("run_id") != run_dir.name):
+                raise TargetError("Browser repair target is outside its registered workflow.")
+            control = owner._load_control(run_dir, feature)
+            if binding is None:
+                cursor = control.get("revalidation")
+                if (current.get("current_execution") != feature
+                        or current.get("current_phase") != "sdlc-evaluate"
+                        or target.get("phase") != "sdlc-evaluate"
+                        or control.get("status") != "revalidation_required"
+                        or not isinstance(cursor, dict) or cursor.get("status") != "pending"
+                        or type(cursor.get("cursor")) is not int
+                        or not 0 <= cursor["cursor"] < len(cursor["required"])
+                        or cursor["required"][cursor["cursor"]]["surface"] != "evaluation"
+                        or cursor.get("integration_commit") != target.get("head")):
+                    raise TargetError("Repeated browser evaluation requires the current counted evaluation gate.")
+                fingerprints = owner._current_fingerprints(run_dir)
+                binding = {"schema": "agentic-sdlc/browser-revalidation-v1", "run_id": run_dir.name,
+                           "execution_id": feature, "integration_commit": target["head"],
+                           "fingerprints": fingerprints,
+                           **{key: cursor[key] for key in ("cursor_id", "classification_id", "repair_dispatch_id")}}
+                owner._verify_revalidation_authority(run_dir, control, {**binding, "surface": "evaluation"})
+                if fingerprints.get("basis") != "sha256:" + target["basis_sha256"]:
+                    raise TargetError("Browser repair fingerprints do not bind its candidate basis.")
+                return binding
+            expected_keys = {"schema", "run_id", "execution_id", "integration_commit", "fingerprints",
+                             "cursor_id", "classification_id", "repair_dispatch_id"}
+            if (not isinstance(binding, dict) or set(binding) != expected_keys
+                    or binding["schema"] != "agentic-sdlc/browser-revalidation-v1"
+                    or binding["run_id"] != run_dir.name or binding["execution_id"] != feature
+                    or binding["integration_commit"] != target.get("head")
+                    or binding["fingerprints"].get("basis") != "sha256:" + target["basis_sha256"]
+                    or any(re.fullmatch(r"[0-9a-f]{64}", str(binding[key])) is None
+                           for key in ("cursor_id", "classification_id", "repair_dispatch_id"))):
+                raise TargetError("Browser revalidation binding is invalid.")
+            repair_root = run_dir / "repairs" / feature
+            archives = sorted((repair_root / "cursor-archives").glob("*.json"))
+            if len(archives) + len(control["resumptions"]) > 64:
+                raise TargetError("Browser repair history exceeds its bound.")
+            contexts = [control]
+            for path in archives:
+                archive = _private_json(path, Path(state["run_root"]))
+                if archive.get("schema") != "agentic-sdlc/revalidation-archive-v1":
+                    raise TargetError("Browser repair archive is invalid.")
+                contexts.append({"execution_id": feature, "current_event_id": archive["event_id"],
+                                 "active_blocker": archive["blocker"], "revalidation": archive["previous"]})
+            for identity in control["resumptions"].values():
+                receipt = owner._load_resumption(run_dir, feature, identity)
+                contexts.append({"execution_id": feature, **receipt["completed_context"]})
+            for context in contexts:
+                cursor = context.get("revalidation")
+                if not isinstance(cursor, dict) or cursor.get("cursor_id") != binding["cursor_id"]:
+                    continue
+                if (any(cursor.get(key) != binding[key] for key in ("classification_id", "repair_dispatch_id"))
+                        or cursor.get("integration_commit") != binding["integration_commit"]):
+                    raise TargetError("Browser repair authority changed.")
+                owner._verify_revalidation_authority(run_dir, context, binding, require_current_gate=False)
+                for identity in cursor["completed_revalidation_ids"]:
+                    record = _private_json(repair_root / "revalidations" / (identity + ".json"), Path(state["run_root"]))
+                    if (record.get("revalidation_id") != identity
+                            or owner._digest(owner._identity_payload(record, "revalidation_id")) != identity):
+                        raise TargetError("Browser revalidation evidence identity changed.")
+                    if record.get("surface") == "evaluation":
+                        if any(record.get(key) != value for key, value in binding.items() if key not in {"schema", "run_id"}):
+                            raise TargetError("Browser revalidation evidence does not bind this attempt.")
+                        owner._verify_revalidation_evidence_source(run_dir, record)
+                        return binding
+                if not require_complete and context is control:
+                    observed = browser_revalidation(state, target, skills_root=skills_root, agent=agent)
+                    if observed == binding:
+                        return binding
+                raise TargetError("Browser evaluation has no completed matching revalidation gate.")
+            raise TargetError("Browser evaluation repair authority is missing.")
+    except TargetError:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
+        raise TargetError("Browser revalidation authority could not be verified.") from error
 
 
 def inventory_recovery_evidence(state, failed, *, skills_root, agent):
@@ -849,26 +1118,33 @@ def _inventory_recovery_evidence(state, failed, *, skills_root, agent):
                 raise TargetError("Inventory recovery failed target is unavailable.")
             repair_root = run_dir / "repairs" / feature
             control = _private_json(repair_root / "repair-control.json", boundary)
-            if control.get("schema") != owner.REPAIR_CONTROL_SCHEMA:
+            if (control.get("schema") != owner.REPAIR_CONTROL_SCHEMA
+                    or not isinstance(control.get("resumptions"), dict)):
                 raise TargetError("Inventory recovery control is invalid.")
-            contexts = [control]
             archives = sorted((repair_root / "cursor-archives").glob("*.json"))
-            if len(archives) > 64:
+            if len(archives) + len(control["resumptions"]) > 64:
                 raise TargetError("Inventory recovery history exceeds its bound.")
+            control = owner._load_control(run_dir, feature)
+            contexts = [(control, ())]
             for path in archives:
                 archive = _private_json(path, boundary)
                 if archive.get("schema") != "agentic-sdlc/revalidation-archive-v1":
                     raise TargetError("Inventory recovery archive is invalid.")
                 contexts.append(
-                    {
+                    ({
                         "execution_id": feature,
                         "current_event_id": archive["event_id"],
                         "active_blocker": archive["blocker"],
                         "revalidation": archive["previous"],
-                    }
+                    }, ())
                 )
+            for identity in control["resumptions"].values():
+                path = repair_root / "resumptions" / (identity + ".json")
+                _private_json(path, boundary)
+                receipt = owner._load_resumption(run_dir, feature, identity)
+                contexts.append(({"execution_id": feature, **receipt["completed_context"]}, (path,)))
             found = None
-            for context in contexts:
+            for context, context_sources in contexts:
                 cursor = context.get("revalidation")
                 if not isinstance(cursor, dict):
                     continue
@@ -987,6 +1263,7 @@ def _inventory_recovery_evidence(state, failed, *, skills_root, agent):
                     event_path,
                     dispatch_path,
                     evidence_path,
+                    *context_sources,
                 )
                 found = {
                     "observation_sha256": summary["sha256"],

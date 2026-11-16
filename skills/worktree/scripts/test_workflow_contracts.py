@@ -30,6 +30,18 @@ from test_workflow_execution import write_private  # noqa: E402
 from test_workflow_fixture import prepare_execution as fixture_prepare_execution, complete_wave as fixture_complete_wave, replan_future as fixture_replan_future, seed_validation  # noqa: E402
 
 class TransitionErrorTests(unittest.TestCase):
+    def test_unproven_cleanup_has_a_structured_retained_ownership_error(self):
+        import workflow_transition as transition
+        from workflow_process import ProcessCleanupError
+        output = io.StringIO()
+        with mock.patch.object(transition, "parser"), mock.patch.object(
+            transition, "execute", side_effect=ProcessCleanupError("termination is unproven"),
+        ), contextlib.redirect_stdout(output):
+            self.assertEqual(transition.main(), 1)
+        self.assertEqual(json.loads(output.getvalue()), {
+            "status": "error", "code": "WRITER_NOT_QUIESCENT", "message": "termination is unproven",
+        })
+
     def test_resource_errors_are_structured_at_cli_boundary(self):
         import workflow_transition as transition
         output = io.StringIO()
@@ -71,10 +83,18 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
         self.addCleanup(isolated_home.stop)
         self.project = self.root / "project"
         self.project.mkdir()
-        git(self.project, "init", "-q", "-b", "feature/source")
+        git(self.project, "init", "-q", "-b", getattr(self, "initial_branch", "feature/source"))
         git(self.project, "config", "user.name", "Workflow Test")
         git(self.project, "config", "user.email", "test@example.invalid")
         (self.project / "README.md").write_text("fixture\n")
+        if getattr(self, 'workflow_owner', 'implement') == 'agentic-sdlc':
+            # These shared execution tests start from an existing SDLC contract.
+            # Initial publication/admission is tested by the bootstrap suite.
+            from project_specs_lib.contracts import canonical_document
+            from test_project_specs_transaction import REQUIREMENTS, DESIGN
+            (self.project / "docs").mkdir()
+            for kind, body in (("requirements", REQUIREMENTS), ("design", DESIGN)):
+                (self.project / "docs" / (kind + ".md")).write_bytes(canonical_document(kind, body))
         git(self.project, "add", "-A")
         git(self.project, "commit", "-qm", "initial")
         self.base = git(self.project, "rev-parse", "HEAD")
@@ -86,6 +106,9 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
             "refs/remotes/origin/main",
         )
         self.session = "root-native-test-session"
+        native = mock.patch.dict(os.environ, {"CODEX_THREAD_ID": self.session})
+        native.start()
+        self.addCleanup(native.stop)
         self.workflow_owner = getattr(self, 'workflow_owner', 'implement')
         if self.workflow_owner == 'agentic-sdlc':
             origin = self.root / 'origin.git'
@@ -101,11 +124,12 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
             "clarifications": [],
             "provenance": {"kind": "current_plan", "source_sha256": "a" * 64},
         }
-        self.run_dir = Path(
-            objectives.accept(
-                self.project, self.home, self.workflow_owner, self.session, self.objective
-            )["run_dir"]
+        selected = objectives.accept(
+            self.project, self.home, self.workflow_owner, self.session, self.objective
         )
+        self.run_dir = Path(selected["run_dir"])
+        self.source_project = self.project
+        self.project = Path(selected["project_root"])
         self.settle()
         self.plan = self.run_dir / "plans/FEAT-001.plan.v1.md"
         self.plan.parent.mkdir()
@@ -153,7 +177,7 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
 
     def prepare(self):
         if self.workflow_owner == 'agentic-sdlc':
-            result = fixture_prepare_execution(self.run_dir, self.project, 'FEAT-001', self.plan, 4)
+            result = fixture_prepare_execution(self.run_dir, self.project, 'FEAT-001', self.plan, 4, session=self.session)
             engine.seal_tdd_base(self.run_dir, 'FEAT-001', 'test: synthetic native admission base')
             return result
         if not engine.coordinator_path(self.run_dir, "FEAT-001").exists():
@@ -161,6 +185,43 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
         return fixture_prepare_execution(
             self.run_dir, self.project, "FEAT-001", self.plan, 4
         )
+
+    def test_aggregation_consumes_real_producer_basis_and_rejects_tampering(self):
+        import workflow_automatic as automatic
+        import workflow_validation as validation
+
+        self.prepare()
+        pointer = read(self.run_dir / "objective-impact/execution/FEAT-001.json")
+        basis_path = self.run_dir / pointer["path"]
+        basis = read(basis_path)
+        plan_path = validation.plan_path(self.plan)
+        validation_plan = read(plan_path)
+        self.assertEqual(impact.canonical_digest(basis), pointer["sha256"])
+        self.assertEqual(
+            impact.canonical_digest(validation_plan), basis["validation_plan_sha256"]
+        )
+        for historical in (False, True):
+            with self.subTest(historical=historical):
+                self.assertEqual(
+                    automatic._frozen_bases(self.run_dir, historical=historical),
+                    {"FEAT-001": pointer["sha256"]},
+                )
+                try:
+                    write(basis_path, {**basis, "plan_digest": "0" * 64})
+                    with self.assertRaises(WorkflowError) as changed_basis:
+                        automatic._frozen_bases(self.run_dir, historical=historical)
+                    self.assertEqual(changed_basis.exception.code, "BASIS_INVALID")
+                finally:
+                    write(basis_path, basis)
+                try:
+                    changed_plan = json.loads(json.dumps(validation_plan))
+                    changed_plan["wave_checks"][0]["execution_policy"]["observation_interval_seconds"] += 1
+                    write(plan_path, changed_plan)
+                    with self.assertRaises(WorkflowError) as changed_validation:
+                        automatic._frozen_bases(self.run_dir, historical=historical)
+                    self.assertEqual(changed_validation.exception.code, "REPLAN_REQUIRED")
+                finally:
+                    write(plan_path, validation_plan)
 
     def test_native_launch_admits_registered_support_directories_before_arm(self):
         import workflow_transition as transition
@@ -241,6 +302,7 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
         fixture.workflow_owner = 'agentic-sdlc'
         fixture.setUp()
         try:
+            self.assertNotEqual(fixture.project, fixture.source_project)
             fixture.test_native_launch_admits_registered_support_directories_before_arm()
             assignment = read(engine.assignment_path(fixture.run_dir, 'FEAT-001', 'WAVE-001', 'TASK-001'))
             common = ['--run-dir', str(fixture.run_dir), '--execution', 'FEAT-001',
@@ -355,6 +417,33 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
         self.assertFalse((self.run_dir / "execution").exists())
         self.assertFalse((self.run_dir / "worktrees").exists())
         self.assertEqual(git(self.project, "rev-parse", "HEAD"), self.base)
+
+    def test_frozen_inputs_survive_current_pointer_refresh_and_guard_delivery(self):
+        import workflow_inputs as inputs
+        import workflow_automatic as automatic
+        declaration = {"schema": inputs.SCHEMA, "base_head": self.base, "complete": True,
+                       "claims": [{"kind": "exact", "path": "README.md"}]}
+        write(self.run_dir / "input-dependencies.json", declaration)
+        coordinator = self.prepare()
+        pointer = read(self.run_dir / "objective-impact/execution/FEAT-001.json")
+        basis = read(self.run_dir / pointer["path"])
+        key = basis["input_dependencies_sha256"]
+        # A later selected declaration cannot change an already-frozen execution.
+        write(self.run_dir / "input-dependencies.json", {**declaration, "claims": []})
+        self.assertEqual(impact.verify_execution(self.run_dir, "FEAT-001", coordinator["plan_digest"], self.project), basis)
+        path = self.run_dir / "input-declarations" / (key + ".json")
+        for mutation in ("missing", "tampered"):
+            with self.subTest(mutation=mutation):
+                if mutation == "missing":
+                    path.unlink()
+                else:
+                    write(path, {**declaration, "claims": []})
+                for historical in (False, True):
+                    with self.assertRaises(WorkflowError):
+                        automatic._frozen_bases(self.run_dir, historical=historical)
+                with self.assertRaises(WorkflowError):
+                    impact.verify_execution(self.run_dir, "FEAT-001", coordinator["plan_digest"], self.project)
+                write(path, declaration)
 
     def bootstrap_publication(self):
         coordinator = engine.prepare_specifications(self.run_dir, self.project, "FEAT-001")
@@ -690,6 +779,8 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
             self.assertFalse((checkout / "docs").exists())
         with self.assertRaisesRegex(ProjectSpecError, "accepted objective"):
             self.publication(integration, objective="0" * 64, basis=basis)
+        with self.assertRaisesRegex(ProjectSpecError, "accepted objective"):
+            self.publication(integration, basis=basis)
         with self.assertRaisesRegex(ProjectSpecError, "basis is stale"):
             self.publication(integration, objective=objective, basis="0" * 64)
         self.publication(integration, objective=objective, basis=basis)
@@ -772,6 +863,8 @@ class DirectExecutionTests(WorkerResultContractCases, unittest.TestCase):
                 "implement/references/implementation-loop.md",
                 "implement/references/objective-contract.md",
                 "worktree/assets/worker-result.schema.json",
+                "worktree/references/statistics.md",
+                "worktree/scripts/workflow_statistics_delivery.py",
                 "global-context-management/references/agent-hosts.md",
                 "maintain-project-specs/SKILL.md",
                 "code-review/SKILL.md",
@@ -1159,9 +1252,14 @@ class ManagedSdlcCompletionTests(unittest.TestCase):
             "test_completion_requires_authoritative_outer_lease_release"
         )
         f.workflow_owner = owner
+        # These cases exercise explicit/manual completion. A default-branch
+        # intake selects the existing direct promotion policy, not an automatic
+        # outer whose separate delivery receipt is covered by automatic tests.
+        f.initial_branch = "main"
         f.setUp()
         self.addCleanup(f.doCleanups)
         self.addCleanup(f.tearDown)
+        self.assertFalse(read(f.run_dir / "run.json")["automatic_outer"])
         f.deliver()
         return f
 
@@ -1252,7 +1350,7 @@ class ManagedSdlcCompletionTests(unittest.TestCase):
             publish.assert_not_called()
             self.assertEqual(
                 inspect.call_args.args[1],
-                ["inspect", "--name", "test-outer", "--require-clean"],
+                interop.PrivateRequest("inspect", {"name": "test-outer", "require_clean": True}),
             )
         self.assertEqual(read(f.run_dir / "run.json")["status"], "done")
         self.assertEqual(state["source_integration_head"], "b" * 40)

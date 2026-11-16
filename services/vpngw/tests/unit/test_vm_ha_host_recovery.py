@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import ast
 import copy
+import hashlib
 import json
+import os
+import stat
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from test_vm_ha_lifecycle import _member, _missing_standby_state
@@ -19,6 +24,7 @@ from nebius_vpngw.agent.vm_ha.auto_healing import (
 )
 from nebius_vpngw.cli import _vm_ha_replacement_policy_reproof_transaction
 from nebius_vpngw.deploy.vm_ha_host_recovery import (
+    REPLACEMENT_RECOVERY_INSPECTION,
     advance_host_recovery,
     authorize_host_recovery,
     host_recovery_effect,
@@ -34,6 +40,61 @@ from nebius_vpngw.deploy.vm_ha_lifecycle import (
     vm_ha_missing_standby_replacement_effect,
     vm_ha_passive_replacement_binding_key,
 )
+from nebius_vpngw.deploy.vm_ha_upgrade_recovery import UPGRADE_RECOVERY_INSPECTION
+
+
+@pytest.fixture(
+    params=[REPLACEMENT_RECOVERY_INSPECTION, UPGRADE_RECOVERY_INSPECTION],
+    ids=["replacement", "upgrade"],
+)
+def source_inspector(request, tmp_path):
+    tree = ast.parse(request.param)
+    reader = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "read")
+    result = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "result" for t in n.targets)
+    ).value
+    hashes = next(
+        v for k, v in zip(result.keys, result.values, strict=True) if k.value == "source_sha256"
+    )
+    scope = {
+        "os": os,
+        "stat": stat,
+        "Path": Path,
+        "hashlib": hashlib,
+        "nebius_vpngw": SimpleNamespace(__file__=str(tmp_path / "__init__.py")),
+    }
+    exec(compile(ast.Module(body=[reader], type_ignores=[]), "<inspector>", "exec"), scope)
+    return scope["read"], lambda: eval(
+        compile(ast.Expression(hashes), "<inspector>", "eval"), scope
+    )
+
+
+def test_recovery_inspector_hashes_large_installed_source(source_inspector, tmp_path):
+    read, hashes = source_inspector
+    module = tmp_path / "cli.py"
+    payload = b"# installed module\n" + b" " * 1048576
+    module.write_bytes(payload)
+    assert hashes() == {"cli.py": hashlib.sha256(payload).hexdigest()}
+    # Configuration and journal observations retain their smaller authority bound.
+    with pytest.raises(ValueError, match="unsafe recovery inspection file"):
+        read(module)
+
+
+def test_recovery_inspector_keeps_source_bound_and_refuses_symlinks(source_inspector, tmp_path):
+    _read, hashes = source_inspector
+    module = tmp_path / "large.py"
+    module.write_bytes(b" " * (4 * 1024 * 1024 + 1))
+    with pytest.raises(ValueError, match="unsafe recovery inspection file"):
+        hashes()
+    module.unlink()
+    target = tmp_path / "payload"
+    target.write_bytes(b"data")
+    module.symlink_to(target)
+    with pytest.raises(OSError):
+        hashes()
 
 
 def _policy(path: Path, node: str = "node-0", peer: str = "node-1", depth: int = 3):

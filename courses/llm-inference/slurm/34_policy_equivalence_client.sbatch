@@ -91,6 +91,13 @@ stop_server() {
     return 2
   fi
   wait "$pid" || status=$?
+  # Keep watchdog diagnostics separate from profiler output. Only a requested
+  # INT is a graceful stop; deadline TERM, escalation and read errors fail closed.
+  local watchdog_status=0
+  grep -qv '^timeout: sending signal INT to command ' "$server_watchdog_log" || watchdog_status=$?
+  [[ $watchdog_status == 1 ]] || {
+    printf 'ERROR: server/profiler watchdog expired or failed.\n' >&2; return 2;
+  }
   [[ $status == 0 || $status == 130 ]] || {
     printf 'ERROR: server/profiler exited with status %s.\n' "$status" >&2; return 2;
   }
@@ -109,7 +116,7 @@ run_trial() {
   local server_log="${COURSE_JOB_DIR}/logs/vllm-chunk-${phase}-${variant}-trial-${trial}-run-${COURSE_RUN_ID}.log"
   local command=(
     env VLLM_BATCH_INVARIANT=1
-    env -u DEBUGINFOD_URLS timeout --signal=TERM --kill-after=15s 900s nsys profile '--trace=cuda,nvtx,osrt' \
+    env -u DEBUGINFOD_URLS LC_ALL=C timeout --verbose --preserve-status --signal=TERM --kill-after=15s 900s bash -c 'exec "$@" 2>&1' bash nsys profile '--trace=cuda,nvtx,osrt' \
       --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
       --discard-environment=true --force-overwrite=false \
       --duration=300 --kill=none --wait=all \
@@ -122,7 +129,8 @@ run_trial() {
   if [[ ${variant} == enabled ]]; then
     command+=(--max-num-batched-tokens 256)
   fi
-  setsid "${command[@]}" >"${server_log}" 2>&1 &
+  server_watchdog_log="${server_log}.watchdog"
+  setsid "${command[@]}" >"${server_log}" 2>"${server_watchdog_log}" &
   server_pid=$!
   local ready=0
   for _ in {1..120}; do

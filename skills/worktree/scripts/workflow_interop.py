@@ -3,28 +3,22 @@
 
 from __future__ import annotations
 
-import json
+import importlib.util
 from pathlib import Path
 import re
-import subprocess
-import sys
-from typing import Any
 
 
 SCHEMA = "workflow/worktree-interop-v1"
 SHA_RE = re.compile(r"[0-9a-f]{40,64}")
 TOKEN_RE = re.compile(r"[0-9a-f]{32}")
-PRIVATE_WORKTREE_ACTIONS = frozenset(
-    {
-        "anchor-inspect",
-        "inspect",
-        "task-lease-acquire",
-        "task-lease-inspect",
-        "task-lease-promote",
-        "task-lease-release",
-        "task-lease-resource",
-    }
-)
+# Reject a foreign/preloaded owner before importing or invoking it.
+_manager_spec = importlib.util.find_spec("worktree_manager")
+_expected_manager = Path(__file__).with_name("worktree_manager.py").resolve()
+if (_manager_spec is None or _manager_spec.origin is None
+        or Path(_manager_spec.origin).resolve() != _expected_manager):
+    raise ImportError("managed outer worktree helper provenance changed")
+from worktree_manager import PrivateRequest  # noqa: E402 — provenance checked before import
+
 
 
 class ExecutionInteropError(RuntimeError):
@@ -49,26 +43,17 @@ def _helper() -> Path:
     return path
 
 
-def _call(cwd: Path, arguments: list[str]) -> dict[str, object]:
-    if not arguments or arguments[0] not in PRIVATE_WORKTREE_ACTIONS:
-        raise ExecutionInteropError(
-            "Agentic SDLC private worktree interop rejects public lifecycle actions"
-        )
+def _call(cwd: Path, request: PrivateRequest) -> dict[str, object]:
+    import worktree_manager as manager
+    if Path(manager.__file__).resolve() != _helper().resolve():
+        raise ExecutionInteropError("managed outer worktree helper provenance changed")
     try:
-        completed = subprocess.run(
-            [sys.executable, str(_helper()), *arguments],
-            cwd=str(cwd),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=60,
-        )
-        value: Any = json.loads(completed.stdout)
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
-        raise ExecutionInteropError("managed outer worktree helper failed") from exc
-    if completed.returncode != 0 or not isinstance(value, dict):
-        raise ExecutionInteropError("managed outer worktree coordination is blocked")
+        value = manager.dispatch_private(cwd=cwd, request=request)
+    except (OSError, manager.WorktreeError, manager.GitPromotionError,
+            manager.InteropError, manager.StateError) as error:
+        raise ExecutionInteropError("managed outer worktree coordination is blocked") from error
+    if not isinstance(value, dict):
+        raise ExecutionInteropError("managed outer worktree helper returned invalid evidence")
     return value
 
 
@@ -175,15 +160,7 @@ def _inspect_lease_identity(
 ) -> dict[str, object]:
     inspected = _call(
         selected_project_root,
-        [
-            "task-lease-inspect",
-            "--owner-kind",
-            _owner(run_dir),
-            "--name",
-            str(state["name"]),
-            "--lease-id",
-            str(state["lease_id"]),
-        ],
+        PrivateRequest('task-lease-inspect', {'owner_kind': _owner(run_dir), 'name': str(state["name"]), 'lease_id': str(state["lease_id"])}),
     )
     expected = {
         "owner_kind": _owner(run_dir),
@@ -196,7 +173,7 @@ def _inspect_lease_identity(
     }
     if any(inspected.get(key) != value for key, value in expected.items()):
         raise ExecutionInteropError("managed outer worktree lease identity changed")
-    if inspected.get("state") not in {"active", "released"}:
+    if inspected.get("state") not in {"active", "aggregation-ready", "released"}:
         raise ExecutionInteropError("managed outer worktree lease state is invalid")
     return inspected
 
@@ -278,7 +255,7 @@ def acquire(
     if existing is not None:
         if existing["project_scope"] != project_scope:
             raise ExecutionInteropError("Agentic SDLC interop identity changed")
-        anchor = _call(selected_project_root, ["anchor-inspect"])
+        anchor = _call(selected_project_root, PrivateRequest('anchor-inspect', {}))
         if existing["mode"] == "unmanaged":
             if anchor.get("status") != "unmanaged":
                 raise ExecutionInteropError("managed outer worktree mode changed")
@@ -301,7 +278,7 @@ def acquire(
                 "managed outer feature base disagrees with its lease"
             )
         return existing
-    anchor = _call(selected_project_root, ["anchor-inspect"])
+    anchor = _call(selected_project_root, PrivateRequest('anchor-inspect', {}))
     if anchor.get("status") == "unmanaged":
         state: dict[str, object] = {
             "schema": SCHEMA,
@@ -324,19 +301,7 @@ def acquire(
             raise ExecutionInteropError("managed outer worktree scope or head changed")
         acquired = _call(
             selected_project_root,
-            [
-                "task-lease-acquire",
-                "--owner-kind",
-                _owner(run_dir),
-                "--workspace",
-                str(run_dir.resolve()),
-                "--run-id",
-                run_dir.name,
-                "--task-scope",
-                project_scope,
-                "--initial-head",
-                feature_base_head,
-            ],
+            PrivateRequest('task-lease-acquire', {'owner_kind': _owner(run_dir), 'workspace': Path(str(run_dir.resolve())), 'run_id': run_dir.name, 'task_scope': project_scope, 'initial_head': feature_base_head}),
         )
         expected_acquisition = {
             "owner_kind": _owner(run_dir),
@@ -381,24 +346,14 @@ def acquire(
 
 
 def _managed_call(
-    run_dir: Path, selected_project_root: Path, arguments: list[str]
+    run_dir: Path, selected_project_root: Path, request: PrivateRequest
 ) -> dict[str, object] | None:
     state = load(run_dir)
     if state is None or state.get("mode") != "managed":
         return None
-    return _call(
-        selected_project_root,
-        [
-            arguments[0],
-            "--owner-kind",
-            _owner(run_dir),
-            "--name",
-            str(state["name"]),
-            "--lease-id",
-            str(state["lease_id"]),
-            *arguments[1:],
-        ],
-    )
+    return _call(selected_project_root, PrivateRequest(request.action, {
+        **request.fields, "owner_kind": _owner(run_dir),
+        "name": str(state["name"]), "lease_id": str(state["lease_id"])}))
 
 
 def record_resource(
@@ -413,17 +368,7 @@ def record_resource(
     _managed_call(
         run_dir,
         selected_project_root,
-        [
-            "task-lease-resource",
-            "--kind",
-            kind,
-            "--path",
-            str(path.absolute()),
-            "--branch",
-            branch,
-            "--state",
-            state,
-        ],
+        PrivateRequest('task-lease-resource', {'kind': kind, 'path': Path(str(path.absolute())), 'branch': branch, 'state': state}),
     )
 
 
@@ -492,13 +437,7 @@ def record_promotion(
     result = _managed_call(
         run_dir,
         selected_project_root,
-        [
-            "task-lease-promote",
-            "--promoted-head",
-            promoted_head,
-            "--expected-head",
-            expected_head,
-        ],
+        PrivateRequest('task-lease-promote', {'promoted_head': promoted_head, 'expected_head': expected_head}),
     )
     if result is None:
         return
@@ -518,9 +457,13 @@ def release(
     uat: str,
     docs: str,
 ) -> dict[str, object]:
+    from workflow_task_acceptance import require_final
+    require_final(run_dir, selected_project_root, promoted_head)
+    from workflow_uat import require_delivery
+    require_delivery(run_dir, promoted_head)
     if not all(value.strip() for value in (final_alignment, uat, docs)):
         raise ExecutionInteropError(
-            "alignment, UAT, and documentation evidence are required"
+            "alignment, honest UAT disposition, and documentation evidence are required"
         )
     state = load(run_dir)
     if state is None or state.get("mode") == "unmanaged":
@@ -530,11 +473,11 @@ def release(
             "release head does not match the recorded outer promotion"
         )
     inspected = _reconcile(run_dir, selected_project_root, state)
-    if inspected["state"] == "active":
+    if inspected["state"] in {"active", "aggregation-ready"}:
         result = _managed_call(
             run_dir,
             selected_project_root,
-            ["task-lease-release", "--promoted-head", promoted_head],
+            PrivateRequest('task-lease-release', {'promoted_head': promoted_head}),
         )
         assert result is not None
     else:
@@ -578,13 +521,7 @@ def reconcile_promotion(
         result = _managed_call(
             run_dir,
             selected_project_root,
-            [
-                "task-lease-promote",
-                "--promoted-head",
-                expected_head,
-                "--expected-head",
-                str(inspected["initial_head"]),
-            ],
+            PrivateRequest('task-lease-promote', {'promoted_head': expected_head, 'expected_head': str(inspected["initial_head"])}),
         )
         assert result is not None
         if result.get("promoted_head") != expected_head:
@@ -601,7 +538,7 @@ def reconcile_promotion(
 
 
 def inspect_anchor(selected_project_root: Path) -> dict[str, object]:
-    return _call(selected_project_root, ["anchor-inspect"])
+    return _call(selected_project_root, PrivateRequest('anchor-inspect', {}))
 
 
 def _source_integration_proof(
@@ -612,7 +549,7 @@ def _source_integration_proof(
         raise ExecutionInteropError("outer lease must be released before integration")
     inspected = _call(
         selected_project_root,
-        ["inspect", "--name", str(state["name"]), "--require-clean"],
+        PrivateRequest('inspect', {'name': str(state["name"]), 'require_clean': True}),
     )
     if (
         inspected.get("lifecycle_status") != "integrated"

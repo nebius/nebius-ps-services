@@ -1029,9 +1029,16 @@ class DestroyOperationResume:
 class DestroyCoordinator:
     """Run one ordered idempotent teardown against an exact manifest."""
 
-    def __init__(self, backend: DestroyBackend, journal: _DestroyJournal) -> None:
+    def __init__(
+        self,
+        backend: DestroyBackend,
+        journal: _DestroyJournal,
+        *,
+        repair: t.Any = None,
+    ) -> None:
         self.backend = backend
         self.journal = journal
+        self.repair = repair
         self._cloud_effect_executed = False
 
     @staticmethod
@@ -1199,6 +1206,8 @@ class DestroyCoordinator:
                 "destroy-authority-conflict",
                 "Destroy is blocked: " + "; ".join(plan.blockers),
             )
+        if self.repair is not None:
+            self.repair.settle_before_stop()
         self.backend.preflight(plan)
         for resource in plan.compute:
 
@@ -1218,6 +1227,8 @@ class DestroyCoordinator:
                 postcondition=fenced,
                 submit=stop,
             )
+        if self.repair is not None:
+            self.repair.verify_fenced()
         for route in plan.routes:
 
             def route_absent(route: DestroyRoute = route) -> bool:
@@ -1254,6 +1265,8 @@ class DestroyCoordinator:
                 postcondition=compute_absent,
                 submit=delete_compute,
             )
+        if self.repair is not None:
+            self.repair.cleanup()
         for resource in plan.disks:
 
             def disk_absent(resource: DestroyResource = resource) -> bool:
@@ -1307,6 +1320,8 @@ class DestroyCoordinator:
                 "Destroy verification changed between fresh observations",
             )
         self.journal.finish()
+        if self.repair is not None:
+            self.repair.retire(self.journal)
         return DestroyResult(
             topology=plan.topology,
             deleted_compute=len(plan.compute),
@@ -1779,6 +1794,10 @@ class NebiusDestroyBackend:
             if ha and self.lifecycle_state is not None
             else frozenset()
         )
+        if ha and self.lifecycle_state is not None:
+            from .destroy_repair import archived_retired_disks
+
+            authoritative_disk_ids |= archived_retired_disks(self.lifecycle_state)
         compute: list[DestroyResource] = []
         disks: list[DestroyResource] = []
         allocations: dict[str, DestroyResource] = {}
@@ -2407,6 +2426,10 @@ def execute_destroy(
             expected_gateway_name=spec.name,
         )
         lifecycle_state = None if snapshot is None else snapshot.state
+        if lifecycle_state is None and spec.vm_ha is not None:
+            from .destroy_repair import reconstruction_authority
+
+            lifecycle_state = reconstruction_authority(project_id, spec.name)
         if (
             spec.vm_ha is None
             and lifecycle_state is not None
@@ -2448,9 +2471,13 @@ def execute_destroy(
         )
 
         if spec.vm_ha is None:
+            from .destroy_repair import pending_retirement
+
             receipt_store = DestroyReceiptStore(config_path)
             existing = receipt_store.read()
-            if existing is not None and not existing.terminal:
+            if existing is not None and (
+                not existing.terminal or pending_retirement(existing.plan)
+            ):
                 if existing.plan.config_digest != config_digest:
                     raise RuntimeError("Destroy config changed after durable intent was written")
                 journal: _DestroyJournal = OrdinaryDestroyJournal(receipt_store, existing)
@@ -2463,7 +2490,7 @@ def execute_destroy(
                     )
                 backend.preflight(plan, require_revisions=True)
                 journal = OrdinaryDestroyJournal.load_or_start(receipt_store, plan)
-            return DestroyCoordinator(backend, journal).run()
+            return _execute_plan(backend, journal)
 
         if lifecycle_state is None:
             plan = backend.build_plan(config_digest)
@@ -2473,7 +2500,7 @@ def execute_destroy(
                 )
             receipt_store = DestroyReceiptStore(config_path)
             journal = OrdinaryDestroyJournal.load_or_start(receipt_store, plan)
-            return DestroyCoordinator(backend, journal).run()
+            return _execute_plan(backend, journal)
         if lifecycle_state.record_version != 4 or lifecycle_state.transaction is None:
             raise RuntimeError("VM-HA destroy requires the current v4 lifecycle authority")
 
@@ -2544,10 +2571,16 @@ def execute_destroy(
         )
         lifecycle_store.write_verified(
             destruction,
-            predecessor_sha256=lifecycle_state.record_sha256,
+            predecessor_sha256=None if snapshot is None else lifecycle_state.record_sha256,
         )
         journal = VMHADestroyJournal(VMHALifecycleJournal(lifecycle_store, destruction))
         return _execute_ha_destroy(backend, journal)
+
+
+def _execute_plan(backend: NebiusDestroyBackend, journal: _DestroyJournal) -> DestroyResult:
+    from .destroy_repair import inspect
+
+    return DestroyCoordinator(backend, journal, repair=inspect(journal.plan, backend)).run()
 
 
 def _execute_ha_destroy(
@@ -2556,7 +2589,7 @@ def _execute_ha_destroy(
     from .apply_command import CommandJournal
     from .destroy_command import retire
 
-    result = DestroyCoordinator(backend, journal).run()
+    result = _execute_plan(backend, journal)
     try:
         retire(CommandJournal(journal.plan.project_id, journal.plan.gateway_name), journal, backend)
     except Exception as error:

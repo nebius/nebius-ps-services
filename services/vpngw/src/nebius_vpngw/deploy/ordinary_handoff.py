@@ -94,6 +94,7 @@ class PackageJob:
 
     def bind(self, request: dict) -> dict:
         import hashlib
+        from copy import deepcopy
 
         from ..package_worker import identity
         from . import package_reservation
@@ -102,6 +103,7 @@ class PackageJob:
             streamed_source()
             + "from nebius_vpngw import package_worker; package_worker.main(sys.argv[1], int(sys.argv[2]), sys.argv[3])\n"
         )
+        request = deepcopy(request)
         saved = package_reservation.admit(request, hashlib.sha256(source.encode()).hexdigest())
         if saved is not None:
             # The original phase key is used by the guest on reattachment.
@@ -238,6 +240,20 @@ def _connection(ssh: Any, target: str, instance: Any, local: dict) -> Iterator[A
 
 
 def _start(client: Any, request: dict) -> tuple[Any, Any]:
+    from .ssh_commands import DEADLINE
+
+    source = base64.b64encode((streamed_source() + _REMOTE).encode()).decode()
+    if len(source) > 4 * 1024 * 1024:
+        raise RuntimeError("HA handoff source bundle exceeds limit")
+    # These requests perform journalled settlement under the native owner's
+    # ten-minute budget. Paramiko applies this timeout to subsequent channel
+    # reads too; a short observation timeout would detach during valid progress.
+    timeout = 600.0 if request.get("action") in {"corrective-reserve", "replan-settle"} else 30.0
+    deadline = DEADLINE.get()
+    if deadline is not None:
+        timeout = min(timeout, deadline - time.monotonic())
+    if timeout <= 0:
+        raise TimeoutError("HA handoff deadline expired before submission")
     stdin, stdout, _stderr = client.exec_command(
         "sudo -n /usr/bin/python3 -B -c "
         + shlex.quote(
@@ -245,11 +261,8 @@ def _start(client: Any, request: dict) -> tuple[Any, Any]:
             "assert len(raw)<=4194304 and raw.endswith('\\n'); "
             "exec(compile(base64.b64decode(raw.strip(),validate=True),'<ha-bootstrap>','exec'))"
         ),
-        timeout=30,
+        timeout=timeout,
     )
-    source = base64.b64encode((streamed_source() + _REMOTE).encode()).decode()
-    if len(source) > 4 * 1024 * 1024:
-        raise RuntimeError("HA handoff source bundle exceeds limit")
     stdin.write(source + "\n")
     stdin.flush()
     _send(stdin, request)
@@ -352,11 +365,23 @@ class Handoff:
         self.job, self.ha = job, ha
         self.finished = False
         self.package, self.peer_observer, self.peer = package, peer_observer, peer
+        self.package_digest = None if package is None else package.digest
         self.package_receipt: dict | None = None
         self.fresh_verifier: Any = None
         self.activated_config_sha256: str | None = None
         self.repair_verifier: Any = None
         self.activation_peer_observer = activation_peer_observer
+
+    def rebind_ssh(self, ssh: Any) -> None:
+        """Adopt refreshed authority after approved Compute effects, retaining the owner."""
+        policy = ssh._ssh_policy
+        if (
+            policy is None
+            or policy.hostname_for_transport(self.job.target) != self.job.instance.hostname
+        ):
+            raise RuntimeError("HA package handoff SSH refresh does not bind its original member")
+        policy.assert_current()
+        self.job.ssh = ssh
 
     def exchange(self, request: dict) -> dict:
         return self.job.submit(request)
@@ -373,12 +398,17 @@ class Handoff:
         return {"peer": current, "expected_peer": self.peer}
 
     def prepare_package(self, plan: Any) -> dict:
+        if (
+            self.package is None
+            or self.package_digest is None
+            or self.package.digest != self.package_digest
+            or plan.digest != self.package_digest
+        ):
+            raise VMHAAgentPackageError("HA handoff package plan changed")
         if REPAIR.get():
             if self.job.request is None:
                 raise RuntimeError("HA package repair lost its reservation")
             self.job.start(self.job.request)
-        if self.package is None or plan.digest != self.package.digest:
-            raise VMHAAgentPackageError("HA handoff package plan changed")
         wheel = plan.wheel.read_bytes()
         from .ordinary_apply import sha
 
@@ -527,7 +557,7 @@ def reserve(
             ]
         boot_id = ingress_ssh.preflight(client, instance.config_yaml)
         holder.repair_verifier = lambda: ingress_ssh.verify_repair_checkpoint(
-            ssh,
+            job.ssh,
             target,
             instance,
             local,
@@ -535,7 +565,7 @@ def reserve(
             config_sha256=observed["config_sha256"],
         )
         holder.fresh_verifier = lambda: ingress_ssh.verify_fresh(
-            ssh,
+            job.ssh,
             target,
             instance,
             local,
@@ -577,8 +607,22 @@ def observe_guarded(ssh: Any, plan: Any, local: dict, expected: dict | None) -> 
 
 
 def corrective_action(ssh: Any, target: str, instance: Any, local: dict, request: dict) -> dict:
-    if request["action"] not in {"corrective-inspect", "corrective-reserve"}:
+    from .apply_diagnostics import GuestResponseUnavailable
+    from .ssh_commands import budget
+
+    if request["action"] not in {
+        "corrective-inspect", "corrective-plan", "corrective-reserve", "replan-inspect", "replan-settle"
+    }:
         raise ValueError("unsupported corrective handoff action")
-    with _connection(ssh, target, instance, local) as client:
-        _stdin, stdout = _start(client, request)
-        return _receive(stdout)
+    duration = 600 if request["action"] in {"corrective-reserve", "replan-settle"} else 30
+    try:
+        with (
+            budget(time.monotonic() + duration),
+            _connection(ssh, target, instance, local) as client,
+        ):
+            _stdin, stdout = _start(client, request)
+            return _receive(stdout)
+    except EOFError:
+        # Empty SSH output cannot distinguish a guest rejection from a lost
+        # response. Preserve its original operation; never call it user input.
+        raise GuestResponseUnavailable(request["action"]) from None

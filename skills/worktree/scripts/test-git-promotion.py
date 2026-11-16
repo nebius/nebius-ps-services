@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("git_promotion.py")
@@ -152,6 +153,15 @@ class GitPromotionTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(exists.returncode, 1)
+
+    def test_promotion_lock_wait_observes_without_expiry(self):
+        import fcntl
+        with mock.patch.object(fcntl, "flock", side_effect=[BlockingIOError(), None, None]), \
+                mock.patch.object(promotion.time, "monotonic", side_effect=[0, 31, 31]), \
+                mock.patch.object(promotion.time, "sleep"), mock.patch("builtins.print") as report:
+            with promotion.promotion_lock(self.repo):
+                pass
+        report.assert_called_once()
 
     def test_promotion_lock_regular_file_fails_with_structured_error(self) -> None:
         lock_directory = promotion.common_git_dir(self.repo) / "codex-workflows"

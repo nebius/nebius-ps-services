@@ -67,7 +67,7 @@ class IssueResolutionTests(unittest.TestCase):
 
     def test_absent_metadata_keeps_ordinary_completion_unchanged(self):
         run = Path(self.accept()["run_dir"])
-        write(run / "execution/FEAT-001/coordinator.json", {"status": "done"})
+        write(run / "execution/FEAT-001/coordinator.json", {"status": "done", "promoted_head": self.git("rev-parse", "HEAD")})
         objectives.complete_run(run, "session-a")
         self.assertFalse((run / "issue-resolution.json").exists())
 

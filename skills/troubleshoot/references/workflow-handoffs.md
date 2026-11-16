@@ -20,7 +20,7 @@ When `sdlc-classify-failure` routes an active Agentic SDLC failure here:
 - Return one `diagnosis-v3` to `sdlc-classify-failure`. The classifier remains
   authoritative for diagnosis validation, taxonomy, budget accounting,
   invalidation, and the next owner.
-- The result must be exactly one of: localized implementation defect, test
+- The result must be exactly one of: localized implementation defect, plan defect, test
   defect, validation defect, evaluator defect, environment defect, specification gap, proven
   system-contract defect, missing decisive evidence, unresolved competing
   hypotheses, policy block, or human input.
@@ -33,6 +33,12 @@ handoff below, bounded repair target, affected files and original regression
 check. Return to classification without repairing the candidate here. The same
 owner route and existing counters apply. `diagnosis-v3` is the sole active
 contract; older records require a fresh supported run, not conversion.
+
+Use `plan_defect` when the frozen executable plan command is the causal owner.
+Preserve the failed producer receipt and prove the command correction against
+unchanged product bytes and acceptance. Supply the complete causal diagnosis,
+bounded plan target and original oracle; the classifier and plan owner control
+counted repair and reviewed replacement. Never relabel it an implementation bug.
 
 A localized implementation handoff must record expected and observed behavior,
 the stable blocker and exact regression oracle, earliest divergent component,
@@ -66,3 +72,17 @@ preserve. It defines the bug and repair boundary, not a speculative patch.
 - In Agentic SDLC diagnostic mode, stop at the causal handoff. Emit
   `diagnosis-v3`, remove temporary instrumentation, and return to
   classification without entering `REMEDIATED`.
+
+For SDLC, request admission through the existing shared transition helper's private
+`diagnostic-admit --run-dir PATH --event PATH --questions PATH`. The questions
+file contains a `questions` list of distinct `question` strings and scoped private
+`evidence` paths. The current CLI adapter returns serial fallback because it
+cannot verify effective per-child tool restrictions. Never substitute a role
+name, local agent TOML or caller-authored capability JSON for native enforcement.
+A host adapter with a live restriction observer may use the shared diagnostic
+owner: normally two, maximum three assignments, at most 300 seconds or remaining
+shared budget, no worktrees and the same native capacity pool as implementations.
+It journals identities before capacity claims, reconciles exact terminal handles,
+retains contradictions and charges the interval union once before diagnosis.
+No helper classifies failure or spends a repair dispatch. The coordinator returns
+one `diagnosis-v3`; unconfirmed termination or incomplete accounting blocks it.

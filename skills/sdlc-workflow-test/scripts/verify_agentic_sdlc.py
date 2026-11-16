@@ -190,6 +190,7 @@ SOURCE_PARITY_SKILLS = (
     # additional golden-path phases or project-lifecycle admission gates.
     "maintain-project-specs",
     "implement",
+    "implement-test",
     "global-context-management",
     "design",
     "research",
@@ -201,6 +202,7 @@ SOURCE_PARITY_SKILLS = (
     "commit",
     "merge-pr",
     "sdlc-workflow-test",
+    "test-software-in-container",
 )
 
 DESCRIPTION_PREFIX = "Use only as part of the Agentic SDLC workflow;"
@@ -244,7 +246,7 @@ DESIGN_REQUIRED_TERMS = (
     "$sdlc-start",
     "$sdlc-start <objective>",
     "$sdlc-start continue [project-folder]",
-    "workflow/accepted-objective-v2",
+    "workflow/accepted-objective-v3",
     "workflow/session-binding-v1",
     "immutable execution basis",
     "normalized objective",
@@ -261,7 +263,7 @@ DESIGN_REQUIRED_TERMS = (
     "task-recover",
     "replan-future",
     "sequential fallback",
-    "v4 outer",
+    "v5 outer",
     "verification-live-results-v3",
     "predefined runtime operational criterion",
     "non-Grafana provenance",
@@ -270,7 +272,7 @@ DESIGN_REQUIRED_TERMS = (
     "publication-only mode",
     "findings-and-readiness-only mode",
     'phase: "create-pr"',
-    'uat_status: "passed"',
+    'uat_status: <owner-reported status>',
 )
 DEFAULT_PROJECT_ID = "sdlc-verification-project"
 DEFAULT_RUN_ID = "run-active"
@@ -418,8 +420,8 @@ EVIDENCE_PROFILES = {
     "safety",
 }
 PROFILE_SOURCE_SCHEMAS = {
-    "lightweight": "workflow/accepted-objective-v2",
-    "three-tier": "agentic-sdlc/three-tier-results-v3",
+    "lightweight": "workflow/accepted-objective-v3",
+    "three-tier": "agentic-sdlc/three-tier-results-v4",
 }
 SKILL_REQUIRED_PROFILES = {
     skill: [
@@ -441,6 +443,7 @@ SKILL_REQUIRED_PROFILES.update(
 )
 DETERMINISTIC_SKILL_CAPABILITIES = {
     "sdlc-start": {
+        "optional.uat",
         "public.interface",
         "objective.intake",
         "objective.revisions",
@@ -451,6 +454,8 @@ DETERMINISTIC_SKILL_CAPABILITIES = {
         "program.source-admission",
     },
     "sdlc-prepare-execution": {
+        "execution.task-acceptance",
+        "optional.uat",
         "execution.scope",
         "execution.sessions-recovery",
         "execution.replan",
@@ -461,9 +466,11 @@ DETERMINISTIC_SKILL_CAPABILITIES = {
         "execution.bounded-scale",
     },
     "sdlc-implement-plan": {
+        "execution.task-acceptance",
+        "optional.uat",
         "execution.sequential-fallback",
         "execution.worker-liveness",
-        "interop.outer-lease-v4",
+        "interop.outer-lease-v5",
         "interop.shared-execution",
         "interop.implement-promotion",
         "execution.bounded-scale",
@@ -607,6 +614,7 @@ class Context:
     agent: str = field(default_factory=agent_name)
     checks: list[Check] = field(default_factory=list)
     suite_results: list[suite_checks.SuiteResult] = field(default_factory=list)
+    verification_groups: dict[str, dict] = field(default_factory=dict)
     report_path: Path | None = None
     progress: bool = False
     interrupted: bool = False
@@ -711,7 +719,7 @@ def validated_three_tier_claims(
             [sys.executable, "-B", str(helper), "--verification-root", str(root),
              "--expected-verification-id", source_identity, "validate-results"],
             env=runtime_environment(ctx.agent),
-            timeout=suite_checks.CAPABILITY_SUITE_TIMEOUT_SECONDS["three-tier"],
+            timeout=None,
         )
         if result.returncode != 0:
             return None
@@ -1212,11 +1220,21 @@ def check_spec_ownership_contract(ctx: Context) -> None:
         problems.append("sdlc-start: shared project-spec validator adapter is invalid")
 
     workflow_test = normalized(ctx.skills_root / "sdlc-workflow-test" / "SKILL.md")
+    runtime_reference = "references/lightweight-runtime-verification.md"
+    workflow_runtime = normalized(ctx.skills_root / "sdlc-workflow-test" / runtime_reference)
     workflow_sequence = "`sdlc-create-design`, `sdlc-auto-steering`"
-    if workflow_sequence not in workflow_test:
+    if runtime_reference not in workflow_test or workflow_sequence not in workflow_runtime:
         problems.append(
             "sdlc-workflow-test: auto-steering is missing after design"
         )
+    sequence = ("sdlc-start", "sdlc-create-requirements", "sdlc-gather-context",
+                "sdlc-create-design", "sdlc-auto-steering", "sdlc-create-plan",
+                "sdlc-prepare-execution", "sdlc-tdd", "sdlc-implement-plan",
+                "sdlc-validate-codes", "sdlc-unit-tests", "sdlc-evaluate",
+                "sdlc-update-documents", "align", "sdlc-commit", "sdlc-uat-tests")
+    positions = [workflow_runtime.find(f"`{name}`") for name in sequence]
+    if any(position < 0 for position in positions) or positions != sorted(positions):
+        problems.append("sdlc-workflow-test: lightweight phase order is incomplete or changed")
 
     readme = read_text(ctx.skills_root / "sdlc-create-requirements" / "README.md")
     boundary_match = re.search(
@@ -1578,7 +1596,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 'phase: "create-pr"',
                 "expected_head",
                 "base_head",
-                'uat_status: "passed"',
+                'uat_status: <owner-reported status>',
                 "outer-integration-pending",
                 "recorded primary path",
                 "$worktree integrate",
@@ -1597,7 +1615,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "sdlc-classify-failure",
                 "expected_head: <promoted_head>",
                 "base_head: <recorded-default-head>",
-                'uat_status: "passed"',
+                'uat_status: <owner-reported status>',
                 "gh pr create --base <origin-default> --head <branch>",
                 "Do not use a shell wrapper",
             ],
@@ -1654,7 +1672,7 @@ def check_execution_plane_contract(ctx: Context) -> None:
                 "expected_review_status",
                 "pr_auth_valid",
                 'expected_phase="create-pr"',
-                'expected_uat_status="passed"',
+                'expected_uat_status=uat["status"]',
             ],
         ),
         "failure taxonomy": (
@@ -1691,7 +1709,7 @@ def check_repair_loop_contract(ctx: Context) -> None:
                 "agentic-sdlc/failure-event-v2",
                 "agentic-sdlc/diagnosis-v3",
                 "agentic-sdlc/design-approval-v2",
-                "agentic-sdlc/repair-control-v2",
+                "agentic-sdlc/repair-control-v3",
                 "agentic-sdlc/revalidation-evidence-v2",
                 "blocked_missing_evidence",
                 "localized_limit",
@@ -1735,7 +1753,7 @@ def check_repair_loop_contract(ctx: Context) -> None:
             ctx.skills_root / "sdlc-start" / "references" / "state-schema.md",
             [
                 "agentic-sdlc/repair-state-pointer-v1",
-                "repair-control-v2",
+                "repair-control-v3",
                 "conditional diagnostic branch",
                 "60 active",
                 "four repair dispatches",
@@ -2501,7 +2519,15 @@ def setup_disposable_project(ctx: Context) -> bool:
         if not valid_verification_context(
             ctx, existing_context, current_head=baseline_head
         ):
-            if ctx.live_evidence_path.exists():
+            if (ctx.verification_root / workspace.RECEIPT).exists():
+                ctx.add(
+                    "Disposable SDLC golden-path run results",
+                    "Verification context",
+                    "FAIL",
+                    "The owned fixture belongs to an earlier source/design snapshot; "
+                    "preserved its context. Run aggregate owned cleanup before fresh preflight.",
+                )
+            elif ctx.live_evidence_path.exists():
                 ctx.add(
                     "Disposable SDLC golden-path run results",
                     "Verification context",
@@ -2586,7 +2612,7 @@ def setup_fixture_state(ctx: Context, *, record: bool = True) -> Path:
             "next_recommended_skill": "sdlc-validate-codes",
             "retry_counts": {"implementation": 0},
             "iteration_count": 1,
-            "max_iterations": 200,
+            "checkpoint_interval_iterations": 200,
             "needs_human": False,
         },
     )
@@ -2637,29 +2663,42 @@ def check_capability_regressions(ctx: Context) -> None:
     if any(suite not in suites for _, requirements in capabilities.values() for suite, _ in requirements):
         ctx.add("Suite execution results", "Suite catalog", "FAIL", "Capability references an unknown suite.")
         return
-    results = {}
-    for index, (name, spec) in enumerate(suites.items(), 1):
-        if ctx.progress:
-            print(f"Suite {index}/{len(suites)}: {name} (limit {spec.timeout}s)", flush=True)
-        result = suite_checks.execute(spec, env)
-        results[name] = result
-        ctx.suite_results.append(result)
-        ctx.add("Suite execution results", name, "PASS" if result.returncode == 0 else "WARN" if result.returncode == 130 else "FAIL", result.detail)
-        if ctx.progress:
-            print(result.detail, flush=True)
+    def retain_group(row):
+        ctx.verification_groups[row["id"]] = row
         if ctx.report_path is not None:
             write_report(ctx, ctx.report_path)
-        if result.returncode in {125, 130}:
-            ctx.interrupted = result.returncode == 130
-            break
+        if ctx.progress and row["status"] != "NOT_RUN":
+            print("Group " + row["id"] + ": " + row["status"], flush=True)
+    try:
+        completed = suite_checks.execute_all(list(suites.values()), env, on_result=retain_group)
+    except (ValueError, ImportError) as error:
+        ctx.add("Suite execution results", "Exact test inventory", "FAIL", str(error))
+        return
+    results = {result.name: result for result in completed}
+    for result in completed:
+        ctx.suite_results.append(result)
+        ctx.add("Suite execution results", result.name,
+                "PASS" if result.returncode == 0 else "WARN" if result.returncode in {126, 130} else "FAIL", result.detail)
+        ctx.interrupted = ctx.interrupted or result.returncode == 130
+        if ctx.report_path is not None:
+            write_report(ctx, ctx.report_path)
     for capability_id, (name, requirements) in capabilities.items():
         failed_suites = sorted({suite for suite, _ in requirements
-                                if suite in results and results[suite].returncode not in {0, 130}})
+                                if suite in results and results[suite].returncode not in {0, 126, 130}})
         incomplete = sorted({suite for suite, _ in requirements
-                             if suite not in results or results[suite].returncode == 130})
-        missing = [test for suite, test in requirements if suite in results
-                   and test not in results[suite].passed and test not in results[suite].skipped]
-        skipped = [test for suite, test in requirements if suite in results and test in results[suite].skipped]
+                             if suite not in results or results[suite].returncode in {126, 130}})
+        missing = []
+        skipped = []
+        for suite, method in requirements:
+            if suite not in results:
+                continue
+            result = results[suite]
+            exact = {name for name in result.inventory if name.rsplit(".", 1)[-1] == method}
+            if not exact:
+                missing.append(suite + ":" + method)
+            else:
+                missing.extend(sorted(exact - result.passed - result.skipped))
+                skipped.extend(sorted(exact & result.skipped))
         status = "FAIL" if failed_suites or missing and not incomplete else "WARN" if incomplete or skipped else "PASS"
         if failed_suites:
             detail = "Blocked by failed required suite(s): " + ", ".join(failed_suites) + ". See suite execution results."
@@ -2778,7 +2817,7 @@ def _check_hooks_with_fixtures(ctx: Context) -> None:
         next_skill: str = "sdlc-validate-codes",
         retry_counts: dict[str, int] | None = None,
         iteration_count: int = 1,
-        max_iterations: int = 200,
+        checkpoint_interval_iterations: int = 200,
         max_retries: int = 3,
         needs_human: bool = False,
         blocked_reason: str = "",
@@ -2795,7 +2834,7 @@ def _check_hooks_with_fixtures(ctx: Context) -> None:
             "next_recommended_skill": next_skill,
             "retry_counts": retry_counts or {current_phase: 0},
             "iteration_count": iteration_count,
-            "max_iterations": max_iterations,
+            "checkpoint_interval_iterations": checkpoint_interval_iterations,
             "max_retries": max_retries,
             "needs_human": needs_human,
             "blocked_reason": blocked_reason,
@@ -2910,14 +2949,14 @@ def _check_hooks_with_fixtures(ctx: Context) -> None:
         str(human.get("stopReason") or human),
     )
 
-    reset_stop_state(iteration_count=200, max_iterations=200)
+    reset_stop_state(iteration_count=200, checkpoint_interval_iterations=200)
     max_iter = run_hook(stop_hook, stop_payload(ctx), ctx)
     ctx.add(
         "Stop continuation test results",
-        "Max iteration stops",
+        "Iteration checkpoint continues with diagnosis",
         "PASS"
-        if max_iter.get("continue") is False
-        and "Max SDLC iterations" in str(max_iter.get("stopReason"))
+        if max_iter.get("decision") == "block"
+        and "Observation checkpoint" in str(max_iter.get("reason"))
         else "FAIL",
         str(max_iter.get("stopReason") or max_iter),
     )
@@ -2940,10 +2979,10 @@ def _check_hooks_with_fixtures(ctx: Context) -> None:
     no_progress = run_hook(stop_hook, stop_payload(ctx, active=True), ctx)
     ctx.add(
         "Stop continuation test results",
-        "No-progress guard stops",
+        "Unchanged-state checkpoint continues with diagnosis",
         "PASS"
-        if no_progress.get("continue") is False
-        and "No progress" in str(no_progress.get("stopReason"))
+        if no_progress.get("decision") == "block"
+        and "Observation checkpoint" in str(no_progress.get("reason"))
         else "FAIL",
         str(no_progress.get("stopReason") or no_progress),
     )
@@ -3735,7 +3774,7 @@ def summarize_matrix(ctx: Context) -> list[tuple[str, str]]:
         ("Future-wave replan", "execution.replan"),
         ("Secret persistence gate", "execution.secret-gate"),
         ("Sequential fallback", "execution.sequential-fallback"),
-        ("Managed outer lease", "interop.outer-lease-v4"),
+        ("Managed outer lease", "interop.outer-lease-v5"),
         ("Implement interoperability", "interop.shared-execution"),
         ("Steering continuation", "steering.continuation"),
         ("Verifier self-tests", "verifier.self-tests"),
@@ -3931,7 +3970,17 @@ def archive_report(path: Path) -> None:
 
 def write_report(ctx: Context, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = report(ctx)
+    groups = {row["id"]: row for result in ctx.suite_results for row in result.groups}
+    groups.update(ctx.verification_groups)
+    observations = {"schema": "workflow/verification-observations-v1", "groups": list(groups.values())}
+    encoded = json.dumps(observations, sort_keys=True, indent=2) + "\n"
+    inventory_digest = hashlib.sha256(encoded.encode()).hexdigest()
+    inventory_path = path.with_name("verification-" + inventory_digest + ".json")
+    if not inventory_path.exists():
+        descriptor = os.open(inventory_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w") as output:
+            output.write(encoded)
+    content = report(ctx) + "\n\nExact inventory and attributed timings: `" + inventory_path.name + "` (SHA-256 `" + inventory_digest + "`).\n"
     fd, tmp_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
     )
@@ -3990,13 +4039,20 @@ def main(argv: list[str]) -> int:
             check_repair_loop_contract(ctx)
             check_skill_discovery(ctx)
             check_hook_config(ctx)
-            ctx.report_path = report_path
-            fixture_admitted = setup_disposable_project(ctx)
             check_direct_objectives(ctx)
             ctx.report_path = report_path
+            fixture_admitted = (setup_disposable_project(ctx)
+                                if not any(check.status == "FAIL" for check in ctx.checks)
+                                else False)
+            ctx.report_path = report_path
             ctx.progress = True
-            check_capability_regressions(ctx)
-            execution_stopped = ctx.interrupted or any(result.returncode == 125 for result in ctx.suite_results)
+            if any(check.status == "FAIL" for check in ctx.checks):
+                ctx.add("Suite execution results", "Preflight prerequisites", "WARN",
+                        "Required regression suites were not launched because preflight prerequisites failed.")
+            else:
+                check_capability_regressions(ctx)
+            execution_stopped = (ctx.interrupted or any(result.returncode != 0 for result in ctx.suite_results)
+                                 or any(check.status == "FAIL" for check in ctx.checks))
             if fixture_admitted and not execution_stopped:
                 check_hooks_with_fixtures(ctx)
             elif not fixture_admitted:

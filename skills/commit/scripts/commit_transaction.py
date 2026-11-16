@@ -944,10 +944,12 @@ def _worktree_coordination_ref(value: dict[str, Any], directory: str, name: str)
             "integration_branch",
             "integration_worktree",
             "integration_head",
+            "commit_tree",
+            "commit_message_sha256",
             "state",
             "token",
         }
-        if set(value) != required or value.get("schema") != 3:
+        if set(value) != required or value.get("schema") != 4:
             raise TransactionError("Worktree integration reservation is malformed")
         states = set()
     if (
@@ -1015,8 +1017,14 @@ def _worktree_coordination_ref(value: dict[str, Any], directory: str, name: str)
             raise TransactionError("Worktree integration branch is invalid")
         state = value.get("state")
         integration_head = value.get("integration_head")
-        if state not in {"planned", "present", "ready"}:
+        if state not in {"planned", "present", "committing", "ready"}:
             raise TransactionError("Worktree integration state is invalid")
+        if state in {"committing", "ready"}:
+            _coordination_sha(value.get("commit_tree"), "integration commit tree")
+            if not isinstance(value.get("commit_message_sha256"), str) or re.fullmatch(r"[0-9a-f]{64}", value["commit_message_sha256"]) is None:
+                raise TransactionError("Worktree integration commit message digest is invalid")
+        elif value.get("commit_tree") is not None or value.get("commit_message_sha256") is not None:
+            raise TransactionError("Worktree unfinished integration commit intent is invalid")
         if state == "ready":
             _coordination_sha(integration_head, "integration candidate head")
         elif integration_head is not None:
@@ -1077,7 +1085,7 @@ def _worktree_manifest_path(value: dict[str, Any], path: Path, primary: Path) ->
     name = path.stem
     if (
         set(value) != required
-        or value.get("schema") != 4
+        or value.get("schema") != 5
         or value.get("status") not in {"planned", "active", "recovery", "integrated"}
         or value.get("name") != name
         or WORKTREE_NAME_RE.fullmatch(name) is None
@@ -1140,7 +1148,7 @@ def _worktree_manifest_path(value: dict[str, Any], path: Path, primary: Path) ->
         if lease_owner is not None or lease_token is not None:
             raise TransactionError("Worktree ownership lease is invalid")
     elif (
-        lease_state not in {"active", "released"}
+        lease_state not in {"active", "aggregation-ready", "released"}
         or lease_owner not in {"implement", "agentic-sdlc"}
         or not isinstance(lease_token, str)
         or TOKEN_RE.fullmatch(lease_token) is None
@@ -2376,6 +2384,8 @@ def publish_target(arguments):
         path, grant, _ = _task_from_arguments(arguments, root)
         state = _task_state(path, grant)
         ref = "refs/heads/" + arguments.branch
+        if _active_worktree_claims(_primary_worktree(root), ref):
+            raise TransactionError("aggregate integration reserves this source; retry publication after delivery", "history_changed")
         if grant["requested_action"] != "create-pr" or ref not in state["targets"]:
             raise TransactionError("publication target is outside PR scope", "scope_changed")
         _publication_open(state, ref, reconcile_push=True)
@@ -2467,6 +2477,15 @@ def _checkout_identity(root, grant):
 
 
 def _occupied_elsewhere(root, ref):
+    registry = _common_dir(root) / "workflow-projects"
+    if registry.is_symlink():
+        raise TransactionError("project ownership registry is unsafe", "scope_changed")
+    for path in sorted(registry.glob("*.json")):
+        row = _load_json(path, "project ownership")
+        if row.get("schema") != "workflow/project-admission-v1":
+            raise TransactionError("project ownership schema is unsupported", "scope_changed")
+        if row.get("state") not in {"cleaned", "cancelled"} and ref == "refs/heads/" + str(row.get("source_branch")):
+            return True
     # NUL-delimited records preserve spaces/newlines in registered worktree paths.
     output = _run_git(root, ("worktree", "list", "--porcelain", "-z")).stdout
     for record in output.split(b"\0\0"):
@@ -2478,6 +2497,95 @@ def _occupied_elsewhere(root, ref):
         if ref in branches and (len(paths) != 1 or Path(paths[0]).resolve() != root):
             return True
     return bool(_active_worktree_claims(_primary_worktree(root), ref))
+
+
+def _commit_push_noop(root, path, grant, state, ref, target):
+    """Prove an unchanged task needs no remote effect before closing it."""
+    publication = target["publication"]
+    if (target["head"] != grant["initial_head"] or target["commits"]
+            or target["last_claim"] is not None or publication["pending"] is not None
+            or _status(root)):
+        return False
+    destination = _pr.origin_destination(root, _run_git)
+    remote = _pr.remote_head(root, _run_git, destination, ref)
+    default = None
+    if remote != target["head"]:
+        if remote is not None:
+            return False
+        branch = ref.removeprefix("refs/heads/")
+        if any(_run_git(root, ("config", "--get", f"branch.{branch}.{key}"), check=False).stdout.strip()
+               for key in ("remote", "merge")):
+            return False
+        default_ref = grant["default_ref"].replace("refs/remotes/origin/", "refs/heads/", 1)
+        default = _pr.remote_head(root, _run_git, destination, default_ref)
+        if default != target["head"]:
+            return False
+    proof = {"schema": "commit-push/noop-v1", "ref": ref, "head": target["head"],
+             "remote_head": remote, "default_head": default}
+    _atomic_json(path.with_name(path.stem + ".noop.json"), proof)
+    return True
+
+
+def push_current(arguments):
+    """Commit-push effect owner; the repository lock also fences aggregation."""
+    root = _canonical_repo(arguments.repo_root)
+    with _repository_lock(_common_dir(root)):
+        path, grant, _ = _task_from_arguments(arguments, root)
+        state = _task_state(path, grant)
+        _checkout_identity(root, grant)
+        identity = _identity(root)
+        ref = identity["ref"]
+        if grant["requested_action"] != "commit-push" or ref != grant["initial_ref"]:
+            raise TransactionError("push requires the original commit-push task", "scope_changed")
+        target = state["targets"][ref]
+        if (identity["head"] != target["head"] or arguments.reviewed_head != target["head"]
+                or _status(root) or _unresolved_claim(root, path, ref)):
+            raise TransactionError("push requires the clean reviewed task checkpoint", "history_changed")
+        if _active_worktree_claims(_primary_worktree(root), ref):
+            raise TransactionError("aggregate integration reserves this source; wait for delivery", "history_changed")
+        for name in ("pre-push", "reference-transaction"):
+            hook = _git_state_path(root, "hooks/" + name)
+            if hook.is_symlink() or hook.exists() and (not hook.is_file() or os.access(hook, os.X_OK)):
+                raise TransactionError("active or unsafe publication hook requires its owner", "scope_changed")
+        branch = ref.removeprefix("refs/heads/")
+        upstream_remote = _run_git(root, ("config", "--get", f"branch.{branch}.remote"), check=False).stdout.decode().strip()
+        upstream_ref = _run_git(root, ("config", "--get", f"branch.{branch}.merge"), check=False).stdout.decode().strip()
+        if (upstream_remote or upstream_ref) and (upstream_remote != "origin" or upstream_ref != ref):
+            raise TransactionError("existing upstream differs from the authorized origin branch", "scope_changed")
+        tracking = f"refs/remotes/origin/{branch}"
+        previous_tracking = _local_head(root, tracking)
+        if previous_tracking and _run_git(root, ("merge-base", "--is-ancestor", previous_tracking, target["head"]), check=False).returncode:
+            raise TransactionError("origin tracking ref diverged from the reviewed publication", "history_changed")
+        destination = _pr.origin_destination(root, _run_git)
+        publication = target["publication"]
+        observed = _pr.remote_head(root, _run_git, destination, ref)
+        if observed != target["head"]:
+            if observed != publication["remote_head"]:
+                raise TransactionError("remote changed after publication intake", "history_changed")
+            publication["pending"] = {"from_head": observed, "to_head": target["head"]}
+            _atomic_json(_task_state_path(path), state)
+            _run_git(root, ("push", "--porcelain", "--no-force", "--verify", "--no-follow-tags",
+                            "--recurse-submodules=no", destination, f"{target['head']}:{ref}"), check=False)
+            observed = _pr.remote_head(root, _run_git, destination, ref)
+        if observed != target["head"]:
+            raise TransactionError("push unconfirmed; retain the task and reconcile push-current", "effect_unknown")
+        publication.update(remote_head=observed, published_head=observed, pending=None)
+        _atomic_json(_task_state_path(path), state)
+        # URL pushes do not refresh tracking refs on every supported Git version.
+        # Bind upstream to the independently observed remote result, preserving
+        # concurrent or divergent local tracking history.
+        branch = ref.removeprefix("refs/heads/")
+        previous = _local_head(root, tracking)
+        if previous != observed:
+            if previous != previous_tracking:
+                raise TransactionError("origin tracking ref changed during publication", "history_changed")
+            result = _run_git(root, ("update-ref", "--no-deref", tracking, observed, previous_tracking or "0" * len(observed)), check=False)
+            if result.returncode:
+                raise TransactionError("origin tracking ref changed during publication", "history_changed")
+        # Configure only this exact verified branch; no checkout is switched.
+        _run_git(root, ("config", f"branch.{branch}.remote", "origin"))
+        _run_git(root, ("config", f"branch.{branch}.merge", ref))
+        return {"status": "published", "branch": branch, "head": observed}
 
 
 def _expected_checkout_head(grant, state, ref):
@@ -3116,6 +3224,9 @@ def finish(arguments: argparse.Namespace) -> dict[str, object]:
                 if ref in review_heads:
                     continue
                 publication = target["publication"]
+                if (grant["requested_action"] == "commit-push" and publication["published_head"] != target["head"]
+                        and not _commit_push_noop(root, path, grant, state, ref, target)):
+                    raise TransactionError("commit-push completion requires verified publication", "effect_unknown")
                 if publication["advanced_head"] is not None:
                     raise TransactionError("advanced contributor head requires fresh intake", "history_changed")
                 if (grant["requested_action"] == "create-pr" and not target["merged_result"]
@@ -4265,6 +4376,7 @@ def _parser() -> argparse.ArgumentParser:
         "validate-order",
         "checkout-target",
         "publish-target",
+        "push-current",
         "complete-checkout",
     ):
         task_parser = subparsers.add_parser(name)
@@ -4282,6 +4394,8 @@ def _parser() -> argparse.ArgumentParser:
                 task_parser.add_argument("--pr-bindings")
         elif name == "checkout-target":
             task_parser.add_argument("--branch", required=True)
+        elif name == "push-current":
+            task_parser.add_argument("--reviewed-head", required=True)
         elif name == "publish-target":
             task_parser.add_argument("--branch", required=True)
             task_parser.add_argument("--reviewed-head", required=True)
@@ -4329,6 +4443,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "finish": finish,
             "checkout-target": checkout_target,
             "publish-target": publish_target,
+            "push-current": push_current,
             "complete-checkout": complete_checkout,
             "sync": sync,
             "validate-order": validate_order,

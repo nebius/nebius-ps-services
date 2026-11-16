@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import re
 import tempfile
 import time
@@ -19,6 +20,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
+
+from ..nebius_pagination import NebiusPaginationError
 
 VM_HA_REQUEST_TIMEOUT_SECONDS = 30.0
 VM_HA_PER_RETRY_TIMEOUT_SECONDS = 10.0
@@ -74,6 +77,106 @@ def nebius_request_error_code_is(error: BaseException, code_name: str) -> bool:
         return False
     status_code = getattr(getattr(error, "status", None), "code", None)
     return isinstance(error, RequestError) and (getattr(status_code, "name", None) == code_name)
+
+
+def _cloud_error_cause(error: Exception) -> Exception:
+    seen: set[int] = set()
+    while isinstance(error, NebiusPaginationError) and isinstance(error.__cause__, Exception):
+        if id(error) in seen:
+            break
+        seen.add(id(error))
+        error = error.__cause__
+    return error
+
+
+def _cloud_error_code(error: Exception) -> str:
+    from nebius.aio.service_error import RequestError
+
+    if isinstance(error, RequestError):
+        return _enum_name(getattr(error.status, "code", None))
+    code = getattr(error, "code", None)
+    try:
+        return _enum_name(code() if callable(code) else code)
+    except Exception:
+        return ""
+
+
+_ReadResult = t.TypeVar("_ReadResult")
+
+
+def _is_gateway_read_error(error: Exception) -> bool:
+    """Recognize a typed gRPC proxy failure, never an arbitrary UNKNOWN error."""
+    if not nebius_request_error_code_is(error, "UNKNOWN"):
+        return False
+    status = getattr(error, "status", None)
+    message = getattr(status, "message", None)
+    # These transport failures have no service response. Preserve explicit
+    # service errors and permanent statuses even if their text mentions HTTP.
+    return bool(
+        not getattr(status, "service_errors", ())
+        and isinstance(message, str)
+        and re.fullmatch(r"Received http2? header with status: 52[0-9]", message.strip())
+    )
+
+
+def read_vm_ha_cloud(
+    read: t.Callable[[dict[str, t.Any]], _ReadResult],
+    *,
+    timeout_provider: t.Callable[[], float] | None = None,
+    clock: t.Callable[[], float] = time.monotonic,
+    sleep: t.Callable[[float], None] = time.sleep,
+    jitter: t.Callable[[], float] = random.random,
+) -> _ReadResult:
+    """Retry one pure read inside the existing cumulative observation deadline.
+
+    Callers must not pass snapshots, local retirement or mutations. One SDK
+    attempt per request keeps this owner responsible for pacing and time.
+    """
+    delay = 0.2
+
+    def remaining_time() -> float:
+        value = vm_ha_observation_remaining()
+        if timeout_provider is not None:
+            provided = timeout_provider()
+            if not 0 < provided < float("inf"):
+                raise TimeoutError("VM-HA cloud request deadline has expired")
+            value = min(value, provided)
+        return value
+
+    started = clock()
+    initial_allowance = remaining_time()
+    with vm_ha_observation_budget(seconds=initial_allowance - (clock() - started), clock=clock):
+        while True:
+            remaining = remaining_time()
+            # Reserve the SDK synchronous auth wait's 200ms cleanup margin.
+            allowance = min(VM_HA_PER_RETRY_TIMEOUT_SECONDS, remaining - 0.2)
+            if allowance <= 0.001:
+                raise TimeoutError("VM-HA cloud read deadline exceeded")
+            try:
+                result = read(
+                    dict(
+                        timeout=allowance,
+                        auth_timeout=allowance,
+                        per_retry_timeout=allowance,
+                        retries=1,
+                    )
+                )
+            except Exception as error:
+                cause = _cloud_error_cause(error)
+                if not (
+                    isinstance(cause, (TimeoutError, ConnectionError))
+                    or _cloud_error_code(cause) in {"UNAVAILABLE", "DEADLINE_EXCEEDED"}
+                    or _is_gateway_read_error(cause)
+                ):
+                    raise
+                remaining = remaining_time()
+                if remaining <= 0.2:
+                    raise TimeoutError("VM-HA cloud read deadline exceeded") from error
+                sleep(min(delay * (0.5 + 0.5 * jitter()), remaining - 0.2))
+                delay = min(delay * 2, 1.0)
+                continue
+            remaining_time()
+            return result
 
 
 def operation_status_lookup_unsupported(error: BaseException) -> bool:
@@ -412,16 +515,23 @@ class NebiusSDKCloudClient:
         return kwargs
 
     def _resume_operation(self, cloud_operation_id: str) -> t.Any:
-        from nebius.api.nebius.common.v1 import GetOperationRequest, OperationServiceClient
+        from nebius.api.nebius.common.v1 import GetOperationRequest
+        from nebius.api.nebius.compute.v1 import InstanceServiceClient
 
-        return (
-            OperationServiceClient(self.sdk)
+        # Every mutation owned here is an Instance service operation, including
+        # alias attachment updates. A generic operation client loses that route.
+        operation = (
+            InstanceServiceClient(self.sdk)
+            .operation_service()
             .get(
                 GetOperationRequest(id=cloud_operation_id),
                 **self._request_kwargs(),
             )
             .wait()
         )
+        if str(getattr(operation, "id", "") or "") != cloud_operation_id:
+            raise AmbiguousHACloudError("VM-HA cloud operation identity changed")
+        return operation
 
     @staticmethod
     def _require_operation_success(operation: t.Any) -> None:
@@ -517,13 +627,16 @@ class NebiusSDKCloudClient:
     def get_instance(self, instance_id: str) -> t.Any:
         from nebius.api.nebius.compute.v1 import GetInstanceRequest, InstanceServiceClient
 
-        return (
-            InstanceServiceClient(self.sdk)
-            .get(
-                GetInstanceRequest(id=instance_id),
-                **self._request_kwargs(),
-            )
-            .wait()
+        return read_vm_ha_cloud(
+            lambda kwargs: (
+                InstanceServiceClient(self.sdk)
+                .get(
+                    GetInstanceRequest(id=instance_id),
+                    **kwargs,
+                )
+                .wait()
+            ),
+            timeout_provider=self._request_timeout_provider,
         )
 
     def stop_instance(self, instance_id: str, operation_id: str | None = None) -> None:
@@ -555,13 +668,16 @@ class NebiusSDKCloudClient:
     def get_allocation(self, allocation_id: str) -> t.Any:
         from nebius.api.nebius.vpc.v1 import AllocationServiceClient, GetAllocationRequest
 
-        return (
-            AllocationServiceClient(self.sdk)
-            .get(
-                GetAllocationRequest(id=allocation_id),
-                **self._request_kwargs(),
-            )
-            .wait()
+        return read_vm_ha_cloud(
+            lambda kwargs: (
+                AllocationServiceClient(self.sdk)
+                .get(
+                    GetAllocationRequest(id=allocation_id),
+                    **kwargs,
+                )
+                .wait()
+            ),
+            timeout_provider=self._request_timeout_provider,
         )
 
     def set_alias_allocation(
@@ -832,22 +948,18 @@ class VMHACloudAdapter:
         except HACloudError:
             raise
         except Exception as exc:
-            code = getattr(exc, "code", None)
-            try:
-                code = code() if callable(code) else code
-            except Exception:
-                code = None
-            code_name = _enum_name(code)
-            if isinstance(exc, (TimeoutError, ConnectionError)) or code_name in {
+            cause = _cloud_error_cause(exc)
+            code_name = _cloud_error_code(cause)
+            if isinstance(cause, (TimeoutError, ConnectionError)) or code_name in {
                 "ABORTED",
                 "DEADLINE_EXCEEDED",
                 "RESOURCE_EXHAUSTED",
                 "UNAVAILABLE",
             }:
                 raise RetryableHACloudError(f"{description}: {exc}") from exc
-            if code_name == "NOT_FOUND" or nebius_request_error_code_is(exc, "NOT_FOUND"):
+            if code_name == "NOT_FOUND":
                 raise MissingHAComputeError(f"{description}: {exc}") from exc
-            if isinstance(exc, PermissionError) or code_name in {
+            if isinstance(cause, PermissionError) or code_name in {
                 "FAILED_PRECONDITION",
                 "INVALID_ARGUMENT",
                 "PERMISSION_DENIED",

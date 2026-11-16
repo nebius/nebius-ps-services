@@ -41,7 +41,7 @@ At minimum, evaluate the edges that exist in the selected design:
 source data -> transformation -> tokenizer/template -> training
 base model -> adapter -> merged or composed model -> quantization
 training checkpoint -> serving artifact -> inference runtime -> hardware
-model provider -> Pydantic AI Model/Provider/profile -> runtime facade
+model provider -> selected SDK model/provider seam -> runtime facade
 provider-native runtime -> runtime facade -> normalized application events
 runtime facade -> typed tool adapter -> policy gateway -> domain service
 embedding model -> dimensions/normalization -> index -> retrieval policy

@@ -400,13 +400,13 @@ def _run_dir_from_lock(project_dir: Path, lock: dict[str, Any]) -> Path | None:
         return None
     run_dir = project_dir / run_id
     run = _private_json(run_dir / "run.json") or {}
-    if (run.get("schema") != "workflow/run-v2" or run.get("owner") != "agentic-sdlc"
+    if (run.get("schema") != "workflow/run-v4" or run.get("owner") != "agentic-sdlc"
             or run.get("run_id") != run_id or run.get("project_root") != lock.get("project_root")
             or run.get("project_id") != lock.get("project_id")
             or run.get("coordinator_session_sha256") != lock.get("owner_session_hash")):
         return None
     objective = _private_json(run_dir / "objective.json") or {}
-    if (objective.get("schema") != "workflow/accepted-objective-v2"
+    if (objective.get("schema") != "workflow/accepted-objective-v3"
             or objective.get("run_id") != run_id or objective.get("owner") != "agentic-sdlc"
             or not isinstance(objective.get("revisions"), list) or not objective["revisions"]):
         return None
@@ -417,7 +417,7 @@ def _run_dir_from_lock(project_dir: Path, lock: dict[str, Any]) -> Path | None:
         if revision.get("snapshot") != f"objectives/r{index:04d}.json" or revision.get("parent_sha256") != parent:
             return None
         snapshot = _private_json(run_dir / revision["snapshot"])
-        if snapshot is None or set(snapshot) != {"outcome", "scope", "constraints", "acceptance_criteria", "clarifications", "provenance", "inputs", "completion"}:
+        if snapshot is None or set(snapshot) - {"issue_resolution"} != {"outcome", "scope", "constraints", "acceptance_criteria", "clarifications", "provenance", "inputs", "completion", "uat"}:
             return None
         encoded = (json.dumps(snapshot, sort_keys=True, indent=2, ensure_ascii=False) + "\n").encode()
         parent = hashlib.sha256(encoded).hexdigest()
@@ -456,7 +456,7 @@ def _execution_registration(
                 assignment = load_json(assignment_path) or {}
             except json.JSONDecodeError:
                 continue
-            if assignment.get("schema") != "workflow/worker-assignment-v2":
+            if assignment.get("schema") != "workflow/worker-assignment-v4":
                 continue
             worker_path = assignment.get("worktree")
             if not worker_path or not is_inside(cwd_path, str(worker_path)):
@@ -549,6 +549,11 @@ def load_active_run(cwd: Path | str, codex_home: Path = CODEX_HOME, session_id: 
         project_dir = lock_path.parent
         run_dir = _run_dir_from_lock(project_dir, lock)
         if run_dir is None:
+            if (bound_path == project_dir / str(lock.get("run_id", ""))
+                    and lock.get("owner_session_hash") == identity
+                    and binding.get("project_root") == str(project_root)
+                    and is_inside(cwd_path, project_root)):
+                raise json.JSONDecodeError("Unsupported bound workflow state; preserve evidence and start a new run", "", 0)
             continue
         project_id = str(lock.get("project_id") or project_dir.name)
         run_id = str(lock.get("run_id") or run_dir.name)
@@ -557,7 +562,11 @@ def load_active_run(cwd: Path | str, codex_home: Path = CODEX_HOME, session_id: 
         if coordinator_owned:
             objective = _private_json(run_dir / "objective.json") or {}
             coordinator_owned = binding.get("objective_id") == objective.get("objective_id")
-        if coordinator_owned and is_inside(cwd_path, project_root):
+        run_state = _private_json(run_dir / "run.json") or {}
+        logical = resolve_path(str(run_state.get("logical_project_root") or project_root))
+        original_owned = (coordinator_owned and is_inside(cwd_path, logical)
+                          and str(git_common_dir(resolve_project_root(cwd_path))) == run_state.get("git_common_dir"))
+        if coordinator_owned and (is_inside(cwd_path, project_root) or original_owned):
             return ActiveRun(
                 project_id=project_id,
                 project_root=project_root,

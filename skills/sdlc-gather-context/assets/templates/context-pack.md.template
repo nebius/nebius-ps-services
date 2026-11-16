@@ -35,3 +35,10 @@
 
 - Requirements fingerprint: <hash-or-summary>
 - Source fingerprint: <hash-or-summary>
+
+## Architecture Inventory
+
+- Declared layers/components: <stable references, names, design sources>
+- Observed layers/components: <same stable references, code sources>
+- Disagreements and unknown scope: <facts requiring reconciliation>
+- Private inventory revision: <owner-produced inventory digest>

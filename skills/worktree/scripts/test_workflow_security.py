@@ -28,6 +28,33 @@ class SensitiveTextTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFalse(contains_sensitive(text))
 
+    def test_dynamic_keyword_arguments_allow_one_trailing_separator(self):
+        for expression in (
+            'os.environ.get("DB_PASSWORD", "placeholder")',
+            'client.cookies["csrf"]',
+            'client.cookies["csrf"].value',
+        ):
+            for separator in (",", ";"):
+                with self.subTest(expression=expression, separator=separator):
+                    self.assertFalse(
+                        contains_sensitive(f"+    password={expression}{separator}")
+                    )
+
+    def test_separator_normalization_preserves_literal_and_ambiguity_guards(self):
+        synthetic = "A" * 20
+        for rhs in (
+            synthetic + ",",
+            '"' + synthetic + '",',
+            "os.environ.get(",
+            'os.environ.get("DB_PASSWORD"),,',
+            'os.environ.get("DB_PASSWORD"),;',
+            'os.environ.get("DB_PASSWORD");,',
+            'os.environ.get("DB_PASSWORD"), "' + synthetic + '",',
+            'os.environ.get("DB_PASSWORD"), token=' + synthetic,
+        ):
+            with self.subTest(rhs=rhs):
+                self.assertTrue(contains_sensitive("password=" + rhs))
+
 
 if __name__ == "__main__":
     unittest.main()

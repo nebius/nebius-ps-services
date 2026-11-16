@@ -37,4 +37,4 @@ def reached(phase: str, journal: Any, *, evidence: dict | None = None) -> None:
 def report(value: Any) -> None:
     selected = CURRENT.get()
     if selected is not None:
-        selected.report(value.mapping())
+        selected.report(value if isinstance(value, dict) else value.mapping())

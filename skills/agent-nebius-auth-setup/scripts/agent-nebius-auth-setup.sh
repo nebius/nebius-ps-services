@@ -70,7 +70,9 @@ Verifies, creates, or repairs local Codex Agent Nebius service-account auth.
 The verify command is read-only and never requires a human/admin profile.
 Runtime renewable context is handled by the installed PreToolUse hook, not by
 this script.
-Setup is explicit-only. Invoking it authorizes one bounded convergence for the
+Setup is ordinarily explicit-only; authorized test-live-on-nebius may delegate
+one exact-target ensure, excluding leases, hooks and tenant write roles.
+Invoking it authorizes one bounded convergence for the
 resolved project: one tenant-parented custom group, exactly project 'admin'
 plus tenant 'viewer', one service-account membership, the canonical credential,
 and its CLI profile. An optional --dry-run previews the same target without
@@ -272,6 +274,10 @@ current_human_profile() {
   local profile=""
 
   profile="$(current_profile || true)"
+  if profile_is_agent "$profile"; then
+    # Runtime selection must not hide the configured administrative session.
+    profile="$(active_profile || true)"
+  fi
   [[ -n "$profile" ]] || return 1
   profile_is_agent "$profile" && return 1
   printf '%s\n' "$profile"
@@ -283,7 +289,7 @@ require_human_profile() {
   local failure="Human profile authentication is unavailable non-interactively; explicitly invoke live ensure to complete browser sign-in."
 
   profile="$(current_human_profile || true)"
-  [[ -n "$profile" ]] || die "blocked-admin-auth: current Nebius profile is missing or is an agent profile; an exact IAM plan requires a non-agent administrative profile."
+  [[ -n "$profile" ]] || die "blocked-admin-auth: neither the effective nor configured active Nebius profile selects a non-agent administrative profile; authenticate a human profile before retrying setup."
   if [[ "$COMMAND" == "ensure" ]] && ! is_dry_run; then
     auth_args=(--auth-timeout 3m)
     failure="Human profile authentication failed or timed out. No IAM changes were made; check browser sign-in and connectivity before retrying ensure."

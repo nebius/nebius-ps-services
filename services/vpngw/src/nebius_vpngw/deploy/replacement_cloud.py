@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol
 
-from .replacement import Journal, digest
+from .replacement import digest
 from .vm_ha_cloud import (
     InstanceCloudState,
     clone_nebius_sdk_message,
@@ -23,6 +23,16 @@ from .vm_ha_cloud import (
 TRANSACTION_LABEL = "nebius-vpngw-replacement"
 LOGICAL_LABEL = "nebius-vpngw-member"
 ROLE_LABEL = "nebius-vpngw-resource-role"
+
+
+class CloudReceiptJournal(Protocol):
+    """The receipt interface shared by replacement, routes and repair owners."""
+
+    project: str
+    gateway: str
+    state: dict[str, Any]
+
+    def save(self) -> None: ...
 
 
 def effect_key(approval: str, index: int, label: str, scope: str | None = None) -> str:
@@ -126,7 +136,7 @@ class Cloud:
     def __init__(
         self,
         sdk: Any,
-        journal: Journal,
+        journal: CloudReceiptJournal,
         *,
         member_index: int | None = None,
         operation_scope: str | None = None,
@@ -204,13 +214,18 @@ class Cloud:
         import nebius.api.nebius.iam.v1 as iam
         import nebius.api.nebius.vpc.v1 as vpc
         from google.protobuf.json_format import ParseDict  # type: ignore[import-untyped]
-        from nebius.api.nebius.common.v1 import GetOperationRequest, OperationServiceClient
+        from nebius.api.nebius.common.v1 import GetOperationRequest
 
         replayable = {
             "StopInstanceRequest": (
                 compute.StopInstanceRequest,
                 compute.InstanceServiceClient,
                 "stop",
+            ),
+            "StartInstanceRequest": (
+                compute.StartInstanceRequest,
+                compute.InstanceServiceClient,
+                "start",
             ),
             "UpdateInstanceRequest": (
                 compute.UpdateInstanceRequest,
@@ -232,6 +247,26 @@ class Cloud:
             "DeleteAllocationRequest": (
                 vpc.DeleteAllocationRequest,
                 vpc.AllocationServiceClient,
+                "delete",
+            ),
+            "CreateSecurityGroupRequest": (
+                vpc.CreateSecurityGroupRequest,
+                vpc.SecurityGroupServiceClient,
+                "create",
+            ),
+            "DeleteSecurityGroupRequest": (
+                vpc.DeleteSecurityGroupRequest,
+                vpc.SecurityGroupServiceClient,
+                "delete",
+            ),
+            "CreateSecurityRuleRequest": (
+                vpc.CreateSecurityRuleRequest,
+                vpc.SecurityRuleServiceClient,
+                "create",
+            ),
+            "DeleteSecurityRuleRequest": (
+                vpc.DeleteSecurityRuleRequest,
+                vpc.SecurityRuleServiceClient,
                 "delete",
             ),
             "UpdateRouteRequest": (vpc.UpdateRouteRequest, vpc.RouteServiceClient, "update"),
@@ -294,20 +329,62 @@ class Cloud:
                     raise RuntimeError(
                         "Replacement request reconstruction changed; retain the checkpoint"
                     )
-                operation = self._submit(
-                    record, key, request, getattr(service_type(self.sdk), method)
-                )
-                self._finish(record, operation)
+                try:
+                    operation = self._submit(
+                        record, key, request, getattr(service_type(self.sdk), method)
+                    )
+                    self._finish(record, operation)
+                except CloudOperationRejected:
+                    if require_success:
+                        raise
             elif record["status"] == "accepted":
+                request_name = record.get("request_type")
+                if request_name is None and self.restore_request is not None:
+                    # Compute creation deliberately omits its private bootstrap
+                    # from the receipt. Its approved owner can prove the exact
+                    # original request without resubmitting it.
+                    request = self.restore_request(record)
+                    if message_digest(request) != record["request_sha256"]:
+                        raise RuntimeError(
+                            "Replacement request reconstruction changed; retain the checkpoint"
+                        )
+                    request_name = type(request).__name__
+                elif (
+                    request_name is None
+                    and "request_metadata" not in record
+                    and record["label"] == "create-candidate"
+                    and key
+                    == effect_key(
+                        self.journal.state["transaction"]["approval"],
+                        self.member_index,
+                        "create-candidate",
+                        self.operation_scope,
+                    )
+                ):
+                    # The replacement owner's canonical creation effect also
+                    # excludes bootstrap data. Its exact journal key binds the
+                    # originating service; operation ID prefixes never do.
+                    request_name = "CreateInstanceRequest"
+                if request_name == "CreateInstanceRequest":
+                    service_type = compute.InstanceServiceClient
+                elif request_name in replayable:
+                    _, service_type, _ = replayable[request_name]
+                else:
+                    raise RuntimeError("Accepted cloud effect has no operation service binding")
                 operation = (
-                    OperationServiceClient(self.sdk)
+                    service_type(self.sdk)
+                    .operation_service()
                     .get(
                         GetOperationRequest(id=record["cloud_operation_id"]),
                         **vm_ha_request_kwargs(),
                     )
                     .wait()
                 )
-                self._finish(record, operation)
+                try:
+                    self._finish(record, operation)
+                except CloudOperationRejected:
+                    if require_success:
+                        raise
         if require_success and any(
             record["status"] in {"rejected", "failed"} for record in self.records.values()
         ):
@@ -315,11 +392,18 @@ class Cloud:
                 "Cloud effect failed; retain its receipt and review a successor operation"
             )
 
-    def mutate(self, label: str, request: Any, submit: Callable[..., Any]) -> str:
+    def mutate(
+        self,
+        label: str,
+        request: Any,
+        submit: Callable[..., Any],
+        *,
+        allow_terminal_predecessors: bool = False,
+    ) -> str:
         transaction = self.journal.state["transaction"]
         key = effect_key(transaction["approval"], self.member_index, label, self.operation_scope)
         signature = message_digest(request)
-        self.settle()
+        self.settle(require_success=not allow_terminal_predecessors)
         record = self.records.get(key)
         if record is not None:
             if record["label"] != label:
@@ -331,7 +415,10 @@ class Cloud:
             if record["status"] == "settled":
                 return record["resource_id"]
         else:
-            if any(item["status"] != "settled" for item in self.records.values()):
+            terminal = (
+                {"settled", "rejected", "failed"} if allow_terminal_predecessors else {"settled"}
+            )
+            if any(item["status"] not in terminal for item in self.records.values()):
                 raise RuntimeError("Another replacement cloud effect is unresolved")
             record = {
                 "label": label,

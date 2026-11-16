@@ -9,6 +9,7 @@ code-review-positive-07,true,Is this implementation too complicated? Look for a 
 code-review-positive-08,true,Review this patch with a strict bar for correctness tests modularity file size and maintainability.
 code-review-positive-09,true,Review this module neutrally and tell me whether any findings should block the local change.
 code-review-positive-10,true,Check this implementation for realistic edge cases and missing failure-path tests.
+code-review-positive-11,true,$code-review Review these newly created untracked files in report-only mode without changing the index.
 code-review-negative-01,false,Review GitHub pull request 42 and report merge readiness.
 code-review-negative-02,false,Review pull request 42 for bugs and regressions without updating its branch.
 code-review-negative-03,false,Align the entire project after these changes.

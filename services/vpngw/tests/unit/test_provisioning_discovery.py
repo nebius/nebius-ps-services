@@ -137,8 +137,9 @@ def test_network_overlap_stops_before_any_plan_can_be_executed(monkeypatch):
 
 
 @pytest.mark.parametrize("count,groups", [(1, ()), (2, ("group-a", "group-b"))])
+@pytest.mark.parametrize("retained", [False, True])
 def test_member_plan_binds_image_allocations_disk_and_multiple_groups_without_private_data(
-    monkeypatch, count, groups
+    monkeypatch, count, groups, retained
 ):
     from dataclasses import replace
 
@@ -186,19 +187,51 @@ def test_member_plan_binds_image_allocations_disk_and_multiple_groups_without_pr
             for index in range(count)
         },
     )
+    if retained:
+        original = next(
+            r for r in requests_from_plan(result) if r.key == "disk:gateway-0"
+        ).template()
+        owned = compute.Disk(
+            metadata=meta("retained-disk", original.metadata.name), spec=original.spec
+        )
+        owned.metadata.labels = dict(original.metadata.labels)
+        native = disk.get_by_name.side_effect
+
+        def current(request, **_):
+            if request.name == owned.metadata.name:
+                return SimpleNamespace(wait=lambda: owned)
+            raise native
+
+        disk.get_by_name.side_effect = current
+        result = provisioning_discovery.resources(
+            manager,
+            object(),
+            spec,
+            tuple(range(count)),
+            configuration_sha256="e" * 64,
+            artifact_sha256="b" * 64,
+            bootstraps=result["bootstraps"],
+            retained_disks={owned.metadata.name: owned},
+        )
+        assert result["observed"]["retained-disk"]["kind"] == "disk"
     planned = requests_from_plan(result)
-    assert len(planned) == 3 + 4 * count
+    assert len(planned) == 3 + 4 * count - retained
     for index in range(count):
         guest = f"gateway-{index}"
         candidate = next(r for r in planned if r.guest == guest)
         request = candidate.template()
         nic = request.spec.network_interfaces[0]
         assert tuple(group.id for group in nic.security_groups) == groups
-        assert request.spec.boot_disk.existing_disk.id == "@disk:" + guest
+        assert request.spec.boot_disk.existing_disk.id == (
+            "retained-disk" if retained and index == 0 else "@disk:" + guest
+        )
         assert nic.public_ip_address.allocation_id == "@public:" + guest
         assert nic.ip_address.allocation_id == "@private:" + guest
         assert not request.spec.cloud_init_user_data
-        boot = next(r for r in planned if r.key == "disk:" + guest).template()
-        assert boot.spec.source_image_id == "frozen-image"
-    manager._resolve_boot_image_id.assert_called_once()
-    assert disk.get_by_name.call_count == count
+        if retained and index == 0:
+            assert not any(r.key == "disk:" + guest for r in planned)
+        else:
+            boot = next(r for r in planned if r.key == "disk:" + guest).template()
+            assert boot.spec.source_image_id == "frozen-image"
+    assert manager._resolve_boot_image_id.call_count == 1 + retained
+    assert disk.get_by_name.call_count == count * (1 + retained)

@@ -117,13 +117,16 @@ from nebius_vpngw.schema import VMHARuntimeBinding
 from nebius_vpngw.cli import _vm_ha_mtls_operation_id
 
 root = Path('/var/lib/nebius-vpngw/vm-ha')
-def read(path):
+def read(path, *, limit=1048576):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd, 'rb') as f:
         info = os.fstat(f.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_size > 1048576:
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
             raise ValueError('unsafe recovery inspection file')
-        return f.read(1048577)
+        raw = f.read(limit + 1)
+        if len(raw) > limit:
+            raise ValueError('unsafe recovery inspection file')
+        return raw
 def record(name):
     path = root / name
     return json.loads(read(path)) if path.exists() else None
@@ -195,7 +198,7 @@ with (root / 'rearm.lock').open('rb') as lock:
         'forwarding': read('/proc/sys/net/ipv4/ip_forward').decode().strip(),
         'units': units,
         'source_sha256': {str(p.relative_to(Path(nebius_vpngw.__file__).parent)):
-                         hashlib.sha256(read(p)).hexdigest()
+                         hashlib.sha256(read(p, limit=4 * 1024 * 1024)).hexdigest()
                          for p in Path(nebius_vpngw.__file__).parent.rglob('*.py')},
     }
     if (read(installed_path) if installed_path.exists() else None) != installed:

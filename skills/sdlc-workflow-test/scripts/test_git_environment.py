@@ -49,6 +49,88 @@ class GitEnvironmentTests(unittest.TestCase):
                          str(self.profile.parent / "attributes"))
         self.assertEqual(dict(os.environ), before)
 
+    def test_steering_ready_command_runs_inside_owned_project_scope(self):
+        """Synthetic readiness must use the same sealed Git scope as its caller."""
+        from test_workflow_execution import REQUIREMENTS, DESIGN, PLAN, seed_objective_impact
+        from test_workflow_fixture import seed_readiness, seed_validation
+
+        project = self.project / "project-a"
+        docs = project / "docs"
+        docs.mkdir()
+        (docs / "requirements.md").write_text(REQUIREMENTS)
+        (docs / "design.md").write_text(DESIGN)
+        self.git("add", "project-a/docs")
+        self.git("commit", "-m", "Synthetic readiness contract")
+        run_dir = Path(self.state["private_root"]) / "readiness-fixture" / "run-1"
+        helper = ROOT / "worktree/scripts/workflow_transition.py"
+        env = {**self.env, "CODEX_THREAD_ID": "deterministic-coordinator",
+               "PYTHONDONTWRITEBYTECODE": "1"}
+        with mock.patch.dict(os.environ, env):
+            seed_objective_impact(run_dir, project)
+            for planned in (False, True):
+                with self.subTest(planned=planned):
+                    plan = run_dir / "plans/FEAT-001.plan.v1.md" if planned else None
+                    if plan is not None:
+                        plan.parent.mkdir()
+                        plan.write_text(PLAN)
+                        plan.with_suffix(plan.suffix + ".lock").write_text("locked\n")
+                        seed_validation(plan)
+                    seed_readiness(run_dir, "FEAT-001", plan)
+                    command = [sys.executable, "-B", str(helper), "steering-inputs",
+                               "--run-dir", str(run_dir), "--execution", "FEAT-001"]
+                    if plan is not None:
+                        command += ["--plan", str(plan)]
+                    result = subprocess.run(command, cwd=project, env=env,
+                                            capture_output=True, text=True, timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    response = json.loads(result.stdout)["result"]
+                    cwd = Path(response["working_directory"])
+                    admitted = environment(cwd, env=env)
+                    self.assertEqual(cwd, project)
+                    ready = subprocess.run(response["ready_command"], cwd=cwd, env=admitted,
+                                           capture_output=True, text=True, timeout=30)
+                    self.assertEqual(ready.returncode, 0, ready.stdout + ready.stderr)
+                    self.assertEqual(json.loads(ready.stdout)["result"]["status"], "ready")
+
+    def test_public_native_adapter_uses_selected_project_from_foreign_caller(self):
+        """The companion may be launched from outside its sealed repository."""
+        with mock.patch.object(sys, "path", [str(ROOT / "implement-test/scripts"), *sys.path]):
+            import native_app_server
+            import public_workflow_trial
+        project = self.project / "project-b"
+        home = Path(self.state["private_root"]) / "codex-home"
+        program = '''
+import json,sys
+for line in sys.stdin:
+ event=json.loads(line); method=event.get('method'); result={}
+ if 'id' not in event: continue
+ if method=='config/read': result={'config':{}}
+ if method=='thread/start': result={'thread':{'id':'fixture-root'}}
+ print(json.dumps({'id':event['id'],'result':result}),flush=True)
+ if method=='turn/start':
+  print(json.dumps({'method':'turn/completed','params':{
+   'threadId':'fixture-root','turn':{'status':'completed'}}}),flush=True)
+'''
+        original = subprocess.Popen
+        launches = []
+
+        def launch(command, **options):
+            if command[0] == "codex":
+                launches.append((options["cwd"], options["env"][PROFILE_ENV],
+                                 "CODEX_THREAD_ID" in options["env"]))
+                return original([sys.executable, "-c", program], **options)
+            return original(command, **options)
+
+        with (mock.patch.dict(os.environ, {**self.env, "CODEX_THREAD_ID": "caller"}, clear=True),
+              mock.patch.object(native_app_server.subprocess, "Popen", side_effect=launch),
+              mock.patch.object(public_workflow_trial, "validate_codex_permissions")):
+            self.assertFalse(Path.cwd().is_relative_to(Path(self.state["run_root"])))
+            result, _ = public_workflow_trial.invoke_codex(project, home, "fixture objective", 5)
+        self.assertEqual(launches, [(project, str(self.profile), False)])
+        self.assertTrue(result["completed"])
+        self.assertTrue(result["cleanup_verified"])
+        self.assertFalse(result["forced_cleanup"])
+
     def test_profile_tampering_and_missing_files_fail_closed(self):
         for name, data in (("config", b"[filter \"bad\"]\n clean = false\n"),
                            ("attributes", b"* text eol=crlf\n")):
@@ -493,8 +575,9 @@ class GitEnvironmentTests(unittest.TestCase):
         (self.project / "change.txt").write_text("change\n")
         self.git("add", "-A")
         self.git("commit", "-m", "local change")
-        result = self.git("push", "origin", "main", check=False)
+        result = self.git("push", "origin", "HEAD:refs/heads/main", check=False)
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pre-receive hook declined", result.stderr)
         self.assertEqual(self.git("rev-parse", "HEAD", cwd=Path(self.state["run_root"]) / "origin.git").stdout.strip(),
                          self.state["git"]["baseline_sha"])
 

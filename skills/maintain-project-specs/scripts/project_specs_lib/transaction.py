@@ -359,7 +359,25 @@ def _publish_spec_pair(
         for value in (requirements_candidate, design_candidate)
     ):
         raise ProjectSpecError("UNSAFE_SPEC", "specification candidate is too large")
-    inspected = inspect_pair_bytes(requirements_candidate, design_candidate)
+    _authority_check()
+    try:
+        inspected = inspect_pair_bytes(requirements_candidate, design_candidate)
+    except ProjectSpecError:
+        # Rejected structure is exempt only after current authority and all
+        # predecessor identities have been verified, before publication effects.
+        project, _, _, current_head = project_identity(project_root)
+        if current_head != expected_git_head:
+            raise ProjectSpecError("CONCURRENT_MODIFICATION", "Git HEAD changed before candidate admission")
+        for kind, expected in (("requirements", expected_requirements_sha256),
+                               ("design", expected_design_sha256)):
+            path = project / "docs" / (kind + ".md")
+            actual = digest(_read_file(path, kind)[0]) if path.exists() or path.is_symlink() else "absent"
+            if actual != expected:
+                raise ProjectSpecError("CONCURRENT_MODIFICATION", "spec predecessor changed before candidate admission")
+        feedback = _workflow_candidate(project_root, requirements_candidate, design_candidate)
+        if feedback and feedback["status"] in {"correction_pending", "classification_required"}:
+            return feedback
+        raise
     if not all(
         bool(inspected[kind]["managed"]) for kind in ("requirements", "design")
     ):
@@ -451,6 +469,9 @@ def _publish_spec_pair(
             raise ProjectSpecError(
                 "CONCURRENT_MODIFICATION", "specification bytes changed before publication"
             )
+        feedback = _workflow_candidate(project_root, requirements_candidate, design_candidate)
+        if feedback and feedback["status"] in {"correction_pending", "classification_required"}:
+            return feedback
         if existing is None:
             _write_file(journal, stable_json(receipt), 0o600)
         current_documents = dict(originals)
@@ -508,6 +529,19 @@ def _publish_spec_pair(
         os.close(lock)
 
 
+def _workflow_candidate(project: Path, requirements: bytes, design: bytes) -> dict | None:
+    import sys
+    scripts = Path(__file__).resolve().parents[3] / "worktree/scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    from workflow_corrections import spec_submission
+    from workflow_state import WorkflowError
+    try:
+        return spec_submission(project, requirements, design)
+    except WorkflowError as error:
+        raise ProjectSpecError(error.code, str(error)) from error
+
+
 def publish_spec_pair(project_root: Path, *, expected_objective_sha256=None,
                       expected_basis_sha256=None, **arguments) -> dict[str, Any]:
     """Enforce registered workflow ownership without gating unrelated work."""
@@ -532,9 +566,12 @@ def publish_spec_pair(project_root: Path, *, expected_objective_sha256=None,
     try:
         with publication_guard(project, objective_sha256=expected_objective_sha256,
                                basis_sha256=expected_basis_sha256) as check:
+            identity = None
+            if expected_objective_sha256 is not None or expected_basis_sha256 is not None:
+                identity = {"objective_sha256": expected_objective_sha256,
+                            "basis_sha256": expected_basis_sha256}
             return _publish_spec_pair(project_root, _authority_check=check,
-                                      _workflow_identity={"objective_sha256": expected_objective_sha256,
-                                                          "basis_sha256": expected_basis_sha256},
+                                      _workflow_identity=identity,
                                       **arguments)
     except (WorkflowError, SpecCheckoutError) as error:
         raise ProjectSpecError(error.code, str(error)) from error

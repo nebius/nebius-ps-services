@@ -12,14 +12,19 @@ and operating instructions belong in the owning project folder.
 
 | Path | Purpose | Local docs |
 | --- | --- | --- |
-| `agents/ai-support-agent/` | Public support-agent source and information-boundary tooling. | [README](agents/ai-support-agent/README.md) |
+| `agents/agent-execution-platform/` | Planned public Agent Execution Platform application source. | Implementation pending. |
 | `.github/` | Repository automation, dependency updates, and shared workflows. | [root changelog](CHANGELOG.md) |
+| `github-ai-automation/` | Unactivated Actions PR/release controller source and deployment templates. | [README](github-ai-automation/README.md), [architecture](github-ai-automation/docs/architecture.md) |
 | `services/` | Service and CLI projects. | service-local `README.md` / `CHANGELOG.md` files |
 | `courses/` | Seven courses: a text-only Slurm/Soperator introduction, five GPU foundations and specializations, and advanced sixteen-GPU communication labs. | [course catalog](https://nebius.github.io/nebius-ps-services/courses/), [authoring and validation](courses/docs/course-builder.md) |
 | `platform-infra/` | Reusable Terraform modules and examples for Nebius infrastructure. | [README](platform-infra/README.md), [changelog](platform-infra/CHANGELOG.md) |
 | `helm-charts/` | Reusable Helm charts. | chart-local `README.md` / `CHANGELOG.md` files |
 | `skills/` | Public reusable Agent Skills and the local skills installer. | [README](skills/README.md), [changelog](skills/CHANGELOG.md) |
 | `examples/` | Example deployments and reference configurations. | example-local docs where present |
+
+The Agent Execution Platform directory is intentionally empty until scaffolding
+and implementation begin. Git does not track empty directories, so this path
+will appear in fresh checkouts once source files are added.
 
 Codex and Claude marketplace catalogs live at the Git root and point to the
 unchanged `skills/` catalog. See the [installation guide](skills/README.md#native-plugins-and-npx).

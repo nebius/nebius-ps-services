@@ -43,6 +43,14 @@ public command menu but remains available to the verified coordinator.
 
 ## Purpose
 
+Read `../worktree/references/optional-uat.md` for the shared acceptance policy.
+No UAT by default; requested UAT runs at a meaningful ready objective/release
+scope (or explicitly selected coherent milestone). Missing optional prerequisites
+remain pending without blocking implementation or otherwise eligible PR/merge.
+Keep required development checks and correctness dependencies mandatory. Use
+container/Nebius testing skills only when explicitly requested; an existing
+environment uses its own project harness directly.
+
 Coordinate isolated task agents to implement one locked delivery slice safely.
 
 ## When To Use
@@ -74,13 +82,12 @@ Coordinate isolated task agents to implement one locked delivery slice safely.
 
 ## Required Reads
 
-- `../worktree/references/document-delivery.md` for source coverage, phase/slice
-  identities, shared-skill caller contracts and protected completion policy.
-
-- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
-  assignment/ownership and evidence to the current immutable execution basis.
-  Before preparation, bind evidence to the accepted objective and applicable
-  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+- `../worktree/references/workflow-invariants.md` for shared ownership,
+  evidence, failure and conditional-read rules.
+- `../worktree/references/workflow-contract.md` for execution lifecycle operations.
+- Read `../worktree/references/document-delivery.md` when accepted inputs include
+  a source manifest/program, this phase handles SLICE/source coverage or phase
+  barriers, or it handles delivery admission, phase exit or protected completion.
 
 - Locked plan.
 - Feature design and context pack.
@@ -97,6 +104,11 @@ Coordinate isolated task agents to implement one locked delivery slice safely.
 
 ## Process
 
+Wave admission, slot refill, arming and new worker start require current steering
+readiness. Existing running workers may drain when readiness becomes stale. Refresh
+through the coordinator; do not retry through repair control or reset assignments.
+Use owner-supplied result-check argv; ingestion and acceptance remain independent.
+
 1. Reload the checkpoint and coordinator. Re-observe the integration Git root,
    common directory, branch, recorded HEAD, and cleanliness.
 2. For initial execution, run the private helper `seal-tdd` once. This creates
@@ -112,20 +124,22 @@ Coordinate isolated task agents to implement one locked delivery slice safely.
    Use the shared `worktree/scripts/workflow_dispatch.py` for sequential native
    CLI fallback. Arm only when a real slot exists and consume its canonical
    `launch` envelope through Worktree's `task-arm` CLI admission (or
-   `authorize-recovery` for recovery). Grant its validated `support_write_roots`
-   before spawning; unavailable native support blocks launch. Preserve sandbox
-   and approval policy. Prepare the bounded handoff before arming,
+   `authorize-recovery` for recovery). Before arming, verify fresh-context support,
+   explicit command cwd control and support-path permission capability. After
+   admission, verify effective coverage of every returned `support_write_roots` entry.
+   Existing inherited grants suffice; a spawn-level cwd setter is unnecessary
+   when supported command tools set the actual cwd. Follow the shared launch
+   contract; unavailable capability blocks launch. Preserve sandbox and approval
+   policy. Prepare the bounded handoff before arming,
    then spawn immediately; defer launch-observation persistence until afterward.
-   The shared startup window is 300 seconds from arming to `task-start` and is
-   not renewed by repeated arming. Set fresh assignment-only context in the
-   actual native host; use the returned prompt, cwd, command arguments and schema
-   identity rather than reconstructing them. Watch every 30 seconds and
-   interrupt on prestart mutation, stall, scope violation or timeout. On a
-   `WORKER_DEADLINE_NEAR` warning, prioritize remaining validation and handoff
-   within the unchanged deadline. Each attempt has 3600 wall-clock seconds;
-   external runtime waits, builds, tests and review count. Direct heartbeats
-   target 30 seconds; enforced stale-heartbeat detection remains 240 seconds.
-   Never extend a live assignment or use recovery just to renew its clock.
+   Use the shared contract in `../worktree/references/execution-health.md`.
+   Set fresh assignment-only context in the actual native host; consume the
+   returned prompt, cwd, commands and schema identity. Observe every 30 seconds
+   and require direct authentic heartbeats. Startup age, missing telemetry,
+   read-only work and elapsed time request diagnosis, not termination. Preserve
+   unknown-health ownership and never recycle a healthy worker to reset a clock.
+   Cancellation, confirmed native failure, prestart mutation, scope/authority
+   violations and resource safety remain enforceable; failure-repair budgets remain.
    After a native worker terminates, persist the exact coordinator-owned termination
    observation and ingest the complete result through `task-result --result
    <private-json> --termination <observation>`. Only a successful `implemented` or independently validated `verified_no_change` receipt may
@@ -183,13 +197,31 @@ Coordinate isolated task agents to implement one locked delivery slice safely.
    current attempt with explicit stopped-worker confirmation so only one fresh
    session can win an ownership transfer. Use the shared recovery launch envelope
    and current coordinator's immutable authorization; preserve old receipts.
+   For every blocked SDLC result, bind the failure event's
+   `evidence_digests.worker_result` to `sha256:` plus the canonical
+   `receipt_sha256` returned by `task-result`. Require active counted localized
+   authority for the current integration commit and fingerprints. The shared
+   v2 recovery authorization and ownership transfer both enforce that binding.
+   Implementation/environment repairs require `existing_task_attempt`;
+   validation repairs must route to `sdlc-validate-codes`. Test, plan and design
+   defects require their separate revision routes. A new blocked attempt cannot
+   reuse the prior failure's authority. Record remediation completion only after
+   the authorized worker has performed and verified its repair.
+   When that repair interrupted a corrective wave, record the intervening
+   dispatch's successful completion after task verification and termination,
+   before completing the original corrective wave. The repair owner returns
+   `resumed_dispatch_id` and restores the preserved parent without charging
+   again. Refresh checkpoint repair pointers from that returned control, then
+   perform fresh combined validation and ordinary wave completion under the
+   restored active authority. Missing or wider obligations stop continuation.
    For classified `ENVIRONMENT_DEFECT` in this active phase, require the
    classifier's `existing_task_attempt` route and a counted localized dispatch.
    Establish an authorized bounded environment remedy; then preserve the full
    blocked result, independently confirm termination and runtime release, and
    use the existing shared fresh-worker transfer. Rerun the original failed
    operation and complete the original assignment validation and normal
-   task/wave completion before recording the remediation outcome. Success
+   task completion before recording the remediation outcome. Resume an
+   interrupted parent before its wave completion as described above. Success
    still requires the classifier's downstream revalidation cursor. No retry
    grants permissions, changes the assignment or reopens completed work.
    A corrective assignment also carries its exact diagnosis ID and original
@@ -221,6 +253,10 @@ Coordinate isolated task agents to implement one locked delivery slice safely.
    passes at the corrected tip, `wave-complete` records a separate resolution.
    Complete the repair dispatch only after this execution transition, then
    rerun its invalidated gates. Failed history never becomes a passing wave.
+   For a proven integrated plan-command defect, retain the exact failed
+   producer receipt and use the plan owner's reviewed command revision. The
+   scheduler places its appended corrective work before untouched future tasks;
+   a `verified_no_change` result still requires independent task acceptance.
 7. Repeat for dependent waves. Route to downstream validation only after every
    wave is integrated, validated, and cleaned.
 8. Rerun every failed or invalidated evaluation criterion at the new
@@ -269,7 +305,8 @@ Coordinate isolated task agents to implement one locked delivery slice safely.
 - Expand scope without design update.
 - Reclassify direct user intent or let a worker edit canonical specs.
 - Reopen sealed, promoted, or completed execution. A post-promotion defect
-  starts a corrective run from the exact promoted commit.
+  starts a fresh execution revision through the automatic aggregation owner before
+  lease release, or a fresh corrective objective after terminal release.
 - Weaken acceptance criteria or change the regression oracle to make a repair
   pass.
 - Let two active tasks share a worker agent, branch, worktree, write claim, or
@@ -284,6 +321,9 @@ Follow the shared worker wave and acceptance contract in the required sibling
 Before preparation, freeze execution policy and the executable `<plan>.validation.json`
 sidecar covering every task and combined checks. No-change results require independent
 acceptance; all waves require a producer receipt before cleanup and dependency release.
+Also follow the sibling `worktree/references/task-acceptance.md` contract: freeze
+`<plan>.acceptance.json`, execute applicable checks before worker success, retain
+explicit deferred obligations, and preserve requested meaningful-scope UAT.
 
 ## Completion Criteria
 

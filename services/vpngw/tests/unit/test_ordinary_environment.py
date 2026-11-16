@@ -71,7 +71,7 @@ def test_restart_wait_with_unsettled_work_remains_blocked(change):
 def test_queued_management_job_and_dataplane_restart_remain_blocked():
     manager = EnvironmentManager()
     manager.restart_wait()
-    manager.pending = [[7, "nebius-vpngw-agent.service", "start"]]
+    manager.pending = [[7, "nebius-vpngw-agent.service", "start", "running", "/job/7", "/unit/7"]]
     with pytest.raises(ops.OperationBlocked, match="manager_not_ready"):
         manager.preflight()
     manager.pending.clear()
@@ -131,6 +131,22 @@ def test_other_activation_dependencies_remain_blocked(field):
     manager.units["frr.service"][field] = [name]
     with pytest.raises(ops.OperationBlocked, match="service_scope_unknown"):
         manager.environment()
+
+
+def test_known_manager_transition_is_retryable_but_unknown_or_unsupported_is_not(monkeypatch):
+    manager = EnvironmentManager()
+    manager.restart_wait("frr.service")
+    with pytest.raises(ops.ManagerBusy):
+        manager.preflight()
+    manager.units["frr.service"]["ActiveState"] = "unknown"
+    with pytest.raises(ops.OperationBlocked) as error:
+        manager.preflight()
+    assert not isinstance(error.value, ops.ManagerBusy)
+    manager.restart_wait("frr.service")
+    monkeypatch.setattr(manager, "command", lambda *args, **kwargs: "<interface/>")
+    with pytest.raises(ops.OperationBlocked) as error:
+        manager.preflight()
+    assert not isinstance(error.value, ops.ManagerBusy)
 
 
 def test_unit_observation_loads_inactive_definition_without_starting(monkeypatch):

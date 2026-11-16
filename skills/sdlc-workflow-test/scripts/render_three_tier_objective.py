@@ -24,6 +24,7 @@ SECTIONS = (
     "Context",
     "Constraints",
     "Acceptance criteria",
+    "Task acceptance",
     "Verification",
     "Live Experiment Environment",
     "Non-goals",

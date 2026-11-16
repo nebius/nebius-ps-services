@@ -86,7 +86,7 @@ def scenario(request, tmp_path, monkeypatch):
             return result
 
     transport = Transport()
-    monkeypatch.setattr(publication, "Handoff", lambda *a: transport)
+    monkeypatch.setattr(publication, "Handoff", lambda *a, **kw: transport)
     credentials = NS(nodes=(NS(node_id=instance.hostname),))
 
     def enroll(parent, *args, **kwargs):

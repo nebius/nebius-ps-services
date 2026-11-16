@@ -25,51 +25,22 @@ import workflow_worker_contract as contract  # noqa: E402 — load verified shar
 
 class WorkerDispatchTests(unittest.TestCase):
     def test_launch_setup_failure_releases_anchor(self):
-        from workflow_process import OwnedProcessGroup
-        owners = []
-        def create():
-            owner = OwnedProcessGroup()
-            owners.append(owner)
-            return owner
         assignment = self.assignment("TASK-001")
-        try:
-            with mock.patch.object(dispatch, "OwnedProcessGroup", side_effect=create), \
-                    mock.patch.object(dispatch, "runtime_environment", side_effect=ValueError("invalid environment")):
-                with self.assertRaises(ValueError):
-                    dispatch.dispatch_sequential([assignment], self.schema, agent_binary=str(self.fake), terminate_grace=.01)
-            self.assertTrue(all(owner.closed for owner in owners))
-        finally:
-            for owner in owners:
-                owner.close(grace=0)
-                owner.verify_absent()
+        with mock.patch.object(dispatch, "runtime_environment", side_effect=ValueError("invalid environment")), mock.patch.object(dispatch.subprocess, "Popen") as launch:
+            with self.assertRaises(ValueError):
+                dispatch.dispatch_sequential([assignment], self.schema, agent_binary=str(self.fake))
+        launch.assert_not_called()
 
     def test_cleanup_stops_redirected_child_after_parent_exit(self):
-        import subprocess
         import sys
-        from workflow_process import OwnedProcessGroup
-        with tempfile.TemporaryDirectory() as temporary:
-            marker = Path(temporary) / "child-pid"
-            owner = OwnedProcessGroup()
-            process = subprocess.Popen([sys.executable, "-c",
-                "import subprocess,sys; subprocess.Popen([sys.executable,'-c',"
-                "\"import os,signal,time; from pathlib import Path; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
-                "Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(60)\".replace('import os,','import sys,os,'),sys.argv[1]],"
-                "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)", str(marker)],
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, process_group=owner.id)
-            process._workflow_group = owner
-            try:
-                process.communicate(timeout=5)
-                deadline = time.monotonic() + 5
-                while not marker.exists() and time.monotonic() < deadline:
-                    time.sleep(.01)
-                self.assertTrue(marker.exists())
-                dispatch._stop_worker(process, terminate_grace=.05)
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(int(marker.read_text()), 0)
-            finally:
-                owner.close(grace=0)
-                process.wait(timeout=5)
+        from workflow_process import run_owned
+        marker = self.root / "child-pid"
+        code = "import subprocess,sys; subprocess.Popen([sys.executable,'-c',\"import os,time;from pathlib import Path;Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(60)\".replace('import os,','import sys,os,'),sys.argv[1]],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);import time;time.sleep(.1)"
+        result = run_owned([sys.executable, "-c", code, str(marker)])
+        self.assertTrue(result["local_group_quiescent"])
+        self.assertTrue(marker.exists())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int(marker.read_text()), 0)
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -152,7 +123,11 @@ if os.environ.get("SKILLS_AGENT") == "claude":
     result = {"type": "result", "subtype": "success", "is_error": False, "structured_output": result}
     if os.environ.get("FAKE_CLAUDE_ERROR"):
         result["is_error"] = True
-print(os.environ.get("FAKE_CODEX_RAW_OUTPUT", json.dumps(result)))
+if os.environ.get("SKILLS_AGENT") == "claude":
+    print(json.dumps(result))
+else:
+    print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": os.environ.get("FAKE_CODEX_RAW_OUTPUT", json.dumps(result))}}))
+    print(json.dumps({"type": "turn.completed", "usage": {}}))
 """,
             encoding="utf-8",
         )
@@ -174,7 +149,9 @@ print(os.environ.get("FAKE_CODEX_RAW_OUTPUT", json.dumps(result)))
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def assignment(self, task_id: str, *, corrective: bool = False) -> Path:
+    def assignment(
+        self, task_id: str, *, corrective: bool = False, owner: str = "agentic-sdlc"
+    ) -> Path:
         scope = self.root / "workers" / task_id / "services" / "a"
         scope.mkdir(parents=True)
         path = (
@@ -210,11 +187,39 @@ print(os.environ.get("FAKE_CODEX_RAW_OUTPUT", json.dumps(result)))
         handoff["handoff_digest"] = contract.stable_digest(handoff)
         handoff_path.write_text(json.dumps(handoff), encoding="utf-8")
         handoff_path.chmod(0o600)
+        from workflow_validation import digest
+        from workflow_state import write
+        run_dir = (self.root / "run-1").resolve()
+        plan = run_dir / "plans" / f"{task_id}.md"
+        checks = {
+            "schema": "workflow/validation-plan-v2",
+            "wave_checks": [{"id": "combined", "argv": ["{python}", "-V"],
+                             "execution_policy": {"observation_interval_seconds": 30, "deadline": None}, "environment_keys": ["PATH"]}],
+            "task_checks": {
+                task_id: [{"id": "own-check", "argv": ["{python}", "-c", "print('café')"],
+                           "execution_policy": {"observation_interval_seconds": 30, "deadline": None}, "environment_keys": ["PATH", "LANG"]}],
+                "TASK-999": [{"id": "peer-check", "argv": ["{python}", "-V"],
+                              "execution_policy": {"observation_interval_seconds": 30, "deadline": None}, "environment_keys": ["PATH"]}],
+            },
+        }
+        write(Path(str(plan) + ".validation.json"), checks)
+        basis = {"schema": "workflow/objective-impact-execution-basis-v3",
+                 "owner": owner, "execution_id": "FEAT-001", "plan_path": str(plan),
+                 "plan_digest": "e" * 64, "validation_plan_sha256": digest(checks)}
+        from workflow_uat import normalize
+        basis.update(uat_policy=normalize(), uat_policy_sha256=digest(normalize()))
+        fingerprint = digest(basis)
+        write(run_dir / "bases" / "FEAT-001" / (fingerprint + ".json"), basis)
         value = {
-            "schema": "workflow/worker-assignment-v2",
+            "schema": "workflow/worker-assignment-v4",
+            "owner": owner,
+            "uat_policy": basis["uat_policy"], "uat_policy_sha256": basis["uat_policy_sha256"],
             "execution_id": "FEAT-001",
             "wave_id": "WAVE-001",
             "task_id": task_id,
+            "worktree": str((self.root / "workers" / task_id).resolve()),
+            "basis_sha256": fingerprint,
+            "plan_digest": basis["plan_digest"],
             "root_intent_sha256": "b" * 64,
             "project_spec_receipt": {
                 "schema": "maintain-project-specs.worker-receipt.v1",
@@ -226,13 +231,8 @@ print(os.environ.get("FAKE_CODEX_RAW_OUTPUT", json.dumps(result)))
             "incoming_handoff_digest": handoff["handoff_digest"],
             "execution_helper": str(contract.canonical_execution_helper()),
             "run_dir": str((self.root / "run-1").resolve()),
-            "heartbeat_seconds": 30,
-            "start_seconds": 300,
             "worker_profile": "standard",
-            "read_only_warning_seconds": 240,
-            "read_only_seconds": 300,
-            "stall_seconds": 240,
-            "max_seconds": 3600,
+            "health_policy": contract.health_policy("standard"),
             "worker_phases": [
                 "preflight",
                 "implementing",
@@ -248,9 +248,108 @@ print(os.environ.get("FAKE_CODEX_RAW_OUTPUT", json.dumps(result)))
         path.write_text(json.dumps(value), encoding="utf-8")
         return path
 
+    def test_worker_prompt_contains_exact_task_validation_without_discovery(self) -> None:
+        path = self.assignment("TASK-001", owner="implement")
+        assignment = contract.load_assignment(path)
+        prompt = contract.worker_prompt(path, assignment)
+        contexts = [json.loads(line) for line in prompt.splitlines()
+                    if line.startswith('{"cwd":')]
+        self.assertEqual(len(contexts), 1)
+        context = contexts[0]
+        self.assertEqual(context["cwd"], assignment["worktree"])
+        self.assertNotEqual(context["cwd"], assignment["scope_cwd"])
+        self.assertEqual(context["checks"], [{
+            "id": "own-check", "argv": ["{python}", "-c", "print('café')"],
+            "execution_policy": {"observation_interval_seconds": 30, "deadline": None}, "environment_keys": ["PATH", "LANG"],
+        }])
+        self.assertNotIn("peer-check", prompt)
+
+    def test_task_validation_rejects_changed_or_missing_frozen_evidence(self) -> None:
+        from workflow_state import WorkflowError, read, write
+        from workflow_validation import task_validation_context
+        path = self.assignment("TASK-001", owner="implement")
+        assignment = contract.load_assignment(path)
+        basis_path = (Path(assignment["run_dir"]) / "bases" / "FEAT-001"
+                      / (assignment["basis_sha256"] + ".json"))
+        basis = read(basis_path)
+        sidecar = Path(basis["plan_path"] + ".validation.json")
+        original = read(sidecar)
+        for target, changed in (
+            (basis_path, {**basis, "owner": "agentic-sdlc"}),
+            (sidecar, {**original, "wave_checks": []}),
+        ):
+            with self.subTest(path=target.name):
+                prior = read(target)
+                write(target, changed)
+                with self.assertRaises(WorkflowError):
+                    contract.worker_prompt(path, assignment)
+                write(target, prior)
+        sidecar.unlink()
+        with self.assertRaises(WorkflowError):
+            task_validation_context(assignment)
+        write(sidecar, original)
+        alias = sidecar.with_suffix(".alias")
+        sidecar.rename(alias)
+        sidecar.symlink_to(alias)
+        with self.assertRaises(WorkflowError):
+            task_validation_context(assignment)
+
+    def test_task_validation_uses_assignment_basis_after_current_plan_changes(self) -> None:
+        from workflow_state import write
+        from workflow_validation import task_validation_context
+        path = self.assignment("TASK-001", owner="implement")
+        assignment = contract.load_assignment(path)
+        expected = task_validation_context(assignment)
+        # Historical context must not borrow a newer coordinator's validation.
+        write(Path(assignment["run_dir"]) / "execution/FEAT-001/coordinator.json",
+              {"plan_path": "/unrelated/new-plan.md", "validation_plan_sha256": "f" * 64})
+        self.assertEqual(task_validation_context(assignment), expected)
+
+    def test_missing_task_validation_returns_structured_error_before_spawn(self) -> None:
+        path = self.assignment("TASK-001", owner="implement")
+        assignment = contract.load_assignment(path)
+        basis_path = (Path(assignment["run_dir"]) / "bases" / "FEAT-001"
+                      / (assignment["basis_sha256"] + ".json"))
+        basis_path.unlink()
+        args = type("Args", (), {"assignment": [path], "output_schema": self.schema,
+                    "agent_binary": str(self.fake), "watch_interval": .01,
+                    "terminate_grace": .01})()
+        with mock.patch.object(dispatch, "parse_args", return_value=args), \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as output, \
+                mock.patch.object(dispatch.subprocess, "Popen") as spawn:
+            self.assertEqual(dispatch.main(), 2)
+        spawn.assert_not_called()
+        self.assertEqual(json.loads(output.getvalue())["code"], "RESULT_INVALID")
+
+    def test_task_validation_rejects_hash_consistent_foreign_plan(self) -> None:
+        from workflow_state import WorkflowError, read, write
+        from workflow_validation import digest, task_validation_context
+        path = self.assignment("TASK-001", owner="implement")
+        assignment = contract.load_assignment(path)
+        basis_dir = Path(assignment["run_dir"]) / "bases" / "FEAT-001"
+        basis = read(basis_dir / (assignment["basis_sha256"] + ".json"))
+        basis["plan_path"] = str(self.root.resolve() / "foreign/plan.md")
+        assignment["basis_sha256"] = digest(basis)
+        write(basis_dir / (assignment["basis_sha256"] + ".json"), basis)
+        with self.assertRaises(WorkflowError) as failure:
+            task_validation_context(assignment)
+        self.assertEqual(failure.exception.code, "BASIS_INVALID")
+
+    def test_task_acceptance_prompt_is_scoped_to_sdlc_owner(self) -> None:
+        for index, owner in enumerate(("agentic-sdlc", "implement"), start=1):
+            with self.subTest(owner=owner):
+                path = self.assignment(f"TASK-{index:03}", owner=owner)
+                prompt = contract.worker_prompt(path, contract.load_assignment(path))
+                if owner == "agentic-sdlc":
+                    self.assertIn('"task-accept"', prompt)
+                    self.assertIn("Deferred criteria remain open obligations", prompt)
+                else:
+                    self.assertNotIn('"task-accept"', prompt)
+                    self.assertIn("Follow the frozen task validation instructions.", prompt)
+
     def test_obsolete_worker_deadline_is_rejected_before_dispatch(self) -> None:
         path = self.assignment("TASK-001")
-        self.assertEqual(contract.load_assignment(path)["max_seconds"], 3600)
+        self.assertEqual(contract.load_assignment(path)["health_policy"]["duration_expiry"], "disabled")
         value = json.loads(path.read_text())
         value["max_seconds"] = 1800
         value.pop("assignment_digest")
@@ -322,10 +421,10 @@ print(os.environ.get("FAKE_CODEX_RAW_OUTPUT", json.dumps(result)))
             self.assertIn("declared before execution in the immutable assignment", entry["prompt"])
             self.assertNotIn("--session-id", entry["prompt"])
             self.assertIn("Do not commit", entry["prompt"])
-        self.assertEqual(
-            [call.args[1] for call in self.transition.call_args_list],
-            ["task-arm", "task-watch", "task-arm", "task-watch"],
-        )
+        calls = self.transition.call_args_list
+        self.assertEqual([call.args[0]["task_id"] for call in calls if call.args[1] == "task-arm"],
+                         ["TASK-001", "TASK-002"])
+        self.assertTrue(all(call.args[1] in {"task-arm", "task-watch"} for call in calls))
 
     def test_first_failure_stops_later_dispatch_and_retains_concise_error(self) -> None:
         first = self.assignment("TASK-001")
@@ -392,10 +491,8 @@ print(os.environ.get("FAKE_CODEX_RAW_OUTPUT", json.dumps(result)))
                 self.assertEqual(result["worker_result"]["task_id"], "TASK-001")
                 entries = [json.loads(line) for line in self.log.read_text().splitlines()]
                 self.assertEqual([entry["task"] for entry in entries], ["TASK-001"])
-                self.assertEqual(
-                    [call.args[1] for call in self.transition.call_args_list],
-                    ["task-arm", "task-watch"],
-                )
+                self.assertEqual([call.args[0]["task_id"] for call in self.transition.call_args_list if call.args[1] == "task-arm"], ["TASK-001"])
+                self.assertTrue(all(call.args[1] in {"task-arm", "task-watch"} for call in self.transition.call_args_list))
 
     def test_invalid_blocked_result_never_returns_worker_payload(self) -> None:
         assignment = self.assignment("TASK-001")
@@ -495,7 +592,7 @@ print(os.environ.get("FAKE_CODEX_RAW_OUTPUT", json.dumps(result)))
 
     def test_prestart_diagnostics_never_override_exit_or_liveness_failures(self) -> None:
         assignment = self.assignment("TASK-001")
-        for status, failed in (("PENDING_START", True), ("WORKER_PRESTART_TIMEOUT", False),
+        for status, failed in (("PENDING_START", True), ("WORKER_SCOPE_VIOLATION", False),
                                ("ASSIGNED", False)):
             self.transition.return_value = {"status": status}
             with self.subTest(status=status, nonzero=failed), mock.patch.dict(os.environ, {
@@ -506,7 +603,7 @@ print(os.environ.get("FAKE_CODEX_RAW_OUTPUT", json.dumps(result)))
                 dispatch.dispatch_sequential([assignment], self.schema, agent_binary=str(self.fake))
             self.assertIsNone(caught.exception.prestart_result)
             self.assertIsNone(caught.exception.worker_result)
-            if status == "WORKER_PRESTART_TIMEOUT":
+            if status == "WORKER_SCOPE_VIOLATION":
                 self.assertEqual(caught.exception.code, status)
 
     def test_schema_declares_all_terminal_worker_outcomes(self) -> None:
@@ -768,7 +865,7 @@ print(os.environ.get("FAKE_CODEX_RAW_OUTPUT", json.dumps(result)))
         slow.chmod(slow.stat().st_mode | stat.S_IXUSR)
         self.transition.side_effect = [
             {"status": "assigned"},
-            {"status": "WORKER_STALLED"},
+            {"status": "WORKER_SCOPE_VIOLATION"},
         ]
 
         with self.assertRaises((dispatch.DispatchError, contract.WorkerContractError)) as caught:
@@ -780,7 +877,7 @@ print(os.environ.get("FAKE_CODEX_RAW_OUTPUT", json.dumps(result)))
                 terminate_grace=0.05,
             )
 
-        self.assertEqual(caught.exception.code, "WORKER_STALLED")
+        self.assertEqual(caught.exception.code, "WORKER_SCOPE_VIOLATION")
 
     def test_arm_failure_rejects_before_native_spawn(self) -> None:
         assignment = self.assignment("TASK-001")
@@ -859,10 +956,14 @@ child.wait()
             encoding="utf-8",
         )
         worker.chmod(worker.stat().st_mode | stat.S_IXUSR)
-        self.transition.side_effect = [
-            {"status": "assigned"},
-            dispatch.DispatchError("EXECUTION_STATE_INVALID", "watch failed"),
-        ]
+        def observe(assignment, action, *extra):
+            if action == "task-arm":
+                return {"status": "assigned"}
+            deadline = time.monotonic() + 5
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(.01)
+            raise dispatch.DispatchError("EXECUTION_STATE_INVALID", "watch failed")
+        self.transition.side_effect = observe
 
         with (
             mock.patch.dict(

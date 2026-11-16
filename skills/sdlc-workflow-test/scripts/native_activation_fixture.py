@@ -20,7 +20,7 @@ def seed(state, startup, skills_root):
     records = [
         {
             "type": "session_meta",
-            "payload": {"id": SESSION, "source": "cli", "cli_version": "0.166.0"},
+            "payload": {"id": SESSION, "source": "cli", "cli_version": "0.167.0"},
         },
         {
             "type": "event_msg",

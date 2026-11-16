@@ -4,7 +4,8 @@ import hashlib
 import json
 import ssl
 import struct
-from dataclasses import dataclass, field
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -21,12 +22,14 @@ from nebius_vpngw.agent.vm_ha import (
     StalePeerStateError,
     StateValidationError,
 )
+from nebius_vpngw.agent.vm_ha import store as state_store
 from nebius_vpngw.agent.vm_ha.mtls import (
     ManagedMTLSStore,
     MTLSOperationKind,
     MTLSSnapshot,
     PeerLeaf,
 )
+from nebius_vpngw.agent.vm_ha.runtime import BoundPeerRuntime
 from nebius_vpngw.agent.vm_ha.transport import (
     MutualTLSPeerTransport,
     PeerTransportError,
@@ -93,9 +96,123 @@ class MemoryReplayStore:
         assert peer_node_id == "node-b"
         return self.state
 
-    def save_replay_state(self, peer_node_id: str, state: ReplayState) -> None:
+    def save_accepted_peer_heartbeat(
+        self, peer_node_id: str, heartbeat: PeerHeartbeat, *, replay_state: ReplayState
+    ) -> None:
         assert peer_node_id == "node-b"
-        self.state = state
+        assert heartbeat.sequence == replay_state.highest_sequence
+        self.state = replay_state
+
+
+def test_authenticated_peer_publication_never_exposes_partial_pair(tmp_path, monkeypatch):
+    store = AtomicGenerationStore(tmp_path / "ha")
+    reader = AtomicGenerationStore(store.root)
+    heartbeat = _heartbeat(sequence=1)
+    exchange = PeerStateExchange(
+        FakeTransport([_message(_heartbeat()), _message(heartbeat)]),
+        cluster_id="cluster-a",
+        peer_node_id="node-b",
+        replay_store=store,
+    )
+    runtime = BoundPeerRuntime(
+        exchange, clock=lambda: 1.0, peer_node_id="node-b", heartbeat_store=store
+    )
+    runtime.poll(timeout_seconds=1.0)
+    observations = []
+    locked = store._locked
+
+    @contextmanager
+    def observe_each_unlocked_boundary():
+        with locked():
+            yield
+        # Deterministically schedule an independent reader at every boundary
+        # where another process can acquire the native publication lock.
+        replay = reader.load_replay_state("node-b")
+        if replay is not None and replay.highest_sequence == heartbeat.sequence:
+            observations.append(reader.load_accepted_peer_heartbeat("node-b"))
+
+    monkeypatch.setattr(store, "_locked", observe_each_unlocked_boundary)
+    assert runtime.poll(timeout_seconds=1.0) == heartbeat
+    assert observations and all(item == heartbeat for item in observations)
+
+
+def test_peer_exchange_recovers_later_boot_after_failed_cache_publication(tmp_path, monkeypatch):
+    store = AtomicGenerationStore(tmp_path / "ha")
+    heartbeats = [replace(_heartbeat(), boot_id=f"boot-{boot}") for boot in ("a", "b", "c")]
+    exchange = PeerStateExchange(
+        FakeTransport([_message(heartbeat) for heartbeat in heartbeats]),
+        cluster_id="cluster-a",
+        peer_node_id="node-b",
+        replay_store=store,
+    )
+    exchange.receive(timeout_seconds=1.0)
+    write = state_store.atomic_write_json
+
+    def fail_cache_write(path, value):
+        if path.name == "accepted-heartbeat.json":
+            raise OSError("injected cache publication failure")
+        write(path, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(state_store, "atomic_write_json", fail_cache_write)
+        with pytest.raises(OSError, match="injected cache publication failure"):
+            exchange.receive(timeout_seconds=1.0)
+    assert store.load_replay_state("node-b") == ReplayState("boot-b", 0, ("boot-a",))
+    assert store.load_accepted_peer_heartbeat("node-b") is None
+    assert exchange.receive(timeout_seconds=1.0) == (
+        heartbeats[2],
+        ReplayState("boot-c", 0, ("boot-a", "boot-b")),
+    )
+    assert store.load_accepted_peer_heartbeat("node-b") == heartbeats[2]
+
+
+def test_running_peer_exchange_retains_replay_floor_if_durable_file_is_lost(tmp_path):
+    store = AtomicGenerationStore(tmp_path / "ha")
+    heartbeat = _heartbeat(sequence=1)
+    exchange = PeerStateExchange(
+        FakeTransport([_message(heartbeat), _message(heartbeat)]),
+        cluster_id="cluster-a",
+        peer_node_id="node-b",
+        replay_store=store,
+    )
+    exchange.receive(timeout_seconds=1.0)
+    (store.peers / "node-b" / "replay.json").unlink()
+    with pytest.raises(StalePeerStateError, match="stale or replayed"):
+        exchange.receive(timeout_seconds=1.0)
+
+
+@pytest.mark.parametrize("failed_file", ["replay.json", "accepted-heartbeat.json"])
+def test_failed_publication_consumes_sequence_without_returning_parity(
+    tmp_path, monkeypatch, failed_file
+):
+    store = AtomicGenerationStore(tmp_path / "ha")
+    heartbeats = [replace(_heartbeat(), boot_id=f"boot-{boot}") for boot in ("a", "b", "c")]
+    exchange = PeerStateExchange(
+        FakeTransport([_message(h) for h in [*heartbeats[:2], *heartbeats[1:]]]),
+        cluster_id="cluster-a",
+        peer_node_id="node-b",
+        replay_store=store,
+    )
+    exchange.receive(timeout_seconds=1.0)
+    write = state_store.atomic_write_json
+
+    def fail_publication(path, value):
+        if path.name == failed_file:
+            raise OSError("injected publication failure")
+        write(path, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(state_store, "atomic_write_json", fail_publication)
+        with pytest.raises(OSError, match="injected publication failure"):
+            exchange.receive(timeout_seconds=1.0)
+    assert store.load_accepted_peer_heartbeat("node-b") != heartbeats[1]
+    with pytest.raises(StalePeerStateError, match="stale or replayed"):
+        exchange.receive(timeout_seconds=1.0)
+    assert exchange.receive(timeout_seconds=1.0) == (
+        heartbeats[2],
+        ReplayState("boot-c", 0, ("boot-a", "boot-b")),
+    )
+    assert store.load_accepted_peer_heartbeat("node-b") == heartbeats[2]
 
 
 def test_peer_exchange_accepts_authenticated_monotonic_advisory_state() -> None:

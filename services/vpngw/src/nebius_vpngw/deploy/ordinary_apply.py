@@ -24,14 +24,16 @@ import yaml
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name, parse_wheel_filename
 
-from .. import ingress_policy, ordinary_bootstrap, ordinary_routes
+from .. import dependency_scope, ingress_policy, ordinary_bootstrap, ordinary_routes
 from ..config_loader import InstanceResolvedConfig
+from ..deployment_assets import ORDINARY as ASSETS
 from ..replay_window import (
     REPLAY_WINDOW_CAPABILITY,
     require_replay_window_capability,
     wheel_supports_replay_window,
 )
 from . import ingress_ssh
+from .recovery import GUEST_FAILURES, GuestFailure, WriterBusy
 from .ssh_policy import configure_paramiko_host_verification
 
 UFW_ORDERING_PATH = "/etc/systemd/system/ufw.service.d/override.conf"
@@ -45,44 +47,6 @@ PREVIOUS_AGENT_ORDERINGS = (
     b"[Unit]\nAfter=strongswan-starter.service frr.service\n",
     b"[Unit]\nAfter=strongswan-starter.service frr.service\n"
     b"Wants=strongswan-starter.service frr.service\n",
-)
-
-ASSETS = (
-    (
-        "nebius-vpngw-ordinary-agent.service",
-        "/etc/systemd/system/nebius-vpngw-agent.service",
-        0o644,
-    ),
-    (
-        "nebius-vpngw-ordinary-agent-ordering.conf",
-        AGENT_ORDERING_PATH,
-        0o644,
-    ),
-    (
-        "nebius-vpngw-ordinary-fix-routes.service",
-        "/etc/systemd/system/nebius-vpngw-fix-routes.service",
-        0o644,
-    ),
-    ("nebius-vpngw-fix-routes.timer", "/etc/systemd/system/nebius-vpngw-fix-routes.timer", 0o644),
-    (
-        "nebius-vpngw-ordinary-health-monitor.service",
-        "/etc/systemd/system/nebius-vpngw-health-monitor.service",
-        0o644,
-    ),
-    ("nebius-vpngw-ingress.service", "/etc/systemd/system/nebius-vpngw-ingress.service", 0o644),
-    (
-        "nebius-vpngw-strongswan.conf",
-        "/etc/systemd/system/strongswan.service.d/override.conf",
-        0o644,
-    ),
-    ("nebius-vpngw-ufw-ordering.conf", UFW_ORDERING_PATH, 0o644),
-    ("setup-vpngw-firewall.sh", "/usr/local/bin/setup-vpngw-firewall.sh", 0o755),
-    ("nebius-vpngw-esp4-preflight.sh", "/usr/local/bin/nebius-vpngw-esp4-preflight.sh", 0o755),
-    (
-        "nebius-vpngw-esp4-preflight.service",
-        "/etc/systemd/system/nebius-vpngw-esp4-preflight.service",
-        0o644,
-    ),
 )
 
 
@@ -230,7 +194,7 @@ def dependencies_satisfied(requirements: list[str], observed: dict[str, Any]) ->
         ):
             continue
         if req.url:
-            raise RuntimeError("Direct URL dependencies require a separately built wheel set")
+            raise dependency_scope.DependencyFailure('dependency-direct-url', 'Direct URL dependencies require a separately built wheel set')
         name = canonicalize_name(req.name)
         version = observed["dependencies"].get(name)
         if not version or version not in req.specifier:
@@ -242,26 +206,58 @@ def dependencies_satisfied(requirements: list[str], observed: dict[str, Any]) ->
     return True
 
 
-def resolve_dependencies(
-    manifest: dict[str, Any], observed: dict[str, Any], directory: Path
-) -> list[Path]:
-    if dependencies_satisfied(manifest["requirements"], observed):
-        return []
+def require_dependency_resolver() -> str:
+    """Require the controller tool before any reconstruction can disrupt hosts."""
     uv = shutil.which("uv")
     if not uv:
-        raise RuntimeError(
-            "Dependency changes need local uv resolution; install uv and rerun dry-run"
+        raise dependency_scope.DependencyFailure(
+            "dependency-resolver-unavailable",
+            "Dependency changes need local uv resolution; install uv on this controller and rerun"
         )
+    return uv
+
+
+def resolve_dependencies(
+    manifest: dict[str, Any], observed: dict[str, Any], directory: Path, *, reinstall: bool = False
+) -> list[Path]:
+    from .recovery import CURRENT
+
+    context = CURRENT.get()
+    if context is None:
+        return _resolve_dependencies(manifest, observed, directory, reinstall=reinstall)
+    # Only resolver inputs participate. Caller still obtains fresh guest
+    # observations, verifies approval and rechecks package bytes before effects.
+    key = digest({
+        "requirements": manifest["requirements"],
+        "inventory": {name: observed.get(name) for name in (
+            "dependencies", "requirements", "markers", "machine", "python", "wheel_tags",
+        )},
+        "reinstall": reinstall,
+    })
+    return context.preparation.files(
+        key, directory,
+        lambda: _resolve_dependencies(manifest, observed, directory, reinstall=reinstall),
+    )
+
+
+def _resolve_dependencies(
+    manifest: dict[str, Any], observed: dict[str, Any], directory: Path, *, reinstall: bool = False
+) -> list[Path]:
+    if not reinstall and dependencies_satisfied(manifest["requirements"], observed):
+        return []
+    uv = require_dependency_resolver()
     machine = observed["machine"]
     if machine not in {"x86_64", "aarch64"}:
-        raise RuntimeError("Unsupported gateway wheel platform")
+        raise dependency_scope.DependencyFailure('dependency-platform-unsupported', 'Unsupported gateway wheel platform')
     source = directory / "requirements.in"
     output = directory / "requirements.txt"
     source.write_text("\n".join(manifest["requirements"]) + "\n")
     # uv uses existing output pins as preferences, preserving every compatible
     # installed version while resolving necessary changes for the target platform.
     output.write_text(
-        "\n".join(
+        ""
+        if reinstall
+        else "\n".join(
             f"{name}=={version}" for name, version in sorted(observed["dependencies"].items())
         )
         + "\n"
@@ -288,7 +284,7 @@ def resolve_dependencies(
         timeout=120,
     )
     if result.returncode:
-        raise RuntimeError("Required dependency resolution failed before gateway mutation")
+        raise dependency_scope.DependencyFailure('dependency-resolution-failed', 'Required dependency resolution failed before gateway mutation')
     paths = []
     selected: dict[str, str] = {}
     for line in output.read_text().splitlines():
@@ -297,10 +293,10 @@ def resolve_dependencies(
         req = Requirement(line)
         pins = list(req.specifier)
         if len(pins) != 1 or pins[0].operator != "==" or req.url:
-            raise RuntimeError("Dependency resolution did not produce exact versions")
+            raise dependency_scope.DependencyFailure('dependency-manifest-invalid', 'Dependency resolution did not produce exact versions')
         name, version = canonicalize_name(req.name), pins[0].version
         selected[name] = version
-        if observed["dependencies"].get(name) == version:
+        if not reinstall and observed["dependencies"].get(name) == version:
             continue
         with urlopen(f"https://pypi.org/pypi/{name}/{version}/json", timeout=30) as response:
             release = json.load(response)
@@ -312,42 +308,68 @@ def resolve_dependencies(
                 if supported.intersection(str(tag) for tag in tags):
                     candidates.append(item)
         if not candidates:
-            raise RuntimeError("No compatible binary wheel for a required dependency")
+            raise dependency_scope.DependencyFailure('dependency-wheel-unavailable', 'No compatible binary wheel for a required dependency')
         item = sorted(candidates, key=lambda value: value["filename"])[0]
         paths.append(_download_dependency(item, directory))
-    changed = {
-        name for name, version in selected.items() if observed["dependencies"].get(name) != version
-    }
-    for name, requirements in observed["requirements"].items():
-        if name in changed or name == "nebius-vpngw":
-            continue
-        for text in requirements:
-            req = Requirement(text)
-            dependency = canonicalize_name(req.name)
-            if req.marker and not req.marker.evaluate({**observed["markers"], "extra": ""}):
-                continue
-            if dependency in changed and selected[dependency] not in req.specifier:
-                raise RuntimeError("Required dependency update conflicts with installed software")
+    dependency_scope.check_shared_conflicts(observed, selected, parse_requirement=Requirement)
     return paths
+
+
+def prepare_dependency_manifest(manifest: dict, inventory: dict, wheels: list[Path]) -> None:
+    versions = {**inventory["dependencies"], "nebius-vpngw": manifest["version"]}
+    requirements = {**inventory["requirements"], "nebius-vpngw": manifest["requirements"]}
+    for path in wheels:
+        key, version, _build, _tags = parse_wheel_filename(path.name)
+        with zipfile.ZipFile(path) as archive:
+            members = [n for n in archive.namelist() if n.endswith(".dist-info/METADATA")]
+            if len(members) != 1:
+                raise dependency_scope.DependencyFailure('dependency-manifest-invalid', 'Selected dependency wheel metadata is ambiguous')
+            metadata = BytesParser().parsebytes(archive.read(members[0]))
+        versions[str(key)] = str(version)
+        requirements[str(key)] = metadata.get_all("Requires-Dist") or []
+    roots = ("nebius-vpngw", "pip")
+    selected = dependency_scope.closure(
+        roots, inventory["requirements"], inventory["markers"], parse_requirement=Requirement
+    ) | dependency_scope.closure(
+        roots, requirements, inventory["markers"], parse_requirement=Requirement
+    )
+    dependency_scope.project(inventory, selected)
+    manifest["expected_dependencies"] = {
+        key: value for key, value in versions.items() if key in selected
+    }
+    manifest["expected_requirements"] = {
+        key: value for key, value in requirements.items() if key in selected
+    }
+
+
+def refresh_dependency_observation(
+    previous: dict, current: dict, inventory: dict, manifest: dict
+) -> dict:
+    """Expand the approval scope without accepting changes during resolution."""
+    selected = set(manifest["expected_dependencies"])
+    predecessor = {**previous, **dependency_scope.project(inventory, selected)}
+    if predecessor != current:
+        raise RuntimeError("Gateway state changed during dependency planning; rerun apply")
+    return current
 
 
 def _download_dependency(item: dict, directory: Path) -> Path:
     """The resolver and resume path share exactly the same payload admission."""
     path = directory / item["filename"]
     if path.parent != directory or path.is_symlink():
-        raise RuntimeError("Dependency wheel has an invalid filename")
+        raise dependency_scope.DependencyFailure('dependency-identity-invalid', 'Dependency wheel has an invalid filename')
     name, version, _build, _tags = parse_wheel_filename(path.name)
     if not item["url"].startswith("https://files.pythonhosted.org/"):
-        raise RuntimeError("Untrusted dependency download origin")
+        raise dependency_scope.DependencyFailure('dependency-wheel-origin', 'Untrusted dependency download origin')
     with urlopen(item["url"], timeout=60) as response:
         raw = response.read(64 * 1024 * 1024 + 1)
     if len(raw) > 64 * 1024 * 1024 or sha(raw) != item["digests"]["sha256"]:
-        raise RuntimeError("Dependency wheel integrity verification failed")
+        raise dependency_scope.DependencyFailure('dependency-wheel-integrity', 'Dependency wheel integrity verification failed')
     if name == "vici":
         from ..ipsec_observation import VICI_VERSION, VICI_WHEEL_SHA256
 
         if str(version) != VICI_VERSION or sha(raw) != VICI_WHEEL_SHA256:
-            raise RuntimeError("VICI wheel differs from the qualified dependency")
+            raise dependency_scope.DependencyFailure('dependency-wheel-integrity', 'VICI wheel differs from the qualified dependency')
     path.write_bytes(raw)
     return path
 
@@ -357,10 +379,10 @@ def restore_dependencies(manifest: dict, observed: dict, directory: Path) -> lis
     paths = []
     for filename, expected in sorted(manifest["dependency_wheels"].items()):
         if Path(filename).name != filename or not re.fullmatch(r"[a-f0-9]{64}", expected):
-            raise RuntimeError("Invalid approved dependency identity")
+            raise dependency_scope.DependencyFailure('dependency-identity-invalid', 'Invalid approved dependency identity')
         name, version, _build, tags = parse_wheel_filename(filename)
         if not set(observed["wheel_tags"]).intersection(str(tag) for tag in tags):
-            raise RuntimeError("Approved dependency is incompatible with the current gateway")
+            raise dependency_scope.DependencyFailure('dependency-wheel-incompatible', 'Approved dependency is incompatible with the current gateway')
         with urlopen(f"https://pypi.org/pypi/{name}/{version}/json", timeout=30) as response:
             release = json.load(response)
         matches = [
@@ -371,14 +393,28 @@ def restore_dependencies(manifest: dict, observed: dict, directory: Path) -> lis
             and item.get("digests", {}).get("sha256") == expected
         ]
         if len(matches) != 1:
-            raise RuntimeError("Exact approved dependency is unavailable; no packages changed")
+            raise dependency_scope.DependencyFailure('dependency-wheel-unavailable', 'Exact approved dependency is unavailable; no packages changed')
         # Yanked status affects new resolution, not a previously approved hash.
         paths.append(_download_dependency(matches[0], directory))
     return paths
 
 
+class RemoteGuestWriterBusy(WriterBusy):
+    """Authenticated guest admission is waiting for its deployment lock."""
+
+
+class RemoteTransportUnavailable(RuntimeError):
+    """Preserve a transport cause separately from rejected guest admission."""
+
+
 def remote(
-    ssh: Any, target: str, instance: InstanceResolvedConfig, local: dict, request: dict
+    ssh: Any,
+    target: str,
+    instance: InstanceResolvedConfig,
+    local: dict,
+    request: dict,
+    *,
+    bootstrap: Any = ordinary_bootstrap,
 ) -> dict:
     payload = json.dumps(request).encode()
     if len(payload) > 128 * 1024 * 1024:
@@ -401,10 +437,10 @@ def remote(
             vm_spec=vm_spec,
         )
         ingress_ssh.preflight(client, instance.config_yaml)
-        payload = ordinary_bootstrap.source_frame() + payload
+        payload = bootstrap.source_frame() + payload
         deadline = time.monotonic() + 630
         stdin, stdout, stderr = client.exec_command(
-            ordinary_bootstrap.COMMAND,
+            bootstrap.COMMAND,
             timeout=630,
         )
         sent = 0
@@ -451,27 +487,22 @@ def remote(
                 "verify",
             }:
                 stage = "transport"
-            reasons = {
-                "stale_plan": "the inspected predecessor changed",
-                "runtime_drift": "local runtime no longer verifies",
-                "final_artifact": "final artifact or runtime proof differs",
-                "receipt": "the guest verification receipt is unconfirmed",
-                "ordinary_environment_changed": "the service or network environment changed",
-                "ordinary_asset_conflict": "a managed service asset conflicts",
-                "route_plan_changed": "the route plan changed",
-                "route_predecessor_changed": "the route predecessor changed",
-                "identity_drift": "the approved guest identity changed",
-                "package_quiescence_unproven": "package writer quiescence is unconfirmed",
-            }
             code = result.get("error_code") if isinstance(result, dict) else None
-            reason = (
-                reasons.get(code, "no success is confirmed")
-                if isinstance(code, str)
-                else "no success is confirmed"
-            )
-            raise RuntimeError(f"Ordinary deployment failed at {stage}; {reason}")
+            display = getattr(bootstrap, "DISPLAY_NAME", "Ordinary deployment")
+            if code == "repair_writer_busy":
+                raise RemoteGuestWriterBusy(f"{display} waiting at {stage}; existing writer is still settling")
+            if isinstance(code, str) and code in dependency_scope.DependencyFailure.CODES:
+                raise dependency_scope.DependencyFailure(code, f"{display} dependency admission failed")
+            if isinstance(code, str) and code in GUEST_FAILURES:
+                raise GuestFailure(code, stage, f"{display} failed at {stage}; {GUEST_FAILURES[code][0]}")
+            raise RuntimeError(f"{display} failed at {stage}; no success is confirmed")
         return result
-    except (OSError, ValueError) as error:
+    except OSError as error:
+        display = getattr(bootstrap, "DISPLAY_NAME", "Ordinary deployment")
+        raise RemoteTransportUnavailable(
+            f"{display} transport is unavailable; remote result is unverified"
+        ) from error
+    except ValueError as error:
         raise RuntimeError(
             "Ordinary deployment transport or receipt verification failed"
         ) from error
@@ -537,6 +568,7 @@ def inspect_plan(
         manifest = json.loads(json.dumps(resume_manifest))
     result = remote(ssh, target, instance, local, {"action": "inspect", "manifest": manifest})
     observed = result["observation"]
+    inventory = result["dependency_inventory"]
     if resume_manifest is not None and manifest["runtime_plan"] != observed["runtime_plan"]:
         raise RuntimeError("Interrupted ordinary package authority changed native closure")
     manifest["runtime_plan"] = observed["runtime_plan"]
@@ -568,19 +600,21 @@ def inspect_plan(
     try:
         dependencies = []
         if pending_runtime is None and resume_manifest is None:
-            dependencies = resolve_dependencies(manifest, observed, Path(temporary.name))
+            dependencies = resolve_dependencies(
+                manifest, {**observed, **inventory}, Path(temporary.name)
+            )
             manifest["dependency_wheels"] = {p.name: sha(p.read_bytes()) for p in dependencies}
-            expected = dict(observed["dependencies"])
-            expected["nebius-vpngw"] = manifest["version"]
-            for path in dependencies:
-                name, version, _build, _tags = parse_wheel_filename(path.name)
-                expected[str(name)] = str(version)
-            manifest["expected_dependencies"] = expected
+            prepare_dependency_manifest(manifest, inventory, dependencies)
         elif pending_runtime is None and any(
             observed["dependencies"].get(name) != version
             for name, version in manifest["expected_dependencies"].items()
         ):
             dependencies = restore_dependencies(manifest, observed, Path(temporary.name))
+        if resume_manifest is None:
+            fresh = remote(
+                ssh, target, instance, local, {"action": "inspect", "manifest": manifest}
+            )["observation"]
+            observed = refresh_dependency_observation(observed, fresh, inventory, manifest)
         effects = [
             f"remove obsolete static route {item['route']['dst']} via {item['link']['name']}"
             for item in route_plan.payload["deletions"]
@@ -598,6 +632,7 @@ def inspect_plan(
         if (
             observed["files"] != manifest["files"]
             or observed["package_version"] != manifest["version"]
+            or dependency_scope.product_metadata_changed(manifest, observed)
         ):
             effects.append("install agent wheel")
         if observed["assets"] != {

@@ -40,6 +40,18 @@ DIAGNOSTIC_CODES = frozenset({
     "WORKER_SCOPE_VIOLATION", "WRITERS_ACTIVE",
 })
 
+OUTER_MEMORY_HANDOFF = (
+    "Verifier environment: the outer verifier owns physical-host memory monitoring "
+    "for this disposable trial, with a fresh reliable prelaunch observation and an "
+    "active bounded monitor throughout the native sessions. It owns exact workload "
+    "cancellation at the existing critical/unknown visibility boundary. Repeat this "
+    "setup context in every worker assignment. Sandboxed workers may rely on that "
+    "active outer owner without launching a duplicate host-memory probe; do not "
+    "claim the worker measured the host. For any tool call, preserve output and "
+    "exit status before reading its optional session handle. An immediately "
+    "completed command has no running session: never store or poll a missing handle."
+)
+
 
 def diagnostic_metadata(event, host):
     """Extract a finite vocabulary, never retain arbitrary output or commands."""
@@ -62,13 +74,21 @@ def diagnostic_metadata(event, host):
 
 
 def initial_failure(native, binding):
+    if native["exit_code"] != 0 or native["forced_cleanup"]:
+        return {"status": "FAIL", "reason": "public native invocation failed or required forced cleanup"}
     if not native["observer_complete"] or not native["cleanup_verified"]:
         return {"status": "PARTIAL", "reason": "native observation or cleanup is incomplete"}
-    if native["exit_code"] != 0 or not native["completed"] or native["forced_cleanup"]:
+    if not native["completed"]:
         return {"status": "FAIL", "reason": "public native invocation did not complete"}
     if binding is None:
         return {"status": "FAIL", "reason": "public native invocation completed without an accepted objective"}
     return None
+
+
+def combined_outcome(results):
+    """An observed failed attempt cannot be hidden by incomplete peer evidence."""
+    statuses = {value["status"] for value in results}
+    return "FAIL" if "FAIL" in statuses else "PARTIAL" if statuses != {"PASS"} else "PASS"
 
 
 def observe_event(event, host):
@@ -120,7 +140,14 @@ def sample(home, session, project, children, elapsed):
                 "ready": wave.get("ready_task_ids", []),
             }
         )
+    capacity_path = home / "workflow-capacity/reservations.json"
+    capacity = read(capacity_path)["runs"] if capacity_path.exists() else {}
+    admitted = sorted(key for key, row in capacity.items() if row["admitted"])
+    worker_count = sum(len(row["workers"]) for row in capacity.values())
+    worktree_count = sum(len(row["worktrees"]) for row in capacity.values())
     return {
+        "shared_admitted": admitted, "shared_workers": worker_count,
+        "shared_worktrees": worktree_count,
         "elapsed_ms": elapsed,
         "run_id": run_dir.name,
         "objective_sha256": objective["revisions"][-1]["sha256"],
@@ -141,31 +168,46 @@ def concurrency(samples):
             prior = previous.get(wave["wave"])
             if prior:
                 old = prior["native_running"]
-                peers = {task: native for task, native in old.items()
-                         if current.get(task) == native}
-                # Termination can precede admission by several observations.
-                # Keep the departure, never stale running status as overlap.
+                # Native departure alone does not release the task's slot.
+                # Keep its ready queue until independently observed admission.
                 for task in set(old) - set(current) - set(prior["admitted"]):
-                    if peers and prior["ready"]:
-                        candidates[task] = {"peers": peers.copy(), "ready": set(prior["ready"])}
+                    if prior["ready"]:
+                        candidates[task] = {"peers": None, "ready": set(prior["ready"])}
             for task, candidate in list(candidates.items()):
+                if task in current:
+                    candidates.pop(task)
+                    continue
+                if candidate["peers"] is None:
+                    # A replacement must first appear in a later snapshot than
+                    # admission; one sample cannot establish their ordering.
+                    candidate["ready"].difference_update(current)
+                    if task in wave["admitted"]:
+                        candidate["peers"] = {
+                            peer: native for peer, native in prior["native_running"].items()
+                            if current.get(peer) == native
+                        }
+                    if not candidate["ready"] or candidate["peers"] == {}:
+                        candidates.pop(task)
+                    continue
                 candidate["peers"] = {peer: native for peer, native in candidate["peers"].items()
                                       if current.get(peer) == native}
-                if not candidate["peers"] or task in current:
+                if not candidate["peers"] or task not in wave["admitted"]:
                     candidates.pop(task)
                     continue
-                if task not in wave["admitted"]:
-                    # Starting a replacement before admission is not a refill
-                    # after admission, even if a later snapshot contains both.
-                    candidate["ready"].difference_update(current)
-                elif candidate["ready"] & set(current):
+                if candidate["ready"] & set(current):
                     refill = True
-                    candidates.pop(task)
-                    continue
-                if not candidate["ready"]:
                     candidates.pop(task)
             previous[wave["wave"]] = wave
     return maximum, refill
+
+
+def permission_roots(project, home):
+    result = subprocess.run(["git", "-C", str(project), "rev-parse", "--show-toplevel"],
+                            capture_output=True, text=True, check=True, timeout=30)
+    repo = Path(result.stdout.strip()).resolve()
+    common = subprocess.run(["git", "-C", str(project), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                            capture_output=True, text=True, check=True, timeout=30)
+    return (home, repo, Path(common.stdout.strip()), repo.parent / (repo.name + "-worktrees"))
 
 
 def codex_command(project, home):
@@ -177,7 +219,7 @@ def codex_command(project, home):
     # A forced workspace-write mode makes .git read-only even inside writable
     # roots. Extend the native profile and reopen only this fixture's Git data.
     filesystem = ", ".join(
-        json.dumps(str(path)) + ' = "write"' for path in (home, project / ".git")
+        json.dumps(str(path)) + ' = "write"' for path in permission_roots(project, home)
     )
     profile = '{ extends = ":workspace", filesystem = { ' + filesystem + ' }, network = { enabled = true } }'
     return [
@@ -189,10 +231,12 @@ def codex_command(project, home):
 
 def validate_codex_permissions(config, project, home):
     """Reject effective policy drift without exposing any configuration values."""
+    if config.get("features", {}).get("hooks") is not True:
+        raise ValueError("effective native configuration disabled required hooks")
     if any(config.get(key) is not None for key in ("sandbox_mode", "sandbox_workspace_write")):
         raise ValueError("effective native config contains legacy sandbox settings")
     expected = {"extends": ":workspace", "filesystem": {
-        str(home): "write", str(project / ".git"): "write"}, "network": {"enabled": True}}
+        **{str(path): "write" for path in permission_roots(project, home)}}, "network": {"enabled": True}}
     def omit_nulls(value):
         if isinstance(value, dict):
             return {key: omit_nulls(item) for key, item in value.items() if item is not None}
@@ -203,24 +247,31 @@ def validate_codex_permissions(config, project, home):
         raise ValueError("effective native config changed the scoped permission profile")
 
 
-def invoke(project, home, host, text, timeout):
-    if host == "codex":
-        return invoke_codex(project, home, text, timeout)
-    return invoke_stream(project, home, host, text, timeout)
+def invoke(project, home, host, text, observation_interval, *, on_launch=None):
+    started = time.monotonic_ns()
+    options = {"on_launch": on_launch} if on_launch else {}
+    value, session = (invoke_codex(project, home, text, observation_interval, **options) if host == "codex"
+                      else invoke_stream(project, home, host, text, observation_interval, **options))
+    value.update(started_monotonic_ns=started, finished_monotonic_ns=time.monotonic_ns())
+    return value, session
 
 
-def invoke_codex(project, home, text, timeout):
-    from native_app_server import NativeServer, child_snapshot
+def invoke_codex(project, home, text, observation_interval, *, on_launch=None):
+    from native_app_server import LaunchTrace, NativeServer, child_snapshot
 
     started = time.monotonic()
     session = None
     completed = finished = timed_out = failed = False
     transitions = 0
     samples, gaps, rounds = [], 0, 0
+    trace = LaunchTrace()
     diagnostics = {"failed_commands": 0, "intake_command_mentions": 0, "codes": []}
 
     def notify(event):
         nonlocal completed, finished, transitions
+        trace.observe(event, session, int((time.monotonic() - started) * 1000))
+        if "id" in event:
+            return  # Request metadata only; NativeServer rejects the interaction.
         method, params = event.get("method"), event.get("params", {})
         if method in {"thread/status/changed", "turn/started", "turn/completed"}:
             transitions += 1
@@ -240,22 +291,25 @@ def invoke_codex(project, home, text, timeout):
             diagnostics["codes"] = sorted(set(diagnostics["codes"]) | set(delta["codes"]))
 
     server = NativeServer(codex_command(project, home), project,
-                          runtime_environment("codex", home=home, fresh_session=True), notify,
-                          deadline=started + timeout)
+                          runtime_environment("codex", home=home, fresh_session=True, cwd=project), notify,
+                          deadline=None)
     try:
+        if on_launch:
+            on_launch(server.process.pid)
         server.request("initialize", {"clientInfo": {"name": "implement-test", "version": "1"},
                                       "capabilities": {"experimentalApi": True}})
         server.send({"method": "initialized"})
         config = server.request("config/read", {"cwd": str(project), "includeLayers": False})["config"]
         validate_codex_permissions(config, project, home)
         session = server.request("thread/start", {"cwd": str(project), "ephemeral": True,
-                                                  "permissions": "implement-test"})["thread"]["id"]
-        server.request("turn/start", {"threadId": session, "input": [{"type": "text", "text": text}]})
+                                                  "permissions": "implement-test"}, timeout=None)["thread"]["id"]
+        server.request("turn/start", {"threadId": session, "input": [{"type": "text", "text": text}]}, timeout=None)
         next_sample = 0
+        next_observation = time.monotonic() + observation_interval
         while not finished:
-            if time.monotonic() - started >= timeout:
-                timed_out = True
-                break
+            if time.monotonic() >= next_observation:
+                print("Native implementation continues; observation checkpoint.", flush=True)
+                next_observation = time.monotonic() + observation_interval
             server.receive(.2)
             if time.monotonic() >= next_sample and not finished:
                 rounds += 1
@@ -266,6 +320,7 @@ def invoke_codex(project, home, text, timeout):
                     children = child_snapshot(server, session, deadline)
                     running = {session_hash(native): "running" for native, status in children.items() if status == "active"}
                     elapsed = int((observed_at - started) * 1000)
+                    trace.children(children, elapsed)
                     first = sample(home, session, project, running, elapsed)
                     second = sample(home, session, project, running, elapsed)
                     checked = child_snapshot(server, session, deadline)
@@ -274,7 +329,10 @@ def invoke_codex(project, home, text, timeout):
                     if (before != transitions or children != checked or first != second
                             or time.monotonic() - observed_at > .5):
                         gaps += 1
-                    elif first is not None and (not samples or first["waves"] != samples[-1]["waves"]):
+                    elif first is not None and (not samples or any(
+                        first[key] != samples[-1][key]
+                        for key in ("waves", "shared_admitted", "shared_workers", "shared_worktrees")
+                    )):
                         if len(samples) >= 256:
                             raise ValueError("native sample inventory exceeds its bound")
                         samples.append(first)
@@ -286,7 +344,7 @@ def invoke_codex(project, home, text, timeout):
     finally:
         server.close()
     return {
-        "schema": "implement-test/native-invocation-v2", "host": "codex",
+        "schema": "implement-test/native-invocation-v3", "host": "codex",
         "observer": "owning-app-server", "observation_rounds": rounds,
         "input_sha256": hashlib.sha256(text.encode()).hexdigest(),
         "session_sha256": session_hash(session) if session else None,
@@ -297,21 +355,25 @@ def invoke_codex(project, home, text, timeout):
         "stdout_sha256": server.stdout_hash.hexdigest(), "stderr_sha256": server.stderr_hash.hexdigest(),
         "elapsed_ms": int((time.monotonic() - started) * 1000), "samples": samples,
         "diagnostics": diagnostics,
+        "launch_diagnostics": trace.result(gaps, not failed and not timed_out),
     }, session
 
 
-def invoke_stream(project, home, host, text, timeout):
+def invoke_stream(project, home, host, text, observation_interval, *, on_launch=None):
+    if on_launch:
+        raise ValueError("registered companion launch requires Codex App Server")
     command = [host, "--print", "--output-format", "stream-json", "--verbose",
                "--no-session-persistence"]
     started = time.monotonic()
     process = subprocess.Popen(
         command,
         cwd=project,
-        env=runtime_environment(host, home=home, fresh_session=True),
+        env=runtime_environment(host, home=home, fresh_session=True, cwd=project),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=True,
+        umask=0o077,
     )
     events = queue.Queue(maxsize=256)
     stream_hash, errors_hash = hashlib.sha256(), hashlib.sha256()
@@ -368,10 +430,20 @@ def invoke_stream(project, home, host, text, timeout):
     diagnostics = {"failed_commands": 0, "intake_command_mentions": 0, "codes": []}
     completed = timed_out = False
     cleanup_verified = forced_cleanup = False
+    exit_observed = None
+    next_observation = time.monotonic() + observation_interval
     try:
         while not (
             process.poll() is not None and output_done.is_set() and events.empty()
         ):
+            if process.poll() is not None:
+                exit_observed = time.monotonic() if exit_observed is None else exit_observed
+                if time.monotonic() - exit_observed >= 1 and not output_done.is_set():
+                    failed.set()  # Leader ended; inherited pipes require owned cleanup.
+                    break
+            if time.monotonic() >= next_observation:
+                print("Native implementation continues; observation checkpoint.", flush=True)
+                next_observation = time.monotonic() + observation_interval
             try:
                 parsed = events.get(timeout=0.2)
             except queue.Empty:
@@ -401,14 +473,11 @@ def invoke_stream(project, home, host, text, timeout):
                             if len(samples) < 256:
                                 samples.append(first)
                             else:
-                                failed.set()
+                                gaps += 1
                         else:
                             gaps += 1
                     except (OSError, ValueError, RuntimeError):
                         gaps += 1  # Observation races must not stop the product.
-            if time.monotonic() - started > timeout:
-                timed_out = True
-                break
     finally:
         # This process owns a new native process group, including descendants
         # which may still hold pipes after the group leader has exited.
@@ -460,7 +529,7 @@ def invoke_stream(project, home, host, text, timeout):
                 except (OSError, BrokenPipeError):
                     failed.set()
     return {
-        "schema": "implement-test/native-invocation-v2",
+        "schema": "implement-test/native-invocation-v3",
         "host": host,
         "input_sha256": hashlib.sha256(text.encode()).hexdigest(),
         "session_sha256": session_hash(session) if session else None,
@@ -483,7 +552,7 @@ def invoke_stream(project, home, host, text, timeout):
 def validate_receipt(receipt_path, run_dir, objective_sha):
     receipt = read(receipt_path)
     if (
-        receipt.get("schema") != "implement-test/public-invocations-v2"
+        receipt.get("schema") != "implement-test/public-invocations-v3"
         or receipt.get("skill") != "implement"
         or receipt.get("run_id") != run_dir.name
         or receipt.get("objective_sha256") != objective_sha
@@ -504,7 +573,7 @@ def validate_receipt(receipt_path, run_dir, objective_sha):
         value = read(receipt_path.parent / row["path"])
         if (
             digest(value) != row.get("sha256")
-            or value.get("schema") != "implement-test/native-invocation-v2"
+            or value.get("schema") != "implement-test/native-invocation-v3"
             or value.get("exit_code") != 0
             or value.get("completed") is not True
             or value.get("timed_out") is not False
@@ -531,7 +600,8 @@ def validate_receipt(receipt_path, run_dir, objective_sha):
     ):
         raise ValueError("fresh continuation did not bind the same terminal objective")
     maximum, refill = concurrency(first["samples"])
-    if maximum < 2 or not refill or first["session_sha256"] == again["session_sha256"]:
+    app = Path(run.get("logical_project_root", "")).name == "project-a"
+    if ((app and (maximum < 2 or not refill)) or first["session_sha256"] == again["session_sha256"]):
         raise ValueError(
             "native overlap, slot refill or fresh-session continuation was not observed"
         )
@@ -543,16 +613,111 @@ def validate_receipt(receipt_path, run_dir, objective_sha):
     return {"observed_max_workers": maximum, "observed_slot_refill": refill}
 
 
+def run_project(project, home, host, text, observation_interval, evidence, *, on_launch=None, verify_frozen=None):
+    evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
+    prefix = "$implement" if host == "codex" else "/implement"
+    options = {"on_launch": on_launch} if on_launch else {}
+    initial = prefix + " " + text + "\n\n" + OUTER_MEMORY_HANDOFF
+    if verify_frozen:
+        verify_frozen()
+    first, session = invoke(project, home, host, initial, observation_interval, **options)
+    write(evidence / "initial-invocation.json", first, exclusive=True)
+    binding = observe_binding(home, "implement", session, project) if session else None
+    failure = initial_failure(first, binding)
+    if failure:
+        return {**failure, "diagnostics": first.get("diagnostics", {})}
+    run_dir, run, objective = binding
+    if run["status"] != "done":
+        # A complete successful native invocation was already observed above.
+        # Returning without its promised delivery is an attempted failure.
+        return {"status": "FAIL", "reason": "public workflow did not deliver"}
+    delivered = digest(read(run_dir / "execution/FEAT-001/coordinator.json"))
+    if verify_frozen:
+        verify_frozen()
+    again, fresh = invoke(project, home, host, prefix + " continue " + str(project), observation_interval, **options)
+    write(evidence / "continuation-invocation.json", again, exclusive=True)
+    continued = observe_binding(home, "implement", fresh, project) if fresh else None
+    same = (continued is not None and continued[0] == run_dir and continued[1]["status"] == "done"
+            and continued[2]["revisions"][-1]["sha256"] == objective["revisions"][-1]["sha256"])
+    receipt = {"schema": "implement-test/public-invocations-v3", "skill": "implement",
+               "run_id": run_dir.name, "objective_sha256": objective["revisions"][-1]["sha256"],
+               "entry": "direct", "intervened": False,
+               "rerun_status": "ALREADY_COMPLETE" if same else "UNPROVEN", "delivery_sha256": delivered,
+               "initial": {"path": "initial-invocation.json", "sha256": digest(first)},
+               "continuation": {"path": "continuation-invocation.json", "sha256": digest(again)}}
+    path = evidence / "public-invocations.json"
+    write(path, receipt, exclusive=True)
+    observed = validate_receipt(path, run_dir, objective["revisions"][-1]["sha256"])
+    return {"status": "PASS", "run_dir": str(run_dir), "receipt": str(path), **observed}
+
+
+def validate_shared_capacity(samples, runs):
+    """Require overlap and all declared home limits, independent of product caps."""
+    error = "shared admission overlap or capacity proof is missing or invalid"
+    if not isinstance(samples, list) or not samples:
+        raise ValueError(error)
+    overlap = False
+    for sample in samples:
+        if not isinstance(sample, dict):
+            raise ValueError(error)
+        admitted = sample.get("shared_admitted")
+        if (not isinstance(admitted, list) or len(admitted) > 4
+                or any(not isinstance(item, str) or not item for item in admitted)
+                or len(admitted) != len(set(admitted))):
+            raise ValueError(error)
+        for field, limit in (("shared_workers", 4), ("shared_worktrees", 16)):
+            if type(sample.get(field)) is not int or not 0 <= sample[field] <= limit:
+                raise ValueError(error)
+        overlap |= set(runs) <= set(admitted)
+    if not overlap:
+        raise ValueError(error)
+
+
+def validate_projects(evidence, repo, home):
+    from workflow_automatic import verify_delivery
+    runs, initial = [], []
+    for scope, folder in (("project-a", evidence), ("project-b", evidence / "project-b")):
+        receipt = read(folder / "public-invocations.json")
+        candidates = list((home / "implement").glob("*/" + receipt["run_id"]))
+        if len(candidates) != 1:
+            raise ValueError("project invocation has no unique registered run")
+        run_dir = candidates[0]
+        run, objective = validate_run(run_dir)
+        if (run.get("logical_project_root") != str(repo / scope)
+                or Path(run["git_common_dir"]) != repo / ".git" or not run.get("automatic_outer")):
+            raise ValueError("multi-project registration identity differs")
+        validate_receipt(folder / "public-invocations.json", run_dir, objective["revisions"][-1]["sha256"])
+        verify_delivery(run_dir)
+        from implement_statistics import require_complete
+        require_complete(run_dir)
+        runs.append(str(run_dir))
+        initial.append(read(folder / "initial-invocation.json"))
+    if initial[0]["session_sha256"] == initial[1]["session_sha256"]:
+        raise ValueError("projects reused a native coordinator")
+    if max(x["started_monotonic_ns"] for x in initial) >= min(x["finished_monotonic_ns"] for x in initial):
+        raise ValueError("project native invocations did not overlap")
+    samples = [sample for value in initial for sample in value["samples"]]
+    validate_shared_capacity(samples, runs)
+    for argument, expected in (("  Hello   WORLD  ", "hello world\n"), ("", "\n"),
+                               ("One\tTwo\nTHREE", "one two three\n")):
+        check = subprocess.run([sys.executable, "-I", "text_tool.py", argument], cwd=repo / "project-b",
+                               capture_output=True, text=True, timeout=30, check=True)
+        if check.stdout != expected or check.stderr:
+            raise ValueError("companion CLI acceptance failed")
+    return {"status": "PASS", "projects": runs, "shared_objective_limit": 4,
+            "shared_worker_limit": 4, "shared_worktree_limit": 16}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--generation", required=True)
     parser.add_argument("--objective", type=Path, required=True)
-    parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument("--observation-interval", type=int, default=30)
     args = parser.parse_args()
     host = agent_name()
     root = lifecycle.default_root()
-    if not 1 <= args.timeout <= 7200:
-        raise ValueError("timeout must be between 1 and 7200 seconds")
+    if not 1 <= args.observation_interval <= 300:
+        raise ValueError("observation interval must be between 1 and 300 seconds")
     trial = None
     try:
         with lifecycle._locked_root(root) as owned:
@@ -561,9 +726,15 @@ def main():
                 raise ValueError("prepare the owned fixture first")
             state, fixture = active
             lifecycle._validate_generation(state, args.generation)
+            catalog_sha = lifecycle.catalog.validate(state, fixture, native=True)
             trial = lifecycle.public_trial_lock(fixture)
             trial.__enter__()
             home, project = fixture / (host + "-home"), fixture / "project"
+            hooks = lifecycle.catalog.runtime_hooks(home, host)
+            if "runtime_hooks" in state:
+                raise ValueError("native hook binding already exists; create a fresh trial")
+            state["runtime_hooks"] = hooks
+            lifecycle._atomic_json(fixture / "lifecycle.json", state)
             text = args.objective.read_text()
             if len(text.encode()) > 128 * 1024:
                 raise ValueError("fixture objective exceeds the bound")
@@ -574,83 +745,49 @@ def main():
                     "schema": "implement-test/public-trial-reservation-v1",
                     "generation_id": args.generation,
                     "objective_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                    "runtime_catalog_sha256": catalog_sha,
                 },
                 exclusive=True,
             )
-        prefix = "$implement" if host == "codex" else "/implement"
-        first, session = invoke(project, home, host, prefix + " " + text, args.timeout)
-        write(evidence / "initial-invocation.json", first, exclusive=True)
-        binding = (
-            observe_binding(home, "implement", session, project) if session else None
-        )
-        failure = initial_failure(first, binding)
-        if failure:
-            print(json.dumps({**failure, "diagnostics": first.get("diagnostics", {})}))
+        from concurrent.futures import ThreadPoolExecutor
+        def verify_frozen():
+            with lifecycle._locked_root(root) as owned:
+                current = lifecycle._active(owned)
+                if current is None or current[1] != fixture:
+                    raise ValueError("fixture generation changed during native execution")
+                lifecycle._validate_generation(current[0], args.generation)
+                lifecycle.catalog.validate(current[0], fixture, native=True)
+                lifecycle.catalog.validate_runtime_hooks(current[0], fixture, required=True)
+        companion = ("Implement text_tool.py as a CLI taking one string argument; normalize whitespace "
+                     "and lowercase it, print the normalized string followed by a newline. Add unittest "
+                     "coverage for mixed case, repeated whitespace and empty input. Own only project-b. "
+                     "Plan one task with at most one active worker; existing owner-authorized recovery "
+                     "may replace a failed worker for that same task, preserving failure history and "
+                     "repair budgets. Freeze Python validation commands with -B immediately after "
+                     "the interpreter, including Python child commands used by tests, so validation "
+                     "does not create out-of-claim bytecode caches. Do not rely on inherited "
+                     "PYTHONDONTWRITEBYTECODE in the explicit validation environment or broaden write "
+                     "claims for generated caches. Complete automatic aggregation and cleanup, then stop. "
+                     "Do not push, publish, invoke continuation, run Docker or touch project-a.")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            app = pool.submit(run_project, project / "project-a", home, host, text, args.observation_interval, evidence,
+                              verify_frozen=verify_frozen)
+            peer = pool.submit(run_project, project / "project-b", home, host, companion, args.observation_interval, evidence / "project-b",
+                               verify_frozen=verify_frozen)
+            results = [app.result(), peer.result()]
+        if any(value["status"] != "PASS" for value in results):
+            print(json.dumps({"status": combined_outcome(results), "projects": results}))
             return 2
-        run_dir, run, objective = binding
-        if run["status"] != "done":
-            print(
-                json.dumps(
-                    {"status": "PARTIAL", "reason": "public workflow did not deliver"}
-                )
-            )
-            return 2
-        delivered = digest(read(run_dir / "execution/FEAT-001/coordinator.json"))
-        again, fresh = invoke(
-            project, home, host, prefix + " continue " + str(project), args.timeout
-        )
-        write(evidence / "continuation-invocation.json", again, exclusive=True)
-        continued = (
-            observe_binding(home, "implement", fresh, project) if fresh else None
-        )
-        same = (
-            continued is not None
-            and continued[0] == run_dir
-            and continued[1]["status"] == "done"
-            and continued[2]["revisions"][-1]["sha256"]
-            == objective["revisions"][-1]["sha256"]
-        )
         with lifecycle._locked_root(root) as owned:
             current = lifecycle._active(owned)
             if current is None or current[1] != fixture:
                 raise ValueError("fixture generation changed during native execution")
             lifecycle._validate_generation(current[0], args.generation)
-            receipt = {
-                "schema": "implement-test/public-invocations-v2",
-                "skill": "implement",
-                "run_id": run_dir.name,
-                "objective_sha256": objective["revisions"][-1]["sha256"],
-                "entry": "direct",
-                "intervened": False,
-                "rerun_status": "ALREADY_COMPLETE" if same else "UNPROVEN",
-                "delivery_sha256": delivered,
-                "initial": {"path": "initial-invocation.json", "sha256": digest(first)},
-                "continuation": {
-                    "path": "continuation-invocation.json",
-                    "sha256": digest(again),
-                },
-            }
-            # Invocation evidence belongs to the verifier generation. Keep it
-            # beside the immutable native observations, outside product state.
-            path = evidence / "public-invocations.json"
-            write(path, receipt, exclusive=True)
-            try:
-                observed = validate_receipt(
-                    path, run_dir, objective["revisions"][-1]["sha256"]
-                )
-            except ValueError as error:
-                print(json.dumps({"status": "PARTIAL", "reason": str(error)}))
-                return 2
-        print(
-            json.dumps(
-                {
-                    "status": "PASS",
-                    "run_dir": str(run_dir),
-                    "receipt": str(path),
-                    **observed,
-                }
-            )
-        )
+            lifecycle.catalog.validate(current[0], fixture, native=True)
+            lifecycle.catalog.validate_runtime_hooks(current[0], fixture, required=True)
+            observed = validate_projects(evidence, project, home)
+            write(evidence / "projects.json", observed, exclusive=True)
+        print(json.dumps({"status": "PASS", **results[0], "projects": results}))
         return 0
     finally:
         if trial is not None:

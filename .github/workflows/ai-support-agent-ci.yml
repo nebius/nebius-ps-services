@@ -117,28 +117,21 @@ jobs:
         env:
           EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-      - name: Test boundary tooling
-        working-directory: agents/ai-support-agent
-        run: python3 -B -m unittest discover -s tests
-      - name: Check public product files
-        working-directory: agents/ai-support-agent
-        run: python3 -B tools/check_boundaries.py scan --root . --destination public --git-files
-      - name: Check this workflow as public content
+      - name: Verify retired scaffold and public navigation
         run: |
           python3 -B - <<'PYTHON'
-          import importlib.util
           import pathlib
-          import sys
-          tool = pathlib.Path('agents/ai-support-agent/tools/check_boundaries.py')
-          spec = importlib.util.spec_from_file_location('boundary_check', tool)
-          module = importlib.util.module_from_spec(spec)
-          sys.modules[spec.name] = module
-          spec.loader.exec_module(module)
-          scanner = module.Scanner('public')
-          path = pathlib.Path('.github/workflows/ai-support-agent-ci.yml')
-          scanner.content(path.name, path.read_bytes())
-          if scanner.findings:
-              raise SystemExit('Workflow boundary check failed; review locally')
+          import subprocess
+          retired = subprocess.check_output(
+              ['git', 'ls-files', '--', 'agents/ai-support-agent'], text=True
+          ).splitlines()
+          if retired:
+              raise SystemExit('Retired AI Support Agent scaffold is still tracked')
+          readme = pathlib.Path('README.md').read_text()
+          if 'agents/ai-support-agent' in readme:
+              raise SystemExit('Root navigation still points to the retired scaffold')
+          if 'agents/agent-execution-platform' not in readme:
+              raise SystemExit('Root navigation omits the intended public product root')
           PYTHON
 
   result-evidence:

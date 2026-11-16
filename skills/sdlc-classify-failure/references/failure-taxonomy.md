@@ -12,7 +12,7 @@ can fix the cause.
 | EXECUTION_PREPARATION_DEFECT | Plan parsing, dependency scheduling, or private integration preparation failed before workers started. | sdlc-prepare-execution or sdlc-create-plan |
 | WORKTREE_CONFLICT | A registered project, integration, or worker checkout is dirty, moved, divergent, foreign, or has the wrong Git identity. | owning execution phase; preserve resources |
 | REPLAN_REQUIRED | Write ownership, plan digest, source shape, or product truth changed after preparation. | sdlc-create-plan after preserving active execution evidence |
-| TEST_DEFECT | Test expectation, fixture, harness, or assertion is wrong. | sdlc-tdd |
+| TEST_DEFECT | Test expectation, fixture, harness, or assertion is wrong. | sdlc-tdd; active unmerged work uses guarded test_revision |
 | IMPLEMENTATION_DEFECT | Production code violates an accepted invariant inside an existing implementation boundary. | active task: sdlc-implement-plan; integrated failed or completed waves: corrective sdlc-create-plan |
 | INTEGRATION_CONFLICT | Ordered worker integration cannot merge or its recorded ancestry/result identity is invalid. | sdlc-implement-plan; do not rewrite worker history |
 | CLEANUP_BLOCKED | A worker or integration resource cannot be proven clean, reachable, and registered for non-force removal. | owning execution phase or human input |
@@ -24,7 +24,7 @@ can fix the cause.
 | UAT_DEFECT | Cross-feature or product-level acceptance fails. | classify to responsible phase |
 | DOCUMENTATION_DRIFT | Project-facing documentation, examples, changelog, or requirement/design traceability no longer matches the accepted implementation and evidence. | sdlc-update-documents, then align before sealing; sealed/promoted/completed execution starts a corrective run through sdlc-create-plan |
 | PR_HEAD_DRIFT | The local, remote, promoted, reviewed, or authorized PR head identities disagree after promotion. | stop without push/overwrite/merge and require human ownership input before sdlc-start |
-| ENVIRONMENT_DEFECT | Tooling, dependency, auth, service, or local environment blocks proof. | active implementation: counted existing-task recovery; completed waves: unchanged gate recovery; otherwise stop for setup or human input |
+| ENVIRONMENT_DEFECT | Tooling, dependency, auth, service, or local environment blocks proof. | active implementation: counted existing-task recovery; deferred acceptance: counted same-tree retry; completed waves: unchanged gate recovery; otherwise stop for setup or human input |
 | POLICY_BLOCK | Safety policy, branch policy, hook, or explicit guardrail blocks action. | human input or safer workflow |
 | HUMAN_INPUT_REQUIRED | A product, priority, credential, access, or approval decision is human-owned. | stop and ask |
 | UNKNOWN_DEFECT | Evidence is insufficient, missing, contradictory, or unresolved. | stop with exact missing evidence; never infer design |
@@ -42,6 +42,13 @@ locked plan, integration checkout or basis. A candidate formatting failure is
 not positive evidence of an architectural `DESIGN_DEFECT`; its stricter gate
 and canonical publication ownership remain unchanged. Other lifecycles retain
 their existing validation route, and uncertain causes still require diagnosis.
+
+The canonical `diagnosis-v3` result `plan_defect` maps to `PLAN_DEFECT`.
+Require the full causal chain, bounded plan target, counterfactual, affected
+files, evidence and original oracle with proven or high-confidence support.
+For an integrated command failure, counted localized admission authorizes the
+existing failed-wave transition and reviewed plan revision. It does not
+authorize rewriting tests, acceptance criteria or failed producer receipts.
 
 The canonical `diagnosis-v3` result `validation_defect` maps to
 `VALIDATION_DEFECT`, including the required diagnosis after a failed direct
@@ -67,10 +74,20 @@ in-scope remedy and new evidence/hypothesis, then consume a counted localized
 repair dispatch before authorizing the shared fresh-worker recovery. Preserve
 the blocked receipt and observe termination and runtime release. Rerun the
 original failed operation through an authorized mechanism, complete the
-assignment's validation and normal task/wave completion, then record the actual
-remediation result. Success requires the existing downstream revalidation
+assignment's validation and normal task completion, then record the actual
+remediation result before completing an interrupted parent's corrective wave. Success requires the existing downstream revalidation
 cursor; it does not erase failure history or grant permission. Other active
-phases, policy/human blockers and later lifecycle boundaries gain no authority.
+phases and policy/human blockers gain no authority through that route.
+
+A deferred acceptance environment failure at `sdlc-implement-plan` or
+`sdlc-uat-tests`, outside `active_task`, may use `acceptance_retry_same_tree`.
+Bind `evidence_digests.task_acceptance` to the exact failed receipt or interrupted
+operation digest. A counted localized dispatch authorizes one new trial through
+`acceptance-resolve --repair-dispatch`; the acceptance owner consumes it, records
+actual active time and completes remediation. Preserve the failed trial and
+unchanged tree, criteria and checks. This route grants no environment permissions
+and cannot waive assertions or final UAT. Interrupted result publication can
+replay verified evidence without rerunning checks or charging another dispatch.
 
 After completed waves, an environment block may resolve through private
 `record-environment-recovery` only after its exact gate passes on the original
@@ -112,3 +129,7 @@ exact replay preserves current progress and counters. The new blocker keeps
 its own failure type, route and budget. Environment-only recovery still rejects
 unrelated pending invalidations. The last allowed dispatch may finish its
 revalidation; another dispatch and over-limit state remain blocked.
+
+Owner-issued [pre-effect input correction](input-correction.md) precedes this
+taxonomy only for the bounded admissible structural lane. Exhaustion, missing
+criteria, semantic changes and executed failures use the table unchanged.

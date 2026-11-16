@@ -299,6 +299,7 @@ class ControllerSnapshot:
     transfer_intent: TransferIntent | None = None
     transfer_effect_started: bool = False
     apply_owner_adoption: bool = False
+    transfer_completion_recorded: bool = False
     transfer_inhibited: bool = False
     standby_replacement_inhibited: bool = False
     tunnel_recovery_remaining: float | None = None
@@ -787,7 +788,7 @@ class VMHAController:
             return self._block_or_disable(cloud_reasons, snapshot, checkpoint)
 
         local_owns = snapshot.cloud.local_attachment_exact(snapshot.local_node_id)
-        if local_owns and snapshot.apply_owner_adoption:
+        if local_owns and (snapshot.apply_owner_adoption or snapshot.transfer_completion_recorded):
             checkpoint = replace(
                 checkpoint,
                 established_ownership_context=snapshot.ownership_context,

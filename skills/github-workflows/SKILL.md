@@ -54,6 +54,18 @@ files. Return candidate path, mode, provenance, and validation requirements.
 - Translating a `container` build, platform, SBOM, provenance, vulnerability,
   and verification contract into GitHub Actions YAML.
 
+## Enrolled automation profile
+
+A repository may enroll a credential-separated Actions controller using
+`.github/ai-automation.json` and `automation_required` in its merge policy.
+Use the `skills-merge-pr-automation` and `merge-completion-automation` templates
+under `assets/protected-merge/` for its broker and completion owner;
+keep the generic broker template for un-enrolled repositories. Candidate CI must
+bind the tested head/base/tree separately from the default-ref workflow revision.
+Explicit dispatch restores CI after built-in-token writes. Release builders use
+`workflow_call` with read-only contents; a separate coordinator owns tags and assets.
+Never place cloud or inference credentials in candidate build/test jobs.
+
 ## Workflow
 
 1. Identify the workflow category.

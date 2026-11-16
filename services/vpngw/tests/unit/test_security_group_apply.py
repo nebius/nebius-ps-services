@@ -100,17 +100,13 @@ def cloud(monkeypatch):
     service = NS(
         get=lambda request, **kw: NS(wait=lambda: clone_nebius_sdk_message(state.instance)),
         update=update,
-    )
-    monkeypatch.setattr(compute, "InstanceServiceClient", lambda _: service)
-    import nebius.api.nebius.common.v1 as common
-
-    monkeypatch.setattr(
-        common,
-        "OperationServiceClient",
-        lambda _: NS(
-            get=lambda request, **kw: NS(wait=lambda: next(iter(state.operations.values())))
+        operation_service=lambda: NS(
+            get=lambda request, **kw: NS(
+                wait=lambda: next(op for op in state.operations.values() if op.id == request.id)
+            )
         ),
     )
+    monkeypatch.setattr(compute, "InstanceServiceClient", lambda _: service)
     manager = NS(
         project_id="project-a",
         _get_client=lambda: object(),
@@ -425,14 +421,8 @@ def test_ha_attachment_preserves_owner_and_resumes_nonowner_first(
     def identity(_ssh, _target, cfg, _local):
         if drift_at_release:
             resumed_reads[cfg.hostname] = resumed_reads.get(cfg.hostname, 0) + 1
-        drift_name = (
-            "gateway-a-0" if failure_mode == "release-owner-read-drift" else "gateway-a-1"
-        )
-        drift = (
-            drift_at_release
-            and cfg.hostname == drift_name
-            and resumed_reads[cfg.hostname] == 2
-        )
+        drift_name = "gateway-a-0" if failure_mode == "release-owner-read-drift" else "gateway-a-1"
+        drift = drift_at_release and cfg.hostname == drift_name and resumed_reads[cfg.hostname] == 2
         return {
             "boot": cfg.hostname + guest["boot_suffix"],
             "config": "e" * 64 if drift else guest["config"],

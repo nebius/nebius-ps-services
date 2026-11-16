@@ -1,3 +1,6 @@
+import json
+import subprocess
+import sys
 from types import SimpleNamespace as NS
 
 import pytest
@@ -8,6 +11,7 @@ from nebius_vpngw.deploy.ordinary_route_ownership import RouteJournal, labels, o
 from nebius_vpngw.deploy.ordinary_route_plan import request_record
 from nebius_vpngw.deploy.replacement_cloud import Cloud, message_digest
 from nebius_vpngw.deploy.vm_ha_cloud import clone_nebius_sdk_message
+from nebius_vpngw.handoff_bootstrap import streamed_source
 
 
 @pytest.fixture
@@ -102,6 +106,52 @@ def test_successful_creation_and_exact_readback_are_both_required(route_case):
     assert owned(state.route, journal.inventory(), project="project", gateway="gateway")
     assert state.effects == 1
     assert journal.path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("settled", [False, True])
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_streamed_admission_validates_saved_route_plan_without_installed_package(
+    route_case, settled, corrupt
+):
+    journal, request, plan, state, create = route_case
+    with journal:
+        journal.begin(plan, approval="a" * 64)
+        if settled:
+            cloud = Cloud(object(), journal)
+            cloud.mutate("create", request, create)
+            journal.created(cloud, "create", state.route, index=0)
+    value = journal.snapshot()
+    if corrupt:
+        if settled:
+            operation = next(iter(value["transaction"]["operations"].values()))
+            operation["request_sha256"] = "0" * 64
+        else:
+            value["transaction"]["intent"]["gateway"] = "another-gateway"
+    source = (
+        streamed_source()
+        + f"""
+import json
+from nebius_vpngw.deploy.ordinary_route_ownership import RouteJournal
+value = json.loads({json.dumps(value)!r})
+try:
+    RouteJournal('project', 'gateway').validate(value)
+except ValueError:
+    assert {corrupt!r}, 'valid route evidence was rejected'
+else:
+    assert not {corrupt!r}, 'changed route authority was accepted'
+print('validated')
+"""
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", "-"],
+        input=source,
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "validated"
 
 
 @pytest.mark.parametrize("point", ["accepted-response", "before-ledger"])

@@ -3,7 +3,7 @@ from types import SimpleNamespace as NS
 
 import pytest
 from nebius.api.nebius.compute import v1 as compute
-from test_ordinary_apply import empty_routes
+from test_ordinary_apply import empty_routes, planning_result
 from test_ordinary_apply import release_wheel as release_wheel
 from test_provisioning_execute import bootstrap, cloud_fixture
 from test_provisioning_journal import plan as resource_plan
@@ -80,7 +80,7 @@ def scope(tmp_path, monkeypatch, release_wheel):
         current = deepcopy(observed)
         if request["manifest"].get("command_approval"):
             current["runtime_plan"] = request["manifest"]["runtime_plan"]
-        return {"observation": current}
+        return planning_result(current)
 
     monkeypatch.setattr(ordinary_apply, "remote", remote)
     ssh = NS(_build_wheel=lambda **kw: release_wheel, _find_project_root=lambda: None)
@@ -126,6 +126,7 @@ def healthy(scope, manifest):
         agent_state="active",
         config_sha256=manifest["config_sha256"],
         dependencies=manifest["expected_dependencies"],
+        requirements=manifest["expected_requirements"],
         assets={path: value["sha256"] for path, value in manifest["assets"].items()},
         asset_modes={path: [value["mode"], 0, 0] for path, value in manifest["assets"].items()},
         runtime_pending=None,
@@ -228,3 +229,77 @@ def test_selected_or_completed_guest_rejects_unexplained_drift(scope, monkeypatc
     with pytest.raises(RuntimeError):
         prepare(scope)
     assert before == (scope.journal.path.read_bytes() if scope.journal.path.exists() else None)
+
+
+def prior_creation(scope, *, phase="complete", same_creation=False):
+    prepared = prepare(scope)
+    prepared.close()
+    with scope.journal:
+        selected = scope.journal.state["transaction"]
+        selected["phase"] = phase
+        selected["authority"]["execution"] = "e" * 32
+        if not same_creation:
+            selected["authority"]["creation"] = "f" * 64
+        # The successor must resolve its own closure, not restore this completed one.
+        selected["manifest"]["expected_dependencies"]["unrelated-old-package"] = "1.0"
+        scope.journal.save()
+    scope.inspected.clear()
+    return scope.journal.path.read_bytes()
+
+
+def test_new_creation_archives_completed_guest_only_after_clean_inspection(scope):
+    previous = prior_creation(scope)
+    prepared = prepare(scope)
+    try:
+        assert "unrelated-old-package" not in prepared.manifest["expected_dependencies"]
+        assert scope.inspected and all(
+            not call["manifest"].get("command_approval") for call in scope.inspected
+        )
+        current = scope.journal.snapshot()["transaction"]
+        assert current["phase"] == "selected"
+        assert (
+            current["authority"]["execution"] == scope.command.state["transaction"]["execution_id"]
+        )
+        archived = list((scope.journal.root / "history").glob("*.json"))
+        assert len(archived) == 1 and archived[0].read_bytes() == previous
+    finally:
+        prepared.close()
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "pending",
+        "same-creation",
+        "same-execution",
+        "bootstrap",
+        "configured",
+        "operation",
+        "completion",
+    ],
+)
+def test_prior_guest_selection_is_preserved_without_new_clean_creation(scope, damage):
+    previous = prior_creation(
+        scope,
+        phase="selected" if damage == "pending" else "complete",
+        same_creation=damage == "same-creation",
+    )
+    if damage == "same-execution":
+        with scope.journal:
+            scope.journal.state["transaction"]["authority"]["execution"] = scope.command.state[
+                "transaction"
+            ]["execution_id"]
+            scope.journal.save()
+        previous = scope.journal.path.read_bytes()
+    elif damage == "bootstrap":
+        scope.cloud["compute-created"].spec.cloud_init_user_data = "foreign"
+    elif damage == "configured":
+        scope.observed["config_sha256"] = "a" * 64
+    elif damage == "operation":
+        scope.observed["operation"] = {"recoverable": True, "id": "foreign"}
+    elif damage == "completion":
+        scope.observed["runtime_completion"] = {"manifest": "foreign"}
+    with pytest.raises(RuntimeError):
+        prepare(scope)
+    assert scope.journal.path.read_bytes() == previous
+    assert not (scope.journal.root / "history").exists()

@@ -21,7 +21,7 @@ from nebius_vpngw.vm_ha_credentials import (
     VMHACredentialSet,
     read_vm_ha_credential_source,
 )
-from nebius_vpngw.vpngw_sa import ServiceAccountTokenIdentity
+from nebius_vpngw.vpngw_sa import ServiceAccountIdentity
 
 
 def test_completed_first_enrollment_recovers_same_key_without_expanding_iam(recovery, tmp_path):
@@ -118,7 +118,7 @@ def recovery(tmp_path, monkeypatch):
                 v["action"] == "reuse"
                 for v in options["reconciliation_plan"].approval_record().values()
             )
-            return ServiceAccountTokenIdentity("test-token", "service-account-a", name)
+            return ServiceAccountIdentity("service-account-a", name)
 
         return managed.ensure_managed_vm_ha_credentials(
             plan,
@@ -295,7 +295,7 @@ def test_transport_uses_pinned_connection_and_never_copies_secret_into_request(
     handoff = transport.Handoff("pinned", "transport", NS(hostname="gateway-a-0"), {})
     assert handoff.read_credential(s.value) == s.payload
     assert captured[0] == "pinned-connect"
-    assert json.loads(incoming.getvalue()) == s.value
+    assert json.loads(incoming.getvalue()) == {"binding": s.value, "repair": None}
     assert "private-key" not in incoming.getvalue()
     output.channel.recv_exit_status = lambda: 1
     with pytest.raises(RuntimeError, match="unavailable"):

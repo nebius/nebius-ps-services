@@ -540,6 +540,17 @@
         "Reviews explicit closing reference against issue-specific criteria.",
         "Preserves human text and stops for reconciliation."
       ]
+    },
+    {
+      "id": "enrolled-merge-authority",
+      "prompt": "Offline contract simulation only; no external calls or mutations. Use $merge-pr for an enrolled repository while its runner is already processing the same PR.",
+      "expected_output": "Uses one hosted merge authority.",
+      "files": [],
+      "assertions": [
+        "Uses the enrollment client and shared controller; no local merge call or competing attestation.",
+        "Lifetime waiver never substitutes for CI, exact-head evidence or branch protection.",
+        "Reports unavailable qualification without bypassing protection."
+      ]
     }
   ]
 }

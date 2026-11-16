@@ -15,6 +15,72 @@ def ledger(tmp_path):
     return value
 
 
+@pytest.mark.parametrize("lifecycle_approval", ["a" * 64, "d" * 64, None])
+@pytest.mark.parametrize("artifact_changed", [False, True])
+def test_cli_handoff_resume_preserves_lifecycle_approval(
+    tmp_path, lifecycle_approval, artifact_changed
+):
+    """Use the CLI's actual handoff argument and the real saved request guard."""
+    import ast
+    from pathlib import Path
+
+    from nebius_vpngw import cli
+    from nebius_vpngw.deploy.ordinary_handoff import PackageJob
+
+    host = "gateway-0"
+    instance = NS(hostname=host)
+    request = {"action": "reserve", "approval": "a" * 64,
+               "artifact": "b" * 64, "package": {"host": host},
+               "observed": {"mode": "ordinary"}}
+    scope = (tmp_path / "command", "c" * 32, "e" * 64)
+    token = reservations.SCOPE.set(scope)
+    try:
+        original = PackageJob(None, "203.0.113.10", instance, {}).bind(request)
+        saved = reservations.read(*scope, host)
+        path = reservations.path_for(scope[0], scope[1], host)
+        before = path.read_bytes()
+        calls = [node for node in ast.walk(ast.parse(Path(cli.__file__).read_text()))
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                 and isinstance(node.func.value, ast.Name)
+                 and node.func.value.id == "ordinary_handoff" and node.func.attr == "reserve"]
+        assert len(calls) == 1
+        argument = next(k.value for k in calls[0].keywords if k.arg == "approval")
+        namespace = {
+            "package_reservation": reservations,
+            "package_reservations": {host: saved}, "instance": instance,
+            "ha_predecessor": None, "migration_plan_digest": "f" * 64,
+            "lifecycle_state": NS(transaction=NS(approval_digest=lifecycle_approval))
+            if lifecycle_approval else None,
+        }
+
+        def reattach():
+            approval = eval(compile(ast.Expression(argument), cli.__file__, "eval"), namespace)
+            replay = {**request, "approval": approval}
+            if artifact_changed:
+                replay["artifact"] = "9" * 64
+            return PackageJob(None, "203.0.113.10", instance, {}).bind(replay)
+
+        if lifecycle_approval == request["approval"] and not artifact_changed:
+            assert reattach() == original
+        else:
+            with pytest.raises(RuntimeError, match="reservation"):
+                reattach()
+        assert path.read_bytes() == before
+    finally:
+        reservations.SCOPE.reset(token)
+
+
+def test_handoff_approval_requires_original_takeover_or_new_unreserved_intent():
+    assert reservations.handoff_approval(
+        None, proposed="a" * 64, lifecycle_approval="b" * 64
+    ) == "a" * 64
+    with pytest.raises(RuntimeError, match="reservation"):
+        reservations.handoff_approval(
+            {"request": {"action": "prepare-guarded", "approval": "b" * 64}},
+            proposed="a" * 64, lifecycle_approval="b" * 64,
+        )
+
+
 def test_prepared_observation_uses_admitted_phase_after_permitted_peer_transition(tmp_path):
     value = ledger(tmp_path)
     value.initial("packages", state="started")

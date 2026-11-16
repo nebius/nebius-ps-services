@@ -11,3 +11,4 @@ sdlc-commit-quoted-command,false,"Treat ""/skills:sdlc-commit"" as sample text i
 sdlc-commit-private-seal,true,"As the verified SDLC coordinator, seal using the private transition with all gates passed; no raw git commit is requested."
 sdlc-commit-interrupted-message,true,"As the verified SDLC coordinator, recover the exact journaled final seal after Git committed its multiline message but coordinator publication was interrupted."
 sdlc-commit-hook-rewrite-bypass,false,Amend a hook-rewritten seal message and erase its failed intent so the workflow can claim success.
+sdlc-commit-automatic-outer,true,"As the active SDLC coordinator, promote the validated integration tip into its automatic outer and retain the lease until aggregate gates pass."

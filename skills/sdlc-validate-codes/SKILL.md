@@ -77,13 +77,13 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 
 ## Required Reads
 
-- `../worktree/references/document-delivery.md` for source coverage, phase/slice
-  identities, shared-skill caller contracts and protected completion policy.
-
-- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
-  assignment/ownership and evidence to the current immutable execution basis.
-  Before preparation, bind evidence to the accepted objective and applicable
-  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+- `../worktree/references/workflow-invariants.md` for shared ownership,
+  evidence, failure and conditional-read rules.
+- Read `../worktree/references/workflow-contract.md` before this phase performs
+  execution planning, reconciliation or any execution lifecycle operation.
+- Read `../worktree/references/document-delivery.md` when accepted inputs include
+  a source manifest/program, this phase handles SLICE/source coverage or phase
+  barriers, or it handles delivery admission, phase exit or protected completion.
 
 - Project config, package manager files, build files, linter and type checker config.
 - Changed source files.
@@ -109,6 +109,19 @@ passed a review-only implementation-quality gate before deeper behavior tests.
   directory, branch, exact recorded HEAD, and cleanliness. Bind all commands,
   review scope, and evidence to that SHA; do not validate the stale project
   checkout.
+- For whole-feature checks, use the private `validate-candidate` producer with
+  `--run-dir` and `--execution`; it runs the frozen combined checks on the current
+  clean candidate. `validate-target --wave` remains tied to that original wave.
+  If a reviewed nonmaterial paired publication left canonical docs dirty after
+  all waves completed, settle objective impact and the execution basis first.
+  Complete its counted remediation, then call private `checkpoint-authoring`
+  with the exact publication `--operation-id` and a concise `--message`, before
+  the first revalidation gate. Follow its returned command and working directory.
+  It commits only the canonical pair and leaves execution unsealed. Unrelated
+  dirt, material changes and already-started revalidation require their owners;
+  do not manually commit, rewrite wave receipts or reuse an old passing gate.
+- Preserve executable invocation paths, including virtualenv interpreter
+  symlinks. The validation producer separately hashes executable bytes.
 - Detect the project stack and reuse configured project commands.
 - Run the smallest reliable validation set first.
 - Include syntax, linting, type checking when configured, Python import checks when relevant, config validation, and feasible build checks.

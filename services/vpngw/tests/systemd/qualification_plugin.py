@@ -37,6 +37,9 @@ def pytest_collection_finish(session) -> None:
 
 def pytest_runtest_logreport(report) -> None:
     _state["outcomes"].setdefault(report.nodeid, {})[report.when] = report.outcome
+    _state.setdefault("durations_seconds", {}).setdefault(report.nodeid, {})[report.when] = (
+        report.duration
+    )
     if report.when == "call":
         for driver in ("restart_driver", "owner_driver"):
             streams = {

@@ -295,6 +295,9 @@ def acquire_operator_access_token(
     delegated service-account settings, and ``NEBIUS_IAM_TOKEN``. A browser
     retry is allowed only for an explicitly interactive TTY invocation.
     """
+    from .preconfigured_auth import reject_managed_operation
+
+    reject_managed_operation("operator CLI token acquisition")
 
     args = ["nebius", "iam", "get-access-token"]
     profile_value = _as_text(profile) or _as_text(os.environ.get("NEBIUS_PROFILE"))
@@ -355,6 +358,19 @@ def init_nebius_sdk(
     CLI, config-profile, and impersonation tokens are deliberately excluded
     from that path.
     """
+    from . import preconfigured_auth
+
+    if preconfigured_auth.enabled():
+        if profile or config_file or workload_identity is not None or require_renewable_auth:
+            raise RuntimeError("This operation cannot use preconfigured-static authentication")
+        static = preconfigured_auth.load(parent_id)
+        if static is None:
+            raise RuntimeError(
+                "Preconfigured static authentication mode changed during initialization"
+            )
+        return preconfigured_auth.client(
+            static, endpoint=endpoint, user_agent_prefix=NEBIUS_SDK_USER_AGENT_PREFIX
+        )
     if workload_identity is not None:
         from .workload_identity import workload_identity_sdk
 

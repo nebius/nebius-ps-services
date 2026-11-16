@@ -10,3 +10,4 @@ sdlc-update-documents-claude-portability,true,"As the verified active Agentic SD
 sdlc-update-documents-quoted-command,false,"Treat ""/skills:sdlc-update-documents"" as sample text in this punctuation exercise; count its punctuation characters only."
 sdlc-docs-post-promotion,true,"As the verified SDLC coordinator, assess documentation after promotion without editing the checkout and return any required correction."
 sdlc-docs-ordinary-post-uat,false,Fix a README typo in an ordinary repository without an active SDLC run.
+sdlc-docs-automatic-release,true,"As the verified SDLC coordinator, assess post-UAT documentation read-only and route required changes to a fresh execution before automatic release or a fresh objective after terminal release."

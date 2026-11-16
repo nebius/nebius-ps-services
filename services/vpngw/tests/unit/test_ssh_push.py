@@ -77,6 +77,8 @@ def _write_vm_ha_agent_wheel(
     include_module_entrypoint: bool = True,
     omit_service_asset: str | None = None,
     metadata_description: bytes = b"",
+    heartbeat_member: str | None = None,
+    heartbeat_fault: str | None = None,
 ) -> None:
     dist_info = "nebius_vpngw-1.2.3.dist-info"
     members = {
@@ -84,7 +86,7 @@ def _write_vm_ha_agent_wheel(
             f'STANDBY_RESTORATION_CAPABILITY = "{restoration_capability}"\n'
         ).encode(),
         "nebius_vpngw/agent/vm_ha/inhibition.py": (
-            b'LIVE_PEER_REPLACEMENT_CAPABILITY = "vm-ha-live-peer-replacement-v4"\n'
+            b'LIVE_PEER_REPLACEMENT_CAPABILITY = "vm-ha-live-peer-replacement-v5"\n'
         ),
         f"{dist_info}/METADATA": b"Metadata-Version: 2.4\nName: nebius-vpngw\nVersion: 1.2.3\n",
         f"{dist_info}/WHEEL": (b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"),
@@ -102,6 +104,8 @@ def _write_vm_ha_agent_wheel(
         "agent/strongswan_renderer.py",
         "agent/vm_ha/runtime.py",
         "agent/vm_ha/models.py",
+        "agent/vm_ha/heartbeat.py",
+        "agent/vm_ha/evidence.py",
         "schema.py",
         "config_loader.py",
         "agent/firewall_manager.py",
@@ -146,6 +150,12 @@ def _write_vm_ha_agent_wheel(
             )
     if include_agent_main and not dead_capability_handler and include_module_entrypoint:
         members["nebius_vpngw/agent/main.py"] = (source_root / "agent/main.py").read_bytes()
+    if heartbeat_member is not None:
+        name = "nebius_vpngw/agent/vm_ha/" + heartbeat_member
+        if heartbeat_fault == "missing":
+            del members[name]
+        elif heartbeat_fault == "altered":
+            members[name] += b"\n# altered capability implementation\n"
     record_path = f"{dist_info}/RECORD"
     record_lines = []
     for name, payload in members.items():
@@ -763,7 +773,7 @@ class _ManagedMTLSClient:
                 {
                     "features": [
                         "managed-peer-ingress-v2",
-                        "vm-ha-live-peer-replacement-v4",
+                        "vm-ha-live-peer-replacement-v5",
                         "vm-ha-standby-restoration-v2",
                         "independent-heartbeat-v6",
                     ],
@@ -1101,6 +1111,18 @@ def test_vm_ha_agent_artifact_accepts_large_package_description(tmp_path) -> Non
     artifact.verify_current()
 
 
+@pytest.mark.parametrize("member", ["heartbeat.py", "evidence.py"])
+@pytest.mark.parametrize("fault", ["missing", "altered"])
+def test_vm_ha_agent_artifact_requires_exact_heartbeat_dependencies(tmp_path, member, fault):
+    wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
+    _write_vm_ha_agent_wheel(wheel, heartbeat_member=member, heartbeat_fault=fault)
+
+    with pytest.raises(VMHAAgentArtifactError) as error:
+        VMHAAgentArtifact.from_wheel(wheel, source="test")
+
+    assert error.value.problem is VMHAAgentArtifactProblem.INCOMPATIBLE
+
+
 def test_vm_ha_agent_artifact_retains_metadata_resource_bound(tmp_path) -> None:
     wheel = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
     _write_vm_ha_agent_wheel(wheel, metadata_description=b"x" * (1024 * 1024))
@@ -1285,6 +1307,31 @@ def test_vm_ha_mtls_action_uses_exact_ssh_and_validates_public_evidence(
     assert "--vm-ha-mtls-action status" in command
     encoded = shlex.split(command)[-1]
     assert json.loads(base64.b64decode(encoded, validate=True)) == {}
+    assert client.closed
+
+
+@pytest.mark.parametrize("stderr,expected", [
+    (b"managed mTLS action failed: managed mTLS state directory permissions are invalid\n", "managed-mtls-permissions"),
+    (b"managed mTLS action failed: managed mTLS state permissions are invalid\n", "managed-mtls-permissions"),
+    (b"managed mTLS action failed: managed mTLS identity directory permissions are invalid\n", "managed-mtls-permissions"),
+    (b"private-diagnostic", "managed-mtls-action-failed"),
+    (b"managed mTLS action failed: managed mTLS state permissions are invalid\nprivate-diagnostic", "managed-mtls-action-failed"),
+    (b"private-diagnostic" * 1000, "managed-mtls-action-failed"),
+])
+def test_vm_ha_mtls_failure_retains_only_bounded_known_cause(monkeypatch, stderr, expected):
+    from nebius_vpngw.deploy.apply_diagnostics import ManagedMTLSActionFailure, first_failure
+
+    client = _ManagedMTLSClient()
+    stream = BytesIO(stderr)
+    client.exec_command = lambda *_args, **_kwargs: (BytesIO(), _CommandStream(b"", 2), stream)
+    push = SSHPush(ssh_policy=object())  # type: ignore[arg-type]
+    push._paramiko = SimpleNamespace(SSHClient=lambda: client)
+    monkeypatch.setattr("nebius_vpngw.deploy.ssh_push.configure_paramiko_host_verification", lambda *a, **k: None)
+    with pytest.raises(ManagedMTLSActionFailure) as result:
+        push.run_vm_ha_mtls_action("203.0.113.10", "gateway-0", {"gateway_group": {"vm_spec": {}}}, action="prepare", request={})
+    assert first_failure(result.value).predicate == expected
+    assert "private-diagnostic" not in str(result.value)
+    assert stream.tell() == min(len(stderr), 4097)
     assert client.closed
 
 
@@ -1516,7 +1563,7 @@ def test_vm_ha_apply_lock_is_exact_atomic_and_cleared_only_by_receipt(tmp_path) 
     assert install_client.closed and clear_client.closed
 
 
-@pytest.mark.parametrize("corrective", [False, True])
+@pytest.mark.parametrize("corrective", [False, True, "record"])
 def test_vm_ha_apply_owner_adoption_is_bound_to_the_exact_lock(tmp_path, corrective) -> None:
     manifest, binding, _sources = _credential_stage_fixture(tmp_path)
     client = _ApplyLockClient()
@@ -1537,7 +1584,11 @@ def test_vm_ha_apply_owner_adoption_is_bound_to_the_exact_lock(tmp_path, correct
             {},
             runtime_binding=binding,
             lock_receipt=lock_receipt,
-            **({"predecessor_operation_id": "f" * 64} if corrective else {}),
+            **(
+                {"predecessor_record_sha256": "8" * 64}
+                if corrective == "record"
+                else {"predecessor_operation_id": "f" * 64} if corrective else {}
+            ),
         )
 
     payload = json.loads(client.writes[-1])
@@ -1566,7 +1617,10 @@ def test_vm_ha_apply_owner_adoption_is_bound_to_the_exact_lock(tmp_path, correct
     assert action.index("apply.lock") < action.index("apply-owner-adoption.json.new")
     assert action.index("apply-owner-adoption.json.new") < action.index("sudo mv")
     assert action.count(receipt.record_sha256) == 2
-    if corrective:
+    if corrective == "record":
+        assert "8" * 64 in action
+        assert "archive_apply_owner_adoption(*sys.argv[1:])" in action
+    elif corrective:
         from nebius_vpngw.apply_lock import encode
 
         previous = {**payload, "operation_id": "f" * 64}
@@ -1875,7 +1929,7 @@ class _RemovalPhaseClient(_DeactivationClient):
                 {
                     "schema": "nebius-vpngw.agent-capabilities.v1",
                     "features": [
-                        "vm-ha-live-peer-replacement-v4",
+                        "vm-ha-live-peer-replacement-v5",
                         "vm-ha-standby-replacement-inhibition-v2",
                     ],
                 }
@@ -1890,7 +1944,7 @@ class _RemovalPhaseClient(_DeactivationClient):
         elif "--vm-ha-standby-replacement-ready" in command:
             schema = "nebius-vpngw/vm-ha-standby-replacement-quiescent-v1"
         elif "--vm-ha-standby-replacement-peer-binding" in command:
-            schema = "vm-ha-live-peer-replacement-v4"
+            schema = "vm-ha-live-peer-replacement-v5"
         elif "--vm-ha-standby-replacement-release" in command:
             schema = "nebius-vpngw/vm-ha-standby-replacement-release-v1"
         else:

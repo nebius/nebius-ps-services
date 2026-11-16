@@ -30,32 +30,28 @@ The selection order is:
 6. Record compatibility edges, failure modes, owners, switch conditions, and
    immutable release identity.
 
-Use **deterministic where possible, agentic where necessary**. Portable Python
-direct-call behavior uses either Pydantic AI's low-level direct model API for
-`ModelResponse` control or a no-tools, single-request `Agent` when typed output
-parsing, validation retries, or typed dependencies are required. The primitive
-does not change the control-flow classification. An intentionally
-provider-specific task may use its official provider API. Known sequences and
-code-owned continuation conditions remain ordinary application workflows with
-explicit model calls. Portable Python agents across supported providers use
-Pydantic AI `Agent` by default. Pydantic AI capabilities or Harness are
-conditional specialist layers; provider-native agent SDKs are separate
-evaluated runtime escapes for named harness requirements.
+Use **deterministic where possible, agentic where necessary**. Direct calls
+use the selected provider's task API or an existing qualified adapter; ordinary
+code owns known workflows. For genuine agents, prefer **OpenAI Agents SDK**
+unless the user explicitly overrides it or an accepted fixed project stack
+already applies. A failed hard gate blocks selection and calls for an explicit
+override, rather than a silent framework switch.
 
-The application owns a logical runtime facade, canonical state, model-routing
-governance, tools, authorization, budgets, telemetry, and evaluation. Pydantic
-AI owns portable provider translation and the model/tool interaction loop. The
-facade may remain in-process, and optional databases, gateways, queues, durable
-engines, and multi-agent topologies still need workload triggers.
+The preference does not mandate OpenAI models or hosted execution. Qualify the
+exact SDK, provider adapter, endpoint, model and capabilities. Pydantic AI and
+other frameworks remain valid explicit alternatives. Keep one primary loop;
+do not nest agent kernels or duplicate SDK provider abstractions without a
+real cross-runtime requirement.
 
-Engineering work is a separate specialist lane: use the Codex SDK for
-coding-focused threads and add Codex app-server only for a deep embedded client
-that needs authentication, conversation history, approvals, or streamed agent
-events. LangGraph remains conditional on explicit graph semantics, while one
-selected qualified workflow engine owns durable cross-service execution;
-either may wrap deterministic or agentic work. A full internal model-provider
-abstraction is justified only by a proven non-Pydantic or cross-runtime
-consumer.
+Application code owns policy, tools, canonical state, budgets, recovery and
+independent outcome verification. The SDK owns its supported loop. The facade
+can stay in-process, and optional infrastructure requires a named trigger.
+Use Codex SDK for a coding-harness requirement. Graphs and durable workflows
+remain independent choices; select one qualified durability owner when needed.
+
+The integration guidance covers approval drift, SDK state versus checkpoints,
+unknown effects, tool/helper admission, bounded concurrency, streaming
+completion, trace export and upgrade qualification.
 
 ## Files
 
@@ -63,6 +59,7 @@ consumer.
   contract.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 - `evals/trigger-prompts.csv`: canonical positive and near-miss trigger cases.
+- `evals/evals.json`: executable quality scenarios and observable assertions.
 - `evals/quality-cases.md`: supplemental output-quality and routing scenarios.
 - `references/workload-contracts.md`: workload-specific decision inputs.
 - `references/selection-framework.md`: hard gates, evidence rules, and decision
@@ -71,8 +68,10 @@ consumer.
   switch conditions.
 - `references/agent-application-stack.md`: agent frameworks, state, durability,
   tools, and UI.
-- `references/provider-agnostic-agent-platform.md`: Pydantic AI-first portable
-  runtime, platform ownership, routing, tools, specialists, and native escapes.
+- `references/provider-agnostic-agent-platform.md`: SDK-first application
+  boundary, platform ownership, routing, tools, state and specialists.
+- `references/openai-agents-sdk-integration.md`: preferred SDK integration and
+  public source evidence, with separate application safeguards.
 - `references/model-provider-contract.md`: semantic provider portability.
 - `references/mcp-core-conformance.md`: MCP core and conformance profile.
 - `references/mcp-apps-tasks-gateway.md`: MCP extensions and gateway boundaries.

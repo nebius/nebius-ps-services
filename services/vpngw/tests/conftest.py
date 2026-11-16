@@ -37,6 +37,7 @@ def runtime_migration_guest(monkeypatch, tmp_path):
     monkeypatch.setattr(migration, "packages", lambda: packages)
     monkeypatch.setattr(migration, "unit_policy", lambda: {})
     monkeypatch.setattr(migration, "policy_snapshot", lambda: None)
+    monkeypatch.setattr(migration, "policy_payload", lambda: None)
     monkeypatch.setattr(migration, "plan", lambda parent=None: approved)
     monkeypatch.setattr(migration, "native", lambda: {"ready": True})
 

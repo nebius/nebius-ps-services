@@ -69,13 +69,12 @@ Seal and promote one completed feature locally without pushing.
 
 ## Required Reads
 
-- `../worktree/references/document-delivery.md` for source coverage, phase/slice
-  identities, shared-skill caller contracts and protected completion policy.
-
-- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
-  assignment/ownership and evidence to the current immutable execution basis.
-  Before preparation, bind evidence to the accepted objective and applicable
-  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+- `../worktree/references/workflow-invariants.md` for shared ownership,
+  evidence, failure and conditional-read rules.
+- `../worktree/references/workflow-contract.md` for execution lifecycle operations.
+- Read `../worktree/references/document-delivery.md` when accepted inputs include
+  a source manifest/program, this phase handles SLICE/source coverage or phase
+  barriers, or it handles delivery admission, phase exit or protected completion.
 
 - Git status and current branch.
 - Feature design and requirement IDs.
@@ -102,6 +101,10 @@ Seal and promote one completed feature locally without pushing.
    reachable, no worker cleanup is retained, and validation, tests, evaluation,
    documentation, and spec-alignment evidence all refer to the current
    integration lineage.
+   An earlier canonical authoring checkpoint is only a validation candidate;
+   it does not satisfy this phase. Its fresh candidate validation must pass, and
+   every required repair gate must precede final sealing/promotion. Keep those
+   checkpoints and the original wave receipts intact.
 2. Verify the integration worktree identity and that its HEAD equals the
    coordinator's recorded tip. Verify private run state is outside the repo and
    no secret is staged.
@@ -129,12 +132,13 @@ Seal and promote one completed feature locally without pushing.
    integration worktree and branch. Advance any repair revalidation cursor
    with that evidence, then move state to `committed`.
 
-This phase never performs the outer managed-child merge. After final
-alignment, UAT, and documentation release the outer lease, `sdlc-start` returns
-the recorded primary path plus the exact `$worktree integrate <generated-name>`
-command and stops for a fresh explicit user invocation from that primary
-checkout. It records the exact source merge proof only after that separate
-action.
+This phase promotes only the inner execution. For an automatic outer,
+`sdlc-start` retains the lease through separate aggregate acceptance, exact
+source promotion and cleanup using `automatic-projects.md`. For a manually
+supplied outer, final alignment, UAT and documentation permit lease release;
+`sdlc-start` then returns the primary path and `$worktree integrate <generated-name>`
+for the existing explicit external integration owner. Never turn inner promotion
+or lease release into unobserved source-integration proof.
 
 `permissions/commit-authorization.json` remains the guard for an explicitly
 operator-visible raw `git commit`. Normal Agentic SDLC sealing and promotion use

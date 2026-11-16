@@ -12,12 +12,41 @@ Required safe teardown and lease release remain allowed. The owning coordinator
 classifies and authorizes recovery or replanning; workers cannot relabel failures
 or erase them with a later successful check.
 
+Typed design/test revision releases exact terminated worker slots. After the
+revision is sealed and replanned, the shared owner archives failed candidate
+bytes and Git history before retiring their owned checkouts and releasing
+physical capacity. [Archive verification and interrupted retirement](references/revision-retirement.md)
+keep recovery evidence separate from admitted product work and acceptance.
+
+SDLC container acceptance keeps exact process and container cleanup under the
+shared owner. Physical-host memory monitoring belongs to the caller or its
+declared active outer monitor; sandboxed workers do not repeat unavailable host
+probes. The [task acceptance contract](references/task-acceptance.md) requires
+fresh visibility, continuous monitoring and exact cancellation on critical or
+unknown observations. A prelaunch failure remains distinct from a failed test.
+Exported source directories and inventory remain readable by the nonroot
+container while their enclosing host temporary directory stays private.
+
 Before actions with known access prerequisites, both worker envelopes direct
 agents to supported tools and native approval mechanisms. An approval request
 does not grant access, a denial remains a policy/authority stop, and an
 unexpected executed failure still requires the blocked handoff. Recovery uses
 the existing shared engine with a stopped predecessor, released runtime,
 unchanged assignment and fresh identity; it never grants permission itself.
+
+## Shared workflow reporting
+
+Shared worker observations bind the assignment, native session, attempt and
+heartbeat sequence to monotonic clock provenance. UTC is display information;
+clock loss or restart leaves incomparable ages unknown without terminating work.
+New task records use `workflow/execution-task-v4`; old records are preserved and
+rejected before effects.
+
+Implement and SDLC use the same observational statistics journal, architecture
+inventory and read-only projector. Initial reports precede specification bootstrap;
+current and immutable terminal reports retain measured facts and explicit gaps.
+Observed running workers remain separate from reserved slots. Delivery and cleanup
+require their own owner receipts. See the [reporting contract](references/statistics.md).
 
 ## Public Actions
 
@@ -27,7 +56,11 @@ $worktree integrate <exact-name> [--restart]
 $worktree remove <exact-name>
 ```
 
-Creation requires the complete primary checkout to be clean. It captures the
+Manual creation requires the complete primary checkout to be clean.
+Implement/SDLC automatic outers use [scoped admission](references/automatic-projects.md#scoped-automatic-admission):
+a clean project and committed shared inputs may start while unrelated siblings
+are dirty. Final original-branch promotion still requires the whole checkout clean.
+Creation captures the
 exact current local feature-branch SHA and uses:
 
 ```text
@@ -51,6 +84,11 @@ install the full catalog for workflows that call sibling skills.
 Codex and Claude are used independently. This lock coordinates callers within
 one selected installation; it does not provide cross-agent synchronization or
 workflow handoff.
+
+Sensitive-content screening recognizes unquoted dynamic calls and lookups with
+one trailing argument comma or statement semicolon. Credential-like literals,
+malformed or multi-value expressions, and neighboring sensitive assignments
+remain subject to the same screening before commit admission.
 
 Implement uses the shared private `prepare-specs` transition to allocate its
 integration checkout before initial specification publication. The following
@@ -79,6 +117,17 @@ owner-validated pair, journals the exact parent/tree, and safely resumes an
 interrupted commit. Fresh impact and replanning then create new assignments;
 old failures and worker artifacts remain historical evidence. See the
 [execution-plane recovery sequence](../sdlc-prepare-execution/references/execution-plane.md).
+The same typed revision owner supports classified active-task test defects via
+private `prepare-test-revision` and `seal-test-revision`. It freezes exact
+existing test files, requires a byte-bound semantic review, protects canonical
+specs and independent harnesses, and preserves the original TDD seal. Corrective
+planning creates new assignments and reruns invalidated gates; neither review
+nor fixture sealing proves product acceptance.
+Integrated plan-command repair uses diagnosed, counted authority and an
+immutable equivalence review. Corrective tasks run before untouched future
+work; a no-change proposal still requires independent acceptance. Failed
+receipts and every reviewed plan remain linked through successful resolution.
+Terminal cancellation retains unresolved integration without rewriting it.
 The shared plan parser preserves multiline task contracts and ownership lists,
 and rejects empty fields, duplicate fields and malformed task headings before
 preparation. Implement and SDLC consume this same parser.
@@ -86,10 +135,15 @@ preparation. Implement and SDLC consume this same parser.
 `--project` selects the returned starting directory; it is not a sparse
 checkout, branch argument, staging boundary, or changed-path restriction.
 
-Both execution coordinators use one five-minute startup window from arming to
-`task-start`, followed by the existing one-hour work limit. Prepare the handoff
-before arming and spawn immediately afterward. Repeated arming never renews time;
-new policy requires fresh assignments after prior writers are quiescent.
+Both coordinators use the shared [execution health](references/execution-health.md)
+contract: delayed startup and progress thresholds trigger observation without
+expiring healthy work. New policy requires fresh assignments after prior writers
+are quiescent. Prepare handoffs before arming and spawn immediately afterward.
+Validation and final delivery evaluators retain durable ownership while checks
+run outside coordinator locks. Incomplete output or unproven cleanup blocks
+receipt publication, retries and successor admission until reconciliation.
+Both verification runners bind result callbacks to the collected test identities,
+preserving case accounting when fixture setup changes test-object attributes.
 
 When `<task>` is omitted, `add` normalizes the resolved project directory's
 basename into the task slug. For example, invoking `$worktree` from `skills/`
@@ -235,10 +289,10 @@ evidence, terminal state or bindings. It cannot record missing proof. Implement
 retains its released-lease completion behavior; unmanaged completion is unchanged.
 Lease reconciliation may update metadata, and proof describes the observation
 time rather than fencing later external Git changes.
-Ownership-manifest schema v4
+Ownership-manifest schema v5
 records whether a nested lease is `active` or `released` plus its exact owner
 and token, so a missing lease record cannot silently unlock the outer lifecycle.
-Lease schema v4 retains ordered promotion heads and persists an exact
+Lease schema v5 retains ordered promotion heads and persists an exact
 `released` terminal receipt; replay is accepted only when owner, token,
 promoted head, clean outer checkout, and absent resources still agree.
 Integration and removal rebind the receipt to the exact manifest and live outer
@@ -261,12 +315,24 @@ in [workflow-contract.md](references/workflow-contract.md). Worker launch envelo
 strict native-result ingestion and immutable per-attempt receipts share this
 owner across parallel and sequential adapters. Blocked or replan results stop
 new dispatch while active peers drain; recovery preserves historical receipts.
+Launch prompts contain only the assigned task's executable checks and their
+Git-root working directory, read from its immutable basis and validated plan.
+Missing, changed or unsafe evidence blocks launch; a newer coordinator plan
+cannot replace historical task context. Independent acceptance still runs
+through its owner after worker termination.
 Accepted objectives,
 immutable bases, fresh task worktrees, slot refill, result admission and delivery
 share these Git lifecycle primitives. Execution bases also bind mandatory workflow
 references, supporting owner instructions, and the worker result schema, so
 contract drift is rejected before task dispatch. Obsolete persistent-lane state is rejected
 and retained without conversion or cleanup.
+Automatic aggregation checks frozen execution and validation fingerprints using
+the producer's canonical digest; current and historical reads both reject
+changed evidence. See the [automatic project contract](references/automatic-projects.md).
+Cancellation retains unfinished work and leases. After the Worktree owner removes
+an interrupted, unleased outer, cancellation reconciliation verifies exact
+resource and ownership-record absence before releasing the project claim and
+admission slot. Historical outer metadata alone cannot keep that slot occupied.
 
 Native worker output uses a provider-supported schema. Local result validation
 enforces status-dependent spec gaps and unique typed requirement/design IDs.
@@ -279,9 +345,12 @@ unknown field names, and invalid results remain `WORKER_FAILED`.
 Native `task-arm` and `authorize-recovery` validate the selected home, registered
 project/run, canonical assignment and current coordinator binding before
 admission. The shared launch envelope declares the project-state directory and,
-for runtime tasks or recovery, the shared runtime-lease directory. Both host
-adapters add these directories without changing sandbox mode or approval policy;
-the sequential adapter completes admission before spawning. Unavailable host
+for runtime tasks or recovery, the shared runtime-lease directory. Native adapters
+verify effective coverage, including inherited grants, without changing sandbox
+mode or approval policy. Explicit command cwd control satisfies the owner checks;
+a separate spawn cwd setter is unnecessary. Check these capabilities before
+arming. The sequential adapter adds the directories and completes admission
+before spawning. Unavailable host
 capability blocks launch. The owner prepares missing lease storage after checks.
 These grants include sibling project runs and shared lease records; helper
 ownership and write-claim checks enforce finer authority, not OS isolation
@@ -301,6 +370,19 @@ later assignments. The coordinator owns diagnosis after observed termination;
 blocked evidence never enters task completion, admission or integration. Workers
 must report unperformed checks honestly instead of inventing a specification gap.
 
+SDLC blocked-worker recovery now enforces the classified, counted repair at both
+authorization and ownership transfer. Its v2 authorization binds the exact
+blocked receipt, dispatch, integration commit and current fingerprints. Stale,
+unclassified and completed repairs cannot transfer ownership. Runtime consumers
+can observe this authority after transfer through the read-only recovery owner,
+which rechecks the current counted repair, exact fresh worker and prior
+termination without changing the phase, task or lease. Ordinary Implement
+and interrupted workers without results retain their existing recovery contracts;
+see the [shared contract](references/workflow-contract.md) for evidence fields
+and permitted routes. Worker prompts also require discovering existing project
+instruction files before reading them; absent optional instructions are not
+required artifacts.
+
 Push and PR guards classify the primary and every linked checkout against Git
 metadata, ownership manifests, integration reservations, and nested lease
 resources.
@@ -316,3 +398,31 @@ cherry-picks.
 The shared [worker wave contract](references/worker-waves.md)
 freezes worker/wave/physical-worktree limits, admits independently verified
 no-change results, and requires producer-owned combined-wave validation receipts.
+
+SDLC readiness, pre-effect correction and diagnostic helpers use the existing
+coordinator and shared capacity owner. Result launch contracts include a read-only
+`check-result` argv and canonical schema. Status includes bounded inclusive stage
+timing and idle reasons; these do not establish native overlap or a speedup.
+
+Shared [invariants](references/workflow-invariants.md) keep ownership and evidence
+rules available to every SDLC phase; detailed execution and delivery contracts
+load when their operations require them. Statistics index loaded history and
+reuse each source within one observation, then recheck coherence. No authority
+cache crosses transitions, Git effects or input archival.
+
+Readiness accepts up to 256 distinct input files and visits at most 4096 entries
+before failing without truncation. Directories consume only the traversal bound;
+unrelated entries in the plan directory also count toward that bound. Symlinks
+and special selected inputs are rejected. The classifier captures exact current
+blocked-worker bindings before repair, including checkpoint identity and every
+fingerprint key; stale recapture cannot rebind an existing receipt.
+
+`evals/benchmark_workflow_overhead.py` compares complete frozen catalogs with
+seven randomized pairs, untimed fixture setup/warmup and output-equivalence
+checks. Keep its generated JSON outside the skill. Its local helper measurements
+do not establish native activation or total implementation speed.
+
+Execution Git commands, including commit hooks and byte-exact seal-message
+plumbing, use the shared bounded process owner without a duration deadline.
+Ordinary hook descendants must be quiescent before returning or initiating Git
+recovery. Tool counters include these observed execution commands.

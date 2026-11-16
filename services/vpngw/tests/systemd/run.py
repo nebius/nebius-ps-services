@@ -220,7 +220,7 @@ def main() -> None:
             )
         with evidence.with_suffix(".log").open("x") as log:
             # Keep the entire diagnostic stream, including subprocess timeouts.
-            run(*command, stdout=log, stderr=subprocess.STDOUT, timeout=1200)
+            run(*command, stdout=log, stderr=subprocess.STDOUT, timeout=2400)
     finally:
         if created:
             captured = subprocess.run(

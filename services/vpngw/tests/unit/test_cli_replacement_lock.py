@@ -1,3 +1,5 @@
+import json
+import shlex
 from types import SimpleNamespace
 from unittest.mock import ANY, Mock
 
@@ -18,13 +20,14 @@ from nebius_vpngw.deploy import (
 from nebius_vpngw.deploy.vm_ha_lifecycle import VMHAApplyLock
 
 
+@pytest.mark.parametrize("fail", [False, True])
 @pytest.mark.parametrize("ha", [False, True])
 @pytest.mark.parametrize("resume", [False, True])
 def test_public_replacement_retains_coordinator_lock_without_reacquiring(
-    monkeypatch, tmp_path, ha, resume
+    monkeypatch, tmp_path, ha, resume, fail
 ):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    config_path = tmp_path / "config.yaml"
+    config_path = tmp_path / "gateway's config.yaml"
     config_path.write_text("# Configuration is supplied by the isolated loader.\n")
     local = {"project_id": "project-test"}
     plan = SimpleNamespace(
@@ -59,7 +62,7 @@ def test_public_replacement_retains_coordinator_lock_without_reacquiring(
         "AttachmentJournal",
         lambda *args: SimpleNamespace(pending=lambda: None),
     )
-    ports = Ports()
+    ports = Ports(fail="prepare" if fail else None)
     ports.inspect = Mock(return_value=desired)
     ports.terminal_receipt = Mock(return_value={"independently_verified": True})
     monkeypatch.setattr(replacement_ordinary, "OrdinaryReplacement", Mock(return_value=ports))
@@ -96,10 +99,40 @@ def test_public_replacement_retains_coordinator_lock_without_reacquiring(
         )
 
     monkeypatch.setattr(cli, "_apply_impl", apply_impl)
-    arguments = ["apply", "--local-config-file", str(config_path)]
+    arguments = [
+        "apply",
+        "--local-config-file",
+        str(config_path),
+        "--project-id",
+        "project-test",
+        "--region",
+        "region-test",
+        "--output-format",
+        "json",
+    ]
     arguments += ["--resume-replacement", str(bundle)] if resume else ["--recreate-gw"]
     result = CliRunner().invoke(cli.app, arguments)
 
+    if fail:
+        assert result.exit_code == 1
+        recovery = json.loads(result.stdout)["recovery"]
+        assert shlex.split(recovery["resume_command"]) == [
+            "nebius-vpngw",
+            "apply",
+            "--local-config-file",
+            str(config_path),
+            "--project-id",
+            "project-test",
+            "--region",
+            "region-test",
+            "--resume-replacement",
+            str(journal.bundle.absolute()),
+        ]
+        assert "--resume-replacement" not in shlex.split(recovery["repair_command"])
+        assert "Resume after the prior writer stops:" not in result.output
+        with lock():
+            pass
+        return
     assert result.exit_code == 0, (result.output, result.exception)
     runner.assert_called_once()
     if resume:

@@ -46,7 +46,7 @@ APPLICATION_KEYS = {
     "loopback_only",
     "database_private",
 }
-ARTIFACT_KEYS = {"application"}
+ARTIFACT_KEYS = {"application", "browser"}
 APPLICATION_EVIDENCE_KEYS = {
     "schema",
     "generation_id",
@@ -80,13 +80,8 @@ def _assignment_context_errors(
     ]
     if assignment.get("worker_profile") != liveness["worker_profile"]:
         errors.append("assignment worker profile does not match its canonical task")
-    if (
-        assignment.get("read_only_warning_seconds")
-        != liveness["read_only_warning_seconds"]
-    ):
-        errors.append("assignment warning budget does not match its canonical task")
-    if assignment.get("read_only_seconds") != liveness["read_only_seconds"]:
-        errors.append("assignment read-only budget does not match its canonical task")
+    if assignment.get("health_policy") != liveness["health_policy"]:
+        errors.append("assignment health policy does not match its canonical task")
     return errors
 
 
@@ -146,7 +141,7 @@ def _dependency_contract_errors(wave_index: Any) -> list[str]:
             ):
                 errors.append("first-wave task write claims overlap")
     tier_task_ids: set[str] = set()
-    for required in ("app/frontend", "app/api", "app/database"):
+    for required in ("project-a/app/frontend", "project-a/app/api", "project-a/app/database"):
         owners = {
             str(task.get("task_id"))
             for task in first_tasks
@@ -165,7 +160,7 @@ def _dependency_contract_errors(wave_index: Any) -> list[str]:
         for task in wave.get("tasks", [])
         if isinstance(task.get("write_claims"), list)
         and any(
-            claim.get("kind") == "exact" and claim.get("path") == "compose.yaml"
+            claim.get("kind") == "exact" and claim.get("path") == "project-a/compose.yaml"
             for claim in task["write_claims"]
         )
     ]
@@ -193,7 +188,7 @@ def _artifact(
     artifacts: Any, evidence_root: Path, errors: list[str]
 ) -> tuple[dict[str, Any], str] | None:
     if not isinstance(artifacts, dict) or set(artifacts) != ARTIFACT_KEYS:
-        errors.append("artifacts must contain exactly application")
+        errors.append("artifacts must contain exactly application and browser")
         return None
     item = artifacts["application"]
     if not isinstance(item, dict) or set(item) != {"path", "sha256"}:
@@ -300,7 +295,10 @@ def _validate_admission_basis(run_dir, assignment, admission, basis, impact, sta
     )
     if impact.canonical_digest(historical) != fingerprint:
         raise ValueError("historical assignment basis was modified")
-    lineage = {"impact_sha256", "spec_receipt_sha256", "spec_transition_sha256"}
+    lineage = {"impact_sha256", "spec_receipt_sha256", "spec_transition_sha256", "plan_action"}
+    if any(value.get("plan_action") not in {"retain_plan", "replan_required"}
+           for value in (historical, basis)):
+        raise ValueError("completed assignment has a different execution contract")
     if ({k: v for k, v in historical.items() if k not in lineage}
             != {k: v for k, v in basis.items() if k not in lineage}):
         raise ValueError("completed assignment has a different execution contract")
@@ -331,6 +329,7 @@ def _validate_admission_basis(run_dir, assignment, admission, basis, impact, sta
     receipt_changes = {
         "generation", "prior_impact_sha256", "requirements_sha256", "design_sha256",
         "spec_receipt_sha256", "spec_transition", "spec_transition_sha256",
+        "coverage", "effects", "plan_action",
     }
     identity = {k: v for k, v in previous.items() if k not in receipt_changes}
     visited = set()
@@ -352,9 +351,103 @@ def _validate_admission_basis(run_dir, assignment, admission, basis, impact, sta
             or transition["prior_spec_receipt_sha256"] != parent.get("spec_receipt_sha256")
             or transition["next_spec_receipt_sha256"] != current.get("spec_receipt_sha256")
             or transition["prior_spec_receipt_sha256"] == transition["next_spec_receipt_sha256"]
+            or not _same_or_fulfilled_coverage(parent, current)
         ):
             raise ValueError("impact ancestry lacks a valid owner reconciliation")
         current = parent
+
+
+def _same_or_fulfilled_coverage(previous, current):
+    """Permit final coverage fulfillment, never new statements or new effects."""
+    fields = ("coverage", "effects", "plan_action")
+    if all(previous.get(key) == current.get(key) for key in fields):
+        return True
+    before, after = previous.get("coverage"), current.get("coverage")
+    if (current.get("plan_action") != "retain_plan" or current.get("effects") != []
+            or not isinstance(before, list) or not before
+            or not isinstance(after, list) or len(before) != len(after)):
+        return False
+    identity = ("statement", "category", "statement_sha256")
+    return all(
+        isinstance(old, dict) and isinstance(new, dict)
+        and all(old.get(key) == new.get(key) for key in identity)
+        and new.get("effects") == []
+        and new.get("disposition") in {"existing_contract", "non_contract"}
+        for old, new in zip(before, after, strict=True)
+    )
+
+
+def _validate_worker_history(run_dir, assignment, task, result, admission, execution, state):
+    """Replay retained recovery authority without reviving removed worktrees."""
+    from workflow_worker_results import read_receipt, receipt_path
+
+    history = execution._validated_session_history(task)
+    if (not 1 <= len(history) <= 256 or type(task.get("attempt")) is not int
+            or task["attempt"] != len(history) or task.get("status") != "finished"
+            or result.get("attempt") != task["attempt"]
+            or result.get("worker_session_hash") != history[-1]
+            or task.get("commit") != result.get("commit")):
+        raise ValueError("completed worker session history is invalid")
+    root = run_dir / "execution" / assignment["execution_id"]
+
+    def termination(path, digest, worker, observer=None, *, admission_digest=False):
+        path = Path(str(path))
+        if path.parent != root / "terminations":
+            raise ValueError("worker termination escapes its execution")
+        value = state.read(path)
+        hash_value = execution.sha256_json(value) if admission_digest else state.digest(value)
+        if (hash_value != digest or value.get("schema") != "workflow/worker-termination-v1"
+                or value.get("assignment_digest") != assignment["assignment_digest"]
+                or value.get("worker_session_hash") != worker
+                or value.get("status") != "terminated"
+                or not value.get("native_handle") or not value.get("observation")
+                or re.fullmatch(r"[0-9a-f]{64}", str(value.get("observer_session_hash"))) is None
+                or observer is not None and value["observer_session_hash"] != observer):
+            raise ValueError("worker termination evidence changed")
+        return value
+
+    if (admission.get("schema") != "workflow/result-admission-v1"
+            or admission.get("task_id") != assignment["task_id"]):
+        raise ValueError("worker admission identity changed")
+    termination(admission.get("termination_path"), admission.get("termination_sha256"),
+                history[-1], admission_digest=True)
+    _, final = read_receipt(assignment, task)
+    if final["receipt_sha256"] != result.get("worker_result_receipt_sha256"):
+        raise ValueError("completed worker result receipt changed")
+
+    expected = {
+        "schema", "assignment_digest", "attempt", "prior_worker_session_hash",
+        "next_worker_session_hash", "coordinator_session_hash", "termination_path",
+        "termination_sha256", "worker_result_receipt_sha256", "repair_authority",
+    }
+    for attempt, (prior, current) in enumerate(zip(history, history[1:]), 1):
+        path = receipt_path(assignment, attempt)
+        failed = None
+        if path.exists() or path.is_symlink():
+            _, failed = read_receipt(assignment, {"attempt": attempt, "worker_session_hash": prior})
+            if failed["worker_result"]["status"] != "blocked":
+                raise ValueError("recovery follows a non-blocked worker result")
+        paths = list((root / "recoveries").glob(f"{assignment['task_id']}-{attempt}-*.json"))
+        if not 1 <= len(paths) <= 256 or sum(p.lstat().st_size for p in paths) > 4 * 1024 * 1024:
+            raise ValueError("worker recovery history is missing or exceeds bounds")
+        authorized = False
+        for path in paths:
+            value = state.read(path)
+            observer = value.get("coordinator_session_hash")
+            if (set(value) != expected or value.get("schema") != "workflow/recovery-authorization-v2"
+                    or re.fullmatch(r"[0-9a-f]{64}", str(observer)) is None
+                    or path.name != f"{assignment['task_id']}-{attempt}-{observer}.json"
+                    or value.get("assignment_digest") != assignment["assignment_digest"]
+                    or value.get("attempt") != attempt
+                    or value.get("prior_worker_session_hash") != prior
+                    or value.get("worker_result_receipt_sha256") != (failed["receipt_sha256"] if failed else None)
+                    or value.get("repair_authority") is not None):
+                raise ValueError("worker recovery authority changed")
+            termination(value["termination_path"], value["termination_sha256"], prior, observer)
+            authorized |= value.get("next_worker_session_hash") == current
+        if not authorized:
+            raise ValueError("worker recovery lacks authority for its fresh session")
+    return set(history)
 
 
 def _validate_orchestration(
@@ -380,16 +473,18 @@ def _validate_orchestration(
         impact = importlib.import_module("workflow_impact")
         state = importlib.import_module("workflow_state")
         run, objective = objectives.validate_run(run_dir, owner="implement")
-        if run["status"] != "done" or run["project_root"] != str(project):
+        if run["status"] != "done" or run.get("logical_project_root") != str(project / "project-a"):
             raise ValueError(
                 "accepted objective has not completed at the selected project"
             )
         coordinator = execution._load_coordinator(run_dir, "FEAT-001")
         if coordinator["status"] != "done" or coordinator["active_wave"] is not None:
             raise ValueError("execution is not delivered")
-        basis = impact.verify_execution(
-            run_dir, "FEAT-001", coordinator["plan_digest"], project
-        )
+        from workflow_automatic import historical_execution, verify_delivery
+        delivery = verify_delivery(run_dir)
+        from implement_statistics import require_complete
+        require_complete(run_dir)
+        basis = historical_execution(run_dir, "FEAT-001")
         waves = [
             state.read(execution.wave_path(run_dir, "FEAT-001", wave))
             for wave in coordinator["wave_ids"]
@@ -443,15 +538,16 @@ def _validate_orchestration(
                     admission["assignment_digest"] != assignment["assignment_digest"]
                     or admission["result_digest"] != result["result_digest"]
                     or assignment["base_head"] != wave["base_head"]
-                    or len(task["worker_session_hash_history"]) != 1
                 ):
                     raise ValueError(
                         "task lacks current immutable admission and isolated ownership"
                     )
-                session = task["worker_session_hash"]
-                if session in sessions:
+                history = _validate_worker_history(
+                    run_dir, assignment, task, result, admission, execution, state
+                )
+                if sessions.intersection(history):
                     raise ValueError("native worker session was reused")
-                sessions.add(session)
+                sessions.update(history)
                 if _assignment_context_errors(
                     task["task"],
                     assignment,
@@ -469,19 +565,13 @@ def _validate_orchestration(
         validate_receipt(
             invocation_receipt, run_dir, objective["revisions"][-1]["sha256"]
         )
-        delivered = Path(
-            coordinator.get("delivered_checkout", coordinator["project_root"])
-        )
-        if (
-            _git(delivered, "rev-parse", "HEAD") != expected_head
-            or coordinator["promoted_head"] != expected_head
-            or _git(delivered, "status", "--porcelain")
-        ):
-            raise ValueError("delivered Git identity changed")
-        if coordinator["delivery_mode"] == "source" and _git(
-            project, "merge-base", "--is-ancestor", run["source_head"], expected_head
-        ):
-            raise ValueError("source delivery ancestry is invalid")
+        delivered = project
+        if (_git(project, "rev-parse", "HEAD") != expected_head
+                or _git(project, "status", "--porcelain")
+                or _git(project, "merge-base", "--is-ancestor", delivery["delivered_head"], expected_head)):
+            raise ValueError("aggregate Git identity changed")
+        from public_workflow_trial import validate_projects
+        validate_projects(invocation_receipt.parent, project, run_dir.parent.parent.parent)
         origin = project.parent / "origin.git"
         if (
             origin.is_symlink()
@@ -529,7 +619,7 @@ def validate_results(
     errors: list[str] = []
     if not isinstance(data, dict) or set(data) != TOP_KEYS:
         return ["manifest must contain exactly the required top-level keys"]
-    if data["schema"] != "implement-test/live-results-v1":
+    if data["schema"] != "implement-test/live-results-v2":
         errors.append("unsupported schema")
     generation = data["generation_id"]
     if not isinstance(generation, str):
@@ -571,6 +661,21 @@ def validate_results(
                 "application evidence was not recorded by the lifecycle helper"
             )
     if data["status"] == "PASS":
+        try:
+            import implement_browser
+            import implement_catalog
+            if lifecycle is None or lifecycle_state is None:
+                raise ValueError("browser evidence requires lifecycle ownership")
+            run_path = lifecycle_state.parent
+            implement_catalog.validate(lifecycle, run_path)
+            browser = data["artifacts"].get("browser")
+            if (not isinstance(browser, dict) or set(browser) != {"path", "sha256"}
+                    or browser["path"] != "evidence/browser.json"
+                    or browser["sha256"] != lifecycle.get("browser_evidence_sha256")):
+                raise ValueError("browser artifact is missing or changed")
+            implement_browser.validate(lifecycle, run_path)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
+            errors.append("browser/catalog evidence is incomplete: " + str(error)[:150])
         for group in (data["orchestration"], data["application"]):
             if isinstance(group, dict) and any(
                 value is not True for value in group.values()

@@ -6,11 +6,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## How to use this file
 
-- Keep `## [Unreleased]` at the top and add bullets as changes land.
-- Before tagging, move items from `Unreleased` into a new
-  `## [nebius-vpngw-vX.Y.Z] - YYYY-MM-DD` section, then leave an empty `Unreleased` section.
+- Add changes under the `Unreleased` heading as they land.
 - Newer releases go above older ones; do not reorder entries within a release.
-- The release helper (`publish-release.sh`) automates rolling `Unreleased` into a dated `## [nebius-vpngw-vX.Y.Z] - YYYY-MM-DD` and re-adding an empty `Unreleased`.
 
 ## [Unreleased]
 
@@ -19,13 +16,488 @@ All notable changes to this project are tracked here. This changelog follows
 - Let proven zero-SPI kernel acquisition placeholders expire after scoped trap
   and policy teardown. These placeholders no longer block tunnel restoration,
   and cleanup never emits an SPI-based deletion for them.
-
 - Batch static tunnel route activation under bounded ownership admission so
   repeated full authority observations per prefix cannot exhaust restoration.
   Retain native IKE recovery when replay proves policy and routes already restored.
-- Permit exact fenced activation with completed standby-restoration history only
-  after private-file validation and durable promotion-receipt binding. Active,
-  blocked, foreign and unverified restoration records remain inhibiting.
+
+## [nebius-vpngw-v0.6.5] - 2026-11-15
+
+- Size the native qualification suite budget for its expanded case set and retain
+  per-phase timings without changing individual recovery deadlines.
+- Recheck shared dependency consumers before every full-repair Python install
+  and resumed checkpoint, using the rebuilt distro parser independently of
+  damaged local packages.
+
+### Changed
+
+- Refresh retained package handoffs and their checkpoint verifiers after approved
+  HA Compute changes. Preserve operation receipts, exact member identity and SSH
+  pins while avoiding stale pre-conversion resource revisions.
+- Preserve known member-specific package-preparation reasons through nested HA
+  recovery errors, including text/JSON repair guidance and pending observations.
+- Preserve exit code 130 and interruption guidance when the inner deployment
+  engine is interrupted during consolidated HA apply.
+- Allow fresh apply after destroy to replace a completed guest selection only
+  after verifying a new creation and clean guest state. Preserve its archived
+  evidence and continue to reject unfinished or conflicting selections.
+- Distinguish unavailable provider identity checks, timeouts, DNS errors and
+  denied access from invalid runtime credentials. Unknown SDK failures retain
+  an unknown-cause diagnostic and conditional repair guidance. Failed HA dry-runs
+  no longer report that convergence effects may have started.
+- Initialize canonical HA lock storage during approved Single-to-HA handoff,
+  before package verification needs it. Preserve stopped-writer checks and
+  reject unsafe directories or previously started controller state; activation
+  retains ownership of certificates and checkpoints.
+- Consolidate HA creation, reconciliation, verification and safe standby recovery
+  under `apply`; remove the public `vm-ha` command without an alias. Add
+  `--convert-to-ha`, conversion-only `--output`/`--force`, `--rotate-mtls`,
+  `--standby-auto-healing`, and exact `--approve` support. Protected conversion
+  provenance makes repeats using the original or generated YAML idempotent.
+- Preserve one apply lock and terminal result, effective project/region selectors,
+  early Single/HA repair admission, conditional repair guidance and separate local
+  convergence/connectivity evidence. HA details are optional in the existing
+  apply JSON result.
+
+- Keep advisory VM-HA controller phase updates independent of heartbeat network
+  sends, so publication cannot unnecessarily delay local-repair confirmation.
+  Preserve draining and sample invalidation around dataplane health transitions
+  and shutdown, along with the original repair and fencing deadlines.
+
+- Prioritize HA component-repair verification over competing tunnel-selection
+  observations. Keep two fresh confirmations, the original five-second deadline
+  and its fencing reserve, preventing duplicate checks from needlessly forcing
+  an otherwise recovered owner to fail over.
+
+- Retry recognized temporary SSH status-read failures during same-owner HA
+  preparation within its existing deadline. Recheck both members and exact
+  ownership, retain immediate authentication and identity failures, and report
+  unverified preparation clearly without retrying transfer requests.
+
+- Apply the existing strictly-below-1% measured packet-loss criterion to new
+  passive-VM restoration trials. Keep independent serving-owner, allocation,
+  route and forwarding checks, complete phase observations, and earlier failed
+  verdicts. Runtime behavior and separately scoped native zero-loss tests are
+  unchanged.
+
+- Let repair wait for normal service-manager shutdown within its existing guest
+  request deadline. Preserve process, job and descendant checks so unresolved
+  writers still prevent reconstruction.
+
+- Allow missing-standby replacement after completed repair. Preserve repair
+  receipts for activation authorization without comparing them to cloud resource
+  identities. Continue rejecting changed serving VMs, disks, allocations and
+  routes before replacement.
+
+- Preserve the final VM-HA health-verification reason in text and JSON failures,
+  with the immediate status/resume action and applicable `apply --repair`
+  guidance, instead of reporting an unknown convergence error.
+
+- Refresh the independent HA rearm controller's exact managed peer identity
+  after standby replacement without restarting a capable serving owner. Reject
+  changed peer fields and unresolved cloud operations before adopting a new
+  Compute identity. Older owners require the existing approved upgrade path.
+
+- Allow an approved missing-standby replacement after completed corrective
+  recovery. Validate the replacement through its exact lifecycle transition,
+  retaining prior recovery history and rejecting changed owner or audit bindings.
+- Reobserve temporarily unavailable HA materialization within the original
+  observation deadline. A busy routing writer no longer causes an immediate
+  unclassified activation failure; persistent uncertainty stays pending with
+  resume and repair guidance, without consuming a corrective attempt.
+- Recognize ordinary ownership labels on an exact approved HA migration route.
+  Recheck its identity, revision, allocation and target before planning; preserve
+  rejection of foreign routes, changed predecessors and conflicting HA labels.
+- Preserve verified ordinary route ownership during HA repair after interrupted
+  conversion. Settle original route operations and persist their exact receipts
+  in the new HA lifecycle before activation; retain writer exclusion and reject
+  changed or foreign routes.
+- Replan an empty HA route action when initial BGP readiness advances during
+  verification. Keep the action pending without a completion receipt, then
+  recheck current ownership and approved migration routes before effects.
+  Preserve foreign-route conflicts and the existing operation deadline.
+- Start native reauthentication traffic checks only after both replacement IKE
+  sessions have authenticated and installed their expected ESP CHILD SAs. Keep
+  the existing acquisition deadline and strict packet-loss assertions.
+- Supply hardened HA lifecycle evidence during repair SSH admission for retained
+  ordinary members after interrupted conversion. Preserve exact host identity
+  and pins, and explain missing or changed authority before confirmation.
+- Allow confirmed full repair to retire an interrupted HA package worker that
+  is provably idle while holding deployment exclusion. Preserve original worker
+  evidence and require exact process identity, settled requests and no executing
+  children before releasing it. Keep active work intact and report unresolved
+  ownership or process-control prerequisites with repair guidance.
+
+- Preserve private managed certificate storage during ordinary repair so a later
+  HA conversion can bootstrap its node identities. Retain writer-lock inodes,
+  reject unsafe ownership and concurrent writers, and report certificate-storage
+  permission failures with the applicable repair command.
+
+- Resume interrupted ordinary-to-HA migrations without regenerating an already
+  verified SSH provenance receipt after approved Compute changes. Preserve exact
+  published pins, selected private identities, and current VM/lifecycle checks.
+  Reattach unfinished package handoffs to their original reserved workers even
+  when SSH publication is already complete, retaining the active lifecycle
+  approval when subsequent Compute progress changes the preview digest.
+  Explain genuine SSH bootstrap and package reservation conflicts with a specific
+  reason, immediate action and conditional repair guidance.
+
+- Keep the standby rearm service running when a Compute or allocation read
+  fails, including a missing standby. Report a sanitized blocked reason and
+  leave remaining recovery authority unchanged without submitting another Start.
+  Completed operation settlement remains completed.
+
+- Explain exhausted HA activation recovery and unchanged-correction refusals in
+  `apply`, JSON results and regional child reports, with same-context
+  repair guidance. Preserve the three-attempt limit and retained-operation
+  authority even when the original failure was a timeout.
+
+- Remove the project-local release script and maintainer README procedures; use the publish-release skill as the sole release entry point. Preserve shared Actions release ownership and move dispatch regressions into the skill suite.
+
+### Added
+
+- Reobserve regional barrier files that change during publication within the
+  existing deadline, preserving exact invocation and receipt checks instead of
+  failing a healthy child on a transient file read.
+- Reject daemon or startup-configuration changes during policy loading after a
+  restart, including retries following a failed passive reload. Keep forwarding
+  fenced and do not publish successful materialization from raced runtime state.
+- Retire an HA apply that failed before publishing its fresh lifecycle after
+  verified destruction, matching its exact terminal checkpoint and uncreated
+  members. Keep package, attachment and unfinished child authority checks.
+- Start a clean HA deployment after verified destruction without carrying the old
+  runtime apply-lock cycle or ordinary-route handoff into the new lifecycle.
+  Keep exact retained public allocation checks and predecessor history.
+- Keep recognized HTTP 52x gateway read failures inside the existing HA
+  observation deadline instead of immediately restarting the controller and
+  triggering failover. Preserve permanent and unclassified error handling,
+  exact route ownership checks, and uncertain mutation reconciliation.
+- Keep repair advice compatible with the CLI after an ordinary `apply --sa`
+  failure: omit `--sa` from repair commands, explain the operator authentication
+  prerequisite, and retain it for ordinary resume and fresh apply.
+- Adapt selected reliability improvements identified in PR #250 by `jkwong888`:
+  retry exact transient HA cloud reads within one deadline, preserve original
+  promotion receipt timestamps on retry, and recover committed transfer cleanup
+  without repeating effects or granting new restoration authority.
+- Preserve BGP sessions during proven unchanged mixed BGP/Static passive
+  materialization. Bind daemon reuse to private process and configuration evidence,
+  avoid unnecessary netplan application, and require exact Static responder and
+  session absence. Candidate Static preparation cannot be satisfied by BGP SAs.
+- Require and verify both independent heartbeat modules in admitted HA wheels,
+  including their archive records and correspondence to the selected CLI source.
+  Include the cloud reader's canonical pagination dependency in streamed recovery
+  so admission still works without a usable installed package.
+
+- Bind the approved HA package parent before staging and guest reservation,
+  and reject mutation of a reserved package plan. Keep ordinary route creation
+  receipts out of cloud-resource identity comparisons while retaining route
+  ownership validation. These fixes cover ordinary-to-HA conversion and resume.
+- Use the remaining IAM observation deadline for delayed authorized-key readback,
+  including reuse and planning, without replaying creation or accepting foreign
+  keys. Preserve bounded route-handoff failure categories through shared recovery
+  guidance. Add two-runtime reverse-failover regression coverage with separate
+  durable ledgers and peer-created route successors.
+
+- Include canonical route-plan and conversion readers in streamed admission so
+  interrupted route transactions remain verifiable before package installation.
+  Stream the selected route-owner lock implementation when inspecting older
+  guests, with source-integrity checks and bounded stdin framing. Preserve
+  deadline, concurrent-writer and exact route-ownership checks.
+
+- Observe an accepted standby recovery through stable two-member authority
+  before preparing its remaining VM-HA policy plan. Avoid treating normal Start
+  completion as changed approval authority. Preserve strict locked rechecks;
+  actual authority drift includes specific next-action and repair guidance.
+
+- Keep observing an acknowledged standby rearm when Compute still reports
+  Stopped but exact recovery progress is available. Preserve the original Start
+  identity and deadline; report unavailable or expired observation as pending
+  with resume and conditional repair guidance.
+
+- Share sanitized `apply` recovery details across installed and module
+  entry points, parsing, JSON and pair-child results. Preserve native exit codes,
+  effective selectors and the authoritative converted HA configuration. Require
+  established retained-VM ownership before offering conditional destroy/fresh-apply
+  guidance for failed repair; destruction is always an explicit operator action.
+  Preserve classified regional package causes and member identities without raw
+  child exception text. Retain known dependency and guest failure predicates
+  through preparation wrappers, with blocker-specific repair prerequisites.
+  Classify malformed YAML, encoding, mapping, schema and file-read failures
+  consistently before either command reaches deployment.
+  Include repair guidance for conversion prerequisites, keep untrusted or
+  unpublished candidates out of repair targets, and preserve distinct permission
+  repair and conversion resume targets. Honor case-insensitive VM-HA JSON output
+  on early parser failures as well as parsed commands.
+  Report retained repair worker observation expiry as pending and blocked workers
+  with specific reconciliation guidance, preserving their repair resume command
+  without suggesting destruction.
+  Replacement failure advice selects the canonical saved recovery bundle and
+  preserves configuration, project and region instead of printing a second,
+  incomplete resume command.
+  For predecessor-settlement errors, explain that confirmed repair handles
+  retirement itself; retain VM-ownership and accepted-request prerequisites
+  without requiring a separate ordinary apply first.
+- Reuse immutable dependency preparation within an invocation while refreshing
+  authority and host observations. Observe semantic controller progress beyond
+  the normal interruption target, reporting pending operations with resume advice.
+- Admit reviewed ordinary successors after unused or completed child work is
+  proven settled. Archive predecessor evidence, preserve route ownership and
+  transfer held reservations without releasing runtime writers. Fresh deployment
+  approval remains separate; dry-run and declined approval have no effects.
+  Also admit retirement of a verified partial route plan; remaining
+  unsubmitted route requests are never executed. Exclude all six local owners
+  during ordinary and HA predecessor retirement.
+  Reconcile lost VPN route acknowledgements under separate settlement approval,
+  using original provider identities and independent readback without executing
+  the obsolete suffix. Require the retained runtime-writer reservation and keep
+  partial route-table conversion authority with its infrastructure owner.
+  Add the corresponding reuse-only HA pre-host retirement path with completed
+  prerequisite proof, fresh credential reuse intent and lifecycle archival.
+  Retire untouched HA and ordinary provisioning plans only after excluding
+  every child writer and proving no child authorization or package reservation
+  was published; preserve completed historical owners and require fresh approval.
+  Add separately approved settlement for changed HA generations after completed
+  package work at a host-only activation checkpoint. Prove installed predecessor
+  content, stop exact writers, archive worker and owner evidence, then require
+  fresh deployment approval before changing generation locks or adoption receipts.
+  Validate the exact predecessor or approved successor generation lock through
+  the canonical reader; an absent generation is never a wildcard. Preserve an
+  ended guest response as an unknown request outcome with resume and repair
+  guidance instead of reporting an operator interruption.
+  Keep corrective and settlement SSH reads within the existing operation budget
+  while native package locks are busy, and refuse submission after its deadline.
+  Add separately approved credential-only predecessor settlement. Reconcile
+  submitted IAM requests with their original identities, retain the selected key,
+  pair interrupted local key metadata, and archive the verified partial graph
+  before requiring fresh approval for its remaining desired actions.
+  Settle ordinary infrastructure prefixes before any VM creation request, with
+  independent VM-absence and prerequisite checks. Preserve creation receipts and
+  require the newly approved plan to reuse every retained resource, including
+  exact unattached boot disks; never execute the obsolete remainder.
+  Settle submitted ordinary Security Group updates using their original requests,
+  full Compute readback and exact guest identity before separately retiring the
+  parent. Retain SSH pins and untouched member updates. Archive conclusively
+  rejected single-attempt requests only after independent no-effect proof.
+  Add separately approved attachment-only HA settlement for the retained
+  generation. Verify original guest gates, ownership continuity and allocation
+  ownership; release the owner gate before the standby lock and verify HA health.
+  Reject uncertain owner requests with revision or specification drift before
+  replay, preserving both members' exact prepared ownership continuity.
+  Preserve release receipts across interruptions and require new plan approval.
+  Admit combined HA commands only after their preceding runtime and prerequisite
+  owners are independently verified complete. Recheck installed package bytes,
+  dependencies, assets and native worker completion before releasing guest gates.
+  Preserve lifecycle recovery for combined commands whose attachment stage has
+  not started, including interrupted upgrade recovery with unused attachments.
+  Keep partial VM creation, route-table conversion and changed-generation
+  attachment work blocked where owner settlement cannot be proven.
+  Final-candidate live qualification remains incomplete.
+
+- Add confirmed `apply --repair` and `pair apply --repair` to reconstruct the
+  managed software stack on retained Ubuntu gateway VMs. Repair replaces native
+  and Python packages even at the same version, resets obsolete product state,
+  and resumes through independent boot inhibition and retained-resource receipts.
+  It retains VM, disk, IP and SSH identities, requires no manual digest, and does
+  not support `--dry-run`. HA BGP and the complete live release qualification
+  matrix remain required before release.
+  Preserve failed cloud receipts while allowing fresh confirmed retry requests;
+  restore and remove preceding repair quarantine before a changed-release rebuild.
+  Inhibit the observed HA non-owner first and verify timer quiescence using its
+  native activation properties rather than service-only PID and cgroup fields.
+  Keep exact SSH identity valid across repair-owned Compute updates and admit
+  stopped ordinary gateways without requiring SSH before their isolated boot.
+  Retry transient SSH negotiation failures during boot readiness without hiding
+  identity, authentication or guest admission errors.
+  Preserve typed transport failures across the shared SSH request boundary so
+  boot-time socket timeouts receive the same bounded retry.
+  Verify repair guards against systemd's canonical owned service identity when
+  an installed strongSwan alias is retained during interrupted-work settlement.
+  Include the complete independent repair bootstrap source in standalone builds.
+  Create every private repair storage directory with private permissions and
+  recover readable, safely owned archive directories during guest succession.
+  Bind HA activation to its canonical operation identity derived from the repair
+  execution and confirmed intent, preserving exact lock and startup authority.
+  Recreate deployed service units and helper scripts from the selected wheel,
+  using the normal deployment asset catalog, and verify their bytes and modes
+  before allowing activation.
+  Tolerate malformed transaction fields in obsolete lifecycle journals while
+  preserving settlement of recognizable accepted cloud operations.
+  Wait for an active guest package writer when resuming an interrupted repair;
+  temporary deployment-lock contention is distinct from failed verification.
+  Settle ordinary route-table copies without treating copied default or unrelated
+  routes as gateway-owned routes or requiring a gateway instance index for them.
+  Admit the canonical repair boot guard during ordinary activation after checking
+  its exact files, repair identity and effective service startup conditions.
+  Stream that verifier independently of the installed gateway package.
+  Repair has no overall outage limit; retain bounded individual requests and
+  resumable work. Document explicit destroy then same-YAML apply as the last
+  resort for irrecoverable VM-local failures, with teardown qualification pending.
+  Accept empty or already settled ordinary route ledgers during reconstruction.
+  Preflight the controller dependency resolver only when new resolution is needed;
+  retained staged or installed repair work resumes without it.
+  Integrate repair settlement into explicit destroy: fence exact Compute targets
+  without guest SSH, clean only receipt-owned quarantine, and retire repair state
+  after verified destruction. Resume interrupted retirement with the original
+  destruction plan, preserve completed repair history after supported VM
+  replacement, and retain native resource authority across lifecycle reset.
+  Recover retired standby-disk ownership from connected native repair history
+  when planning explicit destruction. Preserve exact deployment and provider
+  checks without restoring obsolete runtime state or adopting disks by name.
+  Offer explicit destroy and same-YAML apply guidance for retained-VM blockers;
+  never delete automatically or promise replacement fixes external dependencies.
+
+### Fixed
+
+- Allow host-only recovery and changed-intent replanning after a completed
+  standby replacement. Validate and retain connected ownership history without
+  treating it as active replacement work; keep incomplete history, identity
+  drift and unfinished replacement blocked with actionable repair guidance.
+- Preserve exact standby-replacement ownership through subsequent normal apply
+  transactions. Keep prior disks discoverable for explicit destruction after
+  repair, without replaying old actions or adopting resources by name. Reject
+  successors that remove or change the recorded ownership.
+- Stop maintenance timers and their workers before the HA controller during
+  changed-intent settlement. Prevent scheduled route maintenance from cancelling
+  the accepted controller stop through FRR/strongSwan dependencies; preserve
+  original service receipts, writer exclusion and separate successor approval.
+
+- Defer the ordinary route timer to repair completion while its verified repair
+  guard remains active. Start and verify it after releasing that guard, avoiding
+  a final-verification failure caused by repair's own startup inhibition.
+
+- Restore the repair package-start policy before planning ordinary activation.
+  Keep service startup inhibited until activation and preserve a resumed ordinary
+  transaction's own policy, avoiding rejection of repair's own policy change.
+
+- Report unavailable signed Ubuntu repository metadata as a package-source
+  prerequisite, with DNS and outbound-access guidance, instead of a generic
+  repair verification-receipt failure. Repository authentication remains required.
+
+- Scope apply package checks to current and proposed VPNGW dependencies, keeping
+  shared-consumer conflict checks immediately before installation. Preserve
+  specific preparation causes and recovery guidance through VM-HA convergence.
+  Keep package-start policy payloads in protected guest rollback state and use
+  digest-only identities in deployment plans. Remove unused CLI impersonation
+  from managed HA credential reconciliation; keep the selected operator
+  authentication through provisioning and independently verify runtime keys.
+
+- Wait within a bounded observation window for positively identified transient
+  systemd work, refreshing the complete observation and rejecting late results.
+  A healthy verified VM-HA no-op accepts a surplus approval token. Interactive
+  recovery derives its engine approval from the one confirmed current plan.
+  Report changed interrupted activation intent before presenting an exact-resume
+  plan or modifying credentials, with explicit repair guidance.
+
+- Keep kernel policy identities consistent between trap acquisition and direct
+  IPsec initiation when peers narrow traffic selectors. Reserve a separate
+  dynamic allocation range, preserve rekey and reauthentication overlap, and
+  refuse to load connections after an unproven strongSwan restart.
+
+- Recover managed credential enrollment from temporarily empty authorized-key
+  readback after successful creation. Bound fresh reads by one observation
+  deadline, retain the original operation and selected key on interruption,
+  and reject conflicting identity without repeating IAM mutations.
+
+- Preserve the original HA local repair deadline during subsequent verification.
+  Bound nested tunnel, cloud and local reads to its remaining allowance and
+  physically fence forwarding before ordinary teardown can wait for a lock.
+  Retain the consumed attempt, the one-second fencing reserve and strict cloud
+  ownership gates; completed repairs do not inherit an expired deadline.
+
+- Recover ordinary activation from brief routing-lock contention during initial
+  inspection and runtime route handoff. Wait within existing deadlines, refresh
+  inspection evidence and admit each handoff effect once. Preserve nonblocking
+  periodic writers, exclusive operation guards and unknown-outcome refusal.
+
+- Preserve fresh HA heartbeat readiness when the controller retires an already
+  confirmed repair record after sixty healthy seconds. Validate checkpoint state
+  before excluding completed bookkeeping from the sample identity; retain exact
+  pending-effect, unconfirmed-repair, ownership and fencing guards.
+
+- Resume accepted cloud operations through their originating Nebius service,
+  preventing generic endpoint errors from blocking provisioning and replacement.
+  Bind HA operation reads to Compute or VPC Route and reject mismatched identities.
+  Preserve original receipts, idempotency, private bootstrap data and repair limits.
+
+- Keep unknown candidate health pending during tunnel selection instead of
+  restoring a failed path while probe health is still stabilizing. Confirmed
+  failure still selects fallback, and the original request expiry still bounds
+  waiting and cleanup for Static and BGP.
+
+- Include native verification time in tunnel-selection deadlines. A slow
+  Static or BGP observation cannot complete an expired selection; the same
+  operation restores policy without renewing its deadline.
+
+- Publish accepted HA peer heartbeats and their replay boundary under one store
+  lock, preventing transient missing policy evidence during successful receive.
+  Preserve exact identity, sequence, freshness and interrupted-write refusal.
+  Retain the running receiver's replay floor across failed publication, later
+  peer reboots and replay-file loss without accepting incomplete publication.
+
+- Correct native BGP restart qualification to verify normal-policy restoration
+  after request expiry, with explicit delayed-request coverage. Keep the
+  original product deadline and process limit; bound cleanup observation
+  separately and reject pending cleanup or late selection success.
+  Distinguish native completion from delayed readback, with regression coverage
+  that retains the original completion deadline.
+  Start delayed-readback coverage at durable admission before the first effect,
+  avoiding a redundant fixture policy application and rewind within that deadline.
+
+- Preserve the action-owned HA boot guard during routine active status
+  publication, so bounded daemon recovery retains the exact identity proof.
+  Exercise the service-loop publication in both unit and native crash coverage.
+  Align standalone native reload fixtures with the canonical proof callbacks,
+  complete guard identity and managed XFRM interface prerequisites.
+
+- Remove exactly scoped kernel SAs and policies forgotten by a crashed HA
+  daemon before the existing bounded configuration reload. Preserve surviving
+  sessions, rekey overlaps, passive fencing and the original repair allowance;
+  incomplete evidence, changed authority or deadline expiry prevent loading.
+  Recheck cloud authority before reload and retain the consumed passive attempt
+  when its work deadline expires with forwarding independently proved fenced.
+  Revoke lower-precedence traps before negotiated policies and SAs, reject
+  changed cleanup plans, and preserve completed-attempt receipts at deadline
+  expiry. Cover Static and BGP crash reload in the native qualification lane.
+
+- Accept unchanged current-format checkpoints in package qualification without
+  requiring a conversion receipt that the product correctly does not create.
+  Keep checkpoint validation and conversion-evidence checks strict. Refresh the
+  frozen four-release package matrix to include the published 0.6.4 predecessor.
+  Verify unchanged service assets across an interrupted wheel install, including
+  predecessors whose assets already match the candidate, instead of assuming
+  that every upgrade must change their bytes. Keep the interruption-hook unit
+  fixture aligned with the composed observer and its asset receipt.
+
+- Persist paired regional apply outcomes and readiness as plain JSON values.
+  Preserve failed and pending child reports without a secondary journal-type
+  error; keep exact child receipts and the existing resume authority.
+
+- Preserve an exact current-boot local passive intent during corrective HA
+  recovery, using the same admission checks as upgrade recovery. Keep the
+  original checkpoint and operation for controller replay under the current
+  fence; competing, stale or foreign controller work remains blocked.
+
+- Keep installed-source fingerprint limits separate from authority-record limits
+  in HA recovery inspection, so a larger CLI module cannot block recovery.
+  Configuration and journal limits and no-symlink checks remain enforced.
+
+- Allow guarded corrective HA apply after completed package installation fails
+  during member activation, before owner release. Bind a fresh package proposal
+  to the exact prior journals, preserve their original phases, and reserve the
+  successor before replacing the native transaction. Keep package exclusion,
+  current fencing, exact new locks and interruption-safe replay; partial package
+  or release work and foreign predecessors remain blocked.
+  Restore the original operator startup policy after successful activation,
+  without retaining temporary package inhibition as permanent policy.
+
+- Admit later HA activation with validated, completed standby-restoration history.
+  Preserve the history and exact promotion-receipt proof, bind it to the installed
+  cluster, allocation and member pair, and retain current lock, configuration and
+  boot-fence checks. Active, blocked, malformed and foreign restoration evidence
+  still prevents activation; no history deletion or repair-budget reset is used.
+
+- Defer HA tunnel work when its authority read is unavailable, preserving pending
+  intent and repair budgets. The main controller still obtains fresh ownership
+  evidence and retains its fail-closed handling of unavailable authority.
 
 ## [nebius-vpngw-v0.6.4] - 2026-11-09
 

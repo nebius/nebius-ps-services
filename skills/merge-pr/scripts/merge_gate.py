@@ -361,20 +361,24 @@ def review_record(review, pr, allowed):
     if "sdlc" in value:
         delivery = value["sdlc"]
         require(isinstance(delivery, dict) and set(delivery) == {"schema", "execution_id", "objective_sha256",
-                "basis_sha256", "qualification_sha256", "candidate", "live", "criteria"}
-                and delivery["schema"] == "workflow/sdlc-delivery-v1"
+                "basis_sha256", "admission_sha256", "candidate", "uat", "criteria"}
+                and delivery["schema"] == "workflow/sdlc-delivery-v2"
                 and re.fullmatch(r"SLICE-[0-9]{3,}", str(delivery["execution_id"]))
                 and all(re.fullmatch(r"[0-9a-f]{64}", str(delivery[k])) for k in
-                        ("objective_sha256", "basis_sha256", "qualification_sha256"))
-                and type(delivery["live"]) is bool
-                and isinstance(delivery["criteria"], list) and delivery["criteria"]
+                        ("objective_sha256", "basis_sha256", "admission_sha256"))
+                and isinstance(delivery["criteria"], list)
                 and all(isinstance(c, str) and 0 < len(c) <= 128 for c in delivery["criteria"])
                 and len(set(delivery["criteria"])) == len(delivery["criteria"]), "Invalid SDLC admission attestation")
         candidate = delivery["candidate"]
-        require(isinstance(candidate, dict) and set(candidate) == {"head", "artifact_sha256", "configuration_sha256"}
+        require(isinstance(candidate, dict) and set(candidate) == {"head", "tree"}
                 and candidate["head"] == value["head"]
-                and all(re.fullmatch(r"[0-9a-f]{64}", str(candidate[k])) for k in
-                        ("artifact_sha256", "configuration_sha256")), "Invalid SDLC candidate identity")
+                and re.fullmatch(r"[0-9a-f]{40,64}", str(candidate["tree"])), "Invalid SDLC candidate identity")
+        uat = delivery["uat"]
+        require(isinstance(uat, dict) and set(uat) == {"status", "reason", "policy_sha256", "delivery_eligible", "head"}
+                and uat["status"] in {"not_requested", "pending", "passed", "incomplete"}
+                and uat["delivery_eligible"] is True and uat["head"] == value["head"]
+                and isinstance(uat["reason"], str) and 0 < len(uat["reason"]) <= 1024
+                and re.fullmatch(r"[0-9a-f]{64}", str(uat["policy_sha256"])), "Invalid optional UAT disposition")
     return value
 
 
@@ -540,14 +544,14 @@ def orchestration_suite(api, suite_id, pr, policy):
     return False
 
 
-def checks_ready(api, pr, files, policy):
+def checks_ready(api, pr, files, policy, automation=None):
     sha = pr["head"]["sha"]
     paths = changed_paths(files)
     # Explicit trusted workflow inventory prevents an empty rollup being a pass.
     expected = [w for w in policy["ci_workflows"] if applicable(w["paths"], paths)]
     require(expected, "No applicable CI policy; configure verification before merging")
     runs = api.pages(f"actions/runs?head_sha={sha}", "workflow_runs")
-    for workflow in expected:
+    for workflow in ([] if automation else expected):
         matching = [
             r
             for r in runs
@@ -614,12 +618,21 @@ def snapshot(api, number, head, policy, review_id=None, *, allowed_ids=None):
         type(review.get("id")) is int and review["id"] == review_id,
         "Review ID mismatch",
     )
-    evidence = review_record(review, pr, operator_ids() if allowed_ids is None else allowed_ids)
+    if policy.get("automation_required"):
+        from github_ai_automation.merge import verify_review
+        from github_ai_automation.contracts import Blocked as AutomationBlocked
+
+        try:
+            evidence = verify_review(api.repo, os.environ.get("GH_TOKEN", ""), review, pr)
+        except AutomationBlocked as exc:
+            raise Blocked(exc.code) from None
+    else:
+        evidence = review_record(review, pr, operator_ids() if allowed_ids is None else allowed_ids)
     if "sdlc" in evidence:
-        require(policy.get("sdlc_contract") == "workflow/sdlc-delivery-v1", "SDLC broker contract is not enabled")
+        require(policy.get("sdlc_contract") == "workflow/sdlc-delivery-v2", "SDLC broker contract is not enabled")
     no_objections(api.pages(f"pulls/{number}/reviews"))
     api.threads(number)
-    checks_ready(api, pr, files, policy)
+    checks_ready(api, pr, files, policy, evidence.get("automation"))
     if pr["mergeable"] is None:
         raise Pending("Mergeability is not yet established")
     require(
@@ -649,7 +662,8 @@ def admitted_intent(api, number, head, review_id, method, policy):
         "New merges require explicit operator dispatch",
     )
     require(
-        int(os.environ.get("GITHUB_ACTOR_ID", "0")) in operator_ids(),
+        (policy.get("automation_required") and int(os.environ.get("GITHUB_ACTOR_ID", "0")) == ACTIONS_BOT_ID)
+        or int(os.environ.get("GITHUB_ACTOR_ID", "0")) in operator_ids(),
         "Unauthorized dispatcher",
     )
     require(
@@ -663,6 +677,7 @@ def admitted_intent(api, number, head, review_id, method, policy):
     )
     return {
         "schema": INTENT_SCHEMA,
+        **({"automation": review["automation"]} if "automation" in review else {}),
         **({"sdlc": review["sdlc"]} if "sdlc" in review else {}),
         "repository": api.repo,
         "pr": number,
@@ -686,6 +701,14 @@ def admitted_intent(api, number, head, review_id, method, policy):
 def execute(api, number, head, review_id, method, policy, intent=None):
     default = trusted_runtime(api)
     current = api.api(f"pulls/{number}")
+    def execution_lease():
+        if policy.get("automation_required"):
+            from github_ai_automation.merge import assert_execution_lease
+            from github_ai_automation.contracts import Blocked as AutomationBlocked
+            try:
+                assert_execution_lease(current)
+            except AutomationBlocked as exc:
+                raise Blocked(exc.code) from None
     if current.get("merged"):
         require(
             current["head"]["sha"] == head
@@ -741,6 +764,7 @@ def execute(api, number, head, review_id, method, policy, intent=None):
         "PR changed before approval",
     )
     approvals = api.pages(f"pulls/{number}/reviews")
+    execution_lease()
     if not any(
         r["state"] == "APPROVED"
         and r["commit_id"] == head
@@ -759,8 +783,9 @@ def execute(api, number, head, review_id, method, policy, intent=None):
     # Repeat admission/CI/objections after approval. A new push cannot inherit it.
     refreshed, _, refreshed_review = snapshot(api, number, head, policy, review_id)
     require(
-        refreshed_review.get("sdlc") == expected.get("sdlc"),
-        "SDLC admission evidence changed after approval; qualify and review again",
+        refreshed_review.get("sdlc") == expected.get("sdlc")
+        and refreshed_review.get("automation") == expected.get("automation"),
+        "SDLC or automation admission evidence changed after approval; qualify and review again",
     )
     require(
         refreshed["base"]["sha"] == expected["base_sha"],
@@ -773,6 +798,16 @@ def execute(api, number, head, review_id, method, policy, intent=None):
         "merge_method": method,
     }
     try:
+        execution_lease()
+        if policy.get("automation_required"):
+            receipt = os.environ.get("AI_AUTOMATION_MERGE_DISPATCH_RECEIPT")
+            require(bool(receipt), "Serialized merge dispatch receipt required")
+            # Persist before the remote call. A missing marker is safe to retry
+            # only after this exact owner process has exited.
+            with open(receipt, "x") as stream:
+                json.dump({"head": head, "state": "submitting"}, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
         result = api.api(f"pulls/{number}/merge-async", "PUT", payload)
     except Blocked as exc:
         raise Blocked(
@@ -788,12 +823,13 @@ def execute(api, number, head, review_id, method, policy, intent=None):
     }
 
 
-def candidates(api, event):
+def candidates(api, event, policy=None):
     # Automatic events observe CI only; review evidence never implies merge intent.
     if os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
         return []
     require(
-        int(os.environ.get("GITHUB_ACTOR_ID", "0")) in operator_ids(),
+        ((policy or {}).get("automation_required") and int(os.environ.get("GITHUB_ACTOR_ID", "0")) == ACTIONS_BOT_ID)
+        or int(os.environ.get("GITHUB_ACTOR_ID", "0")) in operator_ids(),
         "Unauthorized dispatcher",
     )
     inputs = event["inputs"]
@@ -815,6 +851,10 @@ def candidates(api, event):
 
 
 def ci_targets(api, event, policy, *, recovery=False):
+    if policy.get("automation_required"):
+        # The request controller owns candidate CI and status publication.
+        # Ordinary PR callbacks and recovery must not enroll the open backlog.
+        return []
     default = api.repo_info()["default_branch"]
     if recovery:
         require(
@@ -898,7 +938,20 @@ def publish_ci(api, number, head, policy):
     try:
         files = api.pages(f"pulls/{number}/files")
         require(len(files) == pr["changed_files"], "Incomplete changed-file listing")
-        checks_ready(api, pr, files, policy)
+        automation = None
+        if policy.get("automation_required"):
+            reviews = api.pages(f"pulls/{number}/reviews")
+            machine = [r for r in reviews if r["user"]["id"] == ACTIONS_BOT_ID
+                       and r.get("commit_id") == head and r.get("state") == "COMMENTED"
+                       and '"github-ai-automation/review-v2"' in r.get("body", "")]
+            if machine:
+                from github_ai_automation.merge import verify_review
+                from github_ai_automation.contracts import Blocked as AutomationBlocked
+                try:
+                    automation = verify_review(api.repo, os.environ.get("GH_TOKEN", ""), machine[-1], pr)["automation"]
+                except AutomationBlocked as exc:
+                    raise Blocked(exc.code) from None
+        checks_ready(api, pr, files, policy, automation)
     except Pending as exc:
         state, reason = "pending", str(exc)
     except Blocked as exc:
@@ -988,7 +1041,7 @@ def main():
             )
         elif args.action == "candidates":
             event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-            result = candidates(api, event)
+            result = candidates(api, event, policy)
         elif args.action == "check":
             _, files, _ = snapshot(api, args.pr, args.head, policy, args.review_id)
             result = {

@@ -186,12 +186,18 @@ def test_composite_dry_run_then_one_lock_and_one_prerequisite(composed):
     plan = converge(api, config, "enable-standby-auto-healing", dry_run=True, approve=None)
     assert state["applies"] == state["locks"] == 0
     assert plan.impact.vpn_traffic_interruption is True
-    assert (
-        converge(
-            api, config, "enable-standby-auto-healing", dry_run=False, approve=plan.approval.digest
+    # The public apply boundary owns the sole deployment lock.
+    with api.VMHAApplyLock():
+        assert (
+            converge(
+                api,
+                config,
+                "enable-standby-auto-healing",
+                dry_run=False,
+                approve=plan.approval.digest,
+            )
+            == "verified"
         )
-        == "verified"
-    )
     assert state["applies"] == state["locks"] == 1
 
 
@@ -242,7 +248,7 @@ def test_prerequisite_admission_is_rechecked_under_lock(composed):
         yield
 
     api.VMHAApplyLock = racing_lock
-    with pytest.raises(RuntimeError, match="existing workflow"):
+    with api.VMHAApplyLock(), pytest.raises(RuntimeError, match="existing workflow"):
         converge(
             api, config, "enable-standby-auto-healing", dry_run=False, approve=plan.approval.digest
         )

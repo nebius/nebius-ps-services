@@ -20,7 +20,11 @@ from typing import Any
 FAILURE_EVENT_SCHEMA = "agentic-sdlc/failure-event-v2"
 DIAGNOSIS_SCHEMA = "agentic-sdlc/diagnosis-v3"
 CLASSIFICATION_SCHEMA = "agentic-sdlc/failure-classification-v2"
-REPAIR_CONTROL_SCHEMA = "agentic-sdlc/repair-control-v2"
+REPAIR_CONTROL_SCHEMA = "agentic-sdlc/repair-control-v3"
+REPAIR_CONTEXT_FIELDS = (
+    "active_blocker", "current_event_id", "current_diagnosis_id",
+    "current_classification_id", "revalidation", "status",
+)
 REPAIR_JOURNAL_SCHEMA = "agentic-sdlc/repair-journal-event-v2"
 DESIGN_APPROVAL_SCHEMA = "agentic-sdlc/design-approval-v2"
 REVALIDATION_EVIDENCE_SCHEMA = "agentic-sdlc/revalidation-evidence-v2"
@@ -66,6 +70,7 @@ EXECUTION_LIFECYCLES = {
 }
 DIAGNOSIS_RESULTS = {
     "localized_implementation_defect",
+    "plan_defect",
     "test_defect",
     "validation_defect",
     "evaluation_defect",
@@ -112,6 +117,7 @@ SENSITIVE_PATTERNS = (
 
 RESULT_TO_CLASSIFICATION = {
     "localized_implementation_defect": "IMPLEMENTATION_DEFECT",
+    "plan_defect": "PLAN_DEFECT",
     "test_defect": "TEST_DEFECT",
     "validation_defect": "VALIDATION_DEFECT",
     "evaluation_defect": "EVALUATION_DEFECT",
@@ -520,6 +526,7 @@ def build_diagnosis(payload: dict[str, Any], event: dict[str, Any]) -> dict[str,
     }
     if result_name in {
         "localized_implementation_defect",
+        "plan_defect",
         "test_defect",
         "validation_defect",
         "evaluation_defect",
@@ -556,7 +563,7 @@ def build_diagnosis(payload: dict[str, Any], event: dict[str, Any]) -> dict[str,
             diagnosis["evidence_references"], "evidence_references"
         )
         diagnosis["constraints"] = _string_list(diagnosis["constraints"], "constraints")
-    if result_name in {"localized_implementation_defect", "validation_defect"}:
+    if result_name in {"localized_implementation_defect", "validation_defect", "plan_defect"}:
         diagnosis["bounded_repair_target"] = _bounded_string(
             diagnosis["bounded_repair_target"], "bounded_repair_target"
         )
@@ -853,6 +860,8 @@ def _new_control(event: dict[str, Any]) -> dict[str, Any]:
         "execution_id": event["execution_id"],
         "active_blocker": _new_blocker(event),
         "previous_blockers": [],
+        "suspended_repairs": [],
+        "resumptions": {},
         "feature_dispatches": 0,
         "feature_dispatch_limit": 4,
         "route_history": [],
@@ -872,6 +881,14 @@ def _load_control(run_dir: Path, execution_id: str) -> dict[str, Any]:
         control.get("schema") != REPAIR_CONTROL_SCHEMA
         or control.get("execution_id") != execution_id
         or not isinstance(control.get("active_blocker"), dict)
+        or not isinstance(control.get("suspended_repairs"), list)
+        or len(control["suspended_repairs"]) > 4
+        or any(not isinstance(item, str) or re.fullmatch(r"[0-9a-f]{64}", item) is None
+               for item in control["suspended_repairs"])
+        or len(set(control["suspended_repairs"])) != len(control["suspended_repairs"])
+        or not isinstance(control.get("resumptions"), dict)
+        or any(not isinstance(item, str) or re.fullmatch(r"[0-9a-f]{64}", item) is None
+               for pair in control["resumptions"].items() for item in pair)
     ):
         raise RepairControlError("STATE_INVALID", "repair control schema is invalid")
     diagnosis_id = control.get("current_diagnosis_id")
@@ -880,6 +897,12 @@ def _load_control(run_dir: Path, execution_id: str) -> dict[str, Any]:
         if event["blocker_key"] != control["active_blocker"].get("blocker_key"):
             raise RepairControlError("STATE_INVALID", "active diagnosis blocker is invalid")
         _load_diagnosis(run_dir, execution_id, diagnosis_id, event)
+    for identity in control["suspended_repairs"]:
+        _load_suspension(run_dir, execution_id, identity)
+    for dispatch_id, identity in control["resumptions"].items():
+        resumed = _load_resumption(run_dir, execution_id, identity)
+        if resumed["completed_attempt"]["dispatch_id"] != dispatch_id:
+            raise RepairControlError("STATE_TAMPERED", "resumption dispatch changed")
     return control
 
 
@@ -904,6 +927,134 @@ def _archive_active_blocker(control: dict[str, Any]) -> None:
             "stop_trigger": blocker["stop_trigger"],
         }
     )
+
+
+def _pending_repair(run_dir: Path, execution_id: str, context: dict) -> tuple[dict, dict]:
+    classification = _load_classification(run_dir, execution_id, context["current_classification_id"])
+    event = _load_event(run_dir, execution_id, context["current_event_id"])
+    blocker = context["active_blocker"]
+    pending = [item for item in blocker["attempts"] if item.get("result") is None]
+    if (context["status"] != "remediating" or blocker["status"] != "remediating"
+            or classification["status"] != "routed" or len(pending) != 1
+            or classification["event_id"] != event["event_id"]
+            or classification["blocker_key"] != blocker["blocker_key"]
+            or event["blocker_key"] != blocker["blocker_key"]
+            or classification.get("diagnosis_id") != context["current_diagnosis_id"]
+            or blocker["stop_trigger"] is not None
+            or not 0 < blocker["total_attempts"] <= blocker["attempt_limit"]
+            or blocker["localized_attempts"] > blocker["localized_limit"]
+            or blocker["design_attempts"] > blocker["design_limit"]
+            or blocker["active_seconds"] >= blocker["time_limit_seconds"]):
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "pending repair context is invalid")
+    attempt = pending[0]
+    if re.fullmatch(r"[0-9a-f]{64}", str(attempt.get("dispatch_id"))) is None:
+        raise RepairControlError("STATE_TAMPERED", "pending dispatch identity is invalid")
+    path = _repair_root(run_dir, execution_id) / "dispatches" / f"{attempt['dispatch_id']}.json"
+    receipt = _read_json(path)
+    identity = {name: receipt.get(name) for name in (
+        "blocker_key", "ordinal", "classification_id", "remedy_scale", "hypothesis", "evidence_reference"
+    )}
+    if (receipt != attempt or _digest(identity) != attempt["dispatch_id"]
+            or attempt["classification_id"] != classification["classification_id"]
+            or attempt["event_id"] != event["event_id"]
+            or attempt["status"] != "dispatched"):
+        raise RepairControlError("STATE_TAMPERED", "pending dispatch authority changed")
+    return classification, attempt
+
+
+def _load_suspension(run_dir: Path, execution_id: str, identity: str) -> dict:
+    value = _read_json(_repair_root(run_dir, execution_id) / "suspended" / f"{identity}.json")
+    if (value.get("schema") != "agentic-sdlc/suspended-repair-v1"
+            or value.get("execution_id") != execution_id
+            or _digest(value) != identity):
+        raise RepairControlError("STATE_TAMPERED", "suspended repair identity changed")
+    _pending_repair(run_dir, execution_id, value["context"])
+    _validated_invalidations(run_dir, execution_id, value["invalidations"])
+    return value
+
+
+def _load_resumption(run_dir: Path, execution_id: str, identity: str) -> dict:
+    value = _read_json(_repair_root(run_dir, execution_id) / "resumptions" / f"{identity}.json")
+    if (value.get("schema") != "agentic-sdlc/repair-resumption-v1"
+            or value.get("execution_id") != execution_id or _digest(value) != identity):
+        raise RepairControlError("STATE_TAMPERED", "repair resumption identity changed")
+    parent = _load_suspension(run_dir, execution_id, value["suspension_id"])
+    attempt = value["completed_attempt"]
+    context = value["completed_context"]
+    classification = _load_classification(run_dir, execution_id, context["current_classification_id"])
+    dispatch = _read_json(_repair_root(run_dir, execution_id) / "dispatches" / f"{attempt['dispatch_id']}.json")
+    if (attempt.get("result") != "succeeded" or attempt.get("status") != "completed"
+            or dispatch != {**attempt, "status": "dispatched", "result": None, "verification_reference": None}
+            or attempt["classification_id"] != classification["classification_id"]
+            or attempt not in context["active_blocker"]["attempts"]
+            or parent["dispatch_id"] != value["parent_dispatch_id"]):
+        raise RepairControlError("STATE_TAMPERED", "resumption completion authority changed")
+    _validated_invalidations(run_dir, execution_id, value["invalidations"])
+    return value
+
+
+def _suspend_pending_repair(run_dir: Path, control: dict, event: dict) -> bool:
+    if control["status"] != "remediating":
+        return False
+    _classification, attempt = _pending_repair(run_dir, event["execution_id"], control)
+    if len(control["suspended_repairs"]) >= 4:
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "suspended repair depth exceeded")
+    value = {
+        "schema": "agentic-sdlc/suspended-repair-v1", "execution_id": event["execution_id"],
+        "interruption_event_id": event["event_id"], "dispatch_id": attempt["dispatch_id"],
+        "feature_dispatches": control["feature_dispatches"],
+        "context": {key: control[key] for key in REPAIR_CONTEXT_FIELDS},
+        "invalidations": control["invalidations"],
+    }
+    identity = _digest(value)
+    _store_immutable(_repair_root(run_dir, event["execution_id"]) / "suspended" / f"{identity}.json",
+                     value, "suspended repair")
+    control["suspended_repairs"].append(identity)
+    return True
+
+
+def _resume_suspended_repair(run_dir: Path, control: dict, attempt: dict, active_seconds_delta: int) -> str | None:
+    if not control["suspended_repairs"]:
+        return None
+    execution_id = control["execution_id"]
+    identity = control["suspended_repairs"][-1]
+    parent = _load_suspension(run_dir, execution_id, identity)
+    classification, pending = _pending_repair(run_dir, execution_id, parent["context"])
+    invalidations = _validated_invalidations(run_dir, execution_id, control["invalidations"])
+    child = _load_classification(run_dir, execution_id, control["current_classification_id"])
+    interrupted = _load_event(run_dir, execution_id, parent["interruption_event_id"])
+    if (any(item["surface"] not in classification["invalidates"] for item in invalidations)
+            or any(item not in invalidations for item in parent["invalidations"])
+            or any({"event_id": child["event_id"], "classification_id": child["classification_id"],
+                    "surface": surface} not in invalidations for surface in child["invalidates"])
+            or interrupted["blocker_key"] != control["active_blocker"]["blocker_key"]
+            or not parent["feature_dispatches"] < control["feature_dispatches"] <= control["feature_dispatch_limit"]
+            or control["active_blocker"]["active_seconds"] >= control["active_blocker"]["time_limit_seconds"]
+            or any(item["result"] is None for item in control["active_blocker"]["attempts"])
+            or attempt["classification_id"] != control["current_classification_id"]):
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "interposed repair cannot safely resume its parent")
+    value = {
+        "schema": "agentic-sdlc/repair-resumption-v1", "execution_id": execution_id,
+        "suspension_id": identity, "parent_dispatch_id": pending["dispatch_id"],
+        "completed_attempt": attempt, "active_seconds_delta": active_seconds_delta,
+        "completed_context": {key: control[key] for key in REPAIR_CONTEXT_FIELDS},
+        "feature_dispatches": control["feature_dispatches"], "invalidations": invalidations,
+    }
+    resumption_id = _digest(value)
+    _store_immutable(_repair_root(run_dir, execution_id) / "resumptions" / f"{resumption_id}.json",
+                     value, "repair resumption")
+    _archive_active_blocker(control)
+    control.update(parent["context"])
+    control["suspended_repairs"].pop()
+    control["resumptions"][attempt["dispatch_id"]] = resumption_id
+    route = next((item for item in reversed(control["route_history"])
+                  if item["classification_id"] == classification["classification_id"]), None)
+    if route is None:
+        raise RepairControlError("STATE_TAMPERED", "suspended repair route is missing")
+    control["route_history"].append({
+        **route, "resumed_from_dispatch_id": attempt["dispatch_id"], "resumption_id": resumption_id,
+    })
+    return pending["dispatch_id"]
 
 
 def _validated_invalidations(
@@ -986,7 +1137,7 @@ def _archive_revalidation(
 
 
 def _record_failure_event_unlocked(
-    run_dir: Path, payload: dict[str, Any]
+    run_dir: Path, payload: dict[str, Any], *, worker_context=None
 ) -> dict[str, Any]:
     event = build_failure_event(payload)
     path = _event_path(run_dir, event["execution_id"], event["event_id"])
@@ -999,6 +1150,17 @@ def _record_failure_event_unlocked(
         event = existing
         created = False
     else:
+        if _worker_bound(event):
+            _validate_worker_failure(run_dir, event, context=worker_context)
+            # A later checkpoint cannot rebind an already observed receipt and
+            # erase its classification. Historical event replay above stays pure.
+            for prior_path in path.parent.glob("*.json"):
+                prior = _load_event(run_dir, event["execution_id"], prior_path.stem)
+                if prior["evidence_digests"].get("worker_result") == event["evidence_digests"]["worker_result"]:
+                    if any(prior[key] != event[key] for key in (
+                        "fingerprints", "integration_commit", "phase", "execution_lifecycle",
+                    )):
+                        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "worker receipt already has a different failure binding")
         created = _store_immutable(path, event, "failure event")
     control_path = _control_path(run_dir, event["execution_id"])
     transition_id = _digest({"action": "record-failure", "event_id": event["event_id"]})
@@ -1021,9 +1183,18 @@ def _record_failure_event_unlocked(
                 "BLOCKER_IDENTITY_UNPROVEN",
                 "a different blocker requires causal-independence evidence",
             )
+        for identity in control["suspended_repairs"]:
+            suspended = _load_suspension(run_dir, event["execution_id"], identity)
+            if suspended["context"]["active_blocker"]["blocker_key"] == event["blocker_key"]:
+                raise RepairControlError("REPAIR_NOT_AUTHORIZED", "suspended blocker must resume without a new budget")
+        for identity in control["resumptions"].values():
+            resumed = _load_resumption(run_dir, event["execution_id"], identity)
+            if resumed["completed_context"]["current_event_id"] == event["event_id"]:
+                raise RepairControlError("REPAIR_NOT_AUTHORIZED", "completed interposed event cannot become active again")
         _archive_revalidation(run_dir, control, transition_id)
         if current_key != event["blocker_key"]:
-            _archive_active_blocker(control)
+            if not _suspend_pending_repair(run_dir, control, event):
+                _archive_active_blocker(control)
             control["active_blocker"] = _new_blocker(event)
             control["status"] = "active"
         control["current_event_id"] = event["event_id"]
@@ -1248,6 +1419,132 @@ def _current_integration_head(run_dir: Path, coordinator: dict[str, Any]) -> str
             "REVALIDATION_INVALID", "current integration commit is malformed"
         )
     return observed
+
+
+def _worker_bound(event):
+    evidence = event.get("evidence_digests")
+    return isinstance(evidence, dict) and "worker_result" in evidence
+
+
+def _workflow_engine():
+    import sys
+    scripts = Path(__file__).resolve().parents[2] / "worktree/scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    import workflow_execution
+    return workflow_execution
+
+
+@contextmanager
+def _failure_transition_lock(run_dir, execution_id, *, worker_bound):
+    """Keep project -> execution -> repair lock ordering for worker effects."""
+    if not worker_bound:
+        with _transition_lock(run_dir, execution_id):
+            yield
+        return
+    engine = _workflow_engine()
+    from workflow_state import WorkflowError
+    try:
+        with engine._execution_transition_lock(run_dir, execution_id):
+            with _transition_lock(run_dir, execution_id):
+                yield
+    except (WorkflowError, engine.ExecutionError) as error:
+        raise RepairControlError(error.code, str(error)) from error
+
+
+def _worker_failure_context(run_dir, execution_id, receipt_sha256, *, wave_id=None, task_id=None):
+    """Read a current blocked receipt under owner locks; never accept caller authority."""
+    engine = _workflow_engine()
+    from workflow_objectives import authorize_coordinator
+    from workflow_state import WorkflowError, read
+    from workflow_transition import runtime_session_identity
+    from workflow_worker_results import _context, read_receipt, receipt_path
+    try:
+        run, _ = authorize_coordinator(run_dir, runtime_session_identity(), owner="agentic-sdlc")
+        checkpoint_path = run_dir.resolve() / "current-state.json"
+        checkpoint = _load_private_state_json(checkpoint_path, "current state")
+        if (checkpoint.get("run_id") != run["run_id"]
+                or checkpoint.get("project_id") != run["project_id"]
+                or checkpoint.get("current_execution") != execution_id):
+            raise RepairControlError("REPAIR_NOT_AUTHORIZED", "checkpoint belongs to a different execution")
+        fingerprints = _current_fingerprints(run_dir)
+        coordinator = engine._load_coordinator(run_dir, execution_id)
+        active_wave = coordinator.get("active_wave")
+        if not active_wave or (wave_id is not None and wave_id != active_wave):
+            raise RepairControlError("REPAIR_NOT_AUTHORIZED", "failure has no current worker wave")
+        wave = read(engine.wave_path(run_dir, execution_id, active_wave))
+        matches = []
+        for current_task in wave["active_task_ids"]:
+            if task_id is not None and current_task != task_id:
+                continue
+            assignment = read(engine.assignment_path(run_dir, execution_id, active_wave, current_task))
+            if (assignment.get("run_dir") != str(run_dir)
+                    or assignment.get("execution_id") != execution_id
+                    or assignment.get("wave_id") != active_wave
+                    or assignment.get("task_id") != current_task):
+                raise RepairControlError("REPAIR_NOT_AUTHORIZED", "worker assignment path identity changed")
+            state = read(engine.task_path(run_dir, execution_id, active_wave, current_task))
+            if not state.get("attempt"):
+                continue
+            path = receipt_path(assignment, state["attempt"])
+            if not path.exists() and not path.is_symlink():
+                continue
+            if read(path).get("receipt_sha256") != receipt_sha256:
+                continue
+            assignment, state = _context(run_dir, execution_id, active_wave, current_task)
+            _, receipt = read_receipt(assignment, state)
+            if state["status"] != "running" or receipt["worker_result"]["status"] != "blocked":
+                raise RepairControlError("REPAIR_NOT_AUTHORIZED", "failure must bind a current blocked worker")
+            matches.append(receipt)
+        if len(matches) != 1:
+            raise RepairControlError("REPAIR_NOT_AUTHORIZED", "exact current blocked receipt is required")
+        head = _current_integration_head(run_dir, coordinator)
+        if head != coordinator["integration_head"]:
+            raise RepairControlError("REPAIR_NOT_AUTHORIZED", "integration HEAD changed")
+        if _load_private_state_json(checkpoint_path, "current state") != checkpoint:
+            raise RepairControlError("REPAIR_NOT_AUTHORIZED", "checkpoint changed during failure capture")
+        return {"checkpoint": checkpoint, "binding": {
+                "execution_id": execution_id, "phase": "sdlc-implement-plan",
+                "execution_lifecycle": "active_task", "integration_commit": head,
+                "fingerprints": fingerprints,
+                "worker_result": "sha256:" + matches[0]["receipt_sha256"]}}
+    except (WorkflowError, engine.ExecutionError) as error:
+        raise RepairControlError(error.code, str(error)) from error
+
+
+def _validate_worker_failure(run_dir, event, *, context=None):
+    expected = event["evidence_digests"]["worker_result"]
+    if context is None:
+        context = _worker_failure_context(run_dir, event["execution_id"], expected.removeprefix("sha256:"))
+    binding = context["binding"]
+    if (any(event.get(key) != value for key, value in binding.items() if key != "worker_result")
+            or expected != binding["worker_result"]
+            or _load_private_state_json(run_dir.resolve() / "current-state.json", "current state") != context["checkpoint"]):
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "worker failure context is stale or incomplete")
+
+
+def capture_worker_failure(run_dir, execution_id, wave_id, task_id, receipt_sha256, payload):
+    """Derive and record initial worker failure bindings in one owner transition."""
+    execution_id = _feature_id(execution_id)
+    if not isinstance(payload, dict) or not isinstance(payload.get("evidence_digests", {}), dict):
+        raise RepairControlError("RECORD_INVALID", "worker diagnostic input must contain an evidence object")
+    with _failure_transition_lock(run_dir, execution_id, worker_bound=True):
+        context = _worker_failure_context(run_dir, execution_id, receipt_sha256,
+                                          wave_id=wave_id, task_id=task_id)
+        binding = context["binding"]
+        candidate = dict(payload)
+        evidence = dict(candidate.get("evidence_digests", {}))
+        if "worker_result" in evidence and evidence["worker_result"] != binding["worker_result"]:
+            raise RepairControlError("REPAIR_NOT_AUTHORIZED", "caller worker receipt conflicts with capture")
+        evidence["worker_result"] = binding["worker_result"]
+        for key, value in binding.items():
+            if key == "worker_result":
+                continue
+            if key in candidate and candidate[key] != value:
+                raise RepairControlError("REPAIR_NOT_AUTHORIZED", "caller context conflicts with capture")
+            candidate[key] = value
+        candidate["evidence_digests"] = evidence
+        return _record_failure_event_unlocked(run_dir, candidate, worker_context=context)
 
 
 def _current_promoted_head(run_dir: Path, coordinator: dict[str, Any]) -> str:
@@ -1503,6 +1800,18 @@ def _record_diagnosis_unlocked(
     execution_id = _feature_id(payload.get("execution_id"))
     event_id = _bounded_string(payload.get("event_id"), "event_id", maximum=64)
     event = _load_event(run_dir, execution_id, event_id)
+    helper_root = _repair_root(run_dir, execution_id) / "helpers" / event_id
+    if helper_root.exists():
+        import sys
+        scripts = Path(__file__).resolve().parents[2] / "worktree/scripts"
+        if str(scripts) not in sys.path:
+            sys.path.insert(0, str(scripts))
+        from workflow_diagnostics import require_reconciled
+        from workflow_state import WorkflowError
+        try:
+            require_reconciled(run_dir, execution_id, event_id)
+        except WorkflowError as error:
+            raise RepairControlError(error.code, str(error)) from error
     diagnosis = build_diagnosis(payload, event)
     path = _diagnosis_path(run_dir, execution_id, diagnosis["diagnosis_id"])
     if path.exists() or path.is_symlink():
@@ -1662,8 +1971,11 @@ def _classification_from(
             route, corrective_mode = "sdlc-update-documents", None
             invalidates = ["documentation", "alignment", "commit"]
     elif classification == "TEST_DEFECT":
-        route, corrective_mode = "sdlc-tdd", "test_repair"
+        route = "sdlc-tdd"
+        corrective_mode = "test_revision" if event["execution_lifecycle"] == "active_task" else "test_repair"
         invalidates = ["tests", "evaluation", "documentation", "alignment", "commit"]
+        if corrective_mode == "test_revision":
+            invalidates = ["plan", "execution_preparation", "implementation", "validation", *invalidates]
     elif classification == "PLAN_DEFECT":
         route, corrective_mode = "sdlc-create-plan", "plan_v_next"
         invalidates = [
@@ -1706,6 +2018,13 @@ def _classification_from(
     elif classification == "EVALUATION_DEFECT":
         route, corrective_mode = "sdlc-evaluate", "evaluator_repair_same_commit"
         invalidates = ["evaluation"]
+    elif (classification == "ENVIRONMENT_DEFECT"
+          and event["phase"] in {"sdlc-implement-plan", "sdlc-uat-tests"}
+          and event["execution_lifecycle"] != "active_task"
+          and "task_acceptance" in event["evidence_digests"]):
+        # The acceptance producer consumes a one-use charged dispatch bound to
+        # this failure, reruns the exact frozen check and records its outcome.
+        route, corrective_mode, invalidates = event["phase"], "acceptance_retry_same_tree", []
     elif classification == "ENVIRONMENT_DEFECT":
         surface = _environment_gate_surface(event["phase"])
         route, corrective_mode, invalidates = (
@@ -1916,6 +2235,89 @@ def _load_classification(
     return record
 
 
+def worker_recovery_authority(
+    run_dir: Path, execution_id: str, worker_result_sha256: str, integration_commit: str,
+) -> dict[str, Any]:
+    """Read the charged repair for one exact blocked active-task result."""
+    execution_id = _feature_id(execution_id)
+    if not isinstance(worker_result_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", worker_result_sha256) is None:
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "blocked worker result identity is invalid")
+    control = _load_control(run_dir, execution_id)
+    classification_id = control.get("current_classification_id")
+    classification = _load_classification(run_dir, execution_id, classification_id)
+    event = _load_event(run_dir, execution_id, classification["event_id"])
+    mode = classification.get("corrective_mode")
+    same_attempt = (
+        classification.get("classification") in {"IMPLEMENTATION_DEFECT", "ENVIRONMENT_DEFECT"}
+        and classification.get("next_recommended_skill") == "sdlc-implement-plan"
+        and mode == "existing_task_attempt"
+    ) or (
+        classification.get("classification") == "VALIDATION_DEFECT"
+        and classification.get("next_recommended_skill") == "sdlc-validate-codes"
+        and mode is None
+    )
+    fingerprints = _validate_digests(_current_fingerprints(run_dir), "current fingerprints")
+    if (not same_attempt or classification.get("status") != "routed"
+            or classification.get("confidence") not in {"proven", "high_confidence"}
+            or event.get("execution_lifecycle") != "active_task"
+            or event.get("integration_commit") != integration_commit
+            or event.get("fingerprints") != fingerprints
+            or event["evidence_digests"].get("worker_result") != "sha256:" + worker_result_sha256
+            or control.get("current_event_id") != event["event_id"]
+            or control.get("status") != "remediating"
+            or control["active_blocker"].get("status") != "remediating"):
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "blocked worker recovery is not classified for this result and target")
+    attempts = control["active_blocker"].get("attempts")
+    if not isinstance(attempts, list) or not attempts or not isinstance(attempts[-1], dict):
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "blocked worker recovery has no counted dispatch")
+    active = attempts[-1]
+    dispatch_id = active.get("dispatch_id")
+    if not isinstance(dispatch_id, str) or re.fullmatch(r"[0-9a-f]{64}", dispatch_id) is None:
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "blocked worker dispatch identity is invalid")
+    receipt = _read_json(_repair_root(run_dir, execution_id) / "dispatches" / f"{dispatch_id}.json")
+    identity = {name: receipt.get(name) for name in (
+        "blocker_key", "ordinal", "classification_id", "remedy_scale", "hypothesis", "evidence_reference"
+    )}
+    if (_digest(identity) != dispatch_id or receipt != active
+            or receipt.get("dispatch_id") != dispatch_id
+            or receipt.get("classification_id") != classification_id
+            or receipt.get("event_id") != event["event_id"]
+            or receipt.get("diagnosis_id") != classification.get("diagnosis_id")
+            or receipt.get("blocker_key") != event["blocker_key"]
+            or receipt.get("status") != "dispatched" or receipt.get("result") is not None
+            or receipt.get("remedy_scale") != "localized"):
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "blocked worker repair dispatch is not active and exact")
+    return {
+        "event_id": event["event_id"], "classification_id": classification_id,
+        "dispatch_id": dispatch_id, "classification": classification["classification"],
+        "corrective_mode": mode, "integration_commit": integration_commit,
+        "fingerprints": fingerprints, "worker_result_receipt_sha256": worker_result_sha256,
+    }
+
+
+def acceptance_retry_authority(run_dir: Path, execution_id: str, dispatch_id: str,
+                               failure_sha256: str) -> dict[str, Any]:
+    """Admit one already-budgeted repair dispatch for exact failed acceptance."""
+    execution_id = _feature_id(execution_id)
+    if re.fullmatch(r"[0-9a-f]{64}", dispatch_id) is None:
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "invalid acceptance repair dispatch")
+    receipt = _read_json(_repair_root(run_dir, execution_id) / "dispatches" / f"{dispatch_id}.json")
+    identity = {name: receipt.get(name) for name in (
+        "blocker_key", "ordinal", "classification_id", "remedy_scale", "hypothesis", "evidence_reference"
+    )}
+    classification = _load_classification(run_dir, execution_id, receipt["classification_id"])
+    event = _load_event(run_dir, execution_id, classification["event_id"])
+    control = _load_control(run_dir, execution_id)
+    if (_digest(identity) != dispatch_id or receipt.get("dispatch_id") != dispatch_id
+            or receipt.get("event_id") != event["event_id"] or classification.get("status") != "routed"
+            or event["evidence_digests"].get("task_acceptance") != "sha256:" + failure_sha256
+            or control.get("status") != "remediating"
+            or control.get("current_classification_id") != receipt["classification_id"]
+            or receipt not in control["active_blocker"]["attempts"]):
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "acceptance retry requires an active charged dispatch bound to its failure")
+    return receipt
+
+
 def integrated_wave_authority(
     run_dir: Path, execution_id: str, classification_id: str, dispatch_id: str,
     *, require_active: bool = True,
@@ -1929,7 +2331,7 @@ def integrated_wave_authority(
     event = _load_event(run_dir, execution_id, classification["event_id"])
     diagnosis_id = classification.get("diagnosis_id")
     if (
-        classification.get("classification") != "IMPLEMENTATION_DEFECT"
+        classification.get("classification") not in {"IMPLEMENTATION_DEFECT", "PLAN_DEFECT"}
         or classification.get("status") != "routed"
         or classification.get("execution_id") != execution_id
         or event.get("execution_id") != execution_id
@@ -1938,7 +2340,8 @@ def integrated_wave_authority(
     ):
         raise RepairControlError("REPAIR_NOT_AUTHORIZED", "integrated repair is not classified")
     diagnosis = _load_diagnosis(run_dir, execution_id, diagnosis_id, event)
-    if diagnosis.get("result") != "localized_implementation_defect" or diagnosis.get(
+    expected_result = {"IMPLEMENTATION_DEFECT": "localized_implementation_defect", "PLAN_DEFECT": "plan_defect"}
+    if diagnosis.get("result") != expected_result[classification["classification"]] or diagnosis.get(
         "confidence"
     ) not in {"proven", "high_confidence"}:
         raise RepairControlError("REPAIR_NOT_AUTHORIZED", "localized diagnosis is not proven")
@@ -1965,9 +2368,59 @@ def integrated_wave_authority(
     return {
         "event_id": event["event_id"], "classification_id": classification_id,
         "dispatch_id": dispatch_id, "diagnosis_id": diagnosis_id,
+        "classification": classification["classification"],
         "integration_commit": event["integration_commit"],
         "blocker_key": event["blocker_key"], "oracle": diagnosis["regression_oracle"],
     }
+
+
+def observe_integrated_wave_repair(
+    run_dir: Path, execution_id: str, classification_id: str, dispatch_id: str,
+) -> dict[str, Any]:
+    """Validate a pending repair's current lineage without granting execution authority."""
+    authority = integrated_wave_authority(
+        run_dir, execution_id, classification_id, dispatch_id, require_active=False,
+    )
+    control = _load_control(run_dir, execution_id)
+    count = control.get("feature_dispatches")
+    if (control.get("feature_dispatch_limit") != 4 or type(count) is not int
+            or not 0 < count <= control["feature_dispatch_limit"]):
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "observation repair budget is invalid")
+    invalidations = _validated_invalidations(run_dir, execution_id, control["invalidations"])
+    snapshots = [_load_suspension(run_dir, execution_id, identity)
+                 for identity in control["suspended_repairs"]]
+    contexts = [item["context"] for item in snapshots] + [control]
+    counts = [item["feature_dispatches"] for item in snapshots] + [count]
+    matched = False
+    for index, context in enumerate(contexts):
+        classification, attempt = _pending_repair(run_dir, execution_id, context)
+        event = _load_event(run_dir, execution_id, context["current_event_id"])
+        if event["integration_commit"] != authority["integration_commit"]:
+            raise RepairControlError("REPAIR_NOT_AUTHORIZED", "observation repair commit changed")
+        obligations = [{"event_id": event["event_id"],
+                        "classification_id": classification["classification_id"], "surface": surface}
+                       for surface in classification["invalidates"]]
+        if any(item not in invalidations for item in obligations):
+            raise RepairControlError("STATE_TAMPERED", "observation repair obligations are missing")
+        if (classification["classification_id"], attempt["dispatch_id"]) == (classification_id, dispatch_id):
+            matched = True
+        if index == len(snapshots):
+            continue
+        snapshot = snapshots[index]
+        child = contexts[index + 1]
+        interrupted = _load_event(run_dir, execution_id, snapshot["interruption_event_id"])
+        if (type(counts[index]) is not int or type(counts[index + 1]) is not int
+                or not 0 < counts[index] < counts[index + 1] <= control["feature_dispatch_limit"]
+                or snapshot["dispatch_id"] != attempt["dispatch_id"]
+                or interrupted["blocker_key"] != child["active_blocker"]["blocker_key"]
+                or interrupted["integration_commit"] != authority["integration_commit"]
+                or any(item not in invalidations for item in snapshot["invalidations"])):
+            raise RepairControlError("REPAIR_NOT_AUTHORIZED", "observation suspension lineage is invalid")
+    if not matched:
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "observed repair is not pending in the current lineage")
+    if _read_json(_control_path(run_dir, execution_id)) != control:
+        raise RepairControlError("STATE_TAMPERED", "repair control changed during observation")
+    return authority
 
 
 def prepared_design_authority(
@@ -2017,6 +2470,48 @@ def prepared_design_authority(
         "dispatch_id": dispatch_id, "diagnosis_id": diagnosis_id,
         "integration_commit": event["integration_commit"],
         "fingerprints": event["fingerprints"], "design_admission": gate,
+    }
+
+
+def prepared_test_authority(
+    run_dir: Path, execution_id: str, classification_id: str, dispatch_id: str,
+    *, require_active: bool = True,
+) -> dict[str, Any]:
+    """Admit a counted test-only revision of a quiescent active worker wave."""
+    execution_id = _feature_id(execution_id)
+    if any(not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
+           for value in (classification_id, dispatch_id)):
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "test repair identity is invalid")
+    classification = _load_classification(run_dir, execution_id, classification_id)
+    event = _load_event(run_dir, execution_id, classification["event_id"])
+    if (classification.get("classification") != "TEST_DEFECT"
+            or classification.get("status") != "routed"
+            or classification.get("corrective_mode") != "test_revision"
+            or classification.get("confidence") not in {"proven", "high_confidence"}
+            or classification.get("execution_id") != execution_id
+            or event.get("execution_id") != execution_id
+            or event.get("execution_lifecycle") != "active_task"):
+        raise RepairControlError("REPAIR_NOT_AUTHORIZED", "active-task test repair is not classified")
+    receipt = _read_json(_repair_root(run_dir, execution_id) / "dispatches" / f"{dispatch_id}.json")
+    identity = {name: receipt.get(name) for name in (
+        "blocker_key", "ordinal", "classification_id", "remedy_scale", "hypothesis", "evidence_reference"
+    )}
+    if (_digest(identity) != dispatch_id or receipt.get("dispatch_id") != dispatch_id
+            or receipt.get("classification_id") != classification_id
+            or receipt.get("event_id") != event["event_id"]
+            or receipt.get("diagnosis_id") != classification.get("diagnosis_id")
+            or receipt.get("remedy_scale") != "localized"):
+        raise RepairControlError("STATE_TAMPERED", "test dispatch receipt is invalid")
+    if require_active:
+        control = _load_control(run_dir, execution_id)
+        if (control.get("current_classification_id") != classification_id
+                or control.get("status") != "remediating"
+                or receipt not in control["active_blocker"]["attempts"]):
+            raise RepairControlError("REPAIR_NOT_AUTHORIZED", "test dispatch is not active")
+    return {
+        "event_id": event["event_id"], "classification_id": classification_id,
+        "dispatch_id": dispatch_id, "diagnosis_id": classification.get("diagnosis_id"),
+        "integration_commit": event["integration_commit"], "fingerprints": event["fingerprints"],
     }
 
 
@@ -2094,8 +2589,7 @@ def _begin_remediation_unlocked(
     evidence_reference = _bounded_string(
         evidence_reference, "evidence_reference", maximum=1024
     )
-    if active_seconds_delta < 0:
-        raise RepairControlError("BUDGET_INVALID", "active_seconds_delta is negative")
+    _validate_seconds(active_seconds_delta)
     control = _load_control(run_dir, execution_id)
     blocker = control["active_blocker"]
     if blocker["blocker_key"] != classification["blocker_key"]:
@@ -2131,6 +2625,9 @@ def _begin_remediation_unlocked(
             blocker_key=blocker["blocker_key"],
         )
         return {"created": False, "attempt": duplicate, "control": control}
+    event = _load_event(run_dir, execution_id, classification["event_id"])
+    if _worker_bound(event):
+        _validate_worker_failure(run_dir, event)
     blocker["active_seconds"] += active_seconds_delta
     if blocker["active_seconds"] >= blocker["time_limit_seconds"]:
         _budget_stop(blocker, "time_limit")
@@ -2258,9 +2755,23 @@ def _complete_remediation_unlocked(
     verification_reference = _bounded_string(
         verification_reference, "verification_reference", maximum=1024
     )
-    if active_seconds_delta < 0:
-        raise RepairControlError("BUDGET_INVALID", "active_seconds_delta is negative")
+    _validate_seconds(active_seconds_delta)
     control = _load_control(run_dir, _feature_id(execution_id))
+    resumption_id = control["resumptions"].get(dispatch_id)
+    if resumption_id is not None:
+        resumed = _load_resumption(run_dir, execution_id, resumption_id)
+        completed = resumed.get("completed_attempt", {})
+        if (_digest(resumed) != resumption_id or resumed.get("execution_id") != execution_id
+                or completed.get("dispatch_id") != dispatch_id or completed.get("result") != result
+                or completed.get("verification_reference") != verification_reference
+                or resumed.get("active_seconds_delta") != active_seconds_delta):
+            raise RepairControlError("STATE_TAMPERED", "completed interposed remediation changed")
+        _append_journal(run_dir, execution_id, "remediation-completion-committed",
+            _digest({"action": "complete", "dispatch_id": dispatch_id, "result": result}),
+            dispatch_id=dispatch_id, blocker_key=completed["blocker_key"], result=result)
+        _write_failure_log(run_dir, execution_id, control)
+        return {"updated": False, "attempt": completed, "control": control,
+                "resumed_dispatch_id": resumed["parent_dispatch_id"]}
     blocker = control["active_blocker"]
     attempt = next(
         (item for item in blocker["attempts"] if item["dispatch_id"] == dispatch_id),
@@ -2294,6 +2805,17 @@ def _complete_remediation_unlocked(
             )
             return {"updated": False, "attempt": attempt, "control": control}
         raise RepairControlError("STATE_TAMPERED", "completed remediation changed")
+    if control["suspended_repairs"]:
+        if control["status"] == "exhausted" or blocker["status"] == "exhausted":
+            raise RepairControlError("REPAIR_BUDGET_EXHAUSTED", "interposed repair budget is exhausted")
+        if (result == "succeeded"
+                and blocker["active_seconds"] + active_seconds_delta >= blocker["time_limit_seconds"]):
+            blocker["active_seconds"] += active_seconds_delta
+            _budget_stop(blocker, "time_limit")
+            control["status"] = "exhausted"
+            _write_json_atomic(_control_path(run_dir, execution_id), control)
+            _write_failure_log(run_dir, execution_id, control)
+            raise RepairControlError("REPAIR_BUDGET_EXHAUSTED", "interposed repair time limit reached")
     transition_id = _digest(
         {"action": "complete", "dispatch_id": dispatch_id, "result": result}
     )
@@ -2334,6 +2856,10 @@ def _complete_remediation_unlocked(
     else:
         blocker["status"] = "diagnosis_required"
         control["status"] = "diagnosis_required"
+    resumed_dispatch_id = (
+        _resume_suspended_repair(run_dir, control, attempt, active_seconds_delta)
+        if result == "succeeded" else None
+    )
     _write_json_atomic(_control_path(run_dir, execution_id), control)
     _append_journal(
         run_dir,
@@ -2345,7 +2871,8 @@ def _complete_remediation_unlocked(
         result=result,
     )
     _write_failure_log(run_dir, execution_id, control)
-    return {"updated": True, "attempt": attempt, "control": control}
+    return {"updated": True, "attempt": attempt, "control": control,
+            "resumed_dispatch_id": resumed_dispatch_id}
 
 
 def _build_revalidation_evidence(
@@ -2508,6 +3035,28 @@ def _record_revalidation_unlocked(
     return {"created": created, "revalidation": record, "control": control}
 
 
+def _validate_seconds(value: Any) -> None:
+    if type(value) is not int or value < 0:
+        raise RepairControlError("BUDGET_INVALID", "active time must be a nonnegative integer")
+
+
+def _interval_union(intervals: list[list[int]]) -> list[list[int]]:
+    if not isinstance(intervals, list) or len(intervals) > 256:
+        raise RepairControlError("BUDGET_INVALID", "diagnostic intervals are invalid")
+    for interval in intervals:
+        if (not isinstance(interval, list) or len(interval) != 2
+                or any(type(value) is not int or value < 0 for value in interval)
+                or interval[1] < interval[0]):
+            raise RepairControlError("BUDGET_INVALID", "diagnostic interval is invalid")
+    merged: list[list[int]] = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return merged
+
+
 def _record_experiment_unlocked(
     run_dir: Path,
     execution_id: str,
@@ -2518,40 +3067,49 @@ def _record_experiment_unlocked(
     *,
     model_rebuilt: bool = False,
     active_seconds_delta: int = 0,
+    active_intervals: list[list[int]] | None = None,
 ) -> dict[str, Any]:
+    _validate_seconds(active_seconds_delta)
+    if type(model_rebuilt) is not bool:
+        raise RepairControlError("RECORD_INVALID", "model_rebuilt must be boolean")
+    intervals = _interval_union([] if active_intervals is None else active_intervals)
+    if active_intervals is not None and active_seconds_delta:
+        raise RepairControlError("BUDGET_INVALID", "use intervals or a serial delta, never both")
     if information_gain not in {"decision_changing", "model_update", "low"}:
         raise RepairControlError("RECORD_INVALID", "information_gain is invalid")
     control = _load_control(run_dir, _feature_id(execution_id))
     blocker = control["active_blocker"]
-    if blocker["model_rebuild_required"] and not model_rebuilt:
-        raise RepairControlError(
-            "MODEL_REBUILD_REQUIRED",
-            "three low-information experiments require a rebuilt model",
-        )
     experiment = {
         "question": _bounded_string(question, "question"),
         "hypothesis": _bounded_string(hypothesis, "hypothesis"),
         "evidence_reference": _bounded_string(evidence_reference, "evidence_reference"),
         "information_gain": information_gain,
-        "model_rebuilt": bool(model_rebuilt),
+        "model_rebuilt": model_rebuilt,
     }
     experiment["experiment_id"] = _digest(experiment)
-    duplicate = next(
-        (
-            item
-            for item in blocker["experiments"]
-            if item["experiment_id"] == experiment["experiment_id"]
-        ),
-        None,
-    )
+    experiment["active_seconds_delta"] = active_seconds_delta
+    experiment["active_intervals"] = intervals
+    duplicate = next((item for item in blocker["experiments"]
+                      if item["experiment_id"] == experiment["experiment_id"]), None)
     if duplicate is not None:
+        if any(duplicate.get(key) != value for key, value in experiment.items()):
+            raise RepairControlError("RECORD_INVALID", "observation accounting changed on replay")
+        if duplicate["outcome"] == "exhausted":
+            raise RepairControlError("REPAIR_BUDGET_EXHAUSTED", "60-minute ceiling reached")
         return {"created": False, "experiment": duplicate, "control": control}
-    blocker["active_seconds"] += active_seconds_delta
-    if blocker["active_seconds"] >= blocker["time_limit_seconds"]:
-        _budget_stop(blocker, "time_limit")
-        control["status"] = "exhausted"
-        _write_json_atomic(_control_path(run_dir, execution_id), control)
-        raise RepairControlError("REPAIR_BUDGET_EXHAUSTED", "60-minute ceiling reached")
+    if blocker["stop_trigger"] is not None or control["status"] == "exhausted":
+        raise RepairControlError("REPAIR_BUDGET_EXHAUSTED", "diagnostic budget is exhausted")
+    if blocker["model_rebuild_required"] and not model_rebuilt:
+        raise RepairControlError("MODEL_REBUILD_REQUIRED",
+                                 "three low-information experiments require a rebuilt model")
+    previous = _interval_union([interval for item in blocker["experiments"]
+                                for interval in item.get("active_intervals", [])])
+    combined = _interval_union(previous + intervals)
+    charged = active_seconds_delta + sum(end - start for start, end in combined) - sum(
+        end - start for start, end in previous)
+    blocker["active_seconds"] += charged
+    exhausted = blocker["active_seconds"] >= blocker["time_limit_seconds"]
+    experiment.update(charged_seconds=charged, outcome="exhausted" if exhausted else "recorded")
     blocker["experiments"].append(experiment)
     if information_gain == "low":
         blocker["low_information_experiments"] += 1
@@ -2560,24 +3118,22 @@ def _record_experiment_unlocked(
     elif model_rebuilt:
         blocker["model_rebuild_required"] = False
         blocker["low_information_experiments"] = 0
+    if exhausted:
+        _budget_stop(blocker, "time_limit")
+        control["status"] = "exhausted"
+    # Identity, exact charge and outcome are one atomic authoritative write.
     _write_json_atomic(_control_path(run_dir, execution_id), control)
-    transition_id = _digest(
-        {"action": "experiment", "experiment_id": experiment["experiment_id"]}
-    )
-    _append_journal(
-        run_dir,
-        execution_id,
-        "diagnostic-experiment-recorded",
-        transition_id,
-        experiment_id=experiment["experiment_id"],
-        blocker_key=blocker["blocker_key"],
-    )
+    transition_id = _digest({"action": "experiment", "experiment_id": experiment["experiment_id"]})
+    _append_journal(run_dir, execution_id, "diagnostic-experiment-recorded", transition_id,
+                    experiment_id=experiment["experiment_id"], blocker_key=blocker["blocker_key"])
+    if exhausted:
+        raise RepairControlError("REPAIR_BUDGET_EXHAUSTED", "60-minute ceiling reached")
     return {"created": True, "experiment": experiment, "control": control}
 
 
 def record_failure_event(run_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
     execution_id = _feature_id(payload.get("execution_id"))
-    with _transition_lock(run_dir, execution_id):
+    with _failure_transition_lock(run_dir, execution_id, worker_bound=_worker_bound(payload)):
         return _record_failure_event_unlocked(run_dir, payload)
 
 
@@ -2612,7 +3168,10 @@ def begin_remediation(
     evidence_reference: str,
     active_seconds_delta: int = 0,
 ) -> dict[str, Any]:
-    with _transition_lock(run_dir, execution_id):
+    # Classification/event records are immutable; reloaded under the repair lock.
+    classification = _load_classification(run_dir, execution_id, classification_id)
+    event = _load_event(run_dir, execution_id, classification["event_id"])
+    with _failure_transition_lock(run_dir, execution_id, worker_bound=_worker_bound(event)):
         return _begin_remediation_unlocked(
             run_dir,
             execution_id,
@@ -2653,8 +3212,16 @@ def record_experiment(
     *,
     model_rebuilt: bool = False,
     active_seconds_delta: int = 0,
+    active_intervals: list[list[int]] | None = None,
+    expected_event_id: str | None = None,
+    expected_blocker_key: str | None = None,
 ) -> dict[str, Any]:
     with _transition_lock(run_dir, execution_id):
+        if expected_event_id is not None or expected_blocker_key is not None:
+            current = _load_control(run_dir, execution_id)
+            if (current["current_event_id"] != expected_event_id
+                    or current["active_blocker"]["blocker_key"] != expected_blocker_key):
+                raise RepairControlError("RECORD_INVALID", "diagnostic observation belongs to a historical blocker")
         return _record_experiment_unlocked(
             run_dir,
             execution_id,
@@ -2664,6 +3231,7 @@ def record_experiment(
             information_gain,
             model_rebuilt=model_rebuilt,
             active_seconds_delta=active_seconds_delta,
+            active_intervals=active_intervals,
         )
 
 
@@ -2918,7 +3486,7 @@ def _write_failure_log(run_dir: Path, execution_id: str, control: dict[str, Any]
     lines = [
         f"# {execution_id} Failure Log",
         "",
-        "<!-- Derived from failure-event-v2, diagnosis-v3, and repair-control-v2. -->",
+        "<!-- Derived from failure-event-v2, diagnosis-v3, and repair-control-v3. -->",
         "",
         f"- Active blocker: `{blocker['blocker_key']}`",
         f"- Status: `{control['status']}`",
@@ -3025,6 +3593,13 @@ def _parser() -> argparse.ArgumentParser:
             "--input", type=Path, required=True,
             help="JSON record; created_at uses YYYY-MM-DDTHH:MM:SSZ (whole-second UTC)",
         )
+    capture = subparsers.add_parser("capture-worker-failure")
+    capture.add_argument("--run-dir", type=Path, required=True)
+    capture.add_argument("--execution", required=True)
+    capture.add_argument("--wave", required=True)
+    capture.add_argument("--task", required=True)
+    capture.add_argument("--receipt-sha256", required=True)
+    capture.add_argument("--input", type=Path, required=True)
     refresh = subparsers.add_parser("refresh-revalidation-routes")
     refresh.add_argument("--run-dir", type=Path, required=True)
     refresh.add_argument("--execution", required=True)
@@ -3062,6 +3637,9 @@ def main() -> int:
     try:
         if args.command == "record-failure":
             result = record_failure_event(args.run_dir, _load_input(args.input))
+        elif args.command == "capture-worker-failure":
+            result = capture_worker_failure(args.run_dir, args.execution, args.wave,
+                                            args.task, args.receipt_sha256, _load_input(args.input))
         elif args.command == "record-diagnosis":
             result = record_diagnosis(args.run_dir, _load_input(args.input))
         elif args.command == "record-approval":

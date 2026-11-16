@@ -51,6 +51,9 @@ that task rather than guessing that it is parallel-safe.
 
 ### TASK-001
 
+- Name: <readable task name>
+- Primary component: COMP-<stable-inventory-reference>, or unknown
+- Touched components: COMP-<additional-reference>, or none
 - Requirements: REQ-<id>
 - Features: FEAT-<id>
 - Goal: <one coherent implementation result>

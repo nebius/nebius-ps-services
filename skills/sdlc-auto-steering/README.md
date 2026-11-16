@@ -29,3 +29,13 @@ classifying them, and deriving compact reminders for the next SDLC phase.
 - `STEERING.md` and `steering/auto-steering.json` are current.
 - Every unresolved steering entry has a disposition.
 - Compact active reminders are ready for `sdlc-start`.
+
+The coordinator issues `workflow/steering-readiness-v1` through the private shared
+transition helper after reviewing `steering-inputs`. Missing/stale readiness is
+pending work, not a repair. Unchanged inputs and timestamp-only ledger updates
+converge; archived receipts and native ownership reject fabricated readiness.
+The returned readiness command uses the authorized run's selected project as its
+working directory, preserving the existing owned Git scope checks.
+Only immediate scalar clock metadata of recognized owner records and steering
+entries is excluded. Nested JSON schema fields, examples and unknown record
+content remain bound, including fields named `updated_at` or `timestamp`.

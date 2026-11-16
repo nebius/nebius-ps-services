@@ -25,6 +25,40 @@ PREFIX = "nebius-vpngw/vm-ha-controller-checkpoint-v"
 RECEIPT = "nebius-vpngw/checkpoint-conversion-v1"
 
 
+def require_recovery_controller(
+    controller: dict,
+    *,
+    boot_id: str,
+    node_id: str,
+    allocation_id: str,
+    generation_id: str,
+    digests: dict,
+) -> None:
+    """Preserve only exact local passive intent for the controller's own replay."""
+    if (
+        not isinstance(controller, dict)
+        or controller.get("transfer_continuity") is not None
+        or controller.get("repair_attempt") is not None
+    ):
+        raise ValueError("upgrade recovery has competing controller continuity")
+    action = controller.get("pending_action")
+    if action is not None and not (
+        isinstance(action, dict)
+        and action.get("kind") == "enter-passive"
+        and action.get("boot_id") == boot_id
+        and action.get("target_node_id") == node_id
+        and action.get("allocation_id") == allocation_id
+        and action.get("generation_id") == generation_id
+        and action.get("digests") == digests
+        and type(controller.get("sequence")) is int
+        and controller["sequence"] > 0
+        and action.get("ownership_incarnation") == controller.get("ownership_incarnation")
+        and action.get("operation_id")
+        == f"{boot_id}:{controller['sequence']}:enter-passive:{node_id}"
+    ):
+        raise ValueError("upgrade recovery has a competing controller operation")
+
+
 def _completed_predecessor(receipt: dict, payload: dict, artifact: str) -> bool:
     """A completed older release is distinct from rollback of this conversion."""
     return (

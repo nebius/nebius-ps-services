@@ -10,6 +10,7 @@ import base64
 import contextlib
 import fcntl
 import hashlib
+import importlib
 import importlib.metadata as metadata
 import io
 import json
@@ -38,13 +39,19 @@ except ModuleNotFoundError:
     from .. import runtime_migration as migration
 
 try:
+    import _vpngw_dependency_scope as dependency_scope  # type: ignore[import-not-found]
     import _vpngw_python_package_recovery as python_packages  # type: ignore[import-not-found]
 except ModuleNotFoundError:
+    from .. import dependency_scope
     from .. import python_package_recovery as python_packages
 
-migration.PYTHON_PREPARE = lambda manifest, path: python_packages.prepare_payload(
-    manifest, path, command
-)
+
+def prepare_python_payload(manifest: dict, path: Path) -> None:
+    python_packages.require_shared_dependencies(manifest)
+    python_packages.prepare_payload(manifest, path, command)
+
+
+migration.PYTHON_PREPARE = prepare_python_payload
 
 CONFIG = Path("/etc/nebius-vpngw/config-resolved.yaml")
 BOOT = Path("/proc/sys/kernel/random/boot_id")
@@ -276,12 +283,62 @@ def agent_receipt(
     return value
 
 
+class _InspectionLockWait(RuntimeError):
+    """The preceding observation must be discarded after routing contention."""
+
+
 def inspect(
     manifest: dict[str, Any],
     *,
     verify_runtime: bool = True,
     runtime_admission: bool = True,
     route_locked: bool = False,
+    dependency_inventory: dict | None = None,
+) -> dict[str, Any]:
+    manager_deadline = DEADLINE
+    while True:
+        if time.monotonic() >= manager_deadline:
+            raise operations.OperationBlocked("ordinary_manager_busy_timeout")
+        try:
+            if dependency_inventory is not None:
+                dependency_inventory.clear()
+            result = _inspect_once(
+                manifest,
+                verify_runtime=verify_runtime,
+                runtime_admission=runtime_admission,
+                route_locked=route_locked,
+                manager_deadline=manager_deadline,
+                dependency_inventory=dependency_inventory,
+            )
+            if time.monotonic() >= manager_deadline:
+                raise operations.OperationBlocked("ordinary_manager_busy_timeout")
+            return result
+        except _InspectionLockWait:
+            # The lock has been released. Refresh boot, config, package and
+            # runtime evidence together; none of the earlier snapshot survives.
+            # routing_lock retains the original transaction deadline.
+            continue
+        except operations.ManagerBusy:
+            remaining = manager_deadline - time.monotonic()
+            if remaining <= 0:
+                raise operations.OperationBlocked("ordinary_manager_busy_timeout") from None
+            time.sleep(min(1, remaining))
+
+
+def inspect_for_plan(manifest: dict, **kwargs: Any) -> dict:
+    inventory: dict = {}
+    observed = inspect(manifest, dependency_inventory=inventory, **kwargs)
+    return {"observation": observed, "dependency_inventory": inventory}
+
+
+def _inspect_once(
+    manifest: dict[str, Any],
+    *,
+    verify_runtime: bool = True,
+    runtime_admission: bool = True,
+    route_locked: bool = False,
+    manager_deadline: float | None = None,
+    dependency_inventory: dict | None = None,
 ) -> dict[str, Any]:
     boot = BOOT.read_text().strip()
     config_sha = sha(CONFIG.read_bytes()) if CONFIG.exists() else None
@@ -315,22 +372,17 @@ def inspect(
         else None
         for path in manifest["assets"]
     }
-    dependencies = {}
-    requirements = {}
-    distributions_by_prefix: dict[tuple[str, str], str] = {}
-    for item in metadata.distributions():
-        name = re.sub(r"[-_.]+", "-", item.metadata["Name"] or "").lower()
-        if name:
-            key = (name, str(Path(str(item.locate_file(""))).resolve()))
-            previous = distributions_by_prefix.setdefault(key, item.version)
-            if previous != item.version:
-                # Two versions can claim the same import files after an older
-                # ignore-installed deployment. Neither enumeration order nor
-                # the first metadata record proves which code Python imports.
-                raise RuntimeError("conflicting installed package metadata")
-        if name and name not in dependencies:
-            dependencies[name] = item.version
-            requirements[name] = item.requires or []
+    from pip._vendor.packaging.markers import default_environment
+    from pip._vendor.packaging.requirements import Requirement
+
+    inventory = dependency_scope.inventory(metadata.distributions(), default_environment())
+    projected = dependency_scope.project(
+        inventory, dependency_scope.names(manifest, inventory, parse_requirement=Requirement)
+    )
+    if "expected_dependencies" in manifest:
+        dependency_scope.check_shared_conflicts(
+            inventory, manifest["expected_dependencies"], parse_requirement=Requirement
+        )
     agent_state = ""
     if runtime_admission:
         _, agent_state = command(["systemctl", "is-active", "nebius-vpngw-agent"], required=False)
@@ -347,14 +399,20 @@ def inspect(
     environment = None
     if logical_config is None and runtime_admission:
         try:
-            environment = operations.Manager(DEADLINE).environment()
+            environment = operations.Manager(
+                min(DEADLINE, manager_deadline) if manager_deadline is not None else DEADLINE
+            ).environment()
+        except operations.ManagerBusy:
+            raise
         except Exception:
             environment = {"error": "ordinary_environment_unverified"}
     ownership = None
     if logical_config is None and runtime_admission:
         import yaml
 
-        with contextlib.nullcontext() if route_locked else routing_lock():
+        with contextlib.nullcontext(False) if route_locked else routing_lock() as waited:
+            if waited:
+                raise _InspectionLockWait
             ownership = routes.RouteStore().snapshot(
                 yaml.safe_load(CONFIG.read_bytes()) if CONFIG.exists() else None,
                 CONFIG.parent / "last-applied.json",
@@ -388,6 +446,8 @@ def inspect(
                 }
             ),
         }
+    if dependency_inventory is not None:
+        dependency_inventory.update(inventory)
     return {
         "runtime": migration.native(),
         "runtime_plan": runtime_plan
@@ -402,10 +462,10 @@ def inspect(
         "files": files,
         "assets": assets,
         "asset_modes": asset_modes,
-        "dependencies": dependencies,
+        "dependencies": projected["dependencies"],
         "agent_state": agent_state,
         "verified": verified,
-        "requirements": requirements,
+        "requirements": projected["requirements"],
         "markers": default_environment(),
         "wheel_tags": [str(tag) for tag in sys_tags()],
         "python": platform.python_version(),
@@ -487,6 +547,10 @@ def final_confirmation(
                 or final["asset_modes"]
                 != {path: [item["mode"], 0, 0] for path, item in manifest["assets"].items()}
                 or final["dependencies"] != manifest["expected_dependencies"]
+                or (
+                    "expected_requirements" in manifest
+                    and final["requirements"] != manifest["expected_requirements"]
+                )
                 or receipt.get("package_identity") != manifest["package_identity"]
                 or receipt.get("render_version") != manifest["render_version"]
                 or receipt.get("proof_sha256") != sha(proof.read_bytes())
@@ -521,8 +585,16 @@ def final_confirmation(
                 if time.monotonic() >= operation.manager.deadline:
                     raise TimeoutError("ordinary_manager_unresolved")
                 migration.release()
-                # Timer activation was deliberately inhibited during package work.
-                operation.service("start", "nebius-vpngw-fix-routes.timer")
+                # Full repair retains a separate timer guard until its outer
+                # completion, whose owner starts the timer after removing it.
+                # Ordinary apply starts it here after package inhibition ends.
+                repair_guest = importlib.import_module(
+                    "_vpngw_repair_guest"
+                    if "_vpngw_repair_guest" in sys.modules
+                    else "nebius_vpngw.repair_guest"
+                )
+                if not repair_guest.defer_route_timer():
+                    operation.service("start", "nebius-vpngw-fix-routes.timer")
                 operation.complete()
                 return receipt
         # An activated timer can dispatch its guarded maintenance job after
@@ -537,19 +609,22 @@ def routing_lock(operation: operations.Operation | None = None):
     fd = os.open(ROUTING_LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         waited = False
+        deadline = DEADLINE if operation is None else operation.manager.deadline
         while True:
             if operation is not None:
                 operation.check()
-                if time.monotonic() >= operation.manager.deadline:
-                    raise TimeoutError("routing_lock_deadline")
+            if time.monotonic() >= deadline:
+                raise TimeoutError("routing_lock_deadline")
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
-                if operation is None:
-                    raise
                 waited = True
-                time.sleep(min(0.1, max(0, operation.manager.deadline - time.monotonic())))
+                time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+        if operation is not None:
+            operation.check()
+        if time.monotonic() >= deadline:
+            raise TimeoutError("routing_lock_deadline")
         yield waited
     finally:
         os.close(fd)
@@ -721,6 +796,7 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
                     raise RuntimeError("package_quiescence_unproven")
                 migration.install()
                 if dependency_paths:
+                    python_packages.require_shared_dependencies(manifest)
                     command(
                         [
                             sys.executable,
@@ -734,7 +810,9 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
                 if (
                     current["files"] != manifest["files"]
                     or current["package_version"] != manifest["version"]
+                    or dependency_scope.product_metadata_changed(manifest, current)
                 ):
+                    python_packages.require_shared_dependencies(manifest)
                     command(
                         migration.product_install_command(wheel_path),
                         limit=120,
@@ -769,6 +847,10 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
                     or observed["asset_modes"]
                     != {path: [item["mode"], 0, 0] for path, item in manifest["assets"].items()}
                     or observed["dependencies"] != manifest["expected_dependencies"]
+                    or (
+                        "expected_requirements" in manifest
+                        and observed["requirements"] != manifest["expected_requirements"]
+                    )
                     or json.loads(replacement_guard.read_text()) != {"operation": replacement}
                     or Path("/proc/sys/net/ipv4/ip_forward").read_text().strip() != "0"
                     or Path("/proc/sys/net/ipv6/conf/all/forwarding").read_text().strip() != "0"
@@ -831,6 +913,8 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
             "package_quiescence_unproven",
         }:
             code = "ordinary_transaction_failed"
+        if isinstance(error, dependency_scope.DependencyFailure):
+            code = error.code
         return {"status": "failed", "stage": stage, "error_code": code}
     finally:
         OPERATION = None
@@ -891,7 +975,7 @@ def main(*, deadline: float | None = None) -> None:
             result = (
                 {
                     "status": "inspected",
-                    "observation": inspect(
+                    **inspect_for_plan(
                         request["manifest"], runtime_admission=request["action"] == "inspect"
                     ),
                 }
@@ -905,11 +989,13 @@ def main(*, deadline: float | None = None) -> None:
                 if request["action"] == "release-runtime"
                 else execute(request)
             )
-    except Exception:
+    except Exception as error:
         result = {
             "status": "failed",
             "stage": "inspect",
-            "error_code": "ordinary_transaction_failed",
+            "error_code": error.code
+            if isinstance(error, dependency_scope.DependencyFailure)
+            else "ordinary_transaction_failed",
         }
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     raise SystemExit(1 if result["status"] == "failed" else 0)

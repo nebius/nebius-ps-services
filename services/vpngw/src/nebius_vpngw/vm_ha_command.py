@@ -8,6 +8,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from .deploy.recovery import Recovery
+
 VM_HA_RESULT_SCHEMA = "nebius-vpngw/vm-ha-result-v1"
 VM_HA_VERIFICATION_SCOPE = "passive-current-state-v1"
 
@@ -28,6 +30,7 @@ class VMHACommandClassification(str, Enum):
     """Closed classifications emitted by the public command."""
 
     HEALTHY = "healthy"
+    CONVERGED = "configuration-converged"
     CONVERSION_REQUIRED = "conversion-required"
     CANDIDATE_READY = "candidate-ready"
     STANDBY_REARM = "standby-rearm"
@@ -114,6 +117,7 @@ class VMHACommandResult:
     next_action: str | None = None
     verification_scope: str = VM_HA_VERIFICATION_SCOPE
     failover_tested: bool = False
+    recovery: Recovery | None = None
 
     @property
     def exit_code(self) -> int:
@@ -123,7 +127,10 @@ class VMHACommandResult:
             VMHACommandOutcome.PLANNED,
         }:
             return 0
-        if self.outcome is VMHACommandOutcome.ACTION_REQUIRED:
+        if self.outcome is VMHACommandOutcome.ACTION_REQUIRED or (
+            self.outcome is VMHACommandOutcome.PENDING
+            and self.classification is VMHACommandClassification.CONTROLLER_TRANSITION
+        ):
             return 3
         return 1
 
@@ -141,6 +148,7 @@ class VMHACommandResult:
             "impact": self.impact.to_dict() if self.impact is not None else None,
             "approval": self.approval.to_dict() if self.approval is not None else None,
             "next_action": self.next_action,
+            **({"recovery": self.recovery.mapping()} if self.recovery is not None else {}),
         }
 
     def to_json(self) -> str:
@@ -218,7 +226,9 @@ class VMHACommandResult:
             )
             if self.approval.artifact_sha256 is not None:
                 lines.append(f"Artifact SHA-256: {self.approval.artifact_sha256}")
-        if self.next_action:
+        if self.recovery is not None:
+            lines.append(self.recovery.text())
+        elif self.next_action:
             lines.append(f"Next: {self.next_action}")
         lines.append("Verification: passive current state only; failover was not exercised.")
         return "\n".join(lines)

@@ -12,13 +12,104 @@ import threading
 import time
 
 
+class LaunchTrace:
+    """Diagnostic metadata only; absence never proves that no child was spawned."""
+
+    LIMIT = 128
+    STATUSES = {"inProgress", "completed", "failed", "interrupted"}
+    CHILD_STATUSES = {"active", "idle", "notLoaded", "systemError"}
+
+    def __init__(self):
+        self.events = []
+        self.seen = set()
+        self.malformed = self.overflow = self.interactions = 0
+
+    @staticmethod
+    def identity(value):
+        if not isinstance(value, str) or not 0 < len(value) <= 256:
+            raise ValueError("invalid native identity")
+        return hashlib.sha256(value.encode()).hexdigest()
+
+    def append(self, elapsed_ms, row):
+        key = repr(row)
+        if key in self.seen:
+            return
+        if len(self.events) >= self.LIMIT:
+            self.overflow = min(100000, self.overflow + 1)
+            return
+        self.seen.add(key)
+        self.events.append({"elapsed_ms": max(0, int(elapsed_ms)), **row})
+
+    def observe(self, event, root, elapsed_ms):
+        method = event.get("method")
+        if not isinstance(method, str):
+            self.malformed = min(100000, self.malformed + 1)
+            return
+        if "id" in event and isinstance(method, str):
+            self.interactions = min(100000, self.interactions + 1)
+            # Do not retain arbitrary RPC methods, parameters or requests.
+            self.append(elapsed_ms, {"kind": "unsupported_interaction"})
+            return
+        if method not in {"item/started", "item/completed"}:
+            return
+        params = event.get("params")
+        if not isinstance(params, dict):
+            self.malformed = min(100000, self.malformed + 1)
+            return
+        item = params.get("item")
+        if not isinstance(item, dict):
+            self.malformed = min(100000, self.malformed + 1)
+            return
+        if item.get("type") != "collabAgentToolCall" or item.get("tool") != "spawnAgent":
+            return
+        if not root or params.get("threadId") != root:
+            return  # Peer or unbound events cannot describe the selected root.
+        try:
+            if item.get("senderThreadId") != root or item.get("status") not in self.STATUSES:
+                raise ValueError("invalid spawn metadata")
+            children = item.get("receiverThreadIds")
+            if not isinstance(children, list) or len(children) > 64:
+                raise ValueError("invalid child inventory")
+            self.append(elapsed_ms, {
+                "kind": "spawn", "item_sha256": self.identity(item.get("id")),
+                "parent_sha256": self.identity(root), "status": item["status"],
+                "children_sha256": sorted({self.identity(child) for child in children}),
+            })
+        except (TypeError, ValueError):
+            self.malformed = min(100000, self.malformed + 1)
+
+    def children(self, children, elapsed_ms):
+        if not isinstance(children, dict) or len(children) > 64:
+            self.malformed = min(100000, self.malformed + 1)
+            return
+        try:
+            rows = []
+            for native, status in children.items():
+                if status not in self.CHILD_STATUSES:
+                    raise ValueError("invalid child state")
+                rows.append({"kind": "child", "child_sha256": self.identity(native), "status": status})
+            for row in rows:
+                self.append(elapsed_ms, row)
+        except (TypeError, ValueError):
+            self.malformed = min(100000, self.malformed + 1)
+
+    def result(self, gaps, complete):
+        return {
+            "schema": "implement-test/native-launch-diagnostics-v1",
+            "events": self.events, "malformed_events": self.malformed,
+            "overflow_events": self.overflow, "unsupported_interactions": self.interactions,
+            "sampling_gaps": gaps, "observer_complete": complete,
+            "absence_is_inconclusive": True,
+        }
+
+
 class NativeServer:
     def __init__(self, command, project, environment, notify, deadline=None):
         self.deadline = deadline
         self.process = subprocess.Popen(
             command, cwd=project, env=environment, stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
-            start_new_session=True,
+            start_new_session=True, umask=0o077,
         )
         self.selector = selectors.DefaultSelector()
         self.selector.register(self.process.stdout, selectors.EVENT_READ)
@@ -45,12 +136,14 @@ class NativeServer:
             raise ValueError("native request exceeds its bound")
         descriptor = self.process.stdin.fileno()
         os.set_blocking(descriptor, False)
-        deadline = min(time.monotonic() + timeout, self.deadline or float("inf"))
+        deadline = min(time.monotonic() + timeout if timeout is not None else float("inf"), self.deadline or float("inf"))
         with selectors.DefaultSelector() as selector:
             selector.register(descriptor, selectors.EVENT_WRITE)
             while payload:
-                if time.monotonic() >= deadline or not selector.select(max(0, deadline - time.monotonic())):
-                    raise ValueError("native input exceeded its time bound")
+                if time.monotonic() >= deadline or self.process.poll() is not None:
+                    raise ValueError("native input transport ended or exceeded its time bound")
+                if not selector.select(min(1, max(0, deadline - time.monotonic()))):
+                    continue
                 try:
                     size = os.write(descriptor, payload)
                 except BlockingIOError:
@@ -80,6 +173,7 @@ class NativeServer:
         if "method" in event:
             if "id" in event:
                 # Never grant approvals or answer user questions on their behalf.
+                self.notify(event)
                 self.send({"id": event["id"], "error": {
                     "code": -32601, "message": "Unattended verifier cannot handle this request"}})
                 raise ValueError("native invocation requires an unsupported interactive request")
@@ -89,7 +183,7 @@ class NativeServer:
     def request(self, method, params, timeout=15, deadline=None):
         self.sequence += 1
         request_id = self.sequence
-        deadline = min(time.monotonic() + timeout, deadline or float("inf"),
+        deadline = min(time.monotonic() + timeout if timeout is not None else float("inf"), deadline or float("inf"),
                        self.deadline or float("inf"))
         self.send({"id": request_id, "method": method, "params": params},
                   timeout=max(0, deadline - time.monotonic()))

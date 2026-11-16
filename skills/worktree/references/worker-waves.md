@@ -1,9 +1,10 @@
 # Worker waves and acceptance
 
-One coordinator owns one workflow on one execution host. Workers use fresh native
-contexts and exact-base worktrees; separate workflows use separate repositories.
-Cross-host workers and multiple coordinators sharing a repository are outside
-this contract. Worktrees share Git objects and refs and are not security sandboxes.
+One coordinator owns one objective on one execution host. Workers use fresh
+native contexts and exact-base worktrees. Independent coordinators may share a
+repository through admitted sibling project scopes and the common capacity and
+write-claim owner in `automatic-projects.md`. Equal/prefix scopes conflict.
+Cross-host workers remain outside this contract. Worktrees share Git objects and refs and are not security sandboxes.
 Native permissions, runtime leases and owner-specific cleanup remain required.
 
 ## Frozen policy
@@ -34,40 +35,93 @@ Refresh before arm/refill; reduced capacity drains existing workers. CPU count
 is not a native concurrency limit. Keep the independent host-memory floor active.
 Never infer observed parallel execution merely from configured capacity.
 
+Verify fresh-context, explicit command-cwd and effective support-path permissions
+before arming. Native tools can satisfy cwd through their execution tool and
+paths through inherited grants; missing spawn setters alone do not require a
+CLI fallback. Follow the shared [launch contract](workflow-contract.md).
+
 ## Frozen executable acceptance
 
+SDLC also requires the separate [task acceptance policy](task-acceptance.md),
+with checks before worker success and explicit deferred obligations. Implement
+keeps the validation contract below. Requested integrated UAT follows the shared
+[optional UAT policy](optional-uat.md); it is not a default worker obligation.
+
 Alongside every locked Markdown plan, create `<plan>.validation.json` before
-preparation. Its `workflow/validation-plan-v1` object has `wave_checks` and
+preparation. Its `workflow/validation-plan-v2` object has `wave_checks` and
 `task_checks`, with exactly every task ID represented. Each nonempty check list
-contains unique `id`, explicit `argv`, `timeout_seconds` (1–3600), and
+contains unique `id`, explicit `argv`, `execution_policy` (observation interval
+and null deadline), and
 `environment_keys` (only PATH, LANG, LC_ALL and TZ). `{python}` selects the current
-Python executable. Relative executable paths resolve against the target checkout.
+Python executable. Commands execute at the target Git checkout root, including
+for nested selected projects. Select the project directory explicitly inside
+the command when required; relative executable paths also resolve at Git root.
 No shell interpolation or secret values belong in this plan. For example:
 
 ```json
 {
-  "schema": "workflow/validation-plan-v1",
+  "schema": "workflow/validation-plan-v2",
   "wave_checks": [{
     "id": "combined-tests",
     "argv": ["{python}", "-m", "unittest", "tests.test_feature"],
-    "timeout_seconds": 300,
+    "execution_policy": {"observation_interval_seconds": 30, "deadline": null},
     "environment_keys": ["PATH"]
   }],
   "task_checks": {
     "TASK-001": [{
       "id": "task-acceptance",
       "argv": ["{python}", "-m", "unittest", "tests.test_feature"],
-      "timeout_seconds": 300,
+      "execution_policy": {"observation_interval_seconds": 30, "deadline": null},
       "environment_keys": ["PATH"]
     }]
   }
 }
 ```
 
+The shared launch owner reads the worker's immutable execution basis and checks
+the original validation-plan digest before embedding only that task's check
+definitions and Git-root working directory in the prompt. Keep explicit argv,
+timeouts and environment keys; `{python}` names the launch interpreter. Missing,
+changed, foreign or symlinked evidence blocks launch. Do not borrow the current
+coordinator's plan for an older assignment or ask workers to guess sidecar paths.
+These definitions grant no early-check or retry authority and do not replace
+independent acceptance after native termination.
+
 Choose checks that actually prove task and combined acceptance. A zero-exit
 placeholder, the worker's narrative or a file-existence check is insufficient
 product evidence. The plan digest is frozen in the basis; changing it requires
 the existing replan owner. Runner output is bounded and only digests enter receipts.
+
+For a proven integrated `PLAN_DEFECT`, the existing failed-wave owner retains
+the exact failed producer receipt and archived validation plan. After counted
+repair admission, create an adjacent locked plan and a private
+`<plan>.validation-review.json` with exactly these keys:
+
+- `schema`: `workflow/validation-plan-review-v1`.
+- `classification_id`, `dispatch_id`: the canonical active repair authority.
+- `failed_receipt_sha256`, `prior_validation_plan_sha256`,
+  `replacement_validation_plan_sha256`: compact canonical JSON digests using
+  `workflow_validation.digest`.
+- `replacement_plan_sha256`: the replacement Markdown bytes digest.
+- `objective_sha256`: the current accepted objective revision digest.
+- `requirements_sha256`, `design_sha256`: unchanged canonical spec digests.
+- `criteria_unchanged`, `source_read_only`: both literal `true`, established by
+  the coordinator's actual review of original and corrected commands.
+- `summary`: a bounded explanation of the command defect, unchanged acceptance
+  and equivalence review; no test-success assertion or sensitive material.
+
+This path changes only combined-check `argv`. Preserve every wave check ID,
+order, timeout and environment key, and all previously frozen task checks.
+The execution owner archives the review and rechecks it at dispatch and
+resolution. Other plan changes require their own supported route; a review
+cannot waive a check. Append diagnosis-bound corrective tasks; the scheduler
+places them before untouched future work without rewriting existing task
+definitions. A command-only correction may return `verified_no_change`, with
+independent task and combined acceptance, without a cosmetic commit. Failed
+wave and original receipts remain immutable; successful correction adds a
+separate resolution, then all invalidated gates run again.
+Further counted command corrections retain each failed plan and review;
+resolution checks their complete chain to the successful producer plan.
 
 ## Changed and unchanged results
 
@@ -79,6 +133,24 @@ After independently observing termination and released runtime leases, ingest th
 native result. For no-change, invoke `validate-target` with the exact run, execution,
 wave and task before `task-finish`. Independent checks run after the worker stops.
 They cannot renew or retroactively excuse a late worker attempt.
+
+For blocked SDLC results, fresh-worker recovery requires the exact counted
+classification and current target binding in
+[`workflow/recovery-authorization-v2`](workflow-contract.md). Authorization and
+transfer both recheck this authority. The classifier's private
+`capture-worker-failure` operation derives the complete current binding from the
+canonical blocked receipt. New failure records and repair dispatches recheck
+that binding before writes or budget charges; historical replay stays idempotent.
+Preserve original failure receipts; a
+second blocked attempt requires its own classification. Interrupted workers
+without a result and ordinary Implement use their existing recovery contracts.
+
+An intervening repair can suspend the counted repair that owns a corrective
+wave. After fresh worker verification and termination, complete the intervening
+dispatch first. The classifier owner restores the exact parent and returns
+`resumed_dispatch_id` only when all obligations are covered. Refresh checkpoint
+pointers, produce fresh combined validation and complete the wave normally.
+Active authority checks, failure history, budgets and later revalidation remain.
 
 The internal result records status, verified head/tree, native receipt and optional
 commit. An implemented task has one direct-child commit; no-change has no commit,

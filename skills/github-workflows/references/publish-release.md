@@ -2,6 +2,12 @@
 
 Use this reference for tag-driven GitHub Releases that publish built artifacts.
 
+The public maintainer workflow is publish-release. For enrolled repositories,
+preserve the shared Actions publisher and build-only service workflows; do not
+generate project-local publisher scripts or replace the enrolled workflow with
+the standalone tag-driven template. Automatic intake and skill requests share
+the same publication owner.
+
 ## Required invariants
 
 - Trigger only from tags matching `<project>-vMAJOR.MINOR.PATCH`.
@@ -42,15 +48,13 @@ handoffs. Keep newly generated helpers aligned with that contract:
 - Approval gates remain on GitHub, with visible 10800-second phase budgets and resumable
   timeouts. No admin bypass or implicit rerun/re-upload.
 
-Existing project helper examples below have their own interfaces; migrating them
-requires explicit scope. Do not silently rewrite project copies during skill work.
+The local primitives remain internal to the non-enrolled skill profile. They
+are not additional maintainer entry points for enrolled repositories.
 
 ## Repo examples
 
 - `.github/workflows/nebius-cxcli-release.yml`
 - `.github/workflows/vpngw-release.yml`
-- `services/nebius-cxcli/publish-release.sh`
-- `services/vpngw/publish-release.sh`
 
 ## Shared implementation
 

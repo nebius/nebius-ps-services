@@ -14,6 +14,38 @@ from nebius_vpngw.deploy.apply_command import CommandJournal
 from nebius_vpngw.deploy.vm_ha_lifecycle import VMHALifecycleStatus
 
 
+def planning_result(observed):
+    return {
+        "observation": deepcopy(observed),
+        "dependency_inventory": {
+            "dependencies": observed["dependencies"],
+            "requirements": observed["requirements"],
+            "markers": observed["markers"],
+            "candidates": {},
+        },
+    }
+
+
+@pytest.mark.parametrize("change", ["parent", "manifest", "missing", "extra"])
+def test_package_binding_refuses_drift_without_partially_mutating_plans(change):
+    manifests = {"a": {"wheel_sha256": "a" * 64}, "b": {"wheel_sha256": "b" * 64}}
+    intent = ha_command.package_intent(None, "c" * 64, manifests)
+    command = ha_command.HACommand(None, None, {"packages": intent}, False)
+    selected = {name: NS(manifest=deepcopy(value)) for name, value in manifests.items()}
+    if change == "parent":
+        selected["b"].manifest["ha_parent"] = "d" * 64
+    elif change == "manifest":
+        selected["b"].manifest["wheel_sha256"] = "d" * 64
+    elif change == "missing":
+        del selected["b"]
+    else:
+        selected["c"] = NS(manifest={})
+    before = deepcopy(selected)
+    with pytest.raises(RuntimeError, match="differ from the approved command"):
+        command.bind_package_plans(None, tuple(selected.items()))
+    assert selected == before
+
+
 @pytest.fixture
 def packages(monkeypatch, tmp_path):
     raw = b"approved dependency bytes"
@@ -40,6 +72,9 @@ def packages(monkeypatch, tmp_path):
         "asset_modes": {},
         "package_version": "old",
         "wheel_tags": ["py3-none-any"],
+        "dependencies": {},
+        "requirements": {},
+        "markers": {},
     }
     monkeypatch.setattr(vm_ha_package, "artifact", lambda *args: deepcopy(manifest))
     monkeypatch.setattr(vm_ha_package, "package_predecessor", deepcopy)
@@ -74,7 +109,7 @@ def packages(monkeypatch, tmp_path):
     def remote(_ssh, _target, _instance, _local, request):
         if request["action"] == "inspect-package":
             assert request["manifest"]["runtime_plan"] == manifest["runtime_plan"]
-            return {"observation": deepcopy(observed)}
+            return planning_result(observed)
         assert request["action"] == "stage-package"
         assert base64.b64decode(request["dependency_wheels"][filename]) == raw
         return {
@@ -94,6 +129,58 @@ def packages(monkeypatch, tmp_path):
         requests=requests,
         observed=observed,
     )
+
+
+def test_only_bound_corrective_proposal_can_plan_beyond_old_pending_packages(packages, monkeypatch):
+    from nebius_vpngw.deploy import ordinary_handoff
+
+    pending = {
+        "manifest": {**packages.manifest, "wheel_sha256": "e" * 64},
+        "operation": "f" * 32,
+        "phase": "activating",
+    }
+    packages.observed.update(runtime_pending=pending, dependencies={}, requirements={})
+    before = deepcopy(pending)
+    with pytest.raises(vm_ha_package.VMHAAgentPackageError, match="same approved artifact"):
+        vm_ha_package.inspect_plan(
+            object(),
+            "host",
+            NS(config_yaml="test", hostname="gateway-a"),
+            {},
+            target_identity="compute-a",
+            wheel=packages.wheel,
+        )
+    predecessor = {"operation": "c" * 64, "children": {"exact": "prior-journals"}}
+    calls = []
+
+    def corrective(_ssh, _target, _instance, _local, request):
+        calls.append(request["action"])
+        assert request["operation"] == predecessor["operation"]
+        if request["action"] == "corrective-inspect":
+            return {"reservation": None, "children": predecessor["children"]}
+        assert request["children"] == predecessor["children"]
+        assert request["manifest"]["ha_parent"] == predecessor["operation"]
+        return planning_result({**packages.observed, "runtime_plan": {"new": "native closure"}})
+
+    monkeypatch.setattr(ordinary_handoff, "corrective_action", corrective)
+    monkeypatch.setattr(ordinary_apply, "resolve_dependencies", lambda *_: [])
+    plan = vm_ha_package.inspect_plan(
+        object(),
+        "host",
+        NS(config_yaml="test", hostname="gateway-a"),
+        {},
+        target_identity="compute-a",
+        wheel=packages.wheel,
+        resume_parent=predecessor["operation"],
+        corrective_predecessor=predecessor,
+    )
+    try:
+        assert plan.manifest["runtime_plan"] == {"new": "native closure"}
+        assert plan.manifest["wheel_sha256"] == packages.manifest["wheel_sha256"]
+        assert calls == ["corrective-inspect", "corrective-plan", "corrective-plan"]
+        assert pending == before
+    finally:
+        plan.close()
 
 
 def test_saved_package_intent_restores_missing_payload_before_first_lifecycle(

@@ -1,0 +1,11 @@
+id,should_trigger,prompt
+live-vm,true,$test-live-on-nebius Create a disposable Nebius VM for this project's integration test and clean it afterward.
+live-mk8s,true,$test-live-on-nebius Run our Kubernetes smoke tests in a temporary Nebius managed cluster using the supplied tenant and project.
+live-sdk,true,$test-live-on-nebius Test this service live on Nebius using the Python SDK because cxcli lacks its component.
+quota-read,false,Compare remaining quota in two tenants without changing anything.
+local-container,false,Run the current unit tests in a local disposable container.
+production,false,Explain the production cluster outage read-only without provisioning resources.
+help,true,$test-live-on-nebius --help
+quoted,false,Count the words in the quoted phrase 'test-live-on-nebius' only.
+uat-existing-env-only,false,Implement this application. A test environment is available; I may test it myself later.
+uat-no-implicit-campaign,false,Implement the next feature and run its normal unit tests. Do not start a separate acceptance campaign.

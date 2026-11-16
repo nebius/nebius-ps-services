@@ -60,6 +60,42 @@ def test_receipt_survives_observer_loss_and_duplicate_submission(transport):
     assert saved["requests"][worker.digest(request)]["state"] == "complete"
 
 
+@pytest.mark.parametrize("running,terminal", [(True, "complete"), (False, None), (False, "failed")])
+def test_replan_refuses_prepared_phase_without_terminal_stopped_worker(transport, monkeypatch, running, terminal):
+    value, request = transport
+    assert value.receive() == request
+    value.reply({"prepared": True})
+    _, saved = worker.record(value.key)
+    saved["terminal"] = terminal
+    worker.publish(value.path, saved)
+    monkeypatch.setattr(worker, "unit_running", lambda _: running)
+    expected = {"identity": value.key, "request": request, "source": "a" * 64}
+    with pytest.raises(RuntimeError, match="unsettled requests"):
+        worker.settled_reservation(expected)
+    assert not (value.path.parent / "history").exists()
+
+
+def test_replan_archives_exact_terminal_worker_under_original_instance_lock(transport, monkeypatch):
+    import fcntl
+
+    value, request = transport
+    assert value.receive() == request
+    value.reply({"prepared": True})
+    value.close(False)
+    monkeypatch.setattr(worker, "unit_running", lambda _: False)
+    (value.path.parent / "instance.lock").touch(mode=0o600)
+    expected = {"identity": value.key, "request": request, "source": "a" * 64}
+    original = worker.record(value.key)[1]
+    with worker.archive_settled_reservation(expected) as receipt:
+        assert worker.read(value.path.parent / "history" / (receipt["record"] + ".json")) == original
+        with (
+            (value.path.parent / "instance.lock").open("rb") as separate,
+            pytest.raises(BlockingIOError),
+        ):
+            fcntl.flock(separate, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert worker.record(value.key)[1] == original
+
+
 def test_no_next_phase_while_current_phase_is_running(transport):
     value, _ = transport
     with pytest.raises(RuntimeError, match="pending phase"):
@@ -194,3 +230,25 @@ def test_collected_unit_requires_complete_native_absence_evidence(monkeypatch, t
     fields = ""
     with pytest.raises(RuntimeError, match="incomplete"):
         worker.unit_running({"boot": "current", "unit": "exact.service"})
+
+
+def test_native_lock_contention_uses_existing_operation_deadline(monkeypatch, tmp_path):
+    path = tmp_path / "native.lock"
+    path.touch(mode=0o640)
+    inode = path.stat().st_ino
+    now, sleeps = [10.0], []
+
+    def locked(*_):
+        raise BlockingIOError()
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(worker.fcntl, "lockf", locked)
+    monkeypatch.setattr(worker.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(worker.time, "sleep", sleep)
+    with pytest.raises(TimeoutError, match="operation deadline"), worker.native_lock(str(path), deadline=10.75):
+        pytest.fail("held lock admitted")
+    assert sleeps == [0.5, 0.25]
+    assert path.stat().st_ino == inode

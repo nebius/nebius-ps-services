@@ -218,6 +218,159 @@ MANAGED_PLAN = """# FEAT-001 Plan v1
 """
 
 
+class GitProcessOwnershipTests(unittest.TestCase):
+    def result(self, *, code=0, complete=True, quiescent=True):
+        return {"exit_code": code, "stop_reason": "exited", "local_group_quiescent": quiescent,
+                "elapsed_seconds": 121,
+                "stdout": {"complete": complete, "data": b"caf\xc3\xa9\n" if complete else None},
+                "stderr": {"complete": True, "data": b""}}
+
+    def test_long_git_uses_no_deadline_and_preserves_message_bytes_and_nonzero(self):
+        import workflow_process
+        with mock.patch.object(execution_core, "git_environment", return_value={}), \
+                mock.patch.object(workflow_process, "run_owned", return_value=self.result()) as owner:
+            result = execution_core._run(["git", "status"], Path("/fixture"), "test Git")
+            self.assertEqual(result.stdout, "café\n")
+            self.assertIsNone(owner.call_args.kwargs["policy"]["deadline"])
+            self.assertNotIn("timeout", owner.call_args.kwargs)
+            message = b"  message\n\n# retained\n"
+            self.assertEqual(execution_core._seal_message_git(Path("/fixture"), ["stripspace"], message), b"caf\xc3\xa9\n")
+            self.assertEqual(owner.call_args.kwargs["stdin"], message)
+            owner.return_value = self.result(code=7)
+            self.assertEqual(execution_core._run(["git", "status"], Path("/fixture"), "test Git", check=False).returncode, 7)
+            owner.return_value["stderr"]["data"] = b"private hook diagnostic"
+            with self.assertRaises(ExecutionError) as error:
+                execution_core._run(["git", "status"], Path("/fixture"), "test Git")
+            self.assertNotIn("private hook diagnostic", str(error.exception))
+            self.assertEqual(error.exception.diagnostics["exit_code"], 7)
+
+    def test_incomplete_result_and_unproven_writer_cannot_enter_git_recovery(self):
+        import workflow_process
+        with mock.patch.object(execution_core, "git_environment", return_value={}), \
+                mock.patch.object(workflow_process, "run_owned", return_value=self.result(complete=False)) as owner:
+            with self.assertRaisesRegex(ExecutionError, "incomplete"):
+                execution_core._run(["git", "status"], Path("/fixture"), "test Git")
+            owner.return_value = self.result(quiescent=False)
+            with self.assertRaises(workflow_process.ProcessCleanupError) as error:
+                execution_core._run(["git", "commit"], Path("/fixture"), "test Git")
+            self.assertNotIsInstance(error.exception, ExecutionError)
+
+    def test_exceptional_unproven_writer_bypasses_git_recovery(self):
+        import workflow_process
+        for action in (
+                lambda: execution_core._run(["git", "commit"], Path("/fixture"), "test Git"),
+                lambda: execution_core._seal_message_git(Path("/fixture"), ["stripspace"], b"message")):
+            original = OSError("injected pipe read failure")
+            original.observation = self.result(quiescent=False)
+            with mock.patch.object(execution_core, "git_environment", return_value={}), \
+                    mock.patch.object(workflow_process, "run_owned", side_effect=original):
+                with self.assertRaises(workflow_process.ProcessCleanupError) as error:
+                    action()
+                self.assertIs(error.exception.__cause__, original)
+                self.assertIs(error.exception.observation, original.observation)
+            original.observation = self.result(quiescent=True)
+            with mock.patch.object(execution_core, "git_environment", return_value={}), \
+                    mock.patch.object(workflow_process, "run_owned", side_effect=original):
+                with self.assertRaises(ExecutionError) as error:
+                    action()
+                self.assertIs(error.exception.__cause__, original)
+
+    def test_exited_commit_cleans_ordinary_background_hook_writer(self):
+        import shlex
+        import signal
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            environment = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+            for args in (["init", "-q"], ["config", "user.name", "Fixture"],
+                         ["config", "user.email", "fixture@example.com"]):
+                subprocess.run(["git", *args], cwd=root, env=environment, check=True, capture_output=True)
+            hook = root / ".git/hooks/post-commit"
+            hook.write_text("#!/bin/sh\n" + shlex.quote(sys.executable)
+                + " -c 'import time; time.sleep(120)' " + shlex.quote(str(root / "owned-hook-writer"))
+                + " >/dev/null 2>&1 &\nprintf '%s\\n' \"$!\" > hook.pid\n")
+            hook.chmod(0o700)
+            pid = None
+            try:
+                with mock.patch.object(execution_core, "git_environment", return_value=environment):
+                    result = execution_core._run(["git", "commit", "--allow-empty", "-m", "fixture"], root, "commit fixture")
+                pid = int((root / "hook.pid").read_text())
+                state = subprocess.run(["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True).stdout.strip()
+                self.assertTrue(not state or state.startswith("Z"), state)
+                self.assertEqual(result.returncode, 0)
+            finally:
+                if pid is None and (root / "hook.pid").exists():
+                    pid = int((root / "hook.pid").read_text())
+                if pid is not None:
+                    observed = subprocess.run(["ps", "-p", str(pid), "-o", "stat=,command="], capture_output=True, text=True).stdout.strip()
+                    if observed and not observed.startswith("Z") and str(root / "owned-hook-writer") in observed:
+                        try:
+                            os.kill(pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+
+
+class WorkerObservationTests(unittest.TestCase):
+    def setUp(self):
+        self.start = {"utc": "2026-11-15T00:00:00+00:00", "monotonic_ns": 1_000_000_000,
+                      "clock_id": "a" * 64, "scope": "machine-boot"}
+        self.assignment = {"assignment_digest": "b" * 64, "execution_id": "FEAT-001",
+                           "wave_id": "WAVE-001", "task_id": "TASK-001",
+                           "health_policy": {"heartbeat_stale_observation_seconds": 240,
+                            "periodic_observation_seconds": 3600, "read_only_observation_seconds": 300}}
+        self.record = {"worker_started_clock": self.start, "last_heartbeat_clock": self.start,
+                       "heartbeat_sequence": 3, "heartbeat_phase": "implementing",
+                       "worker_session_hash": "c" * 64, "attempt": 1}
+        probe = mock.patch.object(execution_core, "_worker_scope_observation",
+                                  return_value={"progress_observed": False, "scope_violation": False})
+        probe.start()
+        self.addCleanup(probe.stop)
+
+    def observe(self, stamp, utc):
+        with mock.patch.object(execution_core, "_liveness_clock", return_value=stamp):
+            return execution_core._worker_guard_status(self.assignment, self.record, clock=lambda: utc)
+
+    def test_worker_clock_type_error_is_rejected_before_effects(self):
+        record = {"schema": execution_core.TASK_SCHEMA, "worker_session_hash_history": [],
+                  "worker_session_hash": None, "finish_intent": None, "status": "assigned",
+                  "dispatched_at": self.start["utc"], "worker_started_at": None,
+                  "last_heartbeat_at": None, "heartbeat_sequence": 0, "heartbeat_phase": None,
+                  "dispatched_clock": {**self.start, "scope": []},
+                  "worker_started_clock": None, "last_heartbeat_clock": None}
+        with self.assertRaises(ExecutionError):
+            execution_core._validate_task_liveness(record)
+        with self.assertRaises(ExecutionError) as error:
+            execution_core._validate_task_liveness({**record, "schema": "workflow/execution-task-v3"})
+        self.assertEqual(error.exception.code, "WORKFLOW_UPGRADE_REQUIRED")
+
+    def test_wall_clock_jumps_do_not_change_monotonic_ages_or_identity(self):
+        end = {**self.start, "monotonic_ns": 11_000_000_000}
+        for utc in (datetime(2020, 1, 1, tzinfo=timezone.utc), datetime(2040, 1, 1, tzinfo=timezone.utc)):
+            result = self.observe(end, utc)
+            self.assertEqual(result["elapsed_seconds"], 10)
+            self.assertEqual(result["heartbeat_age_seconds"], 10)
+            self.assertEqual(result["health"], "responsive")
+            self.assertEqual(result["assignment_digest"], self.assignment["assignment_digest"])
+            self.assertEqual(result["worker_session_hash"], self.record["worker_session_hash"])
+            self.assertEqual(result["heartbeat_sequence"], 3)
+
+    def test_clock_restart_or_loss_reports_unknown_without_termination(self):
+        for end in (None, {**self.start, "clock_id": "d" * 64}, {**self.start, "monotonic_ns": 0}):
+            result = self.observe(end, datetime(2026, 11, 15, tzinfo=timezone.utc))
+            self.assertEqual(result["status"], "ACTIVE")
+            self.assertEqual(result["health"], "unknown")
+            self.assertIsNone(result["elapsed_seconds"])
+            self.assertIsNone(result["heartbeat_age_seconds"])
+
+    def test_fresh_heartbeat_clock_recovers_health_without_inventing_start_interval(self):
+        latest = {**self.start, "clock_id": "d" * 64, "monotonic_ns": 2_000_000_000}
+        self.record["last_heartbeat_clock"] = latest
+        result = self.observe({**latest, "monotonic_ns": 3_000_000_000}, datetime(2026, 11, 15, tzinfo=timezone.utc))
+        self.assertEqual(result["health"], "responsive")
+        self.assertIsNone(result["elapsed_seconds"])
+        self.assertEqual(result["heartbeat_age_seconds"], 1)
+        self.assertIn("CLOCK_INTERVAL_UNKNOWN", result["observation_reasons"])
+
+
 class SensitiveEvidenceTests(unittest.TestCase):
     def test_spec_gap_identity_lists_reject_duplicates_and_untyped_values(self):
         gap = {"kind": "design", "summary": "Scoped interface is incomplete.",
@@ -264,12 +417,12 @@ class WorktreeInteropBoundaryTests(unittest.TestCase):
         for action in ("add", "integrate", "remove"):
             with (
                 self.subTest(action=action),
-                mock.patch.object(execution_interop.subprocess, "run") as run,
+                mock.patch("worktree_operation.operation") as run,
                 self.assertRaisesRegex(
-                    ExecutionInteropError, "rejects public lifecycle actions"
+                    ExecutionInteropError, "coordination is blocked"
                 ),
             ):
-                execution_interop._call(Path.cwd(), [action])
+                execution_interop._call(Path.cwd(), execution_interop.PrivateRequest(action, {}))
             run.assert_not_called()
 
     def test_private_interop_rejects_task_lane_before_state_write(self) -> None:
@@ -778,6 +931,9 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
         )
 
     def setUp(self) -> None:
+        probe = mock.patch.object(execution_core, "_liveness_clock", wraps=execution_core._liveness_clock)
+        self.liveness_clock = probe.start()
+        self.addCleanup(probe.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name).resolve()
         self.origin = self.root / "origin.git"
@@ -917,7 +1073,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
         self.prepare()
         seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): bind specs")
         assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")[0]
-        self.assertEqual(assignment["schema"], "workflow/worker-assignment-v2")
+        self.assertEqual(assignment["schema"], "workflow/worker-assignment-v4")
         self.assertEqual(assignment["root_intent_sha256"], json.loads((self.run_dir / "objective.json").read_text())["revisions"][-1]["intent_sha256"])
         self.assertEqual(
             assignment["project_spec_receipt"],
@@ -931,6 +1087,19 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
                 ).hexdigest(),
             },
         )
+
+    def test_native_handoff_exposes_real_frozen_checks_at_worker_git_root(self) -> None:
+        from workflow_validation import task_validation_context, load_plan
+        from workflow_worker_contract import worker_prompt
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): bind validation")
+        assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")[0]
+        expected = load_plan(self.run_dir, "FEAT-001")["task_checks"][assignment["task_id"]]
+        context = task_validation_context(assignment)
+        self.assertEqual(context, {"cwd": assignment["worktree"], "checks": expected})
+        prompt = worker_prompt(assignment_path(self.run_dir, "FEAT-001", "WAVE-001",
+                                               assignment["task_id"]), assignment)
+        self.assertIn(json.dumps(context, ensure_ascii=False), prompt)
 
     def test_new_objective_revision_freezes_dispatch_until_impact_reconciliation(
         self,
@@ -1531,6 +1700,13 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             )
         self.assertEqual(caught.exception.code, "TASK_NOT_ARMED")
 
+    def clock_at(self, moment):
+        self.liveness_clock.return_value = {
+            "utc": moment.isoformat(), "monotonic_ns": int(moment.timestamp() * 1_000_000_000),
+            "clock_id": "a" * 64, "scope": "machine-boot",
+        }
+        return lambda: moment
+
     def test_arm_start_heartbeat_and_watch_liveness(self) -> None:
         fixed = datetime(2026, 8, 5, tzinfo=timezone.utc)
         self.prepare()
@@ -1542,7 +1718,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             "WAVE-001",
             assignment["task_id"],
             assignment["assignment_digest"],
-            clock=lambda: fixed,
+            clock=self.clock_at(fixed),
         )
         repeated = arm_task(
             self.run_dir,
@@ -1550,7 +1726,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             "WAVE-001",
             assignment["task_id"],
             assignment["assignment_digest"],
-            clock=lambda: fixed + timedelta(seconds=10),
+            clock=self.clock_at(fixed + timedelta(seconds=10)),
         )
         self.assertEqual(repeated["dispatched_at"], armed["dispatched_at"])
         pending = watch_task(
@@ -1559,7 +1735,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             "WAVE-001",
             assignment["task_id"],
             assignment["assignment_digest"],
-            clock=lambda: fixed + timedelta(seconds=30),
+            clock=self.clock_at(fixed + timedelta(seconds=30)),
         )
         self.assertEqual(pending["status"], "PENDING_START")
         start_task(
@@ -1570,7 +1746,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             assignment["assignment_digest"],
             "liveness-session",
             Path(assignment["scope_cwd"]),
-            clock=lambda: fixed + timedelta(seconds=30),
+            clock=self.clock_at(fixed + timedelta(seconds=30)),
         )
         heartbeat = heartbeat_task(
             self.run_dir,
@@ -1581,7 +1757,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             "implementing",
             "liveness-session",
             Path(assignment["scope_cwd"]),
-            clock=lambda: fixed + timedelta(seconds=60),
+            clock=self.clock_at(fixed + timedelta(seconds=60)),
         )
         self.assertEqual(heartbeat["heartbeat_sequence"], 2)
         warning = watch_task(
@@ -1590,30 +1766,32 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             "WAVE-001",
             assignment["task_id"],
             assignment["assignment_digest"],
-            clock=lambda: fixed + timedelta(seconds=270),
+            clock=self.clock_at(fixed + timedelta(seconds=270)),
         )
         self.assertEqual(warning["status"], "ACTIVE")
-        self.assertEqual(warning["warning"], "READ_ONLY_DEADLINE_NEAR")
+        self.assertIsNone(warning["warning"])
         stalled = watch_task(
             self.run_dir,
             "FEAT-001",
             "WAVE-001",
             assignment["task_id"],
             assignment["assignment_digest"],
-            clock=lambda: fixed + timedelta(seconds=301),
+            clock=self.clock_at(fixed + timedelta(seconds=301)),
         )
-        self.assertEqual(stalled["status"], "WORKER_STALLED")
+        self.assertEqual(stalled["status"], "ACTIVE")
+        self.assertEqual(stalled["health"], "unknown")
         read_only = watch_task(
             self.run_dir,
             "FEAT-001",
             "WAVE-001",
             assignment["task_id"],
             assignment["assignment_digest"],
-            clock=lambda: fixed + timedelta(seconds=330),
+            clock=self.clock_at(fixed + timedelta(seconds=330)),
         )
-        self.assertEqual(read_only["status"], "WORKER_READ_ONLY_TIMEOUT")
+        self.assertEqual(read_only["status"], "ACTIVE")
+        self.assertIn("READ_ONLY_REVIEW", read_only["observation_reasons"])
 
-    def test_prestart_mutation_and_timeout_fail_closed(self) -> None:
+    def test_prestart_mutation_fails_but_delayed_start_continues(self) -> None:
         fixed = datetime(2026, 8, 5, tzinfo=timezone.utc)
         self.prepare()
         seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
@@ -1624,7 +1802,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             "WAVE-001",
             assignment["task_id"],
             assignment["assignment_digest"],
-            clock=lambda: fixed,
+            clock=self.clock_at(fixed),
         )
         worker = Path(assignment["worktree"])
         (worker / "src").mkdir()
@@ -1636,22 +1814,15 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             "WAVE-001",
             assignment["task_id"],
             assignment["assignment_digest"],
-            clock=lambda: fixed + timedelta(seconds=1),
+            clock=self.clock_at(fixed + timedelta(seconds=1)),
         )
         self.assertEqual(mutated["status"], "WORKER_PRESTART_MUTATION")
         changed.unlink()
-        with self.assertRaises(ExecutionError) as caught:
-            start_task(
-                self.run_dir,
-                "FEAT-001",
-                "WAVE-001",
-                assignment["task_id"],
-                assignment["assignment_digest"],
-                "late-session",
-                Path(assignment["scope_cwd"]),
-                clock=lambda: fixed + timedelta(seconds=300),
-            )
-        self.assertEqual(caught.exception.code, "WORKER_PRESTART_TIMEOUT")
+        started = start_task(
+            self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"],
+            assignment["assignment_digest"], "late-session", Path(assignment["scope_cwd"]),
+            clock=self.clock_at(fixed + timedelta(hours=120)))
+        self.assertEqual(started["assignment_digest"], assignment["assignment_digest"])
 
     def test_confirmed_prestart_requeue_allows_a_fresh_arm(self) -> None:
         fixed = datetime(2026, 8, 5, tzinfo=timezone.utc)
@@ -1664,7 +1835,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             "WAVE-001",
             assignment["task_id"],
             assignment["assignment_digest"],
-            clock=lambda: fixed,
+            clock=self.clock_at(fixed),
         )
         dispatched_at = str(armed["dispatched_at"])
         timed_out = watch_task(
@@ -1673,9 +1844,9 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             "WAVE-001",
             assignment["task_id"],
             assignment["assignment_digest"],
-            clock=lambda: fixed + timedelta(seconds=300),
+            clock=self.clock_at(fixed + timedelta(seconds=300)),
         )
-        self.assertEqual(timed_out["status"], "WORKER_PRESTART_TIMEOUT")
+        self.assertEqual(timed_out["status"], "PENDING_START")
         with self.assertRaises(ExecutionError) as unconfirmed:
             requeue_task(
                 self.run_dir,
@@ -1714,7 +1885,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             "WAVE-001",
             assignment["task_id"],
             assignment["assignment_digest"],
-            clock=lambda: fixed + timedelta(seconds=61),
+            clock=self.clock_at(fixed + timedelta(seconds=61)),
         )
         started = start_task(
             self.run_dir,
@@ -1724,7 +1895,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             assignment["assignment_digest"],
             "requeued-session",
             Path(assignment["scope_cwd"]),
-            clock=lambda: fixed + timedelta(seconds=62),
+            clock=self.clock_at(fixed + timedelta(seconds=62)),
         )
         self.assertEqual(started["task_id"], assignment["task_id"])
 
@@ -1787,7 +1958,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
         )
         self.assertEqual(moved["status"], "WORKER_SCOPE_VIOLATION")
 
-    def test_progress_does_not_bypass_maximum_runtime(self) -> None:
+    def test_five_day_work_keeps_ownership_and_accepts_late_heartbeat(self) -> None:
         fixed = datetime(2026, 8, 5, tzinfo=timezone.utc)
         self.prepare()
         seal_tdd_base(self.run_dir, "FEAT-001", "test(FEAT-001): no-op TDD base")
@@ -1798,7 +1969,7 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             "WAVE-001",
             assignment["task_id"],
             assignment["assignment_digest"],
-            clock=lambda: fixed,
+            clock=self.clock_at(fixed),
         )
         start_task(
             self.run_dir,
@@ -1808,55 +1979,22 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
             assignment["assignment_digest"],
             "long-session",
             Path(assignment["scope_cwd"]),
-            clock=lambda: fixed + timedelta(seconds=1),
+            clock=self.clock_at(fixed + timedelta(seconds=1)),
         )
         worker = Path(assignment["worktree"])
         (worker / "src").mkdir()
         (worker / "src" / "a.py").write_text("VALUE = 1\n", encoding="utf-8")
-        self.assertEqual(assignment["max_seconds"], 3600)
-        # Runtime waits still count; an otherwise healthy attempt now has an
-        # hour for implementation, tests, review and handoff.
-        for seconds in range(200, 3300, 200):
-            heartbeat_task(
-                self.run_dir,
-                "FEAT-001",
-                "WAVE-001",
-                assignment["task_id"],
-                assignment["assignment_digest"],
-                "implementing",
-                "long-session",
-                Path(assignment["scope_cwd"]),
-                clock=lambda seconds=seconds: fixed + timedelta(seconds=seconds + 1),
-            )
-        warning = heartbeat_task(
-            self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"],
-            assignment["assignment_digest"], "validating", "long-session",
-            Path(assignment["scope_cwd"]),
-            clock=lambda: fixed + timedelta(seconds=3301),
-        )
-        self.assertEqual(warning["warning"], "WORKER_DEADLINE_NEAR")
-        heartbeat_task(
-            self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"],
-            assignment["assignment_digest"], "reporting", "long-session",
-            Path(assignment["scope_cwd"]),
-            clock=lambda: fixed + timedelta(seconds=3501),
-        )
-        before_deadline = watch_task(
-            self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"],
-            assignment["assignment_digest"],
-            clock=lambda: fixed + timedelta(seconds=3600),
-        )
-        self.assertEqual(before_deadline["status"], "ACTIVE")
-        self.assertEqual(before_deadline["warning"], "WORKER_DEADLINE_NEAR")
-        watched = watch_task(
-            self.run_dir,
-            "FEAT-001",
-            "WAVE-001",
-            assignment["task_id"],
-            assignment["assignment_digest"],
-            clock=lambda: fixed + timedelta(seconds=3601),
-        )
-        self.assertEqual(watched["status"], "WORKER_TIMEOUT")
+        args = (self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"], assignment["assignment_digest"])
+        observed = watch_task(*args, clock=self.clock_at(fixed + timedelta(hours=120)))
+        self.assertEqual(observed["status"], "ACTIVE")
+        self.assertEqual(observed["health"], "unknown")
+        self.assertIn("PROGRESS_REVIEW", observed["observation_reasons"])
+        late = heartbeat_task(*args, "validating", "long-session", Path(assignment["scope_cwd"]),
+                              clock=self.clock_at(fixed + timedelta(hours=120, seconds=1)))
+        self.assertEqual(late["status"], "ACTIVE")
+        fresh = watch_task(*args, clock=self.clock_at(fixed + timedelta(hours=120, seconds=2)))
+        self.assertEqual(fresh["health"], "responsive")
+        self.assertEqual(fresh["useful_progress"], "unverified")
 
     def test_interrupted_worker_recovery_transfers_claimed_dirty_state(self) -> None:
         coordinator = self.prepare()
@@ -2176,6 +2314,25 @@ class GitLifecycleTests(WorkerResultContractCases, unittest.TestCase):
         self.assertEqual(result["status"], "tdd_sealed")
         self.assertEqual(git(integration, "status", "--porcelain"), "")
         self.assertNotEqual(git(integration, "rev-parse", "HEAD"), coordinator["base_head"])
+
+    def test_finish_accepts_dynamic_password_keyword_argument(self) -> None:
+        self.prepare()
+        seal_tdd_base(self.run_dir, "FEAT-001", "test: dynamic credential lookup")
+        assignment = prepare_wave(self.run_dir, "FEAT-001", "WAVE-001")[0]
+        self.start_assignment(assignment, "WAVE-001")
+        worker = Path(assignment["worktree"])
+        (worker / "src").mkdir(exist_ok=True)
+        (worker / "src" / "a.py").write_text(
+            'import os\nconnect(\n    password=os.environ.get("DB_PASSWORD"),\n)\n',
+            encoding="utf-8",
+        )
+        finish_task(
+            self.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"],
+            "focused test passed", "review passed", "feat: dynamic credential lookup",
+            summary="dynamic lookup admitted through normal sensitive screening",
+        )
+        self.assertEqual(git(worker, "rev-parse", "HEAD^"), assignment["base_head"])
+        self.assertEqual(git(worker, "status", "--porcelain"), "")
 
     def test_finish_rejects_sensitive_staged_content_without_leaking(self) -> None:
         coordinator = self.prepare()

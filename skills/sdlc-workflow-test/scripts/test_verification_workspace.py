@@ -83,6 +83,121 @@ class WorkspaceTests(unittest.TestCase):
             workspace.destroy(self.root)
         self.assertTrue((self.root / "disposable-project").exists())
 
+    def test_changed_catalog_preserves_owned_context_and_cleanup(self):
+        context = self.root / "verification-context.json"
+        before = context.read_bytes(), workspace._identity(context)
+        with mock.patch.object(verifier, "verification_id", return_value="f" * 64):
+            self.assertFalse(verifier.setup_disposable_project(self.ctx))
+        self.assertEqual((context.read_bytes(), workspace._identity(context)), before)
+        self.assertEqual(workspace.destroy(self.root)["status"], "DESTROYED")
+
+    def _replaced_context(self):
+        context = self.root / "verification-context.json"
+        archive = self.root / workspace.ARCHIVE
+        archive.mkdir(mode=0o700, exist_ok=True)
+        original = archive / "original-context.json"
+        original.write_bytes(context.read_bytes())
+        original.chmod(0o600)
+        changed = workspace._json(context)
+        changed["verification_id"] = "f" * 64
+        verifier.write_private_json(context, changed)
+        return original
+
+    def test_restore_context_requires_original_hash_and_all_other_identities(self):
+        original = self._replaced_context()
+        with self.assertRaisesRegex(workspace.WorkspaceError, "replaced"):
+            workspace.destroy(self.root)
+        before_report = self.report.read_bytes()
+        result = workspace.restore_context(self.root, original)
+        self.assertEqual(result["status"], "RESTORED")
+        self.assertEqual((self.root / "verification-context.json").read_bytes(), original.read_bytes())
+        self.assertEqual(workspace.restore_context(self.root, original)["status"], "ALREADY_RESTORED")
+        self.assertEqual(workspace.destroy(self.root)["status"], "DESTROYED")
+        self.assertEqual(self.report.read_bytes(), before_report)
+        self.assertTrue(original.is_file())
+
+    def test_restore_context_rejects_wrong_original_and_foreign_path(self):
+        original = self._replaced_context()
+        before = (self.root / "verification-context.json").read_bytes()
+        original.write_text("{}\n")
+        with self.assertRaises(workspace.WorkspaceError):
+            workspace.restore_context(self.root, original)
+        self.assertEqual((self.root / "verification-context.json").read_bytes(), before)
+        with self.assertRaises(workspace.WorkspaceError):
+            workspace.restore_context(self.root, Path(self.temp) / "foreign.json")
+
+    def test_restore_context_rejects_replaced_directory(self):
+        original = self._replaced_context()
+        path = self.root / "fixture-agent-home"
+        path.rename(self.root / "old-home")
+        path.mkdir()
+        with self.assertRaisesRegex(workspace.WorkspaceError, "replaced"):
+            workspace.restore_context(self.root, original)
+
+    def test_restore_context_rejects_changed_scope_or_live_evidence(self):
+        original = self._replaced_context()
+        path = self.root / "verification-context.json"
+        changed = workspace._json(path)
+        changed["project_root"] = str(self.root / "foreign")
+        verifier.write_private_json(path, changed)
+        with self.assertRaises(workspace.WorkspaceError):
+            workspace.restore_context(self.root, original)
+        changed = workspace._json(original)
+        changed["verification_id"] = "f" * 64
+        verifier.write_private_json(path, changed)
+        (self.root / "live-results.json").write_text("{}\n")
+        with self.assertRaises(workspace.WorkspaceError):
+            workspace.restore_context(self.root, original)
+
+    def test_restore_context_replays_interrupted_receipt_update(self):
+        original = self._replaced_context()
+        write = workspace._write
+
+        def interrupt(path, value, **kwargs):
+            if path == self.root / workspace.RECEIPT:
+                raise OSError("injected receipt interruption")
+            return write(path, value, **kwargs)
+
+        with mock.patch.object(workspace, "_write", side_effect=interrupt):
+            with self.assertRaisesRegex(OSError, "injected"):
+                workspace.restore_context(self.root, original)
+        self.assertEqual(workspace.restore_context(self.root, original)["status"], "RESTORED")
+        self.assertEqual(workspace.destroy(self.root)["status"], "DESTROYED")
+
+    def test_restore_context_rejects_live_fixture_and_dirty_project(self):
+        original = self._replaced_context()
+        active = self.root / "three-tier-live/active.json"
+        active.parent.mkdir()
+        active.write_text("{}\n")
+        with self.assertRaisesRegex(workspace.WorkspaceError, "no live fixture"):
+            workspace.restore_context(self.root, original)
+        active.unlink()
+        (self.root / "disposable-project/unknown.txt").write_text("preserve\n")
+        with self.assertRaises(ValueError):
+            workspace.restore_context(self.root, original)
+
+    def test_restore_context_cli_uses_the_owned_archive(self):
+        original = self._replaced_context()
+        result = subprocess.run(
+            [sys.executable, "-B", str(Path(workspace.__file__)), "--verification-root",
+             str(self.root), "restore-context", "--original-context", str(original)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["status"], "RESTORED")
+        self.assertEqual(workspace.destroy(self.root)["status"], "DESTROYED")
+
+    def test_restore_context_rejects_symlinked_live_boundary(self):
+        original = self._replaced_context()
+        other = Path(self.temp) / "foreign-live"
+        other.mkdir()
+        (other / "runs").mkdir()
+        (self.root / "three-tier-live").symlink_to(other, target_is_directory=True)
+        before = (self.root / "verification-context.json").read_bytes()
+        with self.assertRaises(workspace.WorkspaceError):
+            workspace.restore_context(self.root, original)
+        self.assertEqual((self.root / "verification-context.json").read_bytes(), before)
+
     def test_symlink_is_rejected_without_following_it(self):
         other = Path(self.temp) / "unrelated"
         other.write_text("preserve")
@@ -304,6 +419,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_missing_native_launcher_proof_blocks_started_product(self):
         state = {
             "private_root": str(self.root / "private"),
+            "evidence_root": str(self.root / "evidence"),
             "workflow_startup": {"path": "started"},
         }
         active = live.paths(self.root)["active"]
@@ -315,6 +431,220 @@ class WorkspaceTests(unittest.TestCase):
         ):
             with workspace.product_quiescence(self.root, live):
                 self.fail("must not admit cleanup")
+
+
+class CompanionBoundaryTests(unittest.TestCase):
+    def test_cleanup_checkpoint_survives_partial_companion_evidence_deletion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            active = root / "active.json"
+            active.touch()
+            companion = root / "evidence/companion"
+            companion.mkdir(parents=True)
+            (companion / "launch.json").write_text("{}")
+            state = {"filesystem_cleanup": {}, "private_root": str(root / "private"),
+                     "evidence_root": str(root / "evidence")}
+            with mock.patch.object(live, "paths", return_value={"active": active}), mock.patch.object(
+                live, "load_active", return_value=(root, state)
+            ), mock.patch.object(live, "validate_filesystem_cleanup") as validate, mock.patch.object(
+                workspace, "require_native_absent"
+            ) as absent:
+                with workspace.product_quiescence(root, live):
+                    pass
+            validate.assert_called_once_with(root, state)
+            absent.assert_called_once_with(root)
+
+    def test_native_inventory_rejects_legacy_duplicate_and_unbounded_rows(self):
+        row = {"pid": 42, "started": "fixed start"}
+        valid = {"schema": "agentic-sdlc/workspace-native-v2", "processes": [row, {**row, "pid": 43}]}
+        self.assertEqual(workspace._native_records(valid), valid["processes"])
+        for value in ({"schema": "agentic-sdlc/workspace-native-v1", **row},
+                      {**valid, "processes": [row, row]},
+                      {**valid, "processes": [{**row, "pid": i + 2} for i in range(65)]}):
+            with self.assertRaises(workspace.WorkspaceError):
+                workspace._native_records(value)
+
+    def test_failed_companion_can_record_quiescent_terminal_proof(self):
+        import companion_trial
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = {"verification_id": "fixture"}
+            with mock.patch.object(workspace, "operation"), mock.patch.object(
+                live, "load_active", return_value=(root, state)
+            ), mock.patch.object(companion_trial.os, "killpg", side_effect=ProcessLookupError):
+                companion_trial.record_terminal(root, state, root, {"status": "FAIL"}, [42])
+            terminal = json.loads((root / "finished.json").read_text())
+            self.assertEqual(terminal["status"], "FAIL")
+            self.assertTrue(terminal["cleanup_verified"])
+            (root / "finished.json").unlink()
+            with mock.patch.object(companion_trial.os, "killpg"), self.assertRaisesRegex(ValueError, "remains active"):
+                companion_trial.record_terminal(root, state, root, {"status": "FAIL"}, [42])
+            self.assertFalse((root / "finished.json").exists())
+
+    def test_aggregate_record_replay_cannot_replace_frozen_proof(self):
+        state = {"git": {}, "multi_project": {"aggregate_sha": "a" * 40, "proof": "first"}}
+        with mock.patch.object(live, "verification_root"), mock.patch.object(
+            live, "load_active", return_value=(None, state)
+        ), mock.patch.object(live, "observe_aggregate", return_value={**state["multi_project"], "proof": "changed"}), mock.patch.object(
+            live, "update_state"
+        ) as update, self.assertRaisesRegex(live.LifecycleError, "evidence changed"):
+            live.record_aggregate(Path("unused"))
+        update.assert_not_called()
+        self.assertEqual(state["multi_project"]["proof"], "first")
+
+
+class NativeProcessHistoryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = self.enterContext(tempfile.TemporaryDirectory())
+        self.root = Path(self.temp).resolve() / "verification"
+        workspace.admit_root(self.root, create=True)
+
+    def terminated_ledger(self, count=64):
+        rows = [{"pid": 900000 + index, "started": "old process identity"}
+                for index in range(count)]
+        value = {"schema": "agentic-sdlc/workspace-native-v2", "processes": rows}
+        workspace._write(self.root / workspace.NATIVE, value)
+        original = subprocess.run
+        dead = {str(row["pid"]) for row in rows}
+
+        def observe(command, *args, **kwargs):
+            if command[:3] == ["ps", "-o", "lstart="] and command[-1] in dead:
+                return subprocess.CompletedProcess(command, 1, "", "")
+            return original(command, *args, **kwargs)
+
+        self.enterContext(mock.patch.object(workspace.subprocess, "run", side_effect=observe))
+        return value
+
+    def test_completed_cleanup_retires_full_native_ledger_before_next_launch(self):
+        previous = self.terminated_ledger()
+        result = workspace.destroy(self.root)
+        repeated = workspace.destroy(self.root)
+        workspace.register_native(self.root)
+        self.assertEqual(result["status"], "DESTROYED")
+        self.assertEqual(repeated["status"], "ALREADY_DESTROYED")
+        current = workspace._json(self.root / workspace.NATIVE)
+        self.assertEqual([row["pid"] for row in current["processes"]], [os.getpid()])
+        archives = list((self.root / workspace.ARCHIVE).glob("native-*.json"))
+        self.assertEqual(len(archives), 1)
+        self.assertEqual(workspace._json(archives[0])["ledger"], previous)
+
+    def test_live_native_process_preserves_ledger_until_exit(self):
+        child = subprocess.Popen(
+            [sys.executable, "-B", "-c", "import sys; sys.stdin.buffer.read()"],
+            stdin=subprocess.PIPE, start_new_session=True,
+        )
+        try:
+            workspace.register_native(self.root, pid=child.pid)
+            path = self.root / workspace.NATIVE
+            before = path.read_bytes()
+            with self.assertRaisesRegex(workspace.WorkspaceError, "still active"):
+                workspace.destroy(self.root)
+            self.assertEqual(path.read_bytes(), before)
+            self.assertFalse((self.root / workspace.ARCHIVE).exists())
+        finally:
+            child.stdin.close()
+            child.wait(timeout=5)
+        self.assertEqual(workspace.destroy(self.root)["status"], "DESTROYED")
+        self.assertFalse(path.exists())
+        saved = next((self.root / workspace.ARCHIVE).glob("native-*.json"))
+        self.assertEqual(workspace._json(saved)["ledger"], json.loads(before))
+
+    def test_native_history_publication_failure_preserves_active_ledger(self):
+        self.terminated_ledger(1)
+        path = self.root / workspace.NATIVE
+        before = path.read_bytes()
+        with mock.patch.object(workspace, "_write", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                workspace.destroy(self.root)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(list((self.root / workspace.ARCHIVE).glob("native-*.json")), [])
+        self.assertEqual(workspace.destroy(self.root)["status"], "DESTROYED")
+
+    def test_native_history_retirement_replays_after_publication(self):
+        previous = self.terminated_ledger(1)
+        path = self.root / workspace.NATIVE
+        before = path.read_bytes()
+        with mock.patch.object(workspace, "_delete_checked", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                workspace.destroy(self.root)
+        self.assertEqual(path.read_bytes(), before)
+        archives = list((self.root / workspace.ARCHIVE).glob("native-*.json"))
+        self.assertEqual(len(archives), 1)
+        archived = archives[0].read_bytes()
+        self.assertEqual(workspace._json(archives[0])["ledger"], previous)
+        self.assertEqual(workspace.destroy(self.root)["status"], "DESTROYED")
+        self.assertFalse(path.exists())
+        self.assertEqual(archives[0].read_bytes(), archived)
+        self.assertEqual(list((self.root / workspace.ARCHIVE).glob("native-*.json")), archives)
+
+    def test_native_history_publication_is_verified_before_retirement(self):
+        self.terminated_ledger(1)
+        path = self.root / workspace.NATIVE
+        before = path.read_bytes()
+        original = workspace._write
+
+        def corrupt(saved, value, **kwargs):
+            original(saved, {"changed": True}, **kwargs)
+
+        with mock.patch.object(workspace, "_write", side_effect=corrupt):
+            with self.assertRaisesRegex(workspace.WorkspaceError, "archive differs"):
+                workspace.destroy(self.root)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_native_history_drift_before_unlink_is_preserved(self):
+        previous = self.terminated_ledger(1)
+        path = self.root / workspace.NATIVE
+        changed = {**previous, "processes": [*previous["processes"],
+                   {"pid": 900001, "started": "another identity"}]}
+        original = workspace._delete_checked
+
+        def replace(*args, **kwargs):
+            workspace._write(path, changed)
+            return original(*args, **kwargs)
+
+        with mock.patch.object(workspace, "_delete_checked", side_effect=replace):
+            with self.assertRaisesRegex(workspace.WorkspaceError, "replaced|changed"):
+                workspace.destroy(self.root)
+        self.assertEqual(workspace._json(path), changed)
+        saved = next((self.root / workspace.ARCHIVE).glob("native-*.json"))
+        self.assertEqual(workspace._json(saved)["ledger"], previous)
+
+    def test_native_history_archive_conflict_preserves_both_records(self):
+        self.terminated_ledger(1)
+        path = self.root / workspace.NATIVE
+        before = path.read_bytes()
+        with mock.patch.object(workspace, "_delete_checked", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                workspace.destroy(self.root)
+        saved = next((self.root / workspace.ARCHIVE).glob("native-*.json"))
+        workspace._write(saved, {"changed": True})
+        with self.assertRaisesRegex(workspace.WorkspaceError, "archive differs"):
+            workspace.destroy(self.root)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(workspace._json(saved), {"changed": True})
+
+    def test_unknown_native_absence_does_not_retire_history(self):
+        self.terminated_ledger(1)
+        path = self.root / workspace.NATIVE
+        before = path.read_bytes()
+        unknown = subprocess.CompletedProcess([], 2, "", "unavailable")
+        with mock.patch.object(workspace.subprocess, "run", return_value=unknown):
+            with self.assertRaisesRegex(workspace.WorkspaceError, "cannot be measured"):
+                workspace.destroy(self.root)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertFalse((self.root / workspace.ARCHIVE).exists())
+
+    def test_native_history_archive_symlink_is_rejected(self):
+        self.terminated_ledger(1)
+        path = self.root / workspace.NATIVE
+        before = path.read_bytes()
+        foreign = Path(self.temp) / "foreign"
+        foreign.mkdir()
+        (self.root / workspace.ARCHIVE).symlink_to(foreign, target_is_directory=True)
+        with self.assertRaisesRegex(workspace.WorkspaceError, "symlink"):
+            workspace.destroy(self.root)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(list(foreign.iterdir()), [])
 
 
 if __name__ == "__main__":

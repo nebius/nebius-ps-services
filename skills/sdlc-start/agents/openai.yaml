@@ -1,6 +1,6 @@
 interface:
   display_name: "SDLC Start"
-  short_description: "Run Agentic SDLC from an objective"
-  default_prompt: "Use $sdlc-start to accept the current objective or explicitly continue the selected project run."
+  short_description: "Run SDLC with automatic project worktrees"
+  default_prompt: "Use $sdlc-start to accept the current objective or explicitly continue the selected project run from its original folder; use $sdlc-start status [project-folder] to inspect shared project progress."
 policy:
   allow_implicit_invocation: false

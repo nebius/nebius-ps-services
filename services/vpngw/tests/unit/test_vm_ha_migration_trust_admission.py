@@ -1,4 +1,4 @@
-"""Migration trust publication uses the exact existing apply approval path."""
+"""Managed trust actions use the one canonical, exact apply approval path."""
 
 from pathlib import Path
 
@@ -19,11 +19,11 @@ from nebius_vpngw.vm_ha_command import (
     [
         ("migration", "migrate", False, True),
         ("migration", "migrate", True, False),
-        ("migration", "repair", False, False),
-        ("migration", "rotate", False, False),
-        ("apply-convergence", "migrate", False, False),
-        ("recovery", "migrate", False, False),
-        ("provisioning", "create", False, False),
+        ("migration", "repair", False, True),
+        ("migration", "rotate", False, True),
+        ("apply-convergence", "migrate", False, True),
+        ("recovery", "migrate", False, True),
+        ("provisioning", "create", False, True),
     ],
 )
 def test_migration_trust_stays_within_exact_approval(kind, action, destructive, admitted, dry_run):
@@ -48,7 +48,7 @@ def test_migration_trust_stays_within_exact_approval(kind, action, destructive, 
     )
     if admitted:
         assert result.approval is not None
-        assert result.approval.kind == "migration"
+        assert result.approval.kind == kind
         assert result.approval.digest == report.digest
         assert result.approval.effects == report.effects
         assert result.impact.approval_required
@@ -58,3 +58,22 @@ def test_migration_trust_stays_within_exact_approval(kind, action, destructive, 
     else:
         assert result.approval is None
         assert result.classification == VMHACommandClassification.EXTERNAL_PREREQUISITE
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("managed_ssh_action", "rotate"), ("engine_digest", "f" * 64), ("effects", ("other-action",))],
+)
+def test_trust_actions_cannot_change_after_exact_approval(field, value):
+    from dataclasses import replace
+
+    approved = cli._VMHAApplyPlanReport(
+        kind="migration",
+        digest="d" * 64,
+        engine_digest="e" * 64,
+        effects=("publish-managed-ssh-trust",),
+        has_destructive_changes=False,
+        managed_ssh_action="migrate",
+    )
+    with pytest.raises(RuntimeError, match="changed after approval"):
+        cli._validate_vm_ha_expected_apply_plan(replace(approved, **{field: value}), approved)

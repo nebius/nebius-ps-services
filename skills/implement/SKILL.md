@@ -29,6 +29,14 @@ and hooks. Missing host capabilities require an explicit limitation.
 
 ## Purpose
 
+Read `../worktree/references/optional-uat.md` for the shared acceptance policy.
+No UAT by default; requested UAT runs at a meaningful ready objective/release
+scope (or explicitly selected coherent milestone). Missing optional prerequisites
+remain pending without blocking implementation or otherwise eligible PR/merge.
+Keep required development checks and correctness dependencies mandatory. Use
+container/Nebius testing skills only when explicitly requested; an existing
+environment uses its own project harness directly.
+
 Accept a conversation objective, freeze a reviewed execution basis, dispatch
 isolated task workers, validate their results, and deliver verified local work.
 Global Context Management owns context, delegation and continuity. Maintain
@@ -64,6 +72,7 @@ Neither hooks nor another coordinator implicitly starts this workflow.
 $implement
 $implement <implementation request>
 $implement continue [project-folder]
+$implement status [project-folder]
 $implement -h
 $implement --help
 ```
@@ -73,14 +82,23 @@ $implement --help
 - An inline request supplies the objective; the exact current project is default.
 - `continue` resumes an existing run in this or the specified project folder.
   A new session must use it. Resolve ambiguous choices by project and outcome.
+  Invoke `workflow_intake.py --owner implement continue --project-root <project>`
+  even when status already reports delivery. Read-only status or observe does
+  not bind the new session. Return completion only after this owner returns
+  `ALREADY_COMPLETE`; otherwise follow its continuation or blocker.
 - `-h, --help` returns report-only help. No additional public flags.
 - Workspace, prompt-file run, integrate and remove actions are retired. Reject
   them; do not interpret retired syntax as an implementation objective.
 
 ## Required Reads
 
+- `../worktree/references/automatic-projects.md` for automatic outer ownership,
+  shared admission, capacity, aggregation, recovery and original-folder status.
+
 - Applicable instructions, the current plan/request and relevant source/tests.
 - `references/implementation-loop.md` and `references/objective-contract.md`.
+- `../worktree/references/statistics.md` for initial inventory, milestone reporting
+  and the read-only status projection.
 - For a saved issue plan, read
   `../worktree/references/issue-resolution.md` for intake, per-issue evidence
   and the private completion handoff. Closure intent never authorizes publication.
@@ -92,11 +110,17 @@ $implement --help
 ## Writes
 
 Only normalized objectives, immutable basis/plan/evidence and run-owned execution
-state under `<agent-home>/implement/`, plus registered integration/task worktrees.
+state under `<agent-home>/implement/`, plus shared admission metadata and registered outer/integration/task worktrees.
 Preserve unrelated dirty content and old private histories/worktrees. Never store
 raw turns, prompt archives, secrets, credentials or private endpoints in artifacts.
 
 ## Process
+
+Public `status [project-folder]` is read-only and uses shared intake `status`;
+return its project/outcome/owner/phase/worker/wait/next-action summary, statistics
+and reserved-slot counts, then stop. Workers means observed running workers.
+At acceptance use the returned execution project; keep the native launch folder
+in the original project so automatic cleanup can remove owned checkouts.
 
 1. Resolve the exact project, Git common directory, committed HEAD and named
    source branch. Reject detached/unborn or unsupported state before execution.
@@ -107,12 +131,26 @@ raw turns, prompt archives, secrets, credentials or private endpoints in artifac
    on uncommitted product/spec content. A saved issue plan may be snapshotted
    once as normalized objective input under the issue-resolution contract; it
    must not remain a live worker dependency or write target. Never copy source
-   dirt into a worker.
+   dirt into a worker. Automatic outer admission may exclude unrelated sibling
+   dirt only after a complete committed input declaration is supplied to private
+   intake, following `automatic-projects.md`. Protect selected-project files,
+   ancestor instructions, canonical specs and shared build/test inputs.
 2. Normalize accepted outcome, scope, constraints, acceptance criteria,
    clarifications and provenance. Use the shared private `workflow_intake.py`
    owner `implement` to accept, observe or explicitly continue. Do not invent
    session identity or recover ownership from the sole active run.
-   For a new run, call shared `workflow_transition.py prepare-specs` with the
+   For a new run, collect source-bound architecture and capture the immutable
+   initial report through the shared statistics inventory owner before
+   `prepare-specs`, even without task decomposition. If capture fails, report
+   the gap without blocking the workflow or backdating a later report.
+   Resolve accepted worker, wave-task and retained-worktree ceilings before
+   allocation. If any ceiling overrides the defaults, call shared
+   `workflow_transition.py configure-policy` with the run and requested limits
+   now, following `../worktree/references/worker-waves.md`. Without an override,
+   defaults are 4/8/16. `prepare-specs` freezes the defaults when no policy
+   exists, so configuring requested limits afterward is too late. Never replace
+   a frozen policy or edit private state to recover an ordering mistake.
+   Call shared `workflow_transition.py prepare-specs` with the
    run, selected project and internal `FEAT-001` identity. This allocates the
    single integration checkout before plan/basis creation. Keep the accepted
    source HEAD and its files unchanged; canonical specs are implicit committed
@@ -141,7 +179,7 @@ raw turns, prompt archives, secrets, credentials or private endpoints in artifac
 5. Freeze objective, applicable spec receipt, plan, committed base, effective
    instructions/helper identities, assignments, ownership and validation. All
    effect boundaries reject stale bases. Record observed native capacity;
-   freeze configurable worker/wave/retention limits (defaults 4/8/16) and
+   preserve the worker/wave/retention limits frozen before allocation and lock
    executable acceptance checks using the shared wave contract in the required sibling
    `../worktree/references/worker-waves.md`.
    Fresh zero capacity waits; unknown capacity permits one total worker.
@@ -150,8 +188,12 @@ raw turns, prompt archives, secrets, credentials or private endpoints in artifac
    identity. Give assignment-only context, including paths, validation and
    instructions. Arm only available slots and consume its canonical `launch`
    envelope through the shared `task-arm` CLI admission (or `authorize-recovery`
-   for recovery). Grant its validated `support_write_roots` before spawning;
-   unavailable native support blocks launch. Preserve sandbox and approval policy.
+   for recovery). Before arming, verify fresh-context support, explicit command
+   cwd control and support-path permission capability. After admission, verify
+   effective coverage of every returned `support_write_roots` entry. Existing inherited
+   grants suffice; a spawn-level cwd setter is unnecessary when supported command
+   tools set the actual cwd. Follow the shared launch contract and preserve sandbox
+   and approval policy. Unavailable capability blocks launch.
    Configure fresh assignment-only
    context in the native host and use the returned prompt, cwd, command arguments
    and schema identity. Host adapters do not reconstruct this contract.
@@ -193,18 +235,13 @@ raw turns, prompt archives, secrets, credentials or private endpoints in artifac
    Known permission prerequisites use native approvals before execution;
    approval denial remains a policy/authority stop. Recovery grants no access,
    creates no automatic retry and never reopens completed work.
-   Observe liveness and interrupt failed/stalled
-   workers; never infer progress from background heartbeat loops. Shared worker
-   startup has a 300-second window from arming to `task-start`. Prepare handoff
-   details before arming, spawn immediately afterward, then persist observations.
-   Repeated arming never resets this window. Started attempts have a
-   3600-second wall-clock limit including external waits,
-   validation and review, with `WORKER_DEADLINE_NEAR` in the final 300 seconds.
-   Target 30-second direct heartbeats at available work/wait boundaries, using
-   short yielding waits where supported. Record actual cadence gaps honestly;
-   ACTIVE does not certify every target interval. Preserve the enforced
-   240-second stale-heartbeat limit;
-   progress never renews the deadline. Finish bounded tasks or report the stop.
+   Observe health using the shared contract in `../worktree/references/execution-health.md`.
+   Prepare the handoff before arming and spawn promptly. Direct heartbeats target
+   30 seconds; startup age, heartbeat gaps, read-only work and elapsed duration
+   request diagnosis and never expire healthy ownership. Preserve unknown-health
+   reservations and distinguish useful progress from native activity and waiting.
+   Stop only for cancellation, confirmed failure, authority/scope violations or
+   operational safety; retain the existing confirmed-failure repair budgets.
 8. Independently validate identity, assignment/basis, ancestry, changed paths,
    native termination and result evidence. Admit a result only when its writer
    is quiescent. Refill the free slot immediately from the ready queue. Shared
@@ -220,14 +257,21 @@ raw turns, prompt archives, secrets, credentials or private endpoints in artifac
     accepted criterion and supply the private seal-feature --issue-evidence
     input. Local completion emits a verified issue-resolution.json handoff;
     report closure pending PR/merge, never completed from local delivery.
-    Deliver automatically to the clean unchanged original non-default
-    branch. Source drift retains the verified result and reports the blocker.
-    Default/unknown-default starts deliver the verified feature branch and
-    checkout while leaving the source branch unchanged; this is local completion.
-11. Preserve a managed outer Worktree lease. Release it only after evidence and
-    cleanup; return its normal explicit integration handoff. Never appropriate
-    the outer owner's branch or cleanup authority.
-12. Record completion and checkpoint. Repeated unchanged bound invocation is
+    Promote the completed inner execution to its clean target checkout. For an
+    automatic outer, that target is the objective checkout; step 11 validates
+    delivery against the current aggregate, including supported source advances.
+    Direct unmanaged execution requires its original non-default branch to match
+    the frozen source. Default/unknown-default starts deliver the verified feature
+    branch and checkout; this is local completion.
+11. Automatic outers aggregate and clean through the private intake lifecycle
+    in `automatic-projects.md`, then complete. Keep the lease until validated
+    source promotion. A manually managed outer retains its explicit Worktree
+    handoff and external cleanup owner.
+12. Refresh architecture through intake/specification/planning after relevant
+    changes; checkpoint accepted plans, revisions, recovery and terminal outcomes.
+    Show each new IMPLEMENT_STATISTICS summary once and retain private reports.
+    Reporting never accepts results or changes scheduling/recovery authority.
+    Record completion and checkpoint. Repeated unchanged bound invocation is
     idempotent. No commit/push/PR/release action on an unrelated checkout is
     authorized by this workflow; remote actions require their own authorization.
 
@@ -273,6 +317,13 @@ worker resources are absent; retained deliverables/blockers are explicit. No
 old workflow conversion or unrelated mutation occurred.
 
 ## Output Contract
+
+For automatic delivery, include the shared `user_message` in the final response.
+Pending delivery must name the original project/branch, retained work and blocker,
+and show the exact owning `next_action` from `automatic-projects.md`. Distinguish
+promotion pending, promoted with finalization pending, and verification/recovery
+pending. Require a clean original before resuming. After verified delivery and
+cleanup, report completion without a continuation command.
 
 Report the outcome, local delivery checkout, actual observed concurrency,
 validation, cleanup/retention and any precise blocker. Keep native, deterministic

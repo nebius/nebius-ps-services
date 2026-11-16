@@ -4,6 +4,12 @@ Publish a GitHub Release with one invocation. The skill commits current work,
 pushes and merges its PR through repository protections, tags the verified merged
 commit, and verifies the resulting release and assets.
 
+This skill is the sole supported maintainer entry point for GitHub Releases.
+In enrolled repositories, it and automatic post-merge intake use the same Actions
+publisher, reservations and evidence gates. Project-local publisher scripts are
+retired; setup must not recreate them. Unregistered projects require separate
+enrollment and never fall back to local publication.
+
 ## Quick start
 
 Run from the application project with Git/GitHub CLI authentication and the
@@ -92,7 +98,9 @@ interface and [orchestration](references/orchestration.md) for private calls.
 The runnable shell template now exposes content preparation, local tag creation,
 exact-object push and wheel verification. It does not commit or publish branches;
 those effects belong to the skill's canonical create-pr transaction. Existing
-project copies require explicit regeneration to adopt this contract.
+project copies in non-enrolled repositories require explicit regeneration to
+adopt this contract. The template remains a private implementation resource;
+do not generate a project-local publisher in an enrolled repository.
 
 ## Validation
 
@@ -127,9 +135,12 @@ are reported independently. No public skill flags are added.
 
 ## Workflow ownership and existing releases
 
-Use `$github-workflows` for release YAML setup and its canonical
-`project-name-release-publish.yml.template`; this skill owns the local publication
-sequence. Preserve the exact workflow filename and service asset contract.
+Use `$github-workflows` for release YAML setup. In enrolled repositories,
+validate and preserve the shared Actions publisher and build-only service
+workflows; do not replace them with the standalone release template. Only
+non-enrolled repositories use `project-name-release-publish.yml.template` and
+this skill's local publication sequence. Preserve the exact workflow filename
+and service asset contract in either profile.
 Existing releases require trusted pre-publication hashes and downloaded-byte
 verification. Missing or expired evidence is a reconciliation blocker, not a
 reason to overwrite or recreate a release. The workflow must compare any
@@ -138,3 +149,7 @@ retained original manifest before a rebuilt retry can publish.
 Private repaired-head reconciliation consumes canonical owner proof of branch,
 cleanliness and prior-head ancestry under the review lock. It performs no separate
 private Git calls that could bypass the review owner's inert-LFS policy.
+
+## Enrolled repository automation
+
+Shared Actions authority: enrolled repositories route laptop and hosted requests through one merge/release controller; PR lifetime waivers are durable policy, not labels. See the skill contract and sibling merge-pr automation-authority reference.

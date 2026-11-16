@@ -1,0 +1,58 @@
+name: GitHub AI rollout control
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        type: choice
+        options: [inspect, configure]
+        default: inspect
+      expected_generation:
+        description: Current generation, or zero for initial configuration
+        type: string
+        default: '0'
+      manifest:
+        description: Exact rollout JSON; required for configure
+        type: string
+        default: '{}'
+permissions:
+  contents: read
+  pull-requests: read
+concurrency:
+  group: ai-rollout-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  control:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: github-ai-automation
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: '0.13.7'
+          enable-cache: false
+      - name: Inspect or replace trusted rollout scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPERATION: ${{ inputs.operation }}
+          MANIFEST: ${{ inputs.manifest }}
+          GENERATION: ${{ inputs.expected_generation }}
+          AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+          AI_AUTOMATION_STATE_BUCKET: ${{ secrets.AI_AUTOMATION_STATE_BUCKET }}
+          AI_AUTOMATION_STATE_ENDPOINT: ${{ secrets.AI_AUTOMATION_STATE_ENDPOINT }}
+          AI_AUTOMATION_STATE_ACCESS_KEY_ID: ${{ secrets.AI_AUTOMATION_STATE_ACCESS_KEY_ID }}
+          AI_AUTOMATION_STATE_SECRET_ACCESS_KEY: ${{ secrets.AI_AUTOMATION_STATE_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ "$OPERATION" == inspect ]]; then
+            uv run --locked --project github-ai-automation github-ai-automation rollout-inspect
+          elif [[ "$OPERATION" == configure && "$GENERATION" =~ ^[0-9]+$ ]]; then
+            printf '%s' "$MANIFEST" > "$RUNNER_TEMP/rollout.json"
+            uv run --locked --project github-ai-automation github-ai-automation rollout-configure "$RUNNER_TEMP/rollout.json" "$GENERATION"
+          else
+            exit 2
+          fi

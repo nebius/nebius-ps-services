@@ -8,6 +8,204 @@ from nebius_vpngw import ha_activation as guest
 from nebius_vpngw.apply_approval import digest
 
 
+def _restoration_authority(tmp_path, monkeypatch, *, node="node-a", active=False):
+    import hashlib
+
+    import yaml
+    from tests.unit.test_vm_ha_restoration import _completed
+    from tests.unit.test_vm_ha_runtime_ports import _runtime_config
+
+    store = _completed(tmp_path)
+    for path in (store.path, store.receipt_path):
+        path.chmod(0o600)
+    runtime = _runtime_config(tmp_path)
+    runtime["node"]["node_id"] = node
+    config, boot, forwarding = (tmp_path / name for name in ("config", "boot", "forwarding"))
+    config.write_text(yaml.safe_dump({"vm_ha": runtime}))
+    boot.write_text("boot")
+    forwarding.write_text("1" if active else "0")
+    lock = {
+        "schema": "nebius-vpngw/vm-ha-apply-lock-v2",
+        "apply_locked": True,
+        "cluster_id": "cluster-a",
+        "node_id": node,
+        "generation_id": "a" * 64,
+        "operation_id": "f" * 64,
+    }
+    for name, value in (
+        ("apply.lock", lock),
+        (
+            "guard.json",
+            {
+                "schema": "nebius-vpngw/vm-ha-status-v1",
+                "guard_boot_id": "boot",
+                "node_id": node,
+                "data_plane_mode": "active" if active else "passive",
+            },
+        ),
+    ):
+        path = tmp_path / name
+        path.write_text(json.dumps(value))
+        path.chmod(0o600)
+    monkeypatch.setattr(guest, "STATE", tmp_path)
+    monkeypatch.setattr(guest, "CONFIG", config)
+    monkeypatch.setattr(guest, "BOOT", boot)
+    monkeypatch.setattr(guest, "FORWARDING", forwarding)
+    return store, {"lock": lock, "configuration": hashlib.sha256(config.read_bytes()).hexdigest()}
+
+
+@pytest.mark.parametrize("node", ["node-a", "node-b"])
+@pytest.mark.parametrize("active", [False, True])
+def test_completed_restoration_is_history_not_an_activation_writer(
+    tmp_path, monkeypatch, node, active
+):
+    store, request = _restoration_authority(tmp_path, monkeypatch, node=node, active=active)
+    before = {path: path.read_bytes() for path in (store.path, store.receipt_path)}
+    assert guest.require_authority(request, active_unlock=active) == "boot"
+    assert {path: path.read_bytes() for path in before} == before
+
+
+@pytest.mark.parametrize(
+    "phase", ["armed", "committed", "start-accepted", "running", "awaiting-standby", "blocked"]
+)
+def test_unfinished_or_blocked_restoration_never_admits_activation(tmp_path, monkeypatch, phase):
+    store, request = _restoration_authority(tmp_path, monkeypatch)
+    record = json.loads(store.path.read_text())
+    record["phase"] = phase
+    if phase == "armed":
+        for key in ("promotion_receipt_id", "ownership_epoch", "route_operation_id"):
+            record[key] = None
+    if phase == "blocked":
+        record["blocked_reason"] = "standby-restoration-blocked"
+    store.path.write_text(json.dumps(record))
+    assert store.load().phase.value == phase
+    with pytest.raises(RuntimeError, match="unresolved restoration authority"):
+        guest.require_authority(request)
+
+
+@pytest.mark.parametrize(
+    "change", ["cluster", "allocation", "members", "node", "generation", "malformed"]
+)
+def test_completed_restoration_requires_exact_current_binding(tmp_path, monkeypatch, change):
+    import hashlib
+
+    import yaml
+
+    from nebius_vpngw.schema import VMHARouteTarget, VMHARuntimeBinding
+
+    _store, request = _restoration_authority(tmp_path, monkeypatch)
+    config = yaml.safe_load(guest.CONFIG.read_text())
+    runtime = config["vm_ha"]
+    binding = runtime["runtime_binding"]
+    if change == "cluster":
+        runtime["cluster_id"] = binding["cluster_id"] = "cluster-foreign"
+    elif change == "allocation":
+        binding["shared_allocation_id"] = "allocation-foreign"
+    elif change == "members":
+        binding["nodes"][1]["node_id"] = "node-foreign"
+    elif change == "node":
+        runtime["node"]["node_id"] = "node-b"
+    elif change == "generation":
+        binding["generation_id"] = binding["configuration_digest"] = "b" * 64
+    else:
+        binding["unexpected"] = True
+    binding["route_runtime_id"] = VMHARuntimeBinding.derive_route_runtime_id(
+        binding["cluster_id"],
+        binding["shared_allocation_id"],
+        tuple(VMHARouteTarget.model_validate(target) for target in binding["route_targets"]),
+    )
+    guest.CONFIG.write_text(yaml.safe_dump(config))
+    request["configuration"] = hashlib.sha256(guest.CONFIG.read_bytes()).hexdigest()
+    with pytest.raises((RuntimeError, ValueError)):
+        guest.require_authority(request)
+
+
+def test_completed_previous_generation_is_preserved_as_history(tmp_path, monkeypatch):
+    import hashlib
+
+    import yaml
+
+    store, request = _restoration_authority(tmp_path, monkeypatch)
+    before = store.path.read_bytes(), store.receipt_path.read_bytes()
+    config = yaml.safe_load(guest.CONFIG.read_text())
+    runtime = config["vm_ha"]
+    runtime["generation"]["generation_id"] = "b" * 64
+    runtime["runtime_binding"]["generation_id"] = "b" * 64
+    runtime["runtime_binding"]["configuration_digest"] = "b" * 64
+    guest.CONFIG.write_text(yaml.safe_dump(config))
+    request["configuration"] = hashlib.sha256(guest.CONFIG.read_bytes()).hexdigest()
+    request["lock"]["generation_id"] = "b" * 64
+    (tmp_path / "apply.lock").write_text(json.dumps(request["lock"]))
+    assert guest.require_authority(request) == "boot"
+    assert (store.path.read_bytes(), store.receipt_path.read_bytes()) == before
+
+
+@pytest.mark.parametrize("target", ["path", "receipt_path"])
+@pytest.mark.parametrize("change", ["symlink", "permissions", "malformed", "changed-during-read"])
+def test_restoration_evidence_must_remain_safe_and_stable(tmp_path, monkeypatch, target, change):
+    store, request = _restoration_authority(tmp_path, monkeypatch)
+    path = getattr(store, target)
+    if change == "symlink":
+        destination = path.with_suffix(".saved")
+        path.rename(destination)
+        path.symlink_to(destination)
+    elif change == "permissions":
+        path.chmod(0o644)
+    elif change == "malformed":
+        path.write_text('{"phase": "completed"}')
+    else:
+        original = guest.ha_repair.read_json
+        count = 0
+
+        def read(current):
+            nonlocal count
+            value = original(current)
+            if current == path:
+                count += 1
+                if count == 2:
+                    value["unexpected"] = True
+            return value
+
+        monkeypatch.setattr(guest.ha_repair, "read_json", read)
+    with pytest.raises((OSError, RuntimeError, ValueError)):
+        guest.require_authority(request)
+
+
+def test_completed_restoration_without_its_receipt_grants_no_authority(tmp_path, monkeypatch):
+    store, request = _restoration_authority(tmp_path, monkeypatch)
+    store.receipt_path.unlink()
+    with pytest.raises(FileNotFoundError):
+        guest.require_authority(request)
+
+
+def test_completed_restoration_rejects_a_different_promotion_receipt(tmp_path, monkeypatch):
+    store, request = _restoration_authority(tmp_path, monkeypatch)
+    receipt = json.loads(store.receipt_path.read_text())
+    receipt["receipt_id"] = "0" * 64
+    store.receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(RuntimeError, match="promotion receipt digest is invalid"):
+        guest.require_authority(request)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "mtls/inhibition.json",
+        "standby-replacement.inhibition.json",
+        "accepted-cloud-operation.json",
+        "rearm-cloud-operation.json",
+        "standby-auto-healing-recovery.json",
+    ],
+)
+def test_completed_restoration_does_not_override_another_inhibition(tmp_path, monkeypatch, name):
+    _store, request = _restoration_authority(tmp_path, monkeypatch)
+    path = tmp_path / name
+    path.parent.mkdir(exist_ok=True)
+    path.write_text("{}")
+    with pytest.raises(RuntimeError, match="another inhibition owner"):
+        guest.require_authority(request)
+
+
 def observation(*, failed="strongswan.service"):
     return {
         "boot": "boot",
@@ -83,14 +281,17 @@ def test_complete_fenced_resume_has_no_service_or_configuration_mutation(monkeyp
     run, publish = Mock(), Mock()
     monkeypatch.setattr(guest.subprocess, "run", run)
     monkeypatch.setattr(guest.ha_repair, "publish", publish)
-    assert guest.repair_service(
-        {
-            "identity": "a" * 64,
-            "action_kind": "configuration",
-            "resume_phase": "verify-active-forwarding-and-routes",
-            "fingerprint": digest({k: v for k, v in observed.items() if k != "clock"}),
-        }
-    ) == observed
+    assert (
+        guest.repair_service(
+            {
+                "identity": "a" * 64,
+                "action_kind": "configuration",
+                "resume_phase": "verify-active-forwarding-and-routes",
+                "fingerprint": digest({k: v for k, v in observed.items() if k != "clock"}),
+            }
+        )
+        == observed
+    )
     run.assert_not_called()
     publish.assert_not_called()
 

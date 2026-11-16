@@ -32,6 +32,7 @@ from nebius_vpngw.deploy.vm_ha_routes import (
     RouteMutationKind,
     RouteMutationPhase,
     RouteOccupancySnapshot,
+    RoutePlanningProgress,
     RouteReconciliationContext,
     RouteReplacementCompensated,
     RouteRollbackSnapshot,
@@ -70,10 +71,11 @@ def test_vm_ha_route_backend_reads_every_page_with_bounded_policy(
         def list(self, request: Request, **kwargs: object) -> SimpleNamespace:
             requests.append((request, kwargs))
             suffix = "one" if not request.page_token else "two"
-            return SimpleNamespace(
+            response = SimpleNamespace(
                 items=[SimpleNamespace(metadata=SimpleNamespace(id=f"route-{suffix}"))],
                 next_page_token="next" if not request.page_token else "",
             )
+            return SimpleNamespace(wait=lambda: response)
 
     backend = NebiusSDKRouteBackend(object())
     monkeypatch.setattr(backend, "_client_types", lambda: (Client, Request))
@@ -84,7 +86,8 @@ def test_vm_ha_route_backend_reads_every_page_with_bounded_policy(
     assert [request.page_token for request, _kwargs in requests] == ["", "next"]
     assert all(request.parent_id == "route-table-a" for request, _kwargs in requests)
     assert all(request.page_size == 1000 for request, _kwargs in requests)
-    assert all(kwargs == vm_ha_request_kwargs() for _request, kwargs in requests)
+    assert all(kwargs["retries"] == 1 for _request, kwargs in requests)
+    assert all(0 < kwargs["timeout"] <= 10 for _request, kwargs in requests)
 
 
 def _static_manifest(*prefixes: str) -> LogicalStaticRouteManifest:
@@ -176,6 +179,157 @@ def _reconciler(*, hold_down: float = 30, observations: int = 2) -> VMHARouteRec
         withdrawal_stability_observations=observations,
         route_targets=(_target(),),
     )
+
+
+@pytest.mark.parametrize("boundary", ["before-mutation", "postcondition"])
+def test_initial_bgp_acquisition_defers_empty_plan_without_route_authority(boundary):
+    reconciler = _reconciler()
+    ordinary = RouteOccupancySnapshot(
+        "ordinary-route", "10.20.0.0/16", "ordinary-allocation", _target()
+    )
+
+    def plan(bgp):
+        return reconciler.plan(
+            ownership=_owner(),
+            static_manifest=_static_manifest(),
+            bgp=bgp,
+            existing_routes=(ordinary,),
+            state=RouteTransitionState(10),
+            now=20,
+        )
+
+    initial = plan(_bgp(learned=(), usable=()))
+    ready = plan(_bgp())
+    effects, receipts = [], []
+    observations = (ready,) if boundary == "before-mutation" else (initial, ready)
+    with pytest.raises(RoutePlanningProgress):
+        execute_route_plan(
+            initial,
+            effects.append,
+            context=_context(),
+            reobserve_ownership=_owner,
+            reobserve_plan=_observations(*observations),
+            persist_receipt=receipts.append,
+            observe_receipt=lambda: None,
+        )
+    assert not effects and not receipts
+    assert "foreign-route-conflict:route-table-a:10.20.0.0/16" in ready.blocked_reasons
+    # Deferral grants no adoption authority: an unchanged foreign route still fails.
+    with pytest.raises(RuntimeError, match="postcondition"):
+        execute_route_plan(
+            ready,
+            effects.append,
+            context=_context(),
+            reobserve_ownership=_owner,
+            reobserve_plan=lambda: ready,
+            persist_receipt=receipts.append,
+            observe_receipt=lambda: None,
+        )
+    assert not effects and not receipts
+
+
+@pytest.mark.parametrize("changed", ["policy", "owner", "targets", "desired", "mutation"])
+def test_initial_bgp_progress_does_not_relax_other_route_failures(changed):
+    reconciler = _reconciler()
+    initial = reconciler.plan(
+        ownership=_owner(),
+        static_manifest=_static_manifest(),
+        bgp=_bgp(learned=(), usable=()),
+        existing_routes=(),
+        state=RouteTransitionState(10),
+        now=20,
+    )
+    ready = reconciler.plan(
+        ownership=_owner(),
+        static_manifest=_static_manifest(),
+        bgp=_bgp(),
+        existing_routes=(),
+        state=RouteTransitionState(10),
+        now=20,
+    )
+    if changed == "policy":
+        initial = replace(initial, blocked_reasons=("bgp-import-policy-mismatch",))
+    elif changed == "owner":
+        ready = replace(ready, ownership=_owner(node_id="node-a"))
+    elif changed == "targets":
+        ready = replace(ready, route_targets=(_target("b"),))
+    elif changed == "desired":
+        initial = replace(initial, desired_prefixes=frozenset({"10.21.0.0/16"}))
+    else:
+        initial = replace(initial, mutations=ready.mutations)
+    effects, receipts = [], []
+    with pytest.raises(RuntimeError, match="plan changed") as caught:
+        execute_route_plan(
+            initial,
+            effects.append,
+            context=_context(),
+            reobserve_ownership=_owner,
+            reobserve_plan=lambda: ready,
+            persist_receipt=receipts.append,
+            observe_receipt=lambda: None,
+        )
+    assert not isinstance(caught.value, RoutePlanningProgress)
+    assert not effects and not receipts
+
+
+@pytest.mark.parametrize("ownership_lost", [False, True])
+def test_route_progress_dispatch_preserves_pending_effect_without_receipt(
+    tmp_path, monkeypatch, ownership_lost
+):
+    from nebius_vpngw.agent.main import VMHAEffectAdapter
+    from nebius_vpngw.agent.vm_ha.models import DigestSet
+    from nebius_vpngw.agent.vm_ha.runtime import BoundRouteRuntime
+    from nebius_vpngw.agent.vm_ha_controller import ActionKind, ControllerAction
+
+    owner = _owner()
+    runtime = object.__new__(BoundRouteRuntime)
+    runtime.binding = SimpleNamespace(cluster_id="cluster-a")
+    runtime.backend = SimpleNamespace()
+    runtime.store = RuntimeStateStore(tmp_path / "routes")
+    runtime.clock = lambda: 20
+    runtime._ownership = lambda **_: owner
+    runtime._plan = lambda *_args, **_kwargs: None
+
+    def progressing(*_args, **_kwargs):
+        nonlocal owner
+        if ownership_lost:
+            owner = _owner(node_id="node-a")
+        raise RoutePlanningProgress("initial BGP acquisition advanced")
+
+    monkeypatch.setattr(NebiusSDKRouteBackend, "execute_verified_plan", progressing)
+    context = _context()
+    action = ControllerAction(
+        ActionKind.RECONCILE_ROUTES,
+        context.operation_id,
+        "boot-a",
+        context.owner_node_id,
+        context.allocation_id,
+        context.ownership_epoch,
+        context.generation_id,
+        DigestSet(
+            context.configuration_digest, context.static_routes_digest, context.bgp_policy_digest
+        ),
+        ownership_incarnation=context.ownership_incarnation,
+    )
+    events, failures = [], []
+    handlers = {kind: lambda _: pytest.fail("unexpected effect") for kind in ActionKind}
+    handlers[ActionKind.RECONCILE_ROUTES] = runtime.reconcile
+    receipt = tmp_path / "effect-receipt.json"
+    adapter = VMHAEffectAdapter(
+        handlers, receipt_path=receipt, event_sink=events.append, effect_failed=failures.append
+    )
+    if ownership_lost:
+        with pytest.raises(RuntimeError, match="exact quiescent authority"):
+            adapter.apply(action)
+        assert failures == [action]
+        assert events[-1]["event"] == "failed"
+    else:
+        adapter.apply(action)
+        assert not failures
+        assert events[-1]["event"] == "deferred"
+    assert not receipt.exists()
+    assert runtime.store.load_route_reconciliation_receipt() is None
+    assert runtime.store.load_pending_mutation() is None
 
 
 def test_sdk_reproves_every_approval_bound_migration_route_field(monkeypatch) -> None:
@@ -591,6 +745,103 @@ def test_sdk_defers_labels_only_for_an_exact_approval_bound_migration_predecesso
     route.metadata.resource_version = "8"
     with pytest.raises(RuntimeError, match="no longer uses the shared allocation"):
         backend.synchronize_authority_labels(ledger)
+
+
+def _ordinary_migration_backend(monkeypatch):
+    from nebius_vpngw.deploy.ordinary_route_ownership import labels
+
+    target = _target()
+    backend = NebiusSDKRouteBackend(object())
+    backend.bind_route_authority(
+        cluster_id="cluster-a", allocation_id="shared-allocation", route_targets=(target,)
+    )
+    binding = VMHAMigrationRouteBinding(
+        route_id="route-shared",
+        name="vpngw-" + "a" * 32,
+        prefix="10.20.0.0/16",
+        allocation_id="ordinary-allocation",
+        resource_revision="7",
+        route_target=target,
+    )
+    backend.bind_migration_routes((binding,))
+    route = _sdk_route_with_labels(
+        labels("project-a", "gateway-a", target.route_table_id, binding.prefix, 0)
+    )
+    route.metadata.name = binding.name
+    route.spec.next_hop.allocation.id = binding.allocation_id
+    monkeypatch.setattr(backend, "verify_target", MagicMock())
+    monkeypatch.setattr(backend, "_raw_routes", lambda _table: (route,))
+    owner = ManagedRouteOwnership(
+        cluster_id="cluster-a", kind=ManagedRouteKind.BGP, route_target=target
+    )
+    return backend, binding, route, owner
+
+
+def test_sdk_admits_exact_ordinary_migration_with_its_original_labels(monkeypatch) -> None:
+    backend, binding, route, owner = _ordinary_migration_backend(monkeypatch)
+    ledger = {binding.route_id: owner}
+    original_labels = dict(route.metadata.labels)
+
+    # Removing ordinary ownership labels hid this bug in historical fixtures.
+    route.metadata.labels = {}
+    unlabelled = backend.list_routes(binding.route_target, ledger)
+    route.metadata.labels = original_labels
+    assert backend.verify_migration_route(binding)
+    labelled = backend.list_routes(binding.route_target, ledger)
+    assert tuple(replace(row, rollback=None) for row in labelled) == tuple(
+        replace(row, rollback=None) for row in unlabelled
+    )
+    assert labelled[0].rollback is not None
+    assert dict(labelled[0].rollback.labels) == original_labels
+    assert tuple(replace(row, rollback=None) for row in labelled) == (
+        ManagedRouteSnapshot(binding.route_id, binding.prefix, binding.allocation_id, owner),
+    )
+    assert route.metadata.labels == original_labels
+    assert isinstance(backend.list_routes(binding.route_target, {})[0], RouteOccupancySnapshot)
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "id",
+        "name",
+        "prefix",
+        "allocation",
+        "revision",
+        "target",
+        "parent",
+        "cluster",
+        "unbound",
+        "foreign-label",
+        "ha-label",
+    ],
+)
+def test_sdk_ordinary_migration_rejects_changed_or_foreign_authority(monkeypatch, changed) -> None:
+    backend, binding, route, owner = _ordinary_migration_backend(monkeypatch)
+    if changed == "id":
+        backend.bind_migration_routes((binding.model_copy(update={"route_id": "another-route"}),))
+    elif changed == "name":
+        route.metadata.name = "foreign-name"
+    elif changed == "prefix":
+        route.spec.destination.cidr = "10.21.0.0/16"
+    elif changed == "allocation":
+        route.spec.next_hop.allocation.id = "foreign-allocation"
+    elif changed == "revision":
+        route.metadata.resource_version = "8"
+    elif changed == "target":
+        owner = replace(owner, route_target=_target("foreign"))
+    elif changed == "parent":
+        route.metadata.parent_id = "foreign-table"
+    elif changed == "cluster":
+        owner = replace(owner, cluster_id="foreign-cluster")
+    elif changed == "unbound":
+        backend.bind_migration_routes(())
+    elif changed == "foreign-label":
+        route.metadata.labels[backend._AUTHORITY_MANAGED_LABEL] = "foreign"
+    elif changed == "ha-label":
+        route.metadata.labels[backend._AUTHORITY_CLUSTER_LABEL] = "foreign"
+    with pytest.raises(RuntimeError, match="cloud route authority conflicts"):
+        backend.list_routes(binding.route_target, {binding.route_id: owner})
 
 
 def test_sdk_identifies_only_stably_absent_ledger_routes(monkeypatch) -> None:

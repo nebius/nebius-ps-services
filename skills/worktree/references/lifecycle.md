@@ -141,11 +141,11 @@ inside the primary checkout.
 
 ## Nested Coordinator Lease
 
-Implement and Agentic SDLC use lease schema v4. An `active` lease binds
+Implement and Agentic SDLC use lease schema v5. An `active` lease binds
 the exact outer path/branch/common Git directory, owner, run, token, initial
 head, ordered promotion heads, and every internal resource. Each promotion is
 an expected-head compare-and-set, which permits successive Implement
-waves without accepting skipped or stale history. Ownership-manifest schema v4
+waves without accepting skipped or stale history. Ownership-manifest schema v5
 independently records the lease participation state, owner, and token; a missing
 lease file therefore cannot silently unlock integration or removal. Release
 requires the clean outer checkout at the final promoted head and all resources

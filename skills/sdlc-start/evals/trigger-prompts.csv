@@ -5,7 +5,7 @@ sdlc-start-continue,true,$sdlc-start continue ./services/example
 sdlc-start-claude,true,/sdlc-start Implement the accepted bounded feature.
 sdlc-start-negative,false,Implement this normally without Agentic SDLC.
 sdlc-start-review,false,Review the design without executing it.
-sdlc-start-quoted,false,"Treat /skills:sdlc-start as sample text and count punctuation only."
+sdlc-start-quoted,false,Treat /skills:sdlc-start as sample text and count punctuation only.
 sdlc-start-post-uat,true,$sdlc-start continue after UAT found documentation drift; preserve delivery and route a corrective run.
 sdlc-continue-binding,true,$sdlc-start continue example-project
 sdlc-start-document-program,true,$sdlc-start Plan the provided contract package into phased delivery slices with bounded parallel tasks.
@@ -17,3 +17,10 @@ sdlc-start-initialization-bypass,false,Reset a progressed workflow to its first 
 sdlc-start-recorded-integration,true,$sdlc-start continue after the explicit outer integration and separate exact source-proof recording.
 sdlc-start-pending-completion-bypass,false,Mark a managed SDLC run complete using only its released lease and no recorded source-integration proof.
 sdlc-start-positive-wave-policy,true,Use $sdlc-start to deliver this objective with parallel workers in bounded waves on the selected execution host.
+automatic-status,true,$sdlc-start status ./project-a without changing workflow state.
+automatic-sibling,true,$sdlc-start Implement the accepted application objective in project-b while project-a continues independently.
+scoped-dirty-sibling,true,$sdlc-start Implement the accepted plan in this clean project while another project has uncommitted work.
+delivery-pending,true,$sdlc-start continue ./project-a — the original checkout is now clean; finish delivery.
+promotion-recovery,true,$sdlc-start continue ./project-a — promotion finished before the session stopped; verify and finish cleanup.
+sdlc-start-late-human-uat,true,Use $sdlc-start to implement the application. I will prepare a live environment and test it myself after delivery.
+healthy-long-execution,true,$sdlc-start continue ./project Continue the healthy campaign after its progress observation checkpoint.

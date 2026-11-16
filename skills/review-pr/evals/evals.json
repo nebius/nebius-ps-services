@@ -194,6 +194,17 @@
         "Reports the current limitation; full LFS support is deferred.",
         "Preserves the caller checkout and retained private work."
       ]
+    },
+    {
+      "id": "enrolled-review-authority",
+      "prompt": "Offline contract simulation only; no external calls or mutations. Use $review-pr in report-only mode for a repository with Actions enrollment. The local agent finds a defect.",
+      "expected_output": "Preserves report-only intent and hosted effect ownership.",
+      "files": [],
+      "assertions": [
+        "Dispatches review or returns findings when already inside the hosted agent.",
+        "Does not repair, post merge attestation, close or merge from the laptop.",
+        "Full lifecycle requests use process and requalify every changed head."
+      ]
     }
   ]
 }

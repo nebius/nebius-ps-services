@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "agentic-sdlc/three-tier-results-v3",
+  "$id": "agentic-sdlc/three-tier-results-v4",
   "title": "Agentic SDLC three-tier semantic results",
   "type": "object",
   "additionalProperties": false,
@@ -16,7 +16,7 @@
   ],
   "properties": {
     "schema": {
-      "const": "agentic-sdlc/three-tier-results-v3"
+      "const": "agentic-sdlc/three-tier-results-v4"
     },
     "scenario": {
       "const": "three-tier-task-board-v1"
@@ -31,7 +31,8 @@
       "required": [
         "baseline_sha",
         "promoted_sha",
-        "clean"
+        "clean",
+        "aggregate_sha"
       ],
       "properties": {
         "baseline_sha": {
@@ -58,6 +59,17 @@
         },
         "clean": {
           "type": "boolean"
+        },
+        "aggregate_sha": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40,64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },

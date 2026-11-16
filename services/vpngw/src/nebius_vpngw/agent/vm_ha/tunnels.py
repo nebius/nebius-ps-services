@@ -14,6 +14,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from enum import Enum
 from pathlib import Path
+from time import monotonic
 from typing import Any, Generic, Protocol, TypeVar
 
 from ...ha_tunnel_policy import ConnectionPolicy, connection_policies, selections
@@ -490,6 +491,7 @@ class TunnelController(Generic[AuthorityT]):
     def tick(self, authority: AuthorityT, now: float) -> None:
         if not math.isfinite(now):
             raise ValueError("tunnel clock must be finite")
+        started = monotonic()
         if not self.effects.revalidate(authority):
             return
         self.bind(authority)
@@ -579,7 +581,7 @@ class TunnelController(Generic[AuthorityT]):
         self._save()
         if self._pending():
             self.preferred_observations.clear()
-            self._advance(authority, now)
+            self._advance(authority, now, elapsed_seconds=monotonic() - started)
             return
         if episode is not None and episode["exhausted"]:
             return
@@ -594,7 +596,7 @@ class TunnelController(Generic[AuthorityT]):
                     self._begin(policy, policy.preferred, "release", authority, now)
                     # Persist release intent, then restore normal policy before
                     # the VM policy can repair a path under the stale override.
-                    self._advance(authority, now)
+                    self._advance(authority, now, elapsed_seconds=monotonic() - started)
                     return
             elif health[policy.name] == Health.DOWN.value:
                 self.preferred_observations.pop(policy.name, None)
@@ -643,7 +645,32 @@ class TunnelController(Generic[AuthorityT]):
         record["successes"] += 1
         return record["successes"] >= 2 and now - record["since"] >= 60
 
-    def _advance(self, authority: AuthorityT, now: float) -> None:
+    def _expire_selection(self, policy: ConnectionPolicy) -> None:
+        op = self.state["operation"]
+        if policy.mode == "bgp":
+            # Expiry cannot cancel a partially installed policy. Preserve the
+            # same operation until normal routing is durably restored.
+            if op["verb"] == "release":
+                return
+            self.state["selected"].pop(policy.name, None)
+            op.update(
+                verb="release",
+                phase="activate",
+                successes=0,
+                result="target-failed-restoring-policy",
+            )
+        elif op["phase"] in {"restore", "verify-restore"}:
+            return
+        else:
+            op.update(phase="restore", successes=0, result="recovery-exhausted-restoring")
+        self._save()
+
+    def _advance(self, authority: AuthorityT, now: float, *, elapsed_seconds: float = 0.0) -> None:
+        started = monotonic()
+
+        def current_time() -> float:
+            return now + elapsed_seconds + monotonic() - started
+
         op = self.state["operation"]
         policy = self.policies[op["connection"]]
         if not self.effects.revalidate(authority):
@@ -660,7 +687,7 @@ class TunnelController(Generic[AuthorityT]):
             except RuntimeError:
                 observed = Health.UNKNOWN
             op["successes"] = op["successes"] + 1 if observed is Health.HEALTHY else 0
-            if now >= op["deadline"]:
+            if current_time() >= op["deadline"]:
                 op.update(phase="failed", result="unchanged-path-unverified")
             elif op["successes"] >= 2:
                 op.update(phase="succeeded", result="verified")
@@ -673,23 +700,8 @@ class TunnelController(Generic[AuthorityT]):
         if policy.mode == "static":
             episode = self._episode(now, authority)
             op["deadline"] = min(op["deadline"], episode["deadline"] - 1)
-        if now >= op["deadline"]:
-            if policy.mode == "bgp":
-                # A timed-out caller cannot cancel a partially installed policy.
-                # Cleanup remains durable and outstanding until normal routing
-                # is verified, even across a restart after the request deadline.
-                if op["verb"] != "release":
-                    self.state["selected"].pop(policy.name, None)
-                    op.update(
-                        verb="release",
-                        phase="activate",
-                        successes=0,
-                        result="target-failed-restoring-policy",
-                    )
-                    self._save()
-            elif op["phase"] not in {"restore", "verify-restore"}:
-                op.update(phase="restore", successes=0, result="recovery-exhausted-restoring")
-                self._save()
+        if current_time() >= op["deadline"]:
+            self._expire_selection(policy)
         if policy.mode == "bgp" and op["verb"] == "failback":
             # A restart or delayed retry must not reuse old preferred-path proof.
             if self.effects.candidate(policy, policy.preferred) is not Health.HEALTHY:
@@ -734,6 +746,9 @@ class TunnelController(Generic[AuthorityT]):
                     op["successes"] = 0
                     self._save()
                     return
+                if not restoring and op["verb"] != "release" and current_time() >= op["deadline"]:
+                    self._expire_selection(policy)
+                    return
                 op["successes"] = op["successes"] + 1 if observed is Health.HEALTHY else 0
                 if op["successes"] >= 2:
                     failed_target = op["result"] == "target-failed-restoring-policy"
@@ -748,20 +763,23 @@ class TunnelController(Generic[AuthorityT]):
                     if not restoring:
                         self.state["reasons"][policy.name] = op["verb"]
                 elif (
-                    now >= op["attempt_deadline"]
+                    current_time() >= op["attempt_deadline"]
                     and not restoring
-                    and observed is not Health.HEALTHY
+                    and observed is Health.DOWN
                 ):
-                    self._failed_attempt(policy, now)
+                    # Pending probe hysteresis or unavailable evidence cannot
+                    # prove candidate failure. The original request deadline
+                    # still bounds waiting and retains its expiry cleanup.
+                    self._failed_attempt(policy, current_time())
         except TunnelScopeError:
             if op["phase"] == "suspend":
                 # The initial scope check preceded every native mutation. Do
                 # not convert a rejected local request into gateway suspension.
                 op.update(phase="failed", result="suspension-scope-unproven")
             else:
-                self._failed_attempt(policy, now)
+                self._failed_attempt(policy, current_time())
         except RuntimeError:
-            self._failed_attempt(policy, now)
+            self._failed_attempt(policy, current_time())
         self._save()
 
     def _failed_attempt(self, policy: ConnectionPolicy, now: float) -> None:

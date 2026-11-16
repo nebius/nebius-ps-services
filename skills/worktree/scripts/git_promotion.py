@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import sys
 import time
 import unicodedata
 
@@ -263,7 +264,7 @@ def ensure_promotion_branch(
 
 
 @contextmanager
-def promotion_lock(cwd: Path, *, timeout_seconds: float = 10.0) -> Iterator[None]:
+def promotion_lock(cwd: Path) -> Iterator[None]:
     if os.name != "posix":
         raise GitPromotionError("promotion locking requires a POSIX host")
     import fcntl
@@ -294,16 +295,15 @@ def promotion_lock(cwd: Path, *, timeout_seconds: float = 10.0) -> Iterator[None
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise GitPromotionError("promotion lock is not a regular file")
         os.fchmod(descriptor, 0o600)
-        deadline = time.monotonic() + timeout_seconds
+        next_observation = time.monotonic() + 30
         while True:
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise GitPromotionError(
-                        "another promotion owns the repository lock"
-                    )
+                if time.monotonic() >= next_observation:
+                    print("Waiting for the repository promotion owner; observation checkpoint.", file=sys.stderr, flush=True)
+                    next_observation = time.monotonic() + 30
                 time.sleep(0.05)
         try:
             yield

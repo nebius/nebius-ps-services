@@ -453,6 +453,19 @@ main() {
   ensure_origin_identity
   local live_default
   live_default="$(repo_default_branch)"
+  if [[ "${mode}" != verify ]]; then
+    local enrollment
+    if [[ -f "$(git rev-parse --show-toplevel)/.github/ai-automation.json" ]]; then
+      log_error "Repository uses the enrolled Actions coordinator; local prep/tag/push is disabled."; exit 1
+    fi
+    # A stale laptop checkout cannot bypass live default-branch enrollment.
+    # Fetch objects only; preserve the caller's branch, index and working tree.
+    git fetch --quiet --no-tags --no-recurse-submodules origin "refs/heads/${live_default}"
+    enrollment="$(git ls-tree FETCH_HEAD -- .github/ai-automation.json)"
+    if [[ -n "${enrollment}" ]]; then
+      log_error "Repository uses the enrolled Actions coordinator; local prep/tag/push is disabled."; exit 1
+    fi
+  fi
   main_branch="${main_branch:-${live_default}}"
   [[ "${main_branch}" == "${live_default}" ]] || { log_error "Expected branch differs from live origin default."; exit 1; }
   tag_prefix="${tag_prefix:-$(derive_tag_prefix "${PWD}")}"

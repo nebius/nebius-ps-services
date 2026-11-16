@@ -62,6 +62,17 @@ class ThreeTierObjectiveTests(unittest.TestCase):
             render(SKILLS_ROOT / 'sdlc-workflow-test/assets/three-tier-objective.md.template',
                    {**self.values(), 'COMPOSE_PROJECT':'foreign-project'})
 
+    def test_rendered_objective_keeps_startup_observer_handoff(self):
+        from render_three_tier_objective import render
+        value = ' '.join(render(
+            SKILLS_ROOT / 'sdlc-workflow-test/assets/three-tier-objective.md.template',
+            self.values(),
+        ).split())
+        self.assertIn('checkpoint still names `sdlc-start`', value)
+        self.assertIn('actual native session identity', value)
+        self.assertIn('await its observation receipt before advancing', value)
+        self.assertIn('must not initialize or advance the workflow for you', value)
+
     def test_headless_browser_contract_is_mirrored(self) -> None:
         skill = (SKILLS_ROOT / "sdlc-workflow-test" / "SKILL.md").read_text()
         self.assertIn("read and follow\n`references/three-tier-process.md` before any live operation", skill)

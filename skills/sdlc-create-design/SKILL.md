@@ -77,13 +77,13 @@ and feature designs in `docs/design.md`.
 
 ## Required Reads
 
-- `../worktree/references/document-delivery.md` for source coverage, phase/slice
-  identities, shared-skill caller contracts and protected completion policy.
-
-- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
-  assignment/ownership and evidence to the current immutable execution basis.
-  Before preparation, bind evidence to the accepted objective and applicable
-  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+- `../worktree/references/workflow-invariants.md` for shared ownership,
+  evidence, failure and conditional-read rules.
+- Read `../worktree/references/workflow-contract.md` before this phase performs
+  execution planning, reconciliation or any execution lifecycle operation.
+- Read `../worktree/references/document-delivery.md` when accepted inputs include
+  a source manifest/program, this phase handles SLICE/source coverage or phase
+  barriers, or it handles delivery admission, phase exit or protected completion.
 
 - Requirements.
 - Context packs.
@@ -101,7 +101,25 @@ and feature designs in `docs/design.md`.
 - Initial pre-execution Git admission of the canonical pair, under the exact
   staged-scope guard below. The preparation phase retains commit ownership.
 
+## Architecture Statistics
+
+After accepted design publication, refresh the source-bound declared inventory
+and preserve existing-code observations through
+`../worktree/references/statistics.md`. Reuse component IDs and report
+disagreements; this observational refresh grants no execution authority.
+
 ## Process
+
+Check unpublished candidates through the canonical `project_specs.py check-candidates`
+helper. The bounded input-correction contract supplied by `sdlc-classify-failure`
+precedes failure classification only for owner-proven structural rejection without
+effects. Existing classified trials and their counted repairs remain unchanged.
+If feedback identifies an eligible correction, submit that unchanged pair through
+the paired publisher before editing. Its `correction_pending` response preserves
+the candidate and reserves the shared two-submission/five-active-minute allowance.
+Correct only the named syntax, then resubmit through that owner. Read-only checks
+alone never grant correction attempts. The coordinator checkpoint must name this
+active phase or this next owning phase after completed context gathering.
 
 - Reconcile the supplied design against extracted requirements; preserve accepted
   decisions. Invoke `design` in advisory mode with the frozen source manifest,
@@ -112,7 +130,8 @@ and feature designs in `docs/design.md`.
 - Use `assets/templates/design.md.template` when creating the file.
 - Write source citations as descriptive Markdown links. A URL in ordinary
   parentheses is still a bare URL and can fail the project's Markdown checks.
-- Before paired publication, run the project's configured Markdown check in
+- After the read-only candidate check returns `valid` and before paired publication, run
+  the project's configured Markdown check in
   check-only mode on the complete design candidate. If none is configured, use
   the private `scripts/check_design_markdown.py --candidate <candidate.md>
   --project-root <selected-project>` helper. It runs available `markdownlint`
@@ -123,7 +142,9 @@ and feature designs in `docs/design.md`.
   private; do not discover configuration from its temporary directory. Preserve
   existing template exceptions without adding ad hoc suppressions, automatic
   fixes or fallback configuration. Keep the result with phase evidence.
-  A failed or unavailable check
+  Literal HTTP route parameters such as `PATCH /api/tasks/<id>` belong in inline
+  code; the candidate owner checks that narrow syntax before this lint gate.
+  Any remaining failed or unavailable check
   returns to the coordinator for normal classification before publication or
   readiness; it grants no uncounted retry or direct canonical-file edit.
 - A shared-owner draft-pair bootstrap may already supply inert mapped draft

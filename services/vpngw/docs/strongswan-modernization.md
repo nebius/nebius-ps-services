@@ -247,7 +247,7 @@ remain blocking.
 
 ## Verification and release gate
 
-Run `status`, `vm-ha --dry-run`, and the existing `failover`/`failback` commands
+Run `status`, `apply --dry-run`, and the existing `failover`/`failback` commands
 through their public interfaces. CLI success, healthy service status and local
 tests are distinct from workload delivery. Inspect logs using
 `journalctl -u strongswan.service` and native sessions with `swanctl --list-sas`.

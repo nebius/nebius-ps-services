@@ -289,6 +289,39 @@ def _provisioning_state() -> VMHALifecycleState:
     )
 
 
+@pytest.mark.parametrize("change", ("drop", "rebind"))
+def test_normal_apply_cannot_discard_replacement_ownership(change):
+    from nebius_vpngw.deploy.vm_ha_lifecycle import _validate_successor
+
+    previous = _missing_standby_state(start_replacement=False)
+    history = {
+        "passive-replacement-approval:gateway-1": _digest("e"),
+        "retired-compute:gateway-1": "old-vm",
+        "retired-disk:gateway-1": "old-disk",
+        "replacement-compute:gateway-1": previous.members[1].compute_id,
+        "replacement-disk:gateway-1": previous.members[1].disk_id,
+    }
+    previous = replace(
+        previous,
+        status=VMHALifecycleStatus.ACTIVE,
+        transaction=replace(previous.transaction, resource_bindings=tuple(sorted(history.items()))),
+    )
+    retained = {} if change == "drop" else {**history, "retired-disk:gateway-1": "foreign-disk"}
+    successor = replace(
+        previous,
+        status=VMHALifecycleStatus.PROVISIONING,
+        transaction=replace(
+            previous.transaction,
+            operation_id="new-approved-apply",
+            predecessor_sha256=previous.record_sha256,
+            resource_bindings=tuple(sorted(retained.items())),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="replacement ownership"):
+        _validate_successor(previous, successor)
+
+
 def _replacement_observation(*, passive_revision: str = "8") -> dict[str, object]:
     return {
         "members": [

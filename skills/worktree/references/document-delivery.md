@@ -18,7 +18,7 @@ Keep requirements/design concise and preserve original source identifiers.
 Never commit private source material merely because intake can read it. Use an
 authorized portable snapshot; local paths and credentials are not portable.
 
-The accepted objective uses `workflow/accepted-objective-v2` and binds:
+The accepted objective uses `workflow/accepted-objective-v3` and binds:
 
 ```json
 {
@@ -74,10 +74,13 @@ merge facts never substitute for current source qualification.
 
 ## Program and task identities
 
-Private `workflow/program-v1` has `phases` and `slices` arrays. A phase has `id`,
+Private `workflow/program-v2` has `phases` and `slices` arrays and an explicit `uat_criteria` catalog. A phase has `id`,
 `depends_on` and full source `exit_criteria`. A slice has `id: SLICE-001`, `phase`,
 `depends_on`, `feature_ids`, `requirement_ids`, `criteria`, `regression_criteria`
-and `change_kind` (non-runtime, runtime, deployment, security or data). Declare
+and `change_kind` (non-runtime, runtime, deployment, security or data). Each slice
+also freezes `implementation_coverage`, mapping every non-UAT source criterion
+and regression criterion to nonempty IDs in the frozen required wave checks.
+Campaign selection never removes a required implementation check. Declare
 slices in topological delivery order, respecting phase barriers. Plan every
 required obligation, but elaborate detailed tasks only for upcoming slices.
 
@@ -131,44 +134,40 @@ inside its scope. Changed authority requires a new accepted revision. Only
 unmanaged source checkouts support unattended delivery initially. Preserve the
 explicit outer-worktree integration boundary.
 
-Freeze the private qualification plan digest in the locked implementation plan
-using the exact line `Qualification plan SHA256: <digest>`. Schema
-`workflow/qualification-plan-v1` requires: execution_id, runner (committed
-relative Python path), runner_sha256, criteria (all slice plus inherited
-regression IDs), environment (`id`, shared `resource`, `nonproduction: true`),
-operations (subset of accepted live operations), timeout_seconds (1–3600),
-environment_keys (names only), and live (boolean).
+UAT is optional and follows [the shared policy](optional-uat.md). Do not require
+live infrastructure for ordinary implementation admission. A supplied environment
+alone requests neither testing nor a provisioning skill.
 
-The reviewed repository harness runs as isolated Python with no shell and a
-declared environment allowlist. `candidate` emits head, artifact_sha256 and
-configuration_sha256. Independent `observe` emits those plus environment,
-trial, reset, intervened=false and writers_quiescent=true. `criterion
---criterion <source-id>` emits criterion, tests, passed, failed and skipped;
-positive test count, all passing, zero failed/skipped are mandatory. These are
-the harness's actual assertions; a wrapper that merely prints passing labels
-is invalid and must fail review. The harness owns honest independent observation;
-local receipt integrity does not defend against a malicious OS account owner.
+Private `admit-delivery` validates task/wave evidence and executes the frozen
+required core checks on the final clean promoted candidate. It binds each source
+implementation criterion through `implementation_coverage`, with executed check
+IDs, outcomes, source tree, objective and basis. This is implementation evidence;
+it has no invented runtime artifact/environment fields. Phase-only implementation
+checks use `admit-phase` with frozen `checks`. Preserve all failed core attempts.
 
-Use private `qualify` after promotion, binding every receipt to source package,
-objective, basis, artifact, configuration, exclusive target lease and clean
-trial before/after. No raw output or secret values enter receipts. Interrupted,
-intervened and failed trials stay failed; reset before retry. Source IDs for
-scoped checks never substitute for full acceptance IDs. External infrastructure
-phases without delivery slices can qualify as `PHASE:<phase-id>`; this is
-verification of provided infrastructure, not deployment authority.
+Only requested ready UAT uses a separately frozen
+`workflow/qualification-plan-v3` and `qualify --execution OBJECTIVE`. Its reviewed
+Python harness owns candidate, independent observation, assertions and backend
+cleanup as described in `optional-uat.md`. The selected backend is `existing`,
+`container` or `nebius`; the latter two require explicit skill invocation. Missing
+scope/runtime prerequisites produce pending status, not repeated repair attempts.
+Complete exact-candidate execution and owner cleanup are required for a UAT PASS.
+Do not relabel historical, skipped or intervened tests as current passing evidence.
 
-`attest-delivery` consumes the qualification reference and complete current
-`skills-review/v2` report from `review-pr`. It posts a COMMENT attestation;
-this is not a GitHub approval. Live N/A is accepted only for reviewed prose-only
-changes. Runtime, deployment, security, data and executable-contract changes
-require live evidence. Default reviewed-PR completion needs no merge broker. Stop at this resumable
+`attest-delivery` consumes an implementation `admission` reference and complete
+current `skills-review/v2` report from `review-pr`. It posts a COMMENT attestation,
+not a GitHub approval. The protected SDLC record contains the admission digest,
+source head/tree, policy-bound UAT disposition and implementation coverage.
+Unrequested or pending UAT permits otherwise eligible publication. Actual product
+failures and unproven cleanup remain separately owned obligations.
+Default reviewed-PR completion needs no merge broker. Stop at this resumable
 delivery checkpoint; do not declare the whole program or its features complete.
 Further slices wait for independently verified merge evidence.
 
 `submit-delivery` independently checks promoted/reviewed/tested identity, source
 basis, current base, CI, objections and conversations, allowed operators and
 accepted effects. It requires an already-installed protected policy declaring
-`sdlc_contract: workflow/sdlc-delivery-v1`. Queue rules are rejected. The shared
+`sdlc_contract: workflow/sdlc-delivery-v2`. Queue rules are rejected. The shared
 broker owns actual approval/protected direct merge, obeying repository rules.
 No guard weakens protections or installs workflows automatically.
 
@@ -180,9 +179,9 @@ dependent delivery, and resumes verification without repeating merge.
 
 After verified merge, the next source branch starts at the current fetched
 default branch. The first candidate preserves the selected branch/history.
-`phase-exit` consumes exact qualification references and completed slice records.
+`phase-exit` consumes exact `admissions` references and completed slice records.
 A merged slice records progress; feature/phase completion requires all of its
-acceptance obligations. Keep candidate readiness and production qualification
+implementation obligations. Retain optional UAT independently. Keep candidate readiness and production qualification
 as separate phases when the source package defines them.
 
 ## Shared skill caller contracts

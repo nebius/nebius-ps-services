@@ -1,0 +1,45 @@
+{
+  "skill_name": "sdlc-uat-tests",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Implement the accepted application scope; no UAT campaign was requested and no live environment exists.",
+      "expected_output": "Run mandatory development checks, retain not_requested UAT, and allow otherwise eligible delivery without runtime identities or synthetic PASS.",
+      "files": [],
+      "assertions": [
+        "Run mandatory development checks, retain not_requested UAT, and allow otherwise eligible delivery without runtime identities or synthetic PASS."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "UAT was requested after implementation, but a required external service is unavailable when the scope is complete.",
+      "expected_output": "Record pending UAT and missing prerequisites with the exact candidate handoff; do not retry optional setup indefinitely or block eligible PR/merge. Preserve any actual failed assertions.",
+      "files": [],
+      "assertions": [
+        "Record pending UAT and missing prerequisites with the exact candidate handoff; do not retry optional setup indefinitely or block eligible PR/merge. Preserve any actual failed assertions."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "In an already verified Agentic SDLC run, use $sdlc-uat-tests for its normal phase on an unchanged FEAT-only basis with no source manifest. Reuse unchanged instructions already loaded in this session. Explain the required reads and next action without executing effects.",
+      "expected_output": "Load the shared invariants and phase inputs. Load deep execution or delivery detail only when the phase operation triggers it; preserve native ownership, exact basis checks and phase-specific gates.",
+      "files": [],
+      "assertions": [
+        "The answer preserves the verified coordinator and exact current evidence requirements.",
+        "Execution owners still require the execution contract; protected publication still requires document delivery.",
+        "Unchanged instruction reuse never becomes a cache of authority, Git identity or passing mutable evidence."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Use $sdlc-uat-tests in a verified resumed SLICE workflow after a source manifest and checkpoint changed. Optional UAT still lacks the same external prerequisite. Explain the safe continuation and required reads without executing effects.",
+      "expected_output": "Reload changed/compacted instructions and current checkpoint. Load document delivery for SLICE/source coverage and execution details for lifecycle effects; preserve pending optional UAT without repeated setup or repair-budget charges.",
+      "files": [],
+      "assertions": [
+        "The answer retains source coverage, serial barriers, immutable history and full relevant detail.",
+        "Changed identity invalidates reuse and requires owner revalidation.",
+        "Pending optional UAT is not a synthetic PASS and does not trigger unchanged setup/research loops."
+      ]
+    }
+  ]
+}

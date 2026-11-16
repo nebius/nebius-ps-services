@@ -1,0 +1,6 @@
+interface:
+  display_name: "Test Live on Nebius"
+  short_description: "Provision, test and clean scoped Nebius environments"
+  default_prompt: "Use $test-live-on-nebius to infer a bounded live environment for this project's test, prefer cxcli, verify behavior and clean owned resources."
+policy:
+  allow_implicit_invocation: false

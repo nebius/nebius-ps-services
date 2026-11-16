@@ -1,6 +1,6 @@
 ---
 name: sdlc-merge-pr
-description: "Use only as part of the Agentic SDLC workflow; complete an opted-in delivery slice through protected direct merge and exact-result verification after independent qualification, review and policy admission."
+description: "Use only as part of the Agentic SDLC workflow; complete an opted-in delivery slice through protected direct merge and exact-result verification after implementation admission, review and policy checks."
 user-invocable: false
 ---
 
@@ -52,7 +52,9 @@ never grants merge authority.
 - The bound root selected `merge-verified` for this repository, default branch,
   delivery slice and live/merge effects in the accepted objective revision.
 - `review-pr` passed for the exact promoted candidate and owner-produced
-  qualification covers every mandatory slice and inherited criterion.
+  implementation admission covers every required criterion through frozen checks.
+  Optional UAT follows `../worktree/references/optional-uat.md`; pending UAT
+  does not block an otherwise eligible merge.
 - A submitted or merged candidate needs read-only reconciliation after a pause.
 
 ## When Not To Use
@@ -63,25 +65,27 @@ never grants merge authority.
 
 ## Required Reads
 
+- `../worktree/references/workflow-invariants.md` for shared ownership and evidence.
+
 - `../worktree/references/document-delivery.md` and
   `../worktree/references/workflow-contract.md`.
 - `../merge-pr/references/actions-protocol.md` for the shared protected broker.
 - Accepted completion policy, immutable execution basis, promoted candidate,
-  qualification producer receipt and exact current `review-pr` evidence.
+  implementation admission receipt and exact current `review-pr` evidence.
 - Current PR/base, repository rules, checks, conversations and human objections.
 
 ## Inputs
 
 - Verified coordinator identity, active run and frozen delivery-slice identity.
 - Accepted objective revision and its scoped completion policy.
-- Promoted candidate, owner-produced qualification receipt and exact PR review.
+- Promoted candidate, owner-produced implementation admission receipt and exact PR review.
 - Existing submission receipt when reconciling an attempted or completed merge.
 
 ## Must Not
 
 - Do not infer merge authority from a supplied cluster or passing test labels.
 - Do not bypass the protected broker, repository rules or required approvals.
-- Do not reuse stale qualification or repeat an ambiguous merge submission.
+- Do not reuse stale admission or repeat an ambiguous merge submission.
 - Do not dispatch dependent delivery until the merged result is verified.
 
 ## Process
@@ -92,7 +96,7 @@ never grants merge authority.
    again for an already-authorized slice. Policy changes require a new revision.
 2. After `review-pr`, use private `workflow_intake.py --owner agentic-sdlc
    attest-delivery --run-dir … --execution SLICE-001 --candidate …`. The candidate
-   contains the exact `skills-review/v2` report and qualification reference.
+   contains the exact `skills-review/v2` report and admission reference.
    This adapter publishes a COMMENT attestation and retains its real review ID.
 3. Use private `submit-delivery --run-dir … --execution SLICE-001`. The adapter
    independently rechecks current source/basis, promoted/tested/reviewed artifact,
@@ -109,7 +113,7 @@ never grants merge authority.
 6. Reconcile actual merge and then exact-result CI/publication. A merged candidate
    whose verification fails remains `merged-verification-failed`; pause dependent
    delivery and resume verification without merging again. Head/base drift before
-   merge returns to corrective integration and fresh qualification.
+   merge returns to corrective integration and fresh implementation admission.
 7. After `result-verified`, record slice progress. The next branch starts at the
    current default branch through the shared source helper. Phase/feature
    completion still requires all its source acceptance obligations. Return to
@@ -125,7 +129,7 @@ never grants merge authority.
 
 - Missing authority, workflow compatibility or operator configuration blocks.
 - Missing, stale, forged, skipped or intervened evidence blocks admission.
-- Base/head/artifact/configuration drift requires fresh qualification and review.
+- Base/head/source-tree drift requires fresh implementation admission and review.
 - Required GitHub approvals and branch rules remain enforced by the broker/API.
 - Report submitted, merged, result-verified or merged-verification-failed precisely.
 

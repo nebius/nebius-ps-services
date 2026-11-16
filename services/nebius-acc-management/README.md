@@ -255,7 +255,7 @@ Notes:
 - Invite files should use the `*.config.yaml` pattern so they stay git-ignored.
 - A user can belong to multiple project groups. If the user already exists in the tenant, the CLI adds them directly to each group; otherwise it sends one invitation and waits for acceptance before group membership can be created.
 
-## Release & Versioning
+## Versioning
 
 - Versions are derived from annotated Git tags (`nebius-acc-vMAJOR.MINOR.PATCH`)
   via `setuptools-scm`.
@@ -264,16 +264,7 @@ Notes:
   - **MAJOR:** breaking changes
   - **MINOR:** backward-compatible features
   - **PATCH:** bug fixes
-- Keep `CHANGELOG.md` updated before tagging.
-
-### How to create a release
-
-1. Prepare on your working branch: `./release.sh --prep nebius-acc-vX.Y.Z`
-2. Open a PR and merge it to `main`.
-3. On `main`, publish the release: `./release.sh --publish nebius-acc-vX.Y.Z`
-
-Note: `--publish` requires `main` to be clean and up to date with
-`origin/main`.
+- [CHANGELOG.md](CHANGELOG.md) records the changes in each version.
 
 ## Project Structure
 
@@ -282,7 +273,6 @@ Note: `--publish` requires `main` to be clean and up to date with
 ├── README.md
 ├── CHANGELOG.md
 ├── pyproject.toml
-├── release.sh
 ├── .markdownlint.json
 ├── doc/
 │   └── design.md

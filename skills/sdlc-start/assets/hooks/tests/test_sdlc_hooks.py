@@ -24,6 +24,7 @@ def run_hook(script: Path, payload: dict, codex_home: Path) -> dict:
     payload = {"session_id": "hook-test-worker" if "/TASK-" in str(payload.get("cwd", "")) else "hook-test-session", **payload}
     env = os.environ.copy()
     env["CODEX_HOME"] = str(codex_home)
+    env["CODEX_THREAD_ID"] = payload["session_id"]
     result = subprocess.run(
         ["python3", str(script)],
         input=json.dumps(payload),
@@ -109,11 +110,12 @@ class HookTestCase(unittest.TestCase):
         status: str = "running",
         phase: str = "implementation",
         next_skill: str = "sdlc-validate-codes",
+        uat: dict | None = None,
     ) -> Path:
         run_dir = self.codex_home / "sdlc-runs" / "test-project" / "run-1"
         sys.path.insert(0, str(HOOK_DIR.parents[2] / 'worktree/scripts'))
         from test_workflow_fixture import seed
-        seed(run_dir, self.project, 'test-project', 'hook-test-session', status=status)
+        seed(run_dir, self.project, 'test-project', 'hook-test-session', status=status, uat=uat)
         write_json(
             run_dir / "current-state.json",
             {
@@ -125,7 +127,7 @@ class HookTestCase(unittest.TestCase):
                 "next_recommended_skill": next_skill,
                 "retry_counts": {phase: 0},
                 "iteration_count": 1,
-                "max_iterations": 200,
+                "checkpoint_interval_iterations": 200,
                 "needs_human": False,
             },
         )
@@ -189,7 +191,9 @@ class HookTestCase(unittest.TestCase):
         write_json(
             control_path,
             {
-                "schema": "agentic-sdlc/repair-control-v2",
+                "schema": "agentic-sdlc/repair-control-v3",
+                "suspended_repairs": [],
+                "resumptions": {},
                 "execution_id": "FEAT-001",
                 "current_event_id": event_id,
                 "current_diagnosis_id": diagnosis_id,
@@ -253,6 +257,22 @@ class HookTestCase(unittest.TestCase):
         write_json(state_path, state)
 
     def authorize(self, run_dir: Path, name: str, **overrides: object) -> None:
+        if name == "pr-authorization.json":
+            # Synthetic completed execution for authorization-unit tests. This
+            # is fixture setup, not product runtime or live qualification proof.
+            from workflow_task_acceptance import digest
+            policy = {"schema": "workflow/task-acceptance-policy-v3", "tasks": {}}
+            basis = {"owner": "agentic-sdlc", "execution_id": "FEAT-001",
+                     "task_acceptance_policy": policy, "task_acceptance_policy_sha256": digest(policy),
+                     "plan_digest": "f" * 64}
+            relative = "bases/FEAT-001/" + digest(basis) + ".json"
+            write_json(run_dir / relative, basis)
+            write_json(run_dir / "execution/FEAT-001/coordinator.json", {"status": "done"})
+            journal = run_dir / "execution/FEAT-001/journals/coordinator.jsonl"
+            journal.parent.mkdir(parents=True, exist_ok=True)
+            journal.write_text('{"event": "prepared"}\n')
+            write_json(run_dir / "objective-impact/execution/FEAT-001.json",
+                       {"schema": "workflow/execution-basis-pointer-v2", "path": relative, "sha256": digest(basis)})
         expires = datetime.now(timezone.utc) + timedelta(hours=1)
         authorization = {
             "allowed": True,
@@ -262,6 +282,10 @@ class HookTestCase(unittest.TestCase):
             "phase": name.removesuffix("-authorization.json"),
             "expires_at": expires.isoformat().replace("+00:00", "Z"),
         }
+        if name == "pr-authorization.json":
+            from workflow_uat import normalize
+            from workflow_state import digest as uat_digest
+            authorization["uat_policy_sha256"] = uat_digest(normalize())
         authorization.update(overrides)
         write_json(
             run_dir / "permissions" / name,
@@ -508,7 +532,7 @@ class HookTestCase(unittest.TestCase):
             / "WAVE-001"
             / "TASK-001.json",
             {
-                "schema": "workflow/worker-assignment-v2",
+                "schema": "workflow/worker-assignment-v4",
                 "execution_id": "FEAT-001",
                 "wave_id": "WAVE-001",
                 "task_id": "TASK-001",
@@ -1220,7 +1244,7 @@ class HookTestCase(unittest.TestCase):
             "pr-authorization.json",
             phase="create-pr",
             expected_head=git(self.project, "rev-parse", "HEAD"),
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(
             PRE_TOOL,
@@ -1228,6 +1252,50 @@ class HookTestCase(unittest.TestCase):
             self.codex_home,
         )
         self.assertEqual(result, {})
+
+    def test_pretool_allows_requested_pending_uat_without_environment(self) -> None:
+        sys.path.insert(0, str(HOOK_DIR.parents[2] / "worktree/scripts"))
+        from workflow_uat import normalize
+        from workflow_state import digest
+        self.switch_feature()
+        policy = normalize({"requested": True, "backend": "existing",
+                            "scope": {"kind": "objective", "executions": []}, "criteria": []})
+        run_dir = self.active_run(uat=policy)
+        self.authorize(run_dir, "pr-authorization.json", phase="create-pr",
+                       expected_head=git(self.project, "rev-parse", "HEAD"),
+                       uat_status="pending", uat_policy_sha256=digest(policy))
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", "git push origin HEAD:agent/test"), self.codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_preserves_and_rejects_unsupported_bound_run(self) -> None:
+        run_dir = self.active_run()
+        run_path = run_dir / "run.json"
+        value = json.loads(run_path.read_text())
+        value["schema"] = "workflow/run-v3"
+        write_json(run_path, value)
+        before = run_path.read_bytes()
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", "git push origin HEAD"), self.codex_home)
+        self.assert_denied(result, "state")
+        self.assertEqual(run_path.read_bytes(), before)
+
+    def test_pretool_rejects_stale_uat_policy_digest(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(run_dir, "pr-authorization.json", phase="create-pr",
+                       expected_head=git(self.project, "rev-parse", "HEAD"),
+                       uat_status="not_requested", uat_policy_sha256="0" * 64)
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", "git push origin HEAD:agent/test"), self.codex_home)
+        self.assert_denied(result, "policy")
+
+    def test_pretool_denies_publication_when_acceptance_basis_is_missing(self) -> None:
+        self.switch_feature()
+        run_dir = self.active_run()
+        self.authorize(run_dir, "pr-authorization.json", phase="create-pr",
+                       expected_head=git(self.project, "rev-parse", "HEAD"), uat_status="not_requested")
+        for path in (run_dir / "bases/FEAT-001").glob("*.json"):
+            path.unlink()
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", "git push origin HEAD:agent/test"), self.codex_home)
+        self.assert_denied(result, "implementation acceptance")
 
     def test_pretool_denies_push_when_authorized_head_is_stale(self) -> None:
         self.switch_feature()
@@ -1237,7 +1305,7 @@ class HookTestCase(unittest.TestCase):
             "pr-authorization.json",
             phase="create-pr",
             expected_head="0" * 40,
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(
             PRE_TOOL, self.pre_payload("Bash", "git push origin HEAD"), self.codex_home
@@ -1252,7 +1320,7 @@ class HookTestCase(unittest.TestCase):
             "pr-authorization.json",
             phase="create-pr",
             expected_head=git(self.project, "rev-parse", "HEAD"),
-            uat_status="passed",
+            uat_status="not_requested",
             base_head="0" * 40,
         )
         result = run_hook(
@@ -1284,7 +1352,7 @@ class HookTestCase(unittest.TestCase):
             "pr-authorization.json",
             phase="review-pr",
             expected_head=git(self.project, "rev-parse", "HEAD"),
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(
             PRE_TOOL,
@@ -1301,7 +1369,7 @@ class HookTestCase(unittest.TestCase):
             "pr-authorization.json",
             phase="create-pr",
             expected_head=git(self.project, "rev-parse", "HEAD"),
-            uat_status="passed",
+            uat_status="not_requested",
             expires_at=None,
         )
         result = run_hook(
@@ -1319,7 +1387,7 @@ class HookTestCase(unittest.TestCase):
             "pr-authorization.json",
             phase="create-pr",
             expected_head=git(self.project, "rev-parse", "HEAD"),
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(
             PRE_TOOL,
@@ -1336,7 +1404,7 @@ class HookTestCase(unittest.TestCase):
             "pr-authorization.json",
             phase="create-pr",
             expected_head=git(self.project, "rev-parse", "HEAD"),
-            uat_status="passed",
+            uat_status="not_requested",
         )
         commands = (
             "git push origin HEAD:agent/test other:other",
@@ -1359,7 +1427,7 @@ class HookTestCase(unittest.TestCase):
             "pr-authorization.json",
             phase="create-pr",
             expected_head=git(self.project, "rev-parse", "HEAD"),
-            uat_status="passed",
+            uat_status="not_requested",
         )
         command = "env git push origin HEAD:agent/test"
         result = run_hook(
@@ -1387,7 +1455,7 @@ class HookTestCase(unittest.TestCase):
             "pr-authorization.json",
             phase="create-pr",
             expected_head=git(self.project, "rev-parse", "HEAD"),
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(
             PRE_TOOL,
@@ -1406,7 +1474,7 @@ class HookTestCase(unittest.TestCase):
             "pr-authorization.json",
             phase="create-pr",
             expected_head=git(self.project, "rev-parse", "HEAD"),
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(
             PRE_TOOL,
@@ -1423,7 +1491,7 @@ class HookTestCase(unittest.TestCase):
             "pr-authorization.json",
             phase="create-pr",
             expected_head=git(self.project, "rev-parse", "HEAD"),
-            uat_status="passed",
+            uat_status="not_requested",
         )
         commands = (
             "gh pr create --head agent/test --fill",
@@ -1450,7 +1518,7 @@ class HookTestCase(unittest.TestCase):
             "pr-authorization.json",
             phase="create-pr",
             expected_head=git(self.project, "rev-parse", "HEAD"),
-            uat_status="passed",
+            uat_status="not_requested",
             base_head="0" * 40,
         )
         result = run_hook(
@@ -1470,7 +1538,7 @@ class HookTestCase(unittest.TestCase):
             "pr-authorization.json",
             phase="create-pr",
             expected_head=git(self.project, "rev-parse", "HEAD"),
-            uat_status="passed",
+            uat_status="not_requested",
         )
         command = "gh pr create --head agent/test --fill && git status"
         result = run_hook(
@@ -1488,7 +1556,7 @@ class HookTestCase(unittest.TestCase):
             "pr-authorization.json",
             phase="create-pr",
             expected_head=git(self.project, "rev-parse", "HEAD"),
-            uat_status="passed",
+            uat_status="not_requested",
         )
         commands = (
             "gh pr create --head other --fill",
@@ -1538,7 +1606,7 @@ class HookTestCase(unittest.TestCase):
             "pr-authorization.json",
             phase="create-pr",
             expected_head=git(self.project, "rev-parse", "HEAD"),
-            uat_status="passed",
+            uat_status="not_requested",
         )
         allowed = run_hook(PRE_TOOL, payload, self.codex_home)
         self.assertEqual(allowed, {})
@@ -1625,7 +1693,7 @@ class HookTestCase(unittest.TestCase):
             explicit_user_request=True,
             checks_status="passed",
             review_status="passed",
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
         self.assert_denied(result, "delivery")
@@ -1645,7 +1713,7 @@ class HookTestCase(unittest.TestCase):
             explicit_user_request=True,
             checks_status="passed",
             review_status="passed",
-            uat_status="passed",
+            uat_status="not_requested",
             base_head="0" * 40,
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
@@ -1666,7 +1734,7 @@ class HookTestCase(unittest.TestCase):
             explicit_user_request=True,
             checks_status="passed",
             review_status="passed",
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
         self.assert_denied(result, "delivery")
@@ -1687,7 +1755,7 @@ class HookTestCase(unittest.TestCase):
             explicit_user_request=True,
             checks_status="passed",
             review_status="passed",
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
         self.assert_denied(result, "delivery")
@@ -1707,7 +1775,7 @@ class HookTestCase(unittest.TestCase):
             explicit_user_request=True,
             checks_status="passed",
             review_status="passed",
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
         self.assert_denied(result, "delivery")
@@ -1728,7 +1796,7 @@ class HookTestCase(unittest.TestCase):
             explicit_user_request=True,
             checks_status="passed",
             review_status="passed",
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(
             PRE_TOOL, self.pre_payload("Bash", attempted), self.codex_home
@@ -1750,7 +1818,7 @@ class HookTestCase(unittest.TestCase):
             explicit_user_request=True,
             checks_status="passed",
             review_status="passed",
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
         self.assert_denied(result, "delivery")
@@ -1770,7 +1838,7 @@ class HookTestCase(unittest.TestCase):
             explicit_user_request=True,
             checks_status="passed",
             review_status="passed",
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
         self.assert_denied(result, "delivery")
@@ -1790,7 +1858,7 @@ class HookTestCase(unittest.TestCase):
             explicit_user_request=True,
             checks_status="passed",
             review_status="passed",
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
         self.assert_denied(result, "delivery")
@@ -1810,7 +1878,7 @@ class HookTestCase(unittest.TestCase):
             explicit_user_request=True,
             checks_status="passed",
             review_status="passed",
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
         self.assert_denied(result, "delivery")
@@ -1830,7 +1898,7 @@ class HookTestCase(unittest.TestCase):
             explicit_user_request=True,
             checks_status="passed",
             review_status="passed",
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
         self.assert_denied(result, "delivery")
@@ -1850,7 +1918,7 @@ class HookTestCase(unittest.TestCase):
             explicit_user_request=True,
             checks_status="failed",
             review_status="passed",
-            uat_status="passed",
+            uat_status="not_requested",
         )
         result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), self.codex_home)
         self.assert_denied(result, "delivery")
@@ -2076,6 +2144,49 @@ class HookTestCase(unittest.TestCase):
         self.assertFalse(result["continue"])
         self.assertIn("stopped with status exhausted", result["stopReason"])
 
+    def test_stop_rejects_missing_or_unresolved_repair_continuation(self) -> None:
+        run_dir = self.active_run(next_skill="sdlc-classify-failure")
+        for mode in ("missing", "dangling", "resolved", "legacy"):
+            with self.subTest(mode=mode):
+                self.write_repair_state(run_dir, status="remediating", next_skill="sdlc-classify-failure")
+                path = run_dir / "repairs/FEAT-001/repair-control.json"
+                value = json.loads(path.read_text())
+                if mode == "missing":
+                    value.pop("suspended_repairs")
+                elif mode == "legacy":
+                    value["schema"] = "agentic-sdlc/repair-control-v2"
+                else:
+                    value["suspended_repairs"] = ["a" * 64]
+                    if mode == "resolved":
+                        value["status"] = "resolved"
+                write_json(path, value)
+                result = run_hook(STOP, self.stop_payload(), self.codex_home)
+                self.assertFalse(result.get("continue", True))
+                self.assertIn("repair", result["stopReason"])
+
+    def test_stop_accepts_owner_resumed_repair_with_current_pointers(self) -> None:
+        run_dir = self.active_run(next_skill="sdlc-create-plan")
+        sys.path.insert(0, str(HOOK_DIR.parents[2] / "sdlc-classify-failure/scripts"))
+        from test_repair_control import RepairControlTests, repair_control
+        case = RepairControlTests()
+        case.run_dir = run_dir
+        parent, _first, _child, second = case.interposed_repair()
+        control = repair_control.complete_remediation(run_dir, "FEAT-001", second["attempt"]["dispatch_id"],
+            "succeeded", "evidence/fresh-worker-oracle.json")["control"]
+        self.assertEqual(control["route_history"][-1]["classification_id"], parent["classification_id"])
+        state_path = run_dir / "current-state.json"
+        state = json.loads(state_path.read_text())
+        state["repair"] = {
+            "schema": "agentic-sdlc/repair-state-pointer-v1",
+            "control": "repairs/FEAT-001/repair-control.json",
+            "failure_event": f"repairs/FEAT-001/events/{control['current_event_id']}.json",
+            "diagnosis": f"repairs/FEAT-001/diagnoses/{control['current_diagnosis_id']}.json",
+        }
+        write_json(state_path, state)
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertEqual(result.get("decision"), "block", result)
+        self.assertIn("sdlc-create-plan", result.get("reason", ""))
+
     def test_stop_rejects_routed_owner_mismatch(self) -> None:
         run_dir = self.active_run(next_skill="sdlc-create-design")
         self.write_repair_state(
@@ -2280,18 +2391,20 @@ class HookTestCase(unittest.TestCase):
         self.assertIn("STEERING.md", result.get("reason", ""))
         self.assertIn("pause or PR-control", result.get("reason", ""))
 
-    def test_stop_no_progress_guard(self) -> None:
+    def test_stop_unchanged_state_requests_diagnosis_without_stopping(self) -> None:
         self.active_run(next_skill="sdlc-validate-codes")
         run_hook(STOP, self.stop_payload(active=True), self.codex_home)
         run_hook(STOP, self.stop_payload(active=True), self.codex_home)
         result = run_hook(STOP, self.stop_payload(active=True), self.codex_home)
-        self.assertFalse(result["continue"])
-        self.assertIn("No progress", result["stopReason"])
+        self.assertEqual(result.get("decision"), "block")
+        self.assertIn("Observation checkpoint", result.get("reason", ""))
 
-    def test_stop_ignores_unbound_run_without_inferring_ownership(self):
+    def test_stop_rejects_missing_objective_in_still_bound_run(self):
         run_dir = self.active_run()
         (run_dir / 'objective.json').unlink()
-        self.assertEqual(run_hook(STOP, self.stop_payload(), self.codex_home), {'continue': True})
+        result = run_hook(STOP, self.stop_payload(), self.codex_home)
+        self.assertFalse(result['continue'])
+        self.assertIn('state', result['stopReason'])
 
     def test_stop_ignores_mismatched_session_binding(self):
         self.active_run()

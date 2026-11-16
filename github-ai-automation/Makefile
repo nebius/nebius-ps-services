@@ -1,0 +1,44 @@
+.DEFAULT_GOAL := all
+
+UV := uv
+
+.PHONY: all lock-check sync fmt lint test test-fast test-unit test-full coverage build smoke-wheel check clean
+
+all: check smoke-wheel
+
+lock-check:
+	$(UV) lock --check
+
+sync: lock-check
+	$(UV) sync --locked
+
+fmt: sync
+	$(UV) run --locked ruff format src tests scripts
+
+lint: sync
+	$(UV) run --locked ruff check src tests scripts
+
+test: test-fast
+
+test-fast: sync
+	$(UV) run --locked pytest
+
+test-unit: sync
+	$(UV) run --locked pytest -m "not external" tests/unit
+
+test-full: sync
+	$(UV) run --locked pytest -m "not external"
+
+coverage: sync
+	$(UV) run --locked pytest -m "not external" --cov=github_ai_automation --cov-report=term-missing
+
+build: sync
+	$(UV) run --locked python -m build --wheel
+
+smoke-wheel: sync
+	$(UV) run --locked python scripts/smoke-wheel.py
+
+check: lint test-fast
+
+clean:
+	rm -rf build dist .pytest_cache .ruff_cache .coverage coverage.xml

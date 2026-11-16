@@ -13,3 +13,5 @@ agent-nebius-auth-setup-claude-portability,true,/agent-nebius-auth-setup Use age
 agent-nebius-auth-setup-quoted-command,false,"Treat ""/skills:agent-nebius-auth-setup"" as sample text in this punctuation exercise; count its punctuation characters only."
 auth-setup-browser-expired,true,Use agent-nebius-auth-setup live; my human login expired but I am signed in through the browser. Complete setup.
 auth-setup-browser-diagnose-only,false,Explain the expired human bootstrap login without opening a browser or changing auth.
+auth-setup-delegated-live,true,An authorized test-live-on-nebius run delegates agent-nebius-auth-setup ensure for its exact project and tenant.
+auth-setup-delegation-no-authority,false,An unapproved live-test proposal wants to change agent IAM; explain the missing authority only.

@@ -5,6 +5,7 @@ All native identities and exit observations here are synthetic test inputs.
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import json
+from unittest import mock
 
 import workflow_execution as engine
 import workflow_reconcile as reconcile
@@ -21,20 +22,27 @@ class WorkerResultContractCases:
             engine.seal_tdd_base(self.run_dir, 'FEAT-001', 'test: startup base')
         assignments = engine.prepare_wave(self.run_dir, 'FEAT-001', 'WAVE-001')
         fixed = datetime(2026, 11, 3, tzinfo=timezone.utc)
+        def observe(moment, operation, *args):
+            stamp = {"utc": moment.isoformat(), "monotonic_ns": int(moment.timestamp() * 1_000_000_000),
+                     "clock_id": "a" * 64, "scope": "machine-boot"}
+            with mock.patch.object(engine, "_liveness_clock", return_value=stamp):
+                return operation(*args, clock=lambda: moment)
+
         for assignment, elapsed in zip(assignments, (79, 299), strict=True):
             args = (self.run_dir, 'FEAT-001', 'WAVE-001', assignment['task_id'], assignment['assignment_digest'])
-            launch = engine.arm_task(*args, clock=lambda: fixed)['launch']
-            self.assertEqual(launch['start_seconds'], 300)
-            self.assertIn('startup window is 300 seconds', launch['prompt'])
-            self.assertEqual(engine.watch_task(*args, clock=lambda: fixed + timedelta(seconds=elapsed))['status'], 'PENDING_START')
+            launch = observe(fixed, engine.arm_task, *args)['launch']
+            self.assertEqual(launch['health_policy']['startup_observation_seconds'], 300)
+            self.assertIn('Long startup requests diagnosis', launch['prompt'])
+            self.assertEqual(observe(fixed + timedelta(seconds=63), engine.watch_task, *args)['status'], 'PENDING_START')
+            self.assertEqual(observe(fixed + timedelta(seconds=elapsed), engine.watch_task, *args)['status'], 'PENDING_START')
             # Replaying arm cannot renew the original dispatch window.
-            engine.arm_task(*args, clock=lambda: fixed + timedelta(seconds=elapsed))
-            self.assertEqual(engine.watch_task(*args, clock=lambda: fixed + timedelta(seconds=300))['status'], 'WORKER_PRESTART_TIMEOUT')
-            with self.assertRaises(engine.ExecutionError) as late:
-                engine.start_task(*args, 'late-' + assignment['task_id'], Path(assignment['scope_cwd']), clock=lambda: fixed + timedelta(seconds=300))
-            self.assertEqual(late.exception.code, 'WORKER_PRESTART_TIMEOUT')
-            started = engine.start_task(*args, 'synthetic-startup-' + assignment['task_id'], Path(assignment['scope_cwd']), clock=lambda: fixed + timedelta(seconds=elapsed))
-            self.assertEqual(started['max_seconds'], 3600)
+            observe(fixed + timedelta(seconds=elapsed), engine.arm_task, *args)
+            observed = observe(fixed + timedelta(hours=120), engine.watch_task, *args)
+            self.assertEqual(observed['status'], 'PENDING_START')
+            self.assertEqual(observed['warning'], 'STARTUP_REVIEW')
+            started = observe(fixed + timedelta(hours=120), engine.start_task, *args,
+                              'synthetic-startup-' + assignment['task_id'], Path(assignment['scope_cwd']))
+            self.assertEqual(started['health_policy']['duration_expiry'], 'disabled')
             task = read(engine.task_path(self.run_dir, 'FEAT-001', 'WAVE-001', assignment['task_id']))
             self.assertEqual(task['dispatched_at'], '2026-11-03T00:00:00Z')
             self.assertEqual(task['attempt'], 1)
@@ -95,6 +103,43 @@ class WorkerResultContractCases:
                               payload or self.result_payload(assignment, status), observation, observer)
         return Path(value['receipt_path']), observation, value
 
+    def result_classify_blocked(self, receipt, *, proposed="IMPLEMENTATION_DEFECT"):
+        if read(self.run_dir / 'run.json')['owner'] != 'agentic-sdlc':
+            return None
+        import sys
+        scripts = Path(__file__).resolve().parents[2] / 'sdlc-classify-failure/scripts'
+        if str(scripts) not in sys.path:
+            sys.path.insert(0, str(scripts))
+        import repair_control
+        from test_repair_control import failure_payload
+        payload = failure_payload(proposed=proposed)
+        state_path = self.run_dir / 'current-state.json'
+        state = read(state_path) if state_path.exists() else {}
+        run = read(self.run_dir / 'run.json')
+        state.update(run_id=run['run_id'], project_id=run['project_id'], current_execution='FEAT-001')
+        state['fingerprint_ids'] = [key + ':' + value for key, value in payload['fingerprints'].items()]
+        state['fingerprint_ids'] += ['context:sha256:' + '8' * 64, 'future-policy:sha256:' + '9' * 64]
+        state.setdefault('checkpoint_id', 'checkpoint-0099')
+        write(state_path, state)
+        # Publish matching synthetic phase evidence, as the coordinator does.
+        checkpoint = 'checkpoints/' + state['checkpoint_id'] + '.json'
+        write(self.run_dir / checkpoint, state)
+        write(self.run_dir / 'checkpoints/latest.json', {'path': checkpoint, 'checkpoint_id': state['checkpoint_id']})
+        for key in ('execution_id', 'phase', 'execution_lifecycle', 'integration_commit', 'fingerprints'):
+            payload.pop(key)
+        with mock.patch('workflow_transition.runtime_session_identity', return_value=self.result_session()):
+            event = repair_control.capture_worker_failure(
+                self.run_dir, 'FEAT-001', 'WAVE-001', read(receipt)['worker_result']['task_id'],
+                read(receipt)['receipt_sha256'], payload)['event']
+        self.assertEqual(event['fingerprints'], repair_control._current_fingerprints(self.run_dir))
+        classification = repair_control.classify_failure(
+            self.run_dir, 'FEAT-001', event['event_id'], None)['classification']
+        with mock.patch('workflow_transition.runtime_session_identity', return_value=self.result_session()):
+            return repair_control.begin_remediation(
+                self.run_dir, 'FEAT-001', classification['classification_id'], 'localized',
+                'Repair the classified synthetic worker failure.', 'evidence/worker-failure.json',
+            )['attempt']
+
     def result_write(self, assignment):
         target = Path(assignment['worktree']) / assignment['write_claims'][0]['path']
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -137,10 +182,12 @@ class WorkerResultContractCases:
                 self.assertIn('stop changes and return blocked to the coordinator', prompt)
                 self.assertIn('declared before execution in the immutable assignment', prompt)
                 self.assertIn('Never relabel an observed failure as expected', prompt)
+                self.assertIn('Discover which instruction files exist before reading them', prompt)
+                self.assertIn('do not include nonexistent paths in a read command', prompt)
                 self.assertIn('authorized safe runtime teardown and lease release', prompt)
                 self.assertIn('rather than presenting a reconstruction as contemporaneous', prompt)
                 self.assertIn('target cadence of 30 seconds', prompt)
-                self.assertIn('enforced stale-heartbeat limit is 240 seconds', prompt)
+                self.assertIn('There is no duration-only attempt deadline', prompt)
                 self.assertNotIn('at least every 30 seconds', prompt)
 
     def test_result_rejections_have_no_receipt_or_git_effect(self):
@@ -249,6 +296,7 @@ class WorkerResultContractCases:
     def test_blocked_recovery_preserves_old_receipt_and_uses_common_envelope(self):
         first, _ = self.result_fixture()
         path, observation, _ = self.result_ingest(first, 'blocked')
+        self.result_classify_blocked(path)
         before = path.read_bytes()
         next_native = 'authorized-recovered-worker'
         approval = reconcile.authorize_recovery(self.run_dir, 'FEAT-001', 'WAVE-001', first['task_id'],
@@ -268,6 +316,239 @@ class WorkerResultContractCases:
             self.result_finish(first, path, new_observation)
         self.result_finish(first, new_path, new_observation)
         self.assertEqual(path.read_bytes(), before)
+
+    def test_active_validation_recovery_observation_preserves_authority(self):
+        first, _ = self.result_fixture()
+        path, observation, _ = self.result_ingest(first, 'blocked')
+        self.result_classify_blocked(path, proposed='VALIDATION_DEFECT')
+        args = (self.run_dir, 'FEAT-001', 'WAVE-001', first['task_id'])
+        native = 'validation-repair-observer-fixture'
+        approval = reconcile.authorize_recovery(
+            *args, observation, self.result_session(), session_hash(native))
+        engine.recover_task(*args, native, Path(first['scope_cwd']),
+                            expected_attempt=1, confirmed_stopped=True)
+        if first['owner'] != 'agentic-sdlc':
+            with self.assertRaises(engine.ExecutionError):
+                reconcile.observe_worker_repair(*args)
+            return
+        approval_path = reconcile.recovery_path(
+            self.run_dir, 'FEAT-001', first['task_id'], 1,
+            session_hash(self.result_session()))
+        watched = [path, observation, approval_path, engine.task_path(*args),
+                   self.run_dir / 'repairs/FEAT-001/repair-control.json']
+        before = {item: item.read_bytes() for item in watched}
+        binding = reconcile.observe_worker_repair(*args)
+        self.assertEqual(binding['assignment_digest'], first['assignment_digest'])
+        self.assertEqual(binding['attempt'], 2)
+        self.assertEqual(binding['worker_session_hash'], session_hash(native))
+        self.assertEqual(binding['repair_authority'], approval['repair_authority'])
+        self.assertEqual(binding['repair_authority']['classification'], 'VALIDATION_DEFECT')
+        self.assertEqual(before, {item: item.read_bytes() for item in watched})
+        original = read(approval_path)
+        changes = {
+            'assignment_digest': '0' * 64, 'attempt': 2,
+            'prior_worker_session_hash': '1' * 64,
+            'next_worker_session_hash': '2' * 64,
+            'coordinator_session_hash': '3' * 64,
+            'termination_path': str(self.run_dir / 'foreign.json'),
+            'termination_sha256': '4' * 64,
+            'worker_result_receipt_sha256': '5' * 64,
+            'repair_authority': None,
+        }
+        for key, value in changes.items():
+            with self.subTest(changed=key):
+                write(approval_path, {**original, key: value})
+                with self.assertRaises(engine.ExecutionError):
+                    reconcile.observe_worker_repair(*args)
+                write(approval_path, original)
+        control_path = self.run_dir / 'repairs/FEAT-001/repair-control.json'
+        control = read(control_path)
+        write(control_path, {**control, 'status': 'completed'})
+        with self.assertRaises(engine.ExecutionError):
+            reconcile.observe_worker_repair(*args)
+        write(control_path, control)
+        self.assertEqual(before, {item: item.read_bytes() for item in watched})
+
+    def test_worker_repair_observation_rejects_initial_attempt(self):
+        first, _ = self.result_fixture()
+        with self.assertRaises(engine.ExecutionError):
+            reconcile.observe_worker_repair(
+                self.run_dir, 'FEAT-001', 'WAVE-001', first['task_id'])
+
+    def test_unclassified_blocked_recovery_requires_sdlc_authority_only(self):
+        first, _ = self.result_fixture()
+        path, observation, _ = self.result_ingest(first, 'blocked')
+        before = path.read_bytes()
+        args = (self.run_dir, 'FEAT-001', 'WAVE-001', first['task_id'])
+        task_before = engine.task_path(*args).read_bytes()
+        approval_path = reconcile.recovery_path(
+            self.run_dir, 'FEAT-001', first['task_id'], 1, session_hash(self.result_session()))
+        if first['owner'] == 'agentic-sdlc':
+            with self.assertRaises(WorkflowError) as caught:
+                reconcile.authorize_recovery(*args, observation, self.result_session(), session_hash('fresh'))
+            self.assertEqual(caught.exception.code, 'REPAIR_NOT_AUTHORIZED')
+            self.assertFalse(approval_path.exists())
+        else:
+            approval = reconcile.authorize_recovery(
+                *args, observation, self.result_session(), session_hash('fresh'))
+            self.assertIsNone(approval['repair_authority'])
+            self.assertEqual(approval['worker_result_receipt_sha256'], read(path)['receipt_sha256'])
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(engine.task_path(*args).read_bytes(), task_before)
+
+    def test_worker_failure_capture_rejects_stale_context_before_effects(self):
+        first, _ = self.result_fixture()
+        path, _, _ = self.result_ingest(first, 'blocked')
+        attempt = self.result_classify_blocked(path)
+        if attempt is None:
+            # Implement keeps its independent recovery authority.
+            self.assertFalse((self.run_dir / 'repairs').exists())
+            return
+        import repair_control as repair
+        control = repair._load_control(self.run_dir, 'FEAT-001')
+        event = repair._load_event(self.run_dir, 'FEAT-001', control['current_event_id'])
+        state_path = self.run_dir / 'current-state.json'
+        state = read(state_path)
+        state['fingerprint_ids'].append('added-input:sha256:' + '7' * 64)
+        write(state_path, state)
+        before = {p: p.read_bytes() for p in (self.run_dir / 'repairs').rglob('*') if p.is_file()}
+        with mock.patch('workflow_transition.runtime_session_identity', return_value=self.result_session()):
+            diagnostic = {key: value for key, value in event.items() if key not in {
+                'event_id', 'blocker_key', 'execution_id', 'phase', 'execution_lifecycle',
+                'integration_commit', 'fingerprints'}}
+            with self.assertRaises(repair.RepairControlError):
+                repair.capture_worker_failure(self.run_dir, 'FEAT-001', 'WAVE-001', first['task_id'],
+                                               read(path)['receipt_sha256'], diagnostic)
+            with self.assertRaises(repair.RepairControlError):
+                repair.begin_remediation(self.run_dir, 'FEAT-001', control['current_classification_id'],
+                                         'localized', 'A new repair hypothesis.', 'evidence/new.json', 5)
+            with self.assertRaises(repair.RepairControlError):
+                repair.record_failure_event(self.run_dir, {**event, 'observed': 'Another stale observation.'})
+            self.assertEqual(before, {p: p.read_bytes() for p in (self.run_dir / 'repairs').rglob('*') if p.is_file()})
+            # Historical replay is idempotent despite subsequent checkpoint drift.
+            self.assertFalse(repair.record_failure_event(self.run_dir, event)['created'])
+            replay = repair.begin_remediation(self.run_dir, 'FEAT-001', control['current_classification_id'],
+                                               'localized', attempt['hypothesis'], attempt['evidence_reference'])
+            self.assertFalse(replay['created'])
+            self.assertEqual(replay['control']['feature_dispatches'], control['feature_dispatches'])
+
+    def test_worker_failure_capture_rejects_foreign_owner_receipt_and_head(self):
+        first, _ = self.result_fixture()
+        path, _, _ = self.result_ingest(first, 'blocked')
+        if self.result_classify_blocked(path) is None:
+            self.assertFalse((self.run_dir / 'repairs').exists())
+            return
+        import repair_control as repair
+        control = repair._load_control(self.run_dir, 'FEAT-001')
+        event = repair._load_event(self.run_dir, 'FEAT-001', control['current_event_id'])
+        payload = {key: value for key, value in event.items() if key not in {
+            'event_id', 'blocker_key', 'execution_id', 'phase', 'execution_lifecycle',
+            'integration_commit', 'fingerprints', 'evidence_digests'}}
+        payload['evidence_digests'] = {'evaluate': 'sha256:' + '1' * 64}
+        digest = read(path)['receipt_sha256']
+        before = {p: p.read_bytes() for p in (self.run_dir / 'repairs').rglob('*') if p.is_file()}
+        for key, value in (('run_id', 'foreign-run'), ('project_id', 'foreign-project'),
+                           ('current_execution', 'FEAT-002')):
+            checkpoint = read(self.run_dir / 'current-state.json')
+            write(self.run_dir / 'current-state.json', {**checkpoint, key: value})
+            with mock.patch('workflow_transition.runtime_session_identity', return_value=self.result_session()), \
+                    self.assertRaises(repair.RepairControlError):
+                repair.capture_worker_failure(self.run_dir, 'FEAT-001', 'WAVE-001', first['task_id'], digest, payload)
+            write(self.run_dir / 'current-state.json', checkpoint)
+        for session, wave, task, expected in (
+            ('foreign-coordinator', 'WAVE-001', first['task_id'], digest),
+            (self.result_session(), 'WAVE-002', first['task_id'], digest),
+            (self.result_session(), 'WAVE-001', 'TASK-999', digest),
+            (self.result_session(), 'WAVE-001', first['task_id'], '0' * 64),
+        ):
+            with self.subTest(session=session, wave=wave, task=task), \
+                    mock.patch('workflow_transition.runtime_session_identity', return_value=session), \
+                    self.assertRaises(repair.RepairControlError):
+                repair.capture_worker_failure(self.run_dir, 'FEAT-001', wave, task, expected, payload)
+        coordinator = engine._load_coordinator(self.run_dir, 'FEAT-001')
+        import subprocess
+        subprocess.run(['git', '-C', coordinator['integration_worktree'], 'commit', '--allow-empty',
+                        '-m', 'test: changed integration identity'], check=True, capture_output=True)
+        with mock.patch('workflow_transition.runtime_session_identity', return_value=self.result_session()), \
+                self.assertRaises(repair.RepairControlError):
+            repair.capture_worker_failure(self.run_dir, 'FEAT-001', 'WAVE-001', first['task_id'], digest, payload)
+        self.assertEqual(before, {p: p.read_bytes() for p in (self.run_dir / 'repairs').rglob('*') if p.is_file()})
+
+    def test_recovery_rechecks_failure_arriving_after_interruption_authorization(self):
+        first, _ = self.result_fixture()
+        args = (self.run_dir, 'FEAT-001', 'WAVE-001', first['task_id'])
+        observation = self.result_observation(first)
+        reconcile.authorize_recovery(*args, observation, self.result_session(), session_hash('fresh'))
+        receipt, _, _ = self.result_ingest(first, 'blocked')
+        self.result_classify_blocked(receipt)
+        before = engine.task_path(*args).read_bytes()
+        with self.assertRaises(engine.ExecutionError) as caught:
+            engine.recover_task(*args, 'fresh', Path(first['scope_cwd']),
+                                expected_attempt=1, confirmed_stopped=True)
+        self.assertEqual(caught.exception.code, 'REPAIR_NOT_AUTHORIZED')
+        self.assertEqual(engine.task_path(*args).read_bytes(), before)
+
+    def test_blocked_recovery_rechecks_completed_dispatch_before_transfer(self):
+        first, _ = self.result_fixture()
+        args = (self.run_dir, 'FEAT-001', 'WAVE-001', first['task_id'])
+        receipt, observation, _ = self.result_ingest(first, 'blocked')
+        attempt = self.result_classify_blocked(receipt)
+        reconcile.authorize_recovery(*args, observation, self.result_session(), session_hash('fresh'))
+        if attempt is None:
+            engine.recover_task(*args, 'fresh', Path(first['scope_cwd']),
+                                expected_attempt=1, confirmed_stopped=True)
+            self.assertEqual(read(engine.task_path(*args))['attempt'], 2)
+            self.assertFalse((self.run_dir / 'repairs').exists())
+            return
+        import repair_control
+        repair_control.complete_remediation(self.run_dir, 'FEAT-001', attempt['dispatch_id'],
+                                            'succeeded', 'evidence/synthetic-resolution.json')
+        before = engine.task_path(*args).read_bytes()
+        with self.assertRaises(engine.ExecutionError) as caught:
+            engine.recover_task(*args, 'fresh', Path(first['scope_cwd']),
+                                expected_attempt=1, confirmed_stopped=True)
+        self.assertEqual(caught.exception.code, 'REPAIR_NOT_AUTHORIZED')
+        self.assertEqual(engine.task_path(*args).read_bytes(), before)
+
+    def test_second_blocked_attempt_requires_current_owner_authority(self):
+        first, _ = self.result_fixture()
+        args = (self.run_dir, 'FEAT-001', 'WAVE-001', first['task_id'])
+        receipt, observation, _ = self.result_ingest(first, 'blocked')
+        self.result_classify_blocked(receipt)
+        reconcile.authorize_recovery(*args, observation, self.result_session(), session_hash('fresh'))
+        engine.recover_task(*args, 'fresh', Path(first['scope_cwd']),
+                            expected_attempt=1, confirmed_stopped=True)
+        second, observation, _ = self.result_ingest(first, 'blocked')
+        self.assertNotEqual(read(second)['receipt_sha256'], read(receipt)['receipt_sha256'])
+        before = engine.task_path(*args).read_bytes()
+        if first['owner'] == 'agentic-sdlc':
+            with self.assertRaises(WorkflowError) as caught:
+                reconcile.authorize_recovery(*args, observation, self.result_session(), session_hash('newer'))
+            self.assertEqual(caught.exception.code, 'REPAIR_NOT_AUTHORIZED')
+        else:
+            approval = reconcile.authorize_recovery(
+                *args, observation, self.result_session(), session_hash('newer'))
+            self.assertIsNone(approval['repair_authority'])
+            self.assertEqual(approval['worker_result_receipt_sha256'], read(second)['receipt_sha256'])
+        self.assertEqual(engine.task_path(*args).read_bytes(), before)
+
+    def test_recovery_rejects_legacy_authorization_without_binding(self):
+        first, _ = self.result_fixture()
+        args = (self.run_dir, 'FEAT-001', 'WAVE-001', first['task_id'])
+        observation = self.result_observation(first)
+        reconcile.authorize_recovery(*args, observation, self.result_session(), session_hash('fresh'))
+        approval_path = reconcile.recovery_path(
+            self.run_dir, 'FEAT-001', first['task_id'], 1, session_hash(self.result_session()))
+        value = read(approval_path)
+        value['schema'] = 'workflow/recovery-authorization-v1'
+        del value['repair_authority'], value['worker_result_receipt_sha256']
+        write(approval_path, value)
+        before = engine.task_path(*args).read_bytes()
+        with self.assertRaises(engine.ExecutionError) as caught:
+            engine.recover_task(*args, 'fresh', Path(first['scope_cwd']),
+                                expected_attempt=1, confirmed_stopped=True)
+        self.assertEqual(caught.exception.code, 'OWNERSHIP_INVALID')
+        self.assertEqual(engine.task_path(*args).read_bytes(), before)
 
     def test_replan_result_cannot_authorize_same_assignment_recovery(self):
         first, _ = self.result_fixture()
@@ -299,6 +580,7 @@ class WorkerResultContractCases:
                                   'receipt-native-stub-' + first['task_id'])
         self.addCleanup(Path(lease['lease_path']).unlink, missing_ok=True)
         receipt, observation, _ = self.result_ingest(first, 'blocked')
+        self.result_classify_blocked(receipt)
         receipt_before = receipt.read_bytes()
         next_native = 'recovered-after-runtime-release'
         reconcile.authorize_recovery(*args, observation, self.result_session(), session_hash(next_native))
@@ -358,6 +640,7 @@ class WorkerResultContractCases:
     def test_recovery_authorization_succession_retains_prior_evidence(self):
         first, _ = self.result_fixture()
         path, observation, _ = self.result_ingest(first, 'blocked')
+        self.result_classify_blocked(path)
         next_native = 'native-after-succession'
         original = reconcile.authorize_recovery(self.run_dir, 'FEAT-001', 'WAVE-001', first['task_id'],
                     observation, self.result_session(), session_hash(next_native))

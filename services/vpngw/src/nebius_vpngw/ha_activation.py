@@ -37,6 +37,46 @@ SCHEMA = "nebius-vpngw.activation-attempt.v2"
 WRITER = Path("/run/nebius-vpngw/activation-writer.lock")
 
 
+def require_restoration_quiescent(configuration: bytes, lock: dict) -> None:
+    """Keep receipt-proven completed history without granting restoration authority."""
+    import yaml
+
+    from .agent.vm_ha.restoration import RestorationPhase, StandbyRestorationStore
+    from .schema import VMHARuntimeBinding
+
+    store = StandbyRestorationStore(STATE)
+    if not store.path.exists() and not store.path.is_symlink():
+        return
+    before = ha_repair.read_json(store.path)
+    receipt = ha_repair.read_json(store.receipt_path)
+    record = store.load()  # Canonical shape, digest and promotion-receipt proof.
+    if record is None or record.phase is not RestorationPhase.COMPLETED:
+        raise RuntimeError("activation repair has unresolved restoration authority")
+    config = yaml.safe_load(configuration)
+    vm_ha = config.get("vm_ha", {}) if isinstance(config, dict) else {}
+    binding = VMHARuntimeBinding.model_validate(vm_ha.get("runtime_binding", {}))
+    if not (
+        record.cluster_id == binding.cluster_id == vm_ha.get("cluster_id") == lock["cluster_id"]
+        and record.allocation_id == binding.shared_allocation_id
+        and {record.owner_node_id, record.former_owner_node_id}
+        == {node.node_id for node in binding.nodes}
+        and vm_ha.get("node", {}).get("node_id") == lock["node_id"]
+        and lock["node_id"] in {node.node_id for node in binding.nodes}
+        and binding.generation_id
+        == vm_ha.get("generation", {}).get("generation_id")
+        == lock["generation_id"]
+    ):
+        raise RuntimeError("activation restoration history differs from installed identity")
+    # A completed earlier generation is audit history, not current ownership proof.
+    # The exact current lock, configuration and boot fence remain mandatory.
+    if (
+        before != record.to_dict()
+        or ha_repair.read_json(store.path) != before
+        or ha_repair.read_json(store.receipt_path) != receipt
+    ):
+        raise RuntimeError("activation restoration history changed during observation")
+
+
 def require_authority(request: dict, *, active_unlock: bool = False) -> str:
     ha_repair.exact_lock(request["lock"], STATE)
     boot = BOOT.read_text().strip()
@@ -90,26 +130,7 @@ def require_authority(request: dict, *, active_unlock: bool = False) -> str:
         )
     ):
         raise RuntimeError("activation repair has another inhibition owner")
-    restoration = STATE / "standby-restoration-authorization.json"
-    if restoration.exists() or restoration.is_symlink():
-        from .agent.vm_ha.restoration import RestorationPhase, StandbyRestorationStore
-
-        store = StandbyRestorationStore(STATE)
-        protected = ha_repair.read_json(restoration)
-        receipt = ha_repair.read_json(store.receipt_path)
-        record = store.load()
-        if (
-            record is None
-            or record.to_dict() != protected
-            or ha_repair.read_json(store.receipt_path) != receipt
-            or record.phase is not RestorationPhase.COMPLETED
-            or record.cluster_id != request["lock"]["cluster_id"]
-            or record.owner_node_id != request["lock"]["node_id"]
-            or record.generation_id != request["lock"]["generation_id"]
-        ):
-            raise RuntimeError("activation repair has unfinished or foreign restoration")
-        # This exact receipt-bound completion is history, not another writer.
-        # Keep the record and all current operation/forwarding fences intact.
+    require_restoration_quiescent(configuration, request["lock"])
     return boot
 
 

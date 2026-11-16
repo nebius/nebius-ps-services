@@ -149,3 +149,9 @@ container passes do not prove another kernel, VM boot or production behavior.
 Python helpers need Python 3.11+. They never execute profile commands. The optional
 pytest reporter needs pytest in the chosen project's test environment. Other
 runners can emit the same neutral contract without importing pytest.
+
+UAT follows the [shared optional policy](../worktree/references/optional-uat.md).
+Requested campaigns wait for a meaningful ready scope. An existing test environment
+uses its project harness directly; container/Nebius campaigns require explicit
+skill selection. Missing optional prerequisites leave a handoff without blocking
+implementation or eligible publication. Actual failures and cleanup remain owned.

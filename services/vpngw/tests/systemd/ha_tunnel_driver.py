@@ -161,6 +161,89 @@ def recover_owner(cfg, config_path, state_dir):
         tunnels.effects.run(("ip", "link", "set", "xfrm0", "up"))
 
 
+def reload_after_daemon_crash(cfg, config_path, state_dir):
+    """Exercise the real bounded local loader with fixed fixture cloud authority.
+
+    The namespace owns a real daemon instead of a systemd unit; its serving VICI
+    socket supplies the active-unit observation. This is not cloud or systemd
+    restart qualification.
+    """
+    from nebius_vpngw.agent.local_commands import CURRENT, CommandBudget
+    from nebius_vpngw.agent.main import DefaultVMHAControllerRuntime
+    from nebius_vpngw.agent.vm_ha.models import DigestSet, RepairDisposition
+    from nebius_vpngw.agent.vm_ha.runtime import (
+        CommandResult,
+        SystemDataPlaneRuntime,
+        _run_command,
+    )
+    from nebius_vpngw.agent.vm_ha.tunnel_runtime import ControllerTunnelRuntime
+    from nebius_vpngw.agent.vm_ha_controller import ActionKind, ControllerAction, DataPlaneMode
+    from nebius_vpngw.ipsec_observation import loaded_configuration
+
+    def runner(argv, timeout):
+        if tuple(argv[1:]) == ("show", "strongswan", "--property=ActiveState", "--value"):
+            loaded_configuration(timeout=min(3.0, timeout))
+            return CommandResult(0, "active")
+        return _run_command(argv, timeout)
+
+    plane = SystemDataPlaneRuntime(
+        state_path=state_dir / "data-plane.json",
+        guard_path=state_dir / "guard.json",
+        configured_bgp_sessions=(),
+        expected_bgp_policy_digest="c" * 64,
+        runner=runner,
+    )
+    started = time.monotonic()
+    action = ControllerAction(
+        kind=ActionKind.REPAIR_LOCAL_DATAPLANE,
+        operation_id="native-daemon-reload",
+        boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+        target_node_id="owner",
+        allocation_id="allocation",
+        ownership_epoch="1",
+        generation_id="a" * 64,
+        digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
+        repair_deadline_at=started + 5.0,
+        repair_reasons=("daemon-configuration-missing:strongswan",),
+    )
+    plane._write_guard(action, DataPlaneMode.ACTIVE)
+    plane._write_state(action, DataPlaneMode.ACTIVE)
+    # Include the real service-loop publication between activation and recovery.
+    # Its heartbeat/cloud inputs are fixed; guard persistence is production code.
+    outer = DefaultVMHAControllerRuntime(
+        SimpleNamespace(
+            step=lambda: {"promotion_ready": True},
+            snapshots=SimpleNamespace(clock=time.monotonic),
+            controller=SimpleNamespace(effects=SimpleNamespace()),
+        ),
+        SimpleNamespace(local=SimpleNamespace(role=SimpleNamespace(value="active"))),
+        boot_id=action.boot_id,
+        sequence_path=state_dir / "heartbeat-sequence.json",
+        guard_path=plane.guard_path,
+    )
+    outer.started_guarded = True
+    outer._start_peer_listener = lambda: None
+    outer.publisher = SimpleNamespace(
+        start=lambda: None, check=lambda: None, progress=lambda phase: None
+    )
+    outer.step()
+    authority_reads = []
+    ports = SimpleNamespace(
+        data_plane=plane,
+        routes=SimpleNamespace(),
+        require_repair_authority=lambda current: authority_reads.append(current == action),
+    )
+    ControllerTunnelRuntime(config_path, state_dir, None, ports)
+    token = CURRENT.set(CommandBudget(started + 4.0))
+    try:
+        assert plane.repair_local(action) is RepairDisposition.ATTEMPTED
+        assert plane.mode() is DataPlaneMode.ACTIVE
+        assert loaded_configuration().includes(plane.ipsec_configuration_provider())
+    finally:
+        CURRENT.reset(token)
+    print(json.dumps({"reloaded": True, "seconds": time.monotonic() - started}))
+
+
 def main() -> None:
     cfg = yaml.safe_load(Path(sys.argv[1]).read_text())
     command = sys.argv[2]
@@ -174,6 +257,9 @@ def main() -> None:
         authority = ordinary_authority(cfg, "native-boot")
         state_dir = Path("/var/lib/nebius-vpngw/ordinary")
     state_dir.mkdir(parents=True, exist_ok=True)
+    if command == "reload-after-daemon-crash":
+        reload_after_daemon_crash(cfg, Path(sys.argv[1]), state_dir)
+        return
     if command in {"activation-checkpoint", "activation"}:
         activate_retained_static(
             cfg, Path(sys.argv[1]), state_dir, checkpoint=command.endswith("checkpoint")

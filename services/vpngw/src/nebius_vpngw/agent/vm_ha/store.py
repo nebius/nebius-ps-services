@@ -322,10 +322,27 @@ class AtomicGenerationStore:
                     ) from error
             return tuple(records)
 
-    def save_replay_state(self, peer_node_id: str, state: ReplayState) -> None:
-        """Persist the accepted peer replay boundary atomically and monotonically."""
+    def save_accepted_peer_heartbeat(
+        self,
+        peer_node_id: str,
+        heartbeat: PeerHeartbeat,
+        *,
+        replay_state: ReplayState,
+    ) -> None:
+        """Publish authenticated parity and its monotonic replay boundary together."""
 
         path = self._replay_state_path(peer_node_id)
+        heartbeat_path = self._accepted_peer_heartbeat_path(peer_node_id)
+        state = replay_state
+        if not (
+            heartbeat.node_id == peer_node_id
+            and state.current_boot_id == heartbeat.boot_id
+            and state.highest_sequence == heartbeat.sequence
+            and heartbeat.boot_id not in state.retired_boot_ids
+        ):
+            raise StalePeerStateError(
+                "accepted peer heartbeat is not covered by the replay boundary"
+            )
         with self._locked():
             current = self._load_replay_state_unlocked(path)
             if current is not None:
@@ -341,24 +358,10 @@ class AtomicGenerationStore:
                         "new replay state must retire the previously accepted boot identity"
                     )
             atomic_write_json(path, _envelope(state.to_dict()))
-
-    def save_accepted_peer_heartbeat(self, peer_node_id: str, heartbeat: PeerHeartbeat) -> None:
-        """Persist the last authenticated heartbeat behind its replay boundary."""
-
-        path = self._accepted_peer_heartbeat_path(peer_node_id)
-        with self._locked():
-            replay = self._load_replay_state_unlocked(self._replay_state_path(peer_node_id))
-            if not (
-                heartbeat.node_id == peer_node_id
-                and replay is not None
-                and replay.current_boot_id == heartbeat.boot_id
-                and replay.highest_sequence == heartbeat.sequence
-                and heartbeat.boot_id not in replay.retired_boot_ids
-            ):
-                raise StalePeerStateError(
-                    "accepted peer heartbeat is not covered by the replay boundary"
-                )
-            atomic_write_json(path, _envelope(heartbeat.to_dict()))
+            # Readers share this lock, so normal publication never exposes the
+            # intermediate pair. Replay is durable first: a failed cache write
+            # still prevents accepting that sequence again after restart.
+            atomic_write_json(heartbeat_path, _envelope(heartbeat.to_dict()))
 
     def load_accepted_peer_heartbeat(self, peer_node_id: str) -> PeerHeartbeat | None:
         """Load checksum-valid authenticated parity evidence for restart recovery."""

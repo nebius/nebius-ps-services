@@ -52,8 +52,16 @@ class Service:
             )
         )
 
-    def list_by_account(self, request):
+    def list_by_account(self, request, **_options):
         return self.list(request)
+
+    def operation_service(self):
+        def get(request, **_options):
+            operation = self.graph.operations[self.label]
+            assert request.id == operation.id
+            return NS(wait=lambda: operation)
+
+        return NS(get=get)
 
     def create(self, request, **options):
         assert options["retries"] == 0
@@ -93,15 +101,6 @@ def graph(tmp_path, monkeypatch):
         monkeypatch.setattr(
             iam, kind + "ServiceClient", lambda _sdk, label=label: graph.services[label]
         )
-    monkeypatch.setattr(
-        common,
-        "OperationServiceClient",
-        lambda _sdk: NS(
-            get=lambda req, **kw: NS(
-                wait=lambda: next(op for op in graph.operations.values() if op.id == req.id)
-            )
-        ),
-    )
     monkeypatch.setattr(vpngw_sa, "_init_client", lambda *_: (graph, True))
     monkeypatch.setattr(vpngw_sa, "_cli_access_token", lambda **_: "ephemeral-fixture-token")
     journal = EnrollmentJournal("project-a", "gateway-a", root=tmp_path / "journal")
@@ -191,6 +190,72 @@ def test_same_named_resource_without_original_operation_is_not_adopted(graph):
         )
         with pytest.raises(managed.VMHAManagedCredentialError, match="reconciliation failed"):
             execute(initial)
+    assert cloud.calls == []
+
+
+@pytest.mark.parametrize("label", REQUESTS)
+@pytest.mark.parametrize("boundary", ["reply", "accepted"])
+def test_settlement_reconciles_only_submitted_iam_prefix_without_new_key(graph, label, boundary):
+    cloud, journal, inspect, execute = graph
+    initial = inspect()
+    with journal:
+        journal.begin(initial.approval_record(), approval="a" * 64, execution_id="b" * 32)
+        cloud.fail = (label, boundary)
+        with pytest.raises(managed.VMHAManagedCredentialError):
+            execute(initial)
+    pending = initial.source_path.parent / managed._PENDING_KEY_NAME
+    original_key = pending.read_bytes()
+    original_labels = set(cloud.requests)
+    original_ids = {name: op.id for name, op in cloud.operations.items()}
+    observed = inspect()
+    with journal:
+        managed.settle_managed_vm_ha_enrollment(
+            observed, enrollment=journal, tenant_id=None, region_id=None,
+            client_factory=lambda *_: (cloud, True),
+        )
+    assert set(cloud.requests) == original_labels
+    assert {name: op.id for name, op in cloud.operations.items()} == original_ids
+    assert all(row[1:] == cloud.requests[row[0]] for row in cloud.calls)
+    current = journal.snapshot()["transaction"]
+    assert current["phase"] == "pending" and current["receipt"] is None
+    assert all(record["status"] == "settled" for record in current["operations"].values())
+    assert not initial.source_path.exists()
+    assert pending.read_bytes() == original_key
+    journal._admit_observation(inspect(), current)
+    before = journal.path.read_bytes(), list(cloud.calls)
+    with journal:
+        managed.settle_managed_vm_ha_enrollment(
+            inspect(), enrollment=journal, tenant_id=None, region_id=None,
+            client_factory=lambda *_: (cloud, True),
+        )
+    assert before == (journal.path.read_bytes(), cloud.calls)
+    assert b"PRIVATE KEY" not in journal.path.read_bytes()
+
+
+def test_settlement_pairs_original_pending_key_without_submitting_iam(graph, monkeypatch):
+    cloud, journal, inspect, execute = graph
+    initial = inspect()
+    with journal:
+        journal.begin(initial.approval_record(), approval="a" * 64, execution_id="b" * 32)
+        with monkeypatch.context() as patch:
+            def stop_before_pair(*_a, **_kw):
+                raise OSError("injected key-only boundary")
+
+            patch.setattr(managed, "_write_journal", stop_before_pair)
+            with pytest.raises(OSError, match="key-only"):
+                execute(initial)
+    pending = initial.source_path.parent / managed._PENDING_KEY_NAME
+    original_key = pending.read_bytes()
+    observed = inspect()
+    assert observed.pending_present and not observed.journal_present
+    with journal:
+        managed.settle_managed_vm_ha_enrollment(
+            observed, enrollment=journal, tenant_id=None, region_id=None,
+            client_factory=lambda *_: pytest.fail("key pairing must not contact the provider"),
+        )
+    assert inspect().journal_present
+    assert pending.read_bytes() == original_key
+    assert not initial.source_path.exists()
     assert cloud.calls == []
 
 
@@ -373,3 +438,238 @@ def test_uncertain_permit_never_replays_after_membership_drift(graph):
     with journal, pytest.raises(managed.VMHAManagedCredentialError):
         execute(observed)
     assert cloud.calls == before
+
+
+@pytest.fixture
+def readback_clock(monkeypatch):
+    now, sleeps = [0.0], []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(managed, "time", NS(monotonic=lambda: now[0], sleep=sleep))
+    monkeypatch.setattr(managed.random, "random", lambda: 1.0)
+    return now, sleeps
+
+
+@pytest.mark.parametrize("empty_reads", [1, 3, 8])
+def test_settled_key_creation_waits_for_exact_readback_without_replaying(
+    graph, monkeypatch, readback_clock, empty_reads
+):
+    cloud, journal, inspect, execute = graph
+    initial = inspect()
+    service = cloud.services["authorized-key"]
+    original = service.list_by_account
+    settled_reads = []
+
+    def delayed_visibility(request, **options):
+        if service.item is not None:
+            settled_reads.append(options)
+            records = journal.snapshot()["transaction"]["operations"].values()
+            key = next(record for record in records if record["label"] == "authorized-key")
+            assert key["status"] == "settled" and key["submission_count"] == 1
+            if len(settled_reads) <= empty_reads:
+                return NS(wait=lambda: NS(items=[], next_page_token=""))
+        return original(request)
+
+    monkeypatch.setattr(service, "list_by_account", delayed_visibility)
+    with journal:
+        journal.begin(initial.approval_record(), approval="a" * 64, execution_id="b" * 32)
+        result = execute(initial)
+        receipt = journal.receipt()
+    assert result.credentials.authorized_key_id == "authorized-key-created"
+    assert len(settled_reads) >= empty_reads + 1
+    assert len(cloud.calls) == len(cloud.operations) == 5
+    assert receipt
+
+
+def test_unavailable_created_key_preserves_receipts_for_later_resume(
+    graph, monkeypatch, readback_clock
+):
+    cloud, journal, inspect, execute = graph
+    initial = inspect()
+    service = cloud.services["authorized-key"]
+    original = service.list_by_account
+    reads = []
+
+    def unavailable(request, **options):
+        if service.item is not None:
+            reads.append(options)
+            return NS(wait=lambda: NS(items=[], next_page_token=""))
+        return original(request)
+
+    with journal:
+        journal.begin(initial.approval_record(), approval="a" * 64, execution_id="b" * 32)
+        with monkeypatch.context() as patch:
+            patch.setattr(service, "list_by_account", unavailable)
+            with pytest.raises(managed.VMHAManagedCredentialError, match="pending exact readback"):
+                execute(initial)
+        pending = journal.snapshot()["transaction"]
+    assert len(reads) > 3 and len(cloud.calls) == 5
+    assert 29.8 <= readback_clock[0][0] <= 30
+    assert not initial.source_path.exists()
+    assert all(record["status"] == "settled" for record in pending["operations"].values())
+    with journal:
+        execute(inspect())
+        completed = journal.snapshot()["transaction"]
+    for field in ("operations", "execution_id", "selected", "approval", "intent"):
+        assert completed[field] == pending[field]
+    assert completed["phase"] == "complete" and len(cloud.calls) == 5
+
+
+def test_reuse_planning_and_execution_wait_for_exact_key_without_new_enrollment(
+    graph, monkeypatch, readback_clock
+):
+    cloud, journal, inspect, execute = graph
+    initial = inspect()
+    with journal:
+        journal.begin(initial.approval_record(), approval="a" * 64, execution_id="b" * 32)
+        enrolled = execute(initial)
+    service = cloud.services["authorized-key"]
+    original = service.list_by_account
+    reads = []
+
+    def delayed(request, **options):
+        reads.append(options)
+        if len(reads) <= 8:
+            return NS(wait=lambda: NS(items=[], next_page_token=""))
+        return original(request, **options)
+
+    monkeypatch.setattr(service, "list_by_account", delayed)
+    reused = inspect()
+    assert reused.action == "reuse" and len(reads) == 9
+    reads.clear()
+    with journal:
+        result = execute(reused)
+    assert len(reads) == 9
+    assert result.credentials.authorized_key_id == enrolled.credentials.authorized_key_id
+    assert len(cloud.calls) == len(cloud.operations) == 5
+
+
+@pytest.mark.parametrize("failure", ["foreign", "extra-key", "permission", "malformed"])
+def test_created_key_retry_does_not_hide_conflicting_or_unavailable_evidence(
+    graph, monkeypatch, readback_clock, failure
+):
+    cloud, journal, inspect, execute = graph
+    initial = inspect()
+    service = cloud.services["authorized-key"]
+    original = service.list_by_account
+    reads = []
+
+    def changed(request, **options):
+        if service.item is None:
+            return original(request)
+        reads.append(options)
+        if len(reads) == 1:
+            return NS(wait=lambda: NS(items=[], next_page_token=""))
+        if failure == "permission":
+            raise PermissionError("private provider detail")
+        if failure == "malformed":
+            return NS(wait=lambda: NS(items=[service.item]))
+        if failure == "foreign":
+            service.item.spec.data = "foreign public key"
+            return original(request)
+        foreign = NS(metadata=NS(id="foreign-key"))
+        return NS(wait=lambda: NS(items=[service.item, foreign], next_page_token=""))
+
+    monkeypatch.setattr(service, "list_by_account", changed)
+    with journal:
+        journal.begin(initial.approval_record(), approval="a" * 64, execution_id="b" * 32)
+        with pytest.raises(managed.VMHAManagedCredentialError) as raised:
+            execute(initial)
+    assert "private provider detail" not in str(raised.value)
+    assert len(reads) == 2 and len(cloud.calls) == 5
+    assert not initial.source_path.exists()
+
+
+def test_created_key_readback_shares_parent_deadline_across_pages(readback_clock):
+    now, _sleeps = readback_clock
+    requests = []
+    item = NS(metadata=NS(id="original-key"))
+
+    def page(request, **options):
+        requests.append((request.page_token, options))
+        now[0] += 0.3
+        return NS(
+            wait=lambda: NS(
+                items=[] if not request.page_token else [item],
+                next_page_token="second" if not request.page_token else "",
+            )
+        )
+
+    with managed.vm_ha_observation_budget(seconds=1.0, clock=lambda: now[0]):
+        assert managed._reread_authorized_key(NS(list_by_account=page), "sa") == (item,)
+    assert [row[0] for row in requests] == ["", "second"]
+    assert requests[0][1]["timeout"] == pytest.approx(0.8)
+    assert requests[1][1]["timeout"] == pytest.approx(0.5)
+    for _token, options in requests:
+        assert options["retries"] == 1
+        assert options["auth_timeout"] == options["per_retry_timeout"] == options["timeout"]
+
+
+def test_late_created_key_readback_cannot_publish_credentials(graph, monkeypatch, readback_clock):
+    cloud, journal, inspect, execute = graph
+    initial = inspect()
+    service = cloud.services["authorized-key"]
+    original = service.list_by_account
+    now, _sleeps = readback_clock
+
+    def late(request, **options):
+        if service.item is not None:
+            now[0] += 31.0
+        return original(request)
+
+    monkeypatch.setattr(service, "list_by_account", late)
+    with journal:
+        journal.begin(initial.approval_record(), approval="a" * 64, execution_id="b" * 32)
+        with pytest.raises(managed.VMHAManagedCredentialError, match="pending exact readback"):
+            execute(initial)
+    assert len(cloud.calls) == 5 and not initial.source_path.exists()
+
+
+def test_created_key_readback_does_not_start_request_without_remaining_auth_budget(
+    readback_clock,
+):
+    now, sleeps = readback_clock
+    requests = []
+
+    def empty(request, **options):
+        requests.append(options)
+        now[0] += 0.3
+        return NS(wait=lambda: NS(items=[], next_page_token=""))
+
+    with (
+        managed.vm_ha_observation_budget(seconds=0.65, clock=lambda: now[0]),
+        pytest.raises(managed.VMHAManagedCredentialError, match="pending exact readback"),
+    ):
+        managed._reread_authorized_key(NS(list_by_account=empty), "sa")
+    assert len(requests) == 1 and requests[0]["auth_timeout"] == pytest.approx(0.45)
+    assert sleeps == [0.2] and now[0] == pytest.approx(0.5)
+
+
+def test_cancelled_key_readback_keeps_accepted_creation_for_resume(
+    graph, monkeypatch, readback_clock
+):
+    cloud, journal, inspect, execute = graph
+    initial = inspect()
+    service = cloud.services["authorized-key"]
+    original = service.list_by_account
+
+    def interrupted(request, **options):
+        if service.item is not None:
+            raise KeyboardInterrupt
+        return original(request)
+
+    with journal:
+        journal.begin(initial.approval_record(), approval="a" * 64, execution_id="b" * 32)
+        with monkeypatch.context() as patch:
+            patch.setattr(service, "list_by_account", interrupted)
+            with pytest.raises(KeyboardInterrupt):
+                execute(initial)
+        pending = journal.snapshot()["transaction"]
+    assert len(cloud.calls) == 5 and not initial.source_path.exists()
+    with journal:
+        execute(inspect())
+        assert journal.snapshot()["transaction"]["operations"] == pending["operations"]
+    assert len(cloud.calls) == 5

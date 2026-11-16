@@ -10,6 +10,11 @@ feature behavior and any planned end-to-end slice in the registered integration
 worktree. The project checkout remains unchanged, and implementation seals the
 TDD base before creating workers.
 
+The root checkpoint records `current_phase: tests_red` or `tests_ready` with
+`status: running`. The matching immutable checkpoint uses the same fields.
+Expected-red and already-green evidence describe the test outcome; phase output
+labels do not replace the run status or authorize sealing.
+
 ## Main Boundaries
 
 - Implement production code except minimal test-only fixtures.

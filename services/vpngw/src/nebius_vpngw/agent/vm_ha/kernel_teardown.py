@@ -51,6 +51,17 @@ def deletions(
         if "local" in address
     }
     commands = []
+    order = {}
+    precedence: dict[
+        tuple[int, str, int],
+        list[
+            tuple[
+                ipaddress.IPv4Network | ipaddress.IPv6Network,
+                ipaddress.IPv4Network | ipaddress.IPv6Network,
+                int,
+            ]
+        ],
+    ] = {}
     for kind, entry, path in scoped:
         matching = [link for link in links if link.get("ifname") == path.interface]
         if len(matching) != 1:
@@ -112,9 +123,26 @@ def deletions(
             )
         else:
             index = number(entry.get("index"))
+            priority = number(entry.get("priority"))
             direction = entry.get("dir")
             if index == 0 or direction not in {"in", "out", "fwd"}:
                 raise ValueError("kernel policy lacks an exact identity")
+            # Equal-precedence overlapping traps cannot be ordered safely by
+            # reqid or dump position. Distinct selectors remain independent.
+            selector = (
+                ipaddress.ip_network(entry["src"]),
+                ipaddress.ip_network(entry["dst"]),
+                number(entry["reqid"]),
+            )
+            group = precedence.setdefault((path.if_id, direction, priority), [])
+            if any(
+                selector[0].overlaps(old[0])
+                and selector[1].overlaps(old[1])
+                and selector[2] != old[2]
+                for old in group
+            ):
+                raise ValueError("kernel policy precedence is ambiguous")
+            group.append(selector)
             command = (
                 "ip",
                 "xfrm",
@@ -130,4 +158,7 @@ def deletions(
         if command in commands:
             raise ValueError("kernel mutation identity is ambiguous")
         commands.append(command)
-    return tuple(commands)
+        order[command] = (0, -priority) if kind == "policy" else (1, 0)
+    # Linux selects the lowest numeric priority. Revoke lower-precedence
+    # traps before negotiated policies can expose them, then remove SAs.
+    return tuple(sorted(commands, key=order.__getitem__))

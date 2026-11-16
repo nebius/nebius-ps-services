@@ -3,13 +3,6 @@
   "os": "ubuntu:24.04",
   "releases": [
     {
-      "version": "0.6.0",
-      "tag": "nebius-vpngw-v0.6.0",
-      "url": "https://github.com/nebius/nebius-ps-services/releases/download/nebius-vpngw-v0.6.0/nebius_vpngw-0.6.0-py3-none-any.whl",
-      "sha256": "0e1f20c001005ac78ba7551ea029ddcc60c13cd736f69984143a420ee1b0e18d",
-      "published_at": "2026-09-03T23:52:08Z"
-    },
-    {
       "version": "0.6.1",
       "tag": "nebius-vpngw-v0.6.1",
       "url": "https://github.com/nebius/nebius-ps-services/releases/download/nebius-vpngw-v0.6.1/nebius_vpngw-0.6.1-py3-none-any.whl",
@@ -29,6 +22,13 @@
       "url": "https://github.com/nebius/nebius-ps-services/releases/download/nebius-vpngw-v0.6.3/nebius_vpngw-0.6.3-py3-none-any.whl",
       "sha256": "24068c97b5ed4282bc0304888cdce9b8abdbb864bd66b6bd3f6163bdf106aaa0",
       "published_at": "2026-11-05T04:34:46Z"
+    },
+    {
+      "version": "0.6.4",
+      "tag": "nebius-vpngw-v0.6.4",
+      "url": "https://github.com/nebius/nebius-ps-services/releases/download/nebius-vpngw-v0.6.4/nebius_vpngw-0.6.4-py3-none-any.whl",
+      "sha256": "1f85d55ea2976ace5a681ba443d02a471c6c1ca6df62b97df3c0183ccf3a14be",
+      "published_at": "2026-11-09T19:13:07Z"
     }
   ]
 }

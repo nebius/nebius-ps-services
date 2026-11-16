@@ -120,6 +120,24 @@
         "Probes actual restricted-user access instead of weakening service security.",
         "Repairs the proven owner and replays fresh without relabeling old evidence."
       ]
+    },
+    {
+      "id": 12,
+      "prompt": "$test-software-in-container is selected for acceptance of the finished application, but only the first component is implemented.",
+      "expected_output": "Retain the explicit choice, mark the campaign pending until meaningful scope is ready, and continue independent implementation without provisioning early.",
+      "files": [],
+      "assertions": [
+        "Retain the explicit choice, mark the campaign pending until meaningful scope is ready, and continue independent implementation without provisioning early."
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "We already have a test environment. Implement the remaining application; I will test it myself later.",
+      "expected_output": "Do not invoke this explicit-only skill or infer UAT from the environment. Retain a later-test handoff and continue eligible delivery.",
+      "files": [],
+      "assertions": [
+        "Do not invoke this explicit-only skill or infer UAT from the environment. Retain a later-test handoff and continue eligible delivery."
+      ]
     }
   ]
 }

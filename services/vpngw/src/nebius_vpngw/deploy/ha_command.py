@@ -18,6 +18,7 @@ from . import security_group_apply as attachments
 from .activation_recovery import POLICY as RECOVERY_POLICY
 from .activation_recovery import Recovery
 from .apply_command import CommandJournal
+from .apply_diagnostics import PreparationBlocked
 from .apply_plan import CommandPlan, Effect, Progress
 from .vm_ha_lifecycle import VMHALifecycleState, VMHALifecycleStatus
 
@@ -103,6 +104,22 @@ class HACommand:
 
     def start_runtime(self) -> None:
         self.journal.started("runtime")
+
+    def bind_package_plans(self, lifecycle: VMHALifecycleState | None, plans: Any) -> None:
+        """Bind the approved parent before staging or reserving a guest request."""
+        saved = self.package_resume(lifecycle)
+        if saved is None:
+            return
+        parent, manifests = saved
+        selected = dict(plans)
+        if set(selected) != set(manifests) or any(
+            manifest_identity(package.manifest) != manifest_identity(manifests[name])
+            or package.manifest.get("ha_parent") not in {None, parent}
+            for name, package in selected.items()
+        ):
+            raise RuntimeError("HA package plans differ from the approved command")
+        for package in selected.values():
+            package.manifest["ha_parent"] = parent
 
     def lifecycle_bindings(self) -> dict[str, str]:
         from ..apply_approval import SCHEMA
@@ -274,6 +291,7 @@ class HACommand:
                     and recovered["artifact"] == self.plan.artifact_sha256
                     and recovered["prior_artifact"] == successor["prior_artifact"]
                     and recovered["prior_record"] == successor["prior_lifecycle"]
+                    and ("settlement" not in successor or digest(recovered.get("replan")) == successor["settlement"])
                 )
             else:
                 from .ha_preparation import command_authority
@@ -451,7 +469,7 @@ def resume(
     if not any(item.key == "runtime" and item.owner == "ha-lifecycle" for item in plan.effects):
         return None
     if plan.artifact_sha256 != artifact:
-        raise RuntimeError("Pending HA apply artifact changed; resume the original operation")
+        raise PreparationBlocked("artifact-changed")
     intent = state["bindings"].get("runtime")
     target_match = tuple(sorted(runtime_effect(plan).targets)) == tuple(sorted(targets))
     if (
@@ -613,6 +631,16 @@ def package_intent(
     }
 
 
+def prehost_package_intent(state: VMHALifecycleState, approval: str, manifests: dict) -> dict:
+    from .vm_ha_prehost import operation_id
+
+    return {
+        "parent": operation_id(state, approval),
+        "checkpoint": state.record_sha256,
+        "manifests": deepcopy(manifests),
+    }
+
+
 def require_runtime_scope(command: HACommand, scope: str) -> None:
     if command.intent["runtime_scope"] != scope:
         raise RuntimeError("Pending HA apply does not authorize different package requests")
@@ -657,10 +685,17 @@ def reviewed_successor(
     action_scope: str,
     targets: tuple[str, ...],
     attachment_child: dict | None,
+    settlement: dict | None = None,
 ) -> dict:
     """Called only after the existing guarded recovery owner admits its plan."""
     transaction = previous["transaction"]
     old = CommandPlan.parse(transaction["plan"])
+    if settlement is not None:
+        from .ha_replan import validate_record
+
+        proof = validate_record(settlement, previous=lifecycle)
+        if proof["predecessor"] != digest(previous) or kind != "corrective-release":
+            raise RuntimeError("HA successor has another settled command")
     if (
         transaction["phase"] != "pending"
         or old.configuration_sha256 != old_scope
@@ -688,4 +723,5 @@ def reviewed_successor(
         "prior_lifecycle": lifecycle.record_sha256,
         "kind": kind,
         "attachment_predecessor": digest(attachment_child) if attachment_child else None,
+        **({"settlement": digest(settlement)} if settlement is not None else {}),
     }

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ..apply_approval import digest
 from .apply_command import CommandJournal
+from .apply_diagnostics import SSHBootstrapConflict
 from .apply_plan import CommandPlan, Progress
 from .replacement import Journal, metadata_only
 from .ssh_policy import SSHTrustPolicy, persist_planned_host_keys, publish_vm_ha_ssh_trust
@@ -151,7 +152,7 @@ class TrustJournal(Journal):
         current = self.state["transaction"]
         if current["selected"] is not None:
             if current["selected"] != chosen:
-                raise RuntimeError("Selected SSH bootstrap identity changed")
+                raise SSHBootstrapConflict("Selected SSH bootstrap identity changed")
             return
         candidate = {**self.state, "transaction": {**current, "selected": chosen}}
         self.validate(candidate)
@@ -221,7 +222,7 @@ def publish(
             "owner": effect.owner,
             "sha256": digest(child.receipt()),
         }:
-            raise RuntimeError("Completed SSH bootstrap has a different child receipt")
+            raise SSHBootstrapConflict("Completed SSH bootstrap has a different child receipt")
         policy = observe()
         admit()
         if (
@@ -241,6 +242,6 @@ def publish(
             selection(observe(), tuple(desired["members"]))
             != child.state["transaction"]["selected"]
         ):
-            raise RuntimeError("Published SSH bootstrap differs from selected identities")
+            raise SSHBootstrapConflict("Published SSH bootstrap differs from selected identities")
         admit()
         return child.complete()

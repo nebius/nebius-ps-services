@@ -143,7 +143,8 @@ class NativeActivationTests(unittest.TestCase):
 
     def test_foreign_session_and_unsupported_version_are_rejected(self):
         original = self.trace.read_text()
-        for old, new in ((SESSION, "foreign-session"), ("0.166.0", "unsupported")):
+        for old, new in ((SESSION, "foreign-session"), ("0.167.0", "unsupported"),
+                         ("0.167.0", "0.166.0")):
             with self.subTest(new=new):
                 self.trace.write_text(original.replace(old, new))
                 with self.assertRaises(native.NativeEvidenceError):

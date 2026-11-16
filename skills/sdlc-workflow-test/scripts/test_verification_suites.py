@@ -3,12 +3,12 @@
 from dataclasses import replace
 from contextlib import ExitStack, redirect_stdout
 from io import StringIO
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
-from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -18,6 +18,44 @@ import verify_agentic_sdlc as verifier
 
 
 class SuiteExecutionTests(unittest.TestCase):
+    def test_catalog_buffers_summaries_without_hiding_failed_test_outcomes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Path(temporary)
+            path = fixture / "test_probe.py"
+            path.write_text("import unittest\nclass Probe(unittest.TestCase):\n def test_passing(self): print('private body')\n def test_failing(self): self.fail('private failure')\n @unittest.skip('control')\n def test_skipped(self): pass\n")
+            result = suites.execute(suites.SuiteSpec("probe", [sys.executable, str(path)], fixture), os.environ.copy())
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.passed, frozenset({"test_probe.Probe.test_passing"}))
+            self.assertEqual(result.skipped, frozenset({"test_probe.Probe.test_skipped"}))
+            self.assertIn("test_probe.Probe.test_failing", result.failed)
+            self.assertNotIn("private", result.detail)
+
+    def test_execution_command_collects_its_required_capability_tests(self):
+        root = Path(__file__).resolve().parents[2]
+        # Use unittest's actual command parser and loader without executing the
+        # expensive real-Git cases. A declared capability must be in this suite.
+        collect = """import json,sys,unittest
+def names(test):
+    if isinstance(test, unittest.TestSuite):
+        return [name for child in test for name in names(child)]
+    return [test.id().rsplit('.', 1)[-1]]
+class Collect(unittest.TestProgram):
+    def runTests(self):
+        print(json.dumps(names(self.test)))
+Collect(module=None, argv=['unittest', *sys.argv[1:]], exit=False)
+"""
+        for suite_id in ("execution", "three-tier"):
+            with self.subTest(suite=suite_id):
+                spec = suites.suite_catalog(root)[suite_id]
+                result = subprocess.run(
+                    [spec.command[0], "-B", "-c", collect, *spec.command[3:]],
+                    cwd=spec.cwd, capture_output=True, text=True, timeout=30, check=True,
+                )
+                collected = set(json.loads(result.stdout))
+                required = {test for _, dependencies in suites.capability_catalog().values()
+                            for suite, test in dependencies if suite == suite_id}
+                self.assertFalse(required - collected, sorted(required - collected))
+
     def test_unproven_process_cleanup_skips_all_later_fixture_execution(self):
         with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
             root = Path(temporary).resolve() / "verify"
@@ -66,79 +104,56 @@ class SuiteExecutionTests(unittest.TestCase):
                 self.assertEqual(verifier.main(["--verification-root", str(root)]), 1)
             hooks.assert_not_called()
 
-    def spec(self, code, timeout=5):
-        return suites.SuiteSpec(
-            "probe", [sys.executable, "-B", "-c", code], Path.cwd(), timeout
-        )
+    def spec(self, code="pass"):
+        return suites.SuiteSpec("probe", [sys.executable, str(Path(__file__).resolve())], Path.cwd())
 
-    def test_timeout_retains_completed_test_identifiers(self):
-        result = suites.execute(
-            self.spec(
-                "import time; print('test_completed ... ok', flush=True); time.sleep(10)",
-                0.15,
-            ),
-            os.environ.copy(),
-        )
-        self.assertEqual(result.returncode, 124)
-        self.assertEqual(result.passed, frozenset({"test_completed"}))
-        self.assertEqual(result.outcome, "TIMEOUT")
-        self.assertLess(result.elapsed, 5)
+    def row(self, status, *, passed=(), inventory=("fixture.Case.test_ok",)):
+        return {"id": "probe:exclusive", "suite": "probe", "status": status,
+                "inventory": list(inventory), "outcomes": {name: "passed" for name in passed},
+                "observation": {"elapsed_seconds": .1, "local_group_quiescent": status != "EXECUTION_UNPROVEN"}}
+
+    def test_interruption_retains_completed_test_identifiers(self):
+        row = self.row("INTERRUPTED", passed=("fixture.Case.test_ok",),
+                       inventory=("fixture.Case.test_ok", "fixture.Case.test_pending"))
+        with mock.patch.object(suites.scheduler(), "schedule", return_value=[row]):
+            result = suites.execute(self.spec(), {})
+        self.assertEqual(result.returncode, 130)
+        self.assertEqual(result.passed, frozenset({"fixture.Case.test_ok"}))
+        self.assertEqual(result.outcome, "INTERRUPTED")
 
     def test_start_failure_is_structured(self):
-        spec = replace(
-            self.spec("pass"), command=["/nonexistent-sdlc-suite-executable"]
-        )
-        self.assertEqual(suites.execute(spec, os.environ.copy()).returncode, 127)
+        with mock.patch.object(suites.scheduler(), "schedule", return_value=[self.row("START_FAILED")]):
+            result = suites.execute(self.spec(), {})
+        self.assertEqual(result.returncode, 127)
 
     def test_normal_exit_cleans_owned_descendants(self):
-        code = "import subprocess,sys; subprocess.Popen([sys.executable,'-c','import time; time.sleep(10)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); print('test_done ... ok')"
-        result = suites.execute(self.spec(code), os.environ.copy())
-        self.assertEqual(result.returncode, 0)
-        self.assertLess(result.elapsed, 5)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "test_child.py"
+            path.write_text("import unittest,subprocess,sys\nclass Child(unittest.TestCase):\n def test_done(self): subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n")
+            result = suites.execute(suites.SuiteSpec("probe", [sys.executable, str(path)], root), os.environ.copy())
+            self.assertEqual(result.returncode, 0)
+            self.assertTrue(result.groups[0]["observation"]["local_group_quiescent"])
 
     def test_failure_details_exclude_exception_bodies(self):
-        completed = subprocess.CompletedProcess(
-            [],
-            1,
-            stdout="secret test value",
-            stderr="ERROR: test_owner (module.Case.test_owner)\nprivate traceback",
-        )
-        with mock.patch.object(suites, "run_command", return_value=completed):
-            result = suites.execute(self.spec("pass"), {})
-        self.assertEqual(result.failed, ("test_owner",))
-        self.assertNotIn("secret", result.detail)
+        row = self.row("FAIL")
+        row["outcomes"] = {"fixture.Case.test_ok": "failed"}
+        with mock.patch.object(suites.scheduler(), "schedule", return_value=[row]):
+            result = suites.execute(self.spec(), {})
+        self.assertEqual(result.failed, ("fixture.Case.test_ok",))
         self.assertNotIn("private", result.detail)
 
     def test_cleanup_failure_is_not_success(self):
-        with mock.patch.object(
-            suites, "run_command", side_effect=RuntimeError("private failure")
-        ):
-            result = suites.execute(self.spec("pass"), {})
+        with mock.patch.object(suites.scheduler(), "schedule", return_value=[self.row("EXECUTION_UNPROVEN")]):
+            result = suites.execute(self.spec(), {})
         self.assertEqual(result.returncode, 125)
-        self.assertNotIn("private", result.detail)
 
-    def test_cleanup_drain_timeout_is_unproven_and_verifies_group_absence(self):
-        group = mock.Mock(id=12345)
-        owner = SimpleNamespace(OwnedProcessGroup=lambda: group)
-        child = mock.Mock(returncode=0)
-        child.communicate.side_effect = [
-            ("test_completed ... ok", ""),
-            subprocess.TimeoutExpired("private command", 5, output="private output"),
-        ]
-        with (
-            mock.patch.object(
-                suites.importlib.util, "spec_from_file_location",
-                return_value=SimpleNamespace(loader=mock.Mock()),
-            ),
-            mock.patch.object(suites.importlib.util, "module_from_spec", return_value=owner),
-            mock.patch.object(suites.subprocess, "Popen", return_value=child),
-        ):
-            result = suites.execute(self.spec("pass"), {})
+    def test_cleanup_uncertainty_preserves_completed_cases_without_admission(self):
+        row = self.row("EXECUTION_UNPROVEN", passed=("fixture.Case.test_ok",))
+        with mock.patch.object(suites.scheduler(), "schedule", return_value=[row]):
+            result = suites.execute(self.spec(), {})
         self.assertEqual(result.outcome, "EXECUTION_UNPROVEN")
-        self.assertFalse(result.passed)
-        self.assertNotIn("private", result.detail)
-        group.close.assert_called_once_with(grace=0.05)
-        group.verify_absent.assert_called_once_with()
+        self.assertEqual(result.passed, frozenset({"fixture.Case.test_ok"}))
 
     def test_cleanup_timeout_preserves_prior_results_and_stops_later_suites(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -154,14 +169,15 @@ class SuiteExecutionTests(unittest.TestCase):
                 mock.patch.object(suites, "capability_catalog", return_value={
                     name: (name, ((name, "test_ok"),)) for name in specs
                 }),
-                mock.patch.object(suites, "run_command", side_effect=[
-                    subprocess.CompletedProcess([], 0, "test_ok ... ok", ""),
-                    subprocess.TimeoutExpired("private command", 5),
+                mock.patch.object(suites, "execute_all", return_value=[
+                    suites.SuiteResult("first", 0, .1, frozenset({"fixture.Case.test_ok"}), frozenset(), (), inventory=frozenset({"fixture.Case.test_ok"})),
+                    suites.SuiteResult("second", 125, .1, frozenset(), frozenset(), (), inventory=frozenset({"fixture.Case.test_ok"})),
+                    suites.SuiteResult("third", 126, 0, frozenset(), frozenset(), (), inventory=frozenset({"fixture.Case.test_ok"})),
                 ]) as run,
             ):
                 verifier.check_capability_regressions(ctx)
-            self.assertEqual(run.call_count, 2)
-            self.assertEqual([r.outcome for r in ctx.suite_results], ["PASS", "EXECUTION_UNPROVEN"])
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual([r.outcome for r in ctx.suite_results], ["PASS", "EXECUTION_UNPROVEN", "NOT_RUN"])
             results = {c.capability_id: c.status for c in ctx.checks if c.capability_id}
             self.assertEqual(results, {"first": "PASS", "second": "FAIL", "third": "WARN"})
             self.assertEqual(verifier.final_status(ctx), "FAIL")
@@ -180,19 +196,20 @@ class SuiteExecutionTests(unittest.TestCase):
             capabilities = {name: (name, ((name, "test_ok"),)) for name in specs}
             outcomes = [
                 suites.SuiteResult(
-                    "first", 0, 0.1, frozenset({"test_ok"}), frozenset(), ()
+                    "first", 0, 0.1, frozenset({"fixture.Case.test_ok"}), frozenset(), (), inventory=frozenset({"fixture.Case.test_ok"})
                 ),
-                suites.SuiteResult("second", 130, 0.2, frozenset(), frozenset(), ()),
+                suites.SuiteResult("second", 130, 0.2, frozenset(), frozenset(), (), inventory=frozenset({"fixture.Case.test_ok"})),
+                suites.SuiteResult("third", 126, 0, frozenset(), frozenset(), (), inventory=frozenset({"fixture.Case.test_ok"})),
             ]
             with (
                 mock.patch.object(suites, "suite_catalog", return_value=specs),
                 mock.patch.object(
                     suites, "capability_catalog", return_value=capabilities
                 ),
-                mock.patch.object(suites, "execute", side_effect=outcomes) as run,
+                mock.patch.object(suites, "execute_all", return_value=outcomes) as run,
             ):
                 verifier.check_capability_regressions(ctx)
-            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_count, 1)
             self.assertTrue(ctx.interrupted)
             results = {c.capability_id: c.status for c in ctx.checks if c.capability_id}
             self.assertEqual(
@@ -220,7 +237,7 @@ class SuiteExecutionTests(unittest.TestCase):
                         name: (name, (("probe", "test_bad"),)) for name in ("a", "b")
                     },
                 ),
-                mock.patch.object(suites, "execute", return_value=outcome),
+                mock.patch.object(suites, "execute_all", return_value=[outcome]),
             ):
                 verifier.check_capability_regressions(ctx)
             failures = [c for c in ctx.checks if c.section == "Suite execution results"]
@@ -234,13 +251,12 @@ class SuiteExecutionTests(unittest.TestCase):
             )
             self.assertEqual(verifier.final_status(ctx), "FAIL")
 
-    def test_catalog_has_bounded_commands_and_measured_dispatch_budget(self):
+    def test_catalog_uses_observations_without_suite_expiry(self):
         catalog = suites.suite_catalog(Path(__file__).resolve().parents[2])
-        self.assertEqual(catalog["dispatch"].timeout, 600)
         for spec in catalog.values():
-            self.assertGreater(spec.timeout, 0)
-            self.assertLessEqual(spec.timeout, 900)
+            self.assertEqual(spec.observation_interval_seconds, 30)
             self.assertTrue(spec.command)
+            self.assertFalse(hasattr(spec, "timeout"))
 
     def test_in_progress_report_never_claims_pass(self):
         with tempfile.TemporaryDirectory() as temporary:

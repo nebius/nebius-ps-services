@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import socket
+import subprocess
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -68,6 +70,53 @@ def test_daemon_restart_cannot_recreate_a_separate_policy_routing_table(sample_c
     assert "  routing_table = 0\n" in runtime
     assert "  install_routes = no\n" in runtime
     assert "      install_routes_xfrmi = no\n" in runtime
+
+
+def test_managed_child_reqids_stay_outside_dynamic_allocator_range(sample_config):
+    original = sample_config["connections"][0]["tunnels"][0]
+    sample_config["connections"][0]["tunnels"] = [
+        {**original, "name": f"path-{index}"} for index in range(200)
+    ]
+    for disabled in (False, True):
+        if disabled:
+            sample_config["connections"][0]["tunnels"][7]["ha_role"] = "disable"
+        files = {}
+        StrongSwanRenderer().render_and_apply(sample_config, rendered_files=files)
+        policy = files[strongswan_renderer.SWANCTL_CONF]
+        runtime = files[strongswan_renderer.STRONGSWAN_CONF_DIR.parent / "nebius-vpngw.conf"]
+        fixed = [int(value) for value in re.findall(r"^\s+reqid = (\d+)$", policy, re.M)]
+        interfaces = [int(value) for value in re.findall(r"^\s+if_id_in = (\d+)$", policy, re.M)]
+        dynamic = re.search(r"^\s+reqid_base = (\d+)$", runtime, re.M)
+        assert fixed == interfaces and len(fixed) == len(set(fixed)) == 200 - disabled
+        assert dynamic and 0 < min(fixed) <= max(fixed) < int(dynamic[1])
+
+
+@pytest.mark.parametrize("failure", ["nonzero", "timeout", "unavailable"])
+def test_failed_daemon_restart_never_loads_policy_into_previous_allocator(
+    tmp_path, monkeypatch, sample_config, failure
+):
+    monkeypatch.setattr(strongswan_renderer, "STRONGSWAN_CONF_DIR", tmp_path / "charon")
+    monkeypatch.setattr(strongswan_renderer, "SWANCTL_CONF", tmp_path / "swanctl.conf")
+    monkeypatch.setattr(strongswan_renderer, "IPSEC_CONF", tmp_path / "ipsec.conf")
+    monkeypatch.setattr(strongswan_renderer, "NETPLAN_DIR", tmp_path / "netplan")
+    monkeypatch.setattr(strongswan_renderer, "_wait_for_vici_socket", lambda: True)
+    monkeypatch.setattr(strongswan_renderer.time, "sleep", lambda _: None)
+    calls = []
+
+    def command(argv, **kwargs):
+        calls.append(argv)
+        if argv == ["systemctl", "restart", "strongswan"]:
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired(argv, 20)
+            if failure == "unavailable":
+                raise OSError("service manager unavailable")
+            return SimpleNamespace(returncode=1, stdout="", stderr="failed")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(strongswan_renderer, "run", command)
+    with pytest.raises(RuntimeError, match="daemon restart"):
+        StrongSwanRenderer().render_and_apply(sample_config)
+    assert not any(argv[0] == "swanctl" for argv in calls)
 
 
 def test_vici_readiness_rejects_a_stale_unix_socket(tmp_path, monkeypatch) -> None:

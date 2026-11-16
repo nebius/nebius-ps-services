@@ -187,4 +187,14 @@ class Result:
     next_command: str | None = None
 
     def mapping(self) -> dict[str, Any]:
-        return {"schema": "nebius-vpngw.apply-result.v1", **asdict(self)}
+        # Persist plain values before the pair worker's strict metadata guard.
+        # JSON encoders accept str enums, but the journal deliberately does not.
+        return {
+            "schema": "nebius-vpngw.apply-result.v1",
+            **asdict(self),
+            "outcome": self.outcome.value,
+            "configuration": self.configuration.value,
+            "local_runtime": self.local_runtime.value,
+            "authority": self.authority.value,
+            "connectivity": self.connectivity.value,
+        }
