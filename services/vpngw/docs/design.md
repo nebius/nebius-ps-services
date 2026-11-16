@@ -11753,6 +11753,131 @@ GitHub deployment and registry behavior remain unverified.
 
 <!-- /FEATURE: FEAT-040 -->
 
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-041 reqs=REQ-041 status=ready delivery=implemented priority=P1 version=6 -->
+### FEAT-041: Private read-only support bundle and exact activation diagnostics
+
+#### Requirements Covered
+
+- REQ-041: Automated bounded troubleshooting evidence and precise HA failures.
+
+#### Context Evidence
+
+The CLI has read-only status and pinned SSH helpers. Artifact selection is separate
+from installed CLI metadata. Before this change, fenced activation used a compound boolean without a
+failed-predicate classifier, obscuring the original failure.
+
+#### Design Details
+
+A dedicated support_bundle package owns safe projection, a standard-library probe
+streamed over verified SSH, bounded orchestration and private archive publication.
+The CLI only binds public options. Parse diagnostic scope without resolving secret
+references or creating defaults. Use existing cloud credentials and host pins;
+missing prerequisites yield partial evidence. Probe stdout and errors cross a typed
+allowlist before persistence. Native status and independent file/service/network
+observations remain separately labelled. No product writer is invoked.
+
+Collect current HA and traffic counters twice at least two seconds apart. Include
+closed lifecycle/checkpoint fields, selected/pending wheel digests, service state,
+clock/resource facts, safe IPsec and BGP facts, and scoped cloud resource/operation
+observations. Parse recognized journal templates into typed events and count omitted
+messages. Keep structural-limit counts separate from intentional privacy omissions
+and mark truncated observations as source-limit even when useful fields remain.
+Retain cloud source timestamps and counts through operator-side projection.
+Default to twenty-four hours with a seven-day maximum explicit window.
+Use five-minute total, thirty-second probe, two-worker and two-MiB probe limits,
+sixty-four-MiB uncompressed and twenty-five-MiB ZIP limits. Reserve current facts
+from every member before log records; read journals newest-first and detect the
+event cap with one extra record. Trim oldest timestamped events across sources
+deterministically. Inspect bounded package-worker history, prioritize unfinished
+workers and mark overflow or incomplete inspection. Observe route-fix timer state and allowlisted OS identity/version. Manifest schema is
+nebius-vpngw/support-bundle-v1 and records source, timing, outcome and omissions.
+Atomic exclusive publication uses mode 0600. Exit codes are 0 complete, 1 partial,
+2 no bundle. No automatic upload. All source and archive names are product-owned.
+
+Share one activation evaluator between readiness acceptance and reason reporting.
+Preserve first/latest failure and owner-replacement semantics. Expected apply locks
+are context, not an initiating failure. Do not change recovery admission or fencing.
+
+#### Selected Option
+
+Deterministic Python using existing Typer, SSH and SDK dependencies plus standard
+library ZIP support. Ship diagnostics first in explicitly selected patch v0.6.6.
+
+#### Alternatives Considered
+
+Raw filesystem/log dumps with regex-only redaction were rejected because arbitrary
+messages and cloud user data can contain credentials. Gateway upgrades and automatic
+repair during collection were rejected because they disturb the incident evidence.
+
+#### Implementation Boundaries
+
+support_bundle owns projections/probes/archive; cli binds command and existing
+read-only discovery. HA diagnostics remain within the current verifier. No dependency
+or persisted deployment-schema changes and no live customer actions are included.
+
+#### Test-First Success Criteria
+
+- Injected secret values never reach archive members or console diagnostics.
+- Probe timeout/unavailability yields bounded partial evidence with no mutation.
+- Each activation failure reports its exact predicate without relaxing acceptance.
+
+#### Validation Plan
+
+Run focused collector and HA tests, Ruff/mypy and installed-wheel smoke, then the
+existing required service/shared exact-commit release qualification.
+
+#### Test Plan
+
+Cover old/broken agent imports, absent prerequisites, corrupt and concurrent state,
+network failures, invalid windows, size/time caps, archive collisions and symlinks,
+privacy across every source and exception, fence readiness and owner replacement.
+
+#### Evaluation Plan
+
+Report local verification separately from installed and published artifact proof.
+A bundle is evidence for diagnosis, never an authorization or readiness receipt.
+
+#### Rollout And Rollback
+
+Publish v0.6.6 through protected PR/merge and tag qualification. Run collection from
+an isolated pipx environment so the previous operator CLI and exact wheel remain
+available. Do not invoke apply until support reviews the bundle. Stop using the new
+collector if it fails; no gateway rollback is required for read-only collection.
+
+#### Done Definition
+
+Accepted collector and diagnostic contracts pass privacy, boundedness, regression
+and installed smoke tests; required release qualification and asset checks pass.
+
+#### Implementation Evidence
+
+Implemented support_bundle projection, bounded cloud/SSH workers, read-only Linux
+probes and atomic ZIP publication. CLI collect-logs and shared activation failure
+evaluation are wired; readable probe sources are packaged in wheels and binaries.
+README, CLI help, recovery guidance and release notes describe the safe collection
+contract and explicitly selected v0.6.6 patch exception.
+
+#### Verification Evidence
+
+Alignment verification passed 504 focused unit tests and four release-build checks,
+including installed-wheel and frozen-binary smoke. Ruff, mypy (222 source files),
+Markdown lint and canonical-pair validation passed. Read-only review covered the
+final fixes and cross-surface wiring; security review covered safe projections,
+SSH trust reuse, command arguments and private archive publication.
+Regression coverage includes exact activation predicates and route next hops,
+source metadata, structural/journal limits, current facts before logs, oldest-event
+trimming, timer/OS facts, unfinished-worker history priority/limits and secret
+exclusion. A subsequent focused code review reproduced and fixed three evidence
+gaps: missing latest apply failures and first/latest labels, filtered native
+interface counters, and omitted digest-keyed package-request states. Four new
+regression cases failed before the fixes and passed afterward. All 59 collector
+and packaging checks then passed, including installed-wheel and frozen-binary
+checks, with Ruff and five-source support-package mypy validation. Required
+release qualification and published-asset verification remain separate gates. No live customer HA recovery
+or production qualification is claimed.
+<!-- /FEATURE: FEAT-041 -->
+
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->
 

@@ -11,10 +11,42 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Retain separately labelled first/latest apply failures, paired interface
+  traffic/error/drop counters and exact package-request states in support bundles.
+- Preserve exact activation predicates, cloud route next hops, source timestamps
+  and omission counts in support bundles. Mark structural and journal limits,
+  prioritize every gateway's current facts, and retain newest journal evidence
+  during bounded collection and archive trimming.
+- Prioritize unfinished package workers over terminal history and report bounded
+  worker-history coverage instead of silently omitting older active operations.
+- Include route-fix timer state and operating-system versions in support evidence.
+
+## [nebius-vpngw-v0.6.6] - 2026-11-16
+
+### Added
+
+- Add bounded `collect-logs` collection into a private ZIP with safe projections,
+  recognized log events, artifact provenance and per-source completeness evidence.
+  Existing gateways need no upgrade. Operational identifiers remain private;
+  credentials and raw configuration/log messages are excluded.
+- Include this diagnostic capability in the explicitly approved v0.6.6 patch
+  release exception to the usual minor-version policy for new capabilities.
+
 - Verify exact-commit CI qualification before release publication, retaining
   final tagged package and artifact checks while excluding unrelated CI/Pages.
 
 ### Fixed
+
+- Run the required build during explicit release qualification and keep optional
+  manual campaigns outside that mode; verify release lint through its required
+  exact-commit qualification evidence.
+- Identify the failed per-member HA activation predicate and retain the first
+  failure through later timeouts. Expected apply fencing is no longer presented
+  as the initiating activation failure; readiness and recovery checks remain.
+- Explain selected deployment wheel versus installed CLI identity in
+  `artifact-changed` recovery guidance and recommend evidence collection.
 
 - Let proven zero-SPI kernel acquisition placeholders expire after scoped trap
   and policy teardown. These placeholders no longer block tunnel restoration,

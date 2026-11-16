@@ -26,6 +26,7 @@ Nebius Security Groups attached to the gateway VMs. See [SSH access](#ssh-access
 - [System Monitoring](#system-monitoring)
 - [Security](#security)
 - [SSH access](#ssh-access)
+- [Collecting a private support bundle](#collecting-a-private-support-bundle)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
 - [Versioning](#versioning)
@@ -4910,6 +4911,65 @@ export TUNNEL_2_PSK="$(openssl rand -base64 32)"
 ssh ubuntu@<gateway-ip>
 sudo ausearch -f /etc/nebius-vpngw/
 ```
+
+## Collecting a private support bundle
+
+Run this on the operator workstation using the same configuration and existing
+Nebius/SSH access as the deployment:
+
+```bash
+nebius-vpngw collect-logs --local-config-file nebius-vpngw.config.yaml
+```
+
+The command writes one private ZIP in the current directory. Attach it manually
+only to a private support ticket. It retains operational identifiers, including
+IP addresses, gateway names and resource IDs. It excludes credentials, private
+keys, raw configuration, cloud-init user data, environment dumps, packet captures
+and arbitrary log messages. Recognized log events are exported as safe event
+codes and typed fields; unknown fields and messages are omitted and counted.
+
+Collection observes the workstation's selected wheel and pending deployment
+records, separately labelled first/latest apply failures, package-request states,
+both HA members, mTLS/heartbeat/fencing state, services and route-fix
+timers, OS/kernel versions, host resources and paired interface counters,
+IPsec/BGP/network state and relevant cloud resources. It does not run apply,
+install gateway software, change trust, restart services or remove locks. Existing
+0.6.5 gateways can be inspected without upgrading them. An independent probe still
+collects host evidence when the installed agent cannot import or run.
+
+Options:
+
+- `--project-id ID` and `--region REGION`: override diagnostic selectors.
+- `--output FILE.zip`: choose a new filename; existing files are never overwritten.
+- `--since RFC3339`: choose a timezone-qualified start within the previous seven
+  days; the default is the previous 24 hours across available journal boots.
+- The root `--ssh-identity PATH` option selects an existing operator identity.
+
+Collection is bounded to five minutes and two simultaneous gateway workers, with
+30-second command budgets, 2 MiB per probe, 64 MiB uncompressed and a 25 MiB ZIP.
+Missing permissions, unreachable members, timeouts and truncation remain visible
+in `manifest.json`. Privacy omissions and structural truncation have separate
+counts. Current facts from every member take priority over journal history;
+journals are read newest-first and archive trimming removes older events first.
+Exit `0` means complete, `1` means a usable partial ZIP, and
+`2` means no valid ZIP. Missing historical logs cannot be reconstructed. Review
+`README.txt` and the manifest before attaching the bundle.
+
+To retain an older CLI needed for an unfinished operation, run the diagnostic
+release in an isolated environment after verifying its published wheel:
+
+```bash
+pipx run --python /usr/bin/python3.12 --spec /path/to/nebius_vpngw-X.Y.Z-py3-none-any.whl \
+  nebius-vpngw collect-logs --local-config-file nebius-vpngw.config.yaml
+```
+
+`artifact-changed` compares the selected deployment wheel's SHA-256 with the
+unfinished operation's pin. The installed CLI version alone does not prove a
+match: HA selects `VPNGW_AGENT_WHEEL` or the existing local wheel. Preserve
+lifecycle records and collect evidence before changing artifacts or retrying
+recovery. The zero-byte local `.write.lock` file is not proof that a writer holds
+its OS lock. A gateway apply lock is a persistent forwarding fence; activation
+verification deliberately requires it until the pair proves readiness.
 
 ## Troubleshooting
 

@@ -252,6 +252,9 @@ _COMMAND_EXAMPLES: t.Mapping[tuple[str, ...], tuple[str, ...]] = MappingProxyTyp
             "nebius-vpngw apply -c gateway.vm-ha.config.yaml --standby-auto-healing disabled",
         ),
         ("status",): ("nebius-vpngw status --local-config-file nebius-vpngw.config.yaml",),
+        ("collect-logs",): (
+            "nebius-vpngw collect-logs --local-config-file nebius-vpngw.config.yaml",
+        ),
         **PAIR_EXAMPLES,
         ("access",): (
             "nebius-vpngw access add-operator alice --generate-ssh-key -c gateway.config.yaml",
@@ -4393,6 +4396,40 @@ def _vm_ha_fenced_owner_incomplete(payload: dict, *, owner: str, operation: str)
     )
 
 
+def _vm_ha_activation_failure(
+    payload: dict[str, t.Any],
+    *,
+    transaction: _VMHAMTLSApplyTransaction,
+    owner: bool,
+    current_owner_node_id: str,
+    operation_id: str,
+) -> str | None:
+    """One evaluator owns both activation acceptance and its first failed predicate."""
+    if payload.get("data_plane_mode") != ("active" if owner else "passive"):
+        return "data-plane-mode-mismatch"
+    if "independent-heartbeat-v6" not in payload.get("controller_capabilities", []):
+        return "heartbeat-capability-missing"
+    heartbeat = payload.get("heartbeat")
+    if not isinstance(heartbeat, dict) or heartbeat.get("schema_version") != 6:
+        return "heartbeat-schema-mismatch"
+    if heartbeat.get("peer_v6_fresh") is not True:
+        return "peer-heartbeat-not-fresh"
+    if payload.get("promotion_ready") is not owner:
+        return "promotion-readiness-mismatch"
+    if owner:
+        if payload.get("observed_owner_node_id") != current_owner_node_id:
+            return "owner-identity-mismatch"
+        if payload.get("transfer_inhibition_operation_id") != operation_id:
+            return "transfer-inhibition-operation-mismatch"
+        if payload.get("transfer_inhibition_quiescent") is not True:
+            return "transfer-inhibition-not-quiescent"
+    if not _vm_ha_mtls_agent_evidence_matches(
+        transaction, str(payload.get("node_id") or ""), payload
+    ):
+        return "managed-mtls-evidence-mismatch"
+    return None
+
+
 def _wait_for_vm_ha_agent_status(
     *,
     predicate: t.Callable[[dict[str, t.Any]], bool],
@@ -4434,6 +4471,11 @@ def _wait_for_vm_ha_agent_status(
                     reason
                     for reason in payload.get("reasons", ())
                     if reason in _VM_HA_SAFE_REASON_CODES
+                    and not (
+                        reason == "apply-lock-held"
+                        and fetch_kwargs.get("expected_apply_locked") is True
+                        and phase.startswith("verify-fenced-node-")
+                    )
                 )[:16],
             )
             first = first or latest
@@ -12218,34 +12260,30 @@ def _activate_bound_vm_ha(
                         and node_id == current_owner_node_id
                     )
 
-                    def activated_status(
+                    activation_failure = functools.partial(
+                        _vm_ha_activation_failure,
+                        transaction=mtls_transaction,
+                        owner=owner_replacement_entry,
+                        current_owner_node_id=current_owner_node_id,
+                        operation_id=operation_id,
+                    )
+
+                    def activation_ready(
                         payload: dict[str, t.Any],
-                        *,
-                        owner: bool = owner_replacement_entry,
+                        check: t.Callable[[dict[str, t.Any]], str | None] = activation_failure,
                     ) -> bool:
-                        return bool(
-                            payload.get("data_plane_mode") == ("active" if owner else "passive")
-                            and "independent-heartbeat-v6"
-                            in payload.get("controller_capabilities", [])
-                            and isinstance(payload.get("heartbeat"), dict)
-                            and payload["heartbeat"].get("schema_version") == 6
-                            and payload["heartbeat"].get("peer_v6_fresh") is True
-                            and payload.get("promotion_ready") is owner
-                            and (
-                                not owner
-                                or payload.get("observed_owner_node_id") == current_owner_node_id
-                                and payload.get("transfer_inhibition_operation_id") == operation_id
-                                and payload.get("transfer_inhibition_quiescent") is True
-                            )
-                            and _vm_ha_mtls_agent_evidence_matches(
-                                mtls_transaction,
-                                str(payload.get("node_id") or ""),
-                                payload,
-                            )
-                        )
+                        return check(payload) is None
+
+                    def failed_activation_predicate(
+                        payload: dict[str, t.Any],
+                        check: t.Callable[[dict[str, t.Any]], str | None] = activation_failure,
+                    ) -> str:
+                        return check(payload) or "required-state-not-observed"
 
                     activated_agent_statuses[node_id] = _wait_for_vm_ha_agent_status(
-                        predicate=activated_status,
+                        predicate=activation_ready,
+                        phase=f"verify-fenced-node-{inst_cfg.instance_index}",
+                        failed_predicate=failed_activation_predicate,
                         target=target,
                         hostname=inst_cfg.hostname,
                         username=username,
@@ -16293,6 +16331,43 @@ def _render_packet_health(
             "correlation; equality is not required. Late means outside the replay window. "
             "Integrity failures do not identify an attacker."
         )
+
+
+@app.command(epilog=_command_help_epilog("collect-logs"))
+def collect_logs(
+    local_config_file: Path = typer.Option(
+        ..., "--local-config-file", "-c", exists=True, readable=True
+    ),
+    project_id: str | None = typer.Option(None, help="Nebius project identifier"),
+    region: str | None = typer.Option(None, help=_NEBIUS_REGION_HELP),
+    output: Path | None = typer.Option(
+        None, help="New private ZIP path; never overwrite an existing file"
+    ),
+    since: str | None = typer.Option(
+        None, help="RFC3339 start within seven days; default: previous 24 hours"
+    ),
+):
+    """Collect private, read-only support evidence without applying gateway changes."""
+    from .support_bundle.collector import collect
+
+    try:
+        path, code = collect(
+            local_config_file, project_id=project_id, region=region, output=output, since=since
+        )
+    except (OSError, ValueError, RuntimeError, yaml.YAMLError):
+        print(
+            "[red]No support bundle created. Check configuration, time window and a new writable .zip output path.[/red]"
+        )
+        raise typer.Exit(2) from None
+    print(
+        "[yellow]Partial support bundle; inspect manifest.json.[/yellow]"
+        if code
+        else "[green]Support bundle collected.[/green]"
+    )
+    # Avoid Rich markup interpretation of an operator-selected filename.
+    typer.echo(str(path))
+    print("Contains operational identifiers. Attach only to a private support ticket.")
+    raise typer.Exit(code)
 
 
 @app.command(epilog=_command_help_epilog("status"))
@@ -25882,6 +25957,13 @@ def add_operator(
 
 
 def main():  # console script entry point
+    if sys.argv[1:] == ["--support-bundle-worker"]:
+        # Private read-only subprocess entry for the frozen executable; not a
+        # deployment command or a public alias. Input/output are bounded by owner.
+        from .support_bundle.worker import main as collect_worker
+
+        collect_worker()
+        return
     try:
         app()
     except Exception:

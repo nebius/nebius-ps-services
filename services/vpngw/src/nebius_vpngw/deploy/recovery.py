@@ -785,8 +785,8 @@ CAUSES = {
         "Previous writers and submitted operations must be settled before reconstruction.",
     ),
     "artifact-changed": (
-        "The selected package differs from the interrupted deployment's package.",
-        "Resume with the original artifact or review a successor after settlement.",
+        "The selected deployment wheel's SHA-256 differs from the interrupted operation's pinned artifact; CLI version alone does not establish a match.",
+        "Collect a support bundle with collect-logs before recovery; resume with the verified original artifact or review a successor after settlement.",
         "Settle the original package worker and select a valid repair artifact.",
     ),
     "checkpoint-binding-changed": (

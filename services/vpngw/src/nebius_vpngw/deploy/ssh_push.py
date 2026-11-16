@@ -1006,22 +1006,11 @@ class SSHPush:
             timeout=timeout,
         )
 
-    def resolve_vm_ha_agent_artifact(self) -> VMHAAgentArtifact:
-        """Resolve one existing wheel without building, deleting, or falling back."""
-
+    def select_vm_ha_agent_wheel(self) -> tuple[Path, str]:
+        """Select the exact existing artifact path without opening wheel contents."""
         wheel_override = os.environ.get("VPNGW_AGENT_WHEEL")
         if wheel_override:
-            try:
-                return VMHAAgentArtifact.from_wheel(
-                    Path(wheel_override),
-                    source="VPNGW_AGENT_WHEEL",
-                )
-            except OSError as error:
-                raise VMHAAgentArtifactError(
-                    VMHAAgentArtifactProblem.MISSING,
-                    "configured VM-HA agent artifact is unavailable",
-                ) from error
-
+            return Path(wheel_override), "VPNGW_AGENT_WHEEL"
         project_root = self._find_project_root()
         search_dirs = (
             (project_root / "dist",)
@@ -1044,10 +1033,25 @@ class SSHPush:
                 VMHAAgentArtifactProblem.AMBIGUOUS,
                 "VM-HA planning found multiple agent wheels; set VPNGW_AGENT_WHEEL exactly",
             )
+        return candidates[0], "local-prebuilt-wheel"
+
+    def resolve_vm_ha_agent_artifact(self) -> VMHAAgentArtifact:
+        """Resolve one existing wheel without building, deleting, or falling back."""
+        path, source = self.select_vm_ha_agent_wheel()
         try:
-            return VMHAAgentArtifact.from_wheel(candidates[0], source="local-prebuilt-wheel")
+            return VMHAAgentArtifact.from_wheel(path, source=source)
+        except OSError as error:
+            if source != "VPNGW_AGENT_WHEEL":
+                raise
+            raise VMHAAgentArtifactError(
+                VMHAAgentArtifactProblem.MISSING,
+                "configured VM-HA agent artifact is unavailable",
+            ) from error
         except VMHAAgentArtifactError as error:
-            if error.problem is not VMHAAgentArtifactProblem.MISSING:
+            if (
+                source == "VPNGW_AGENT_WHEEL"
+                or error.problem is not VMHAAgentArtifactProblem.MISSING
+            ):
                 raise
             raise VMHAAgentArtifactError(
                 VMHAAgentArtifactProblem.CHANGED,
@@ -1831,12 +1835,18 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
             from .. import ha_repair
 
             if predecessor_record_sha256 is not None:
-                if predecessor_operation_id is not None or re.fullmatch(r"[a-f0-9]{64}", predecessor_record_sha256) is None:
+                if (
+                    predecessor_operation_id is not None
+                    or re.fullmatch(r"[a-f0-9]{64}", predecessor_record_sha256) is None
+                ):
                     raise ValueError("VM-HA owner adoption exact predecessor is invalid")
                 previous_digest = predecessor_record_sha256
             else:
                 assert predecessor_operation_id is not None
-                if re.fullmatch(r"[a-f0-9]{64}", predecessor_operation_id) is None or predecessor_operation_id == lock_receipt.operation_id:
+                if (
+                    re.fullmatch(r"[a-f0-9]{64}", predecessor_operation_id) is None
+                    or predecessor_operation_id == lock_receipt.operation_id
+                ):
                     raise ValueError("VM-HA owner adoption predecessor is invalid")
                 previous = json.loads(encoded)
                 previous["operation_id"] = predecessor_operation_id
@@ -3095,7 +3105,12 @@ printf "VM_HA_MUTATION_SERVICES_STOPPED=1\\n"
         )
 
     def inspect_vm_ha_predecessor(
-        self, ssh_target: str, instance_name: str, local_cfg: dict, *, generation_id: str | None = None
+        self,
+        ssh_target: str,
+        instance_name: str,
+        local_cfg: dict,
+        *,
+        generation_id: str | None = None,
     ) -> dict:
         """Observe the old locked generation without trusting the new configuration."""
         from .checkpoint_conversion import source as checkpoint_source
@@ -3105,9 +3120,14 @@ printf "VM_HA_MUTATION_SERVICES_STOPPED=1\\n"
         if generation_id is not None:
             if re.fullmatch(r"[a-f0-9]{64}", generation_id) is None:
                 raise ValueError("HA predecessor generation is invalid")
-            script = script.replace("generation_id = original_lock['generation_id']", "generation_id = " + repr(generation_id))
+            script = script.replace(
+                "generation_id = original_lock['generation_id']",
+                "generation_id = " + repr(generation_id),
+            )
         return self._inspect_vm_ha_host(
-            ssh_target, instance_name, local_cfg,
+            ssh_target,
+            instance_name,
+            local_cfg,
             script=checkpoint_source() + script,
         )
 

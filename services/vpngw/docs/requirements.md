@@ -4427,5 +4427,65 @@ separate local checks from deployed qualification without claiming unrun tests.
 
 <!-- /REQUIREMENT: REQ-040 -->
 
+<!-- REQUIREMENT: REQ-041 status=active priority=P1 type=feature -->
+### REQ-041: Collect bounded private support evidence without deployment effects
+
+#### User Story
+
+Operators need one automated diagnostic ZIP for a private support ticket, including
+an interrupted HA deployment, without upgrading gateways or disturbing recovery.
+
+#### Acceptance Criteria
+
+- Add collect-logs with required local config and optional project, region, output
+  ZIP and RFC3339 since selectors. Support ordinary and HA groups, existing 0.6.5
+  nodes and damaged agent installations through a standalone read-only probe.
+- Collect workstation artifact provenance and lifecycle checkpoints; per-member
+  HA, heartbeat, mTLS, fence, service, host, network, IPsec and BGP evidence;
+  scoped cloud ownership, allocation, routes, security groups and operation state;
+  and recognized diagnostic journal events. Distinguish unavailable, partial,
+  changed and not-applicable evidence from healthy observations.
+- Retain operational identifiers for private support. Export only allowlisted
+  typed fields and recognized log events; exclude credentials, keys, certificate
+  bodies, raw config, user data, arbitrary messages, environment, command lines,
+  packet captures and XFRM cryptographic material. Report omissions and scan the
+  final safe export. Never write raw source material into staging files.
+- Bound collection to five minutes, two member workers, thirty seconds per probe,
+  two MiB per probe, sixty-four MiB uncompressed and twenty-five MiB compressed.
+  Default journals to twenty-four hours; explicit since is at most seven days.
+  Preserve current state before oldest-log trimming. Capture paired observations.
+- Publish a private non-overwriting atomic ZIP, summary and versioned manifest.
+  Exit zero means complete, one a valid partial bundle and two no valid bundle.
+  Never upload automatically or mutate deployment state, trust or cloud resources.
+- HA activation reports the exact failed readiness predicate and member, preserving
+  first versus latest failure and distinguishing expected apply fencing. Preserve
+  the existing predicate, ownership, timeout, lock and persisted-format contracts.
+- Explain artifact-changed through selected versus pending wheel digests; installed
+  CLI version alone is not the selected deployment artifact. No automatic recovery.
+
+#### Negative Criteria
+
+- No raw log/config/API dumps, automatic trust enrollment, remote installation,
+  secrets discovery, credential changes, writer locks, restarts or cloud mutations.
+- No claim that diagnostic delivery proves an unresolved customer HA cause fixed.
+
+#### Validation Method
+
+Run synthetic privacy and read-only invariants, bounded failure and installed-wheel
+smokes, existing HA regression tests and the required exact-commit release lanes.
+
+#### Test Method
+
+Exercise unreachable members, authentication failure, corrupt and changing state,
+old or broken agents, injected secrets, limits, output races, all activation
+predicates and owner-replacement behavior without live customer access.
+
+#### Evaluation Method
+
+Separate local, installed, CI and published artifact proof. Operational identifiers
+remain private support information. Declare partial evidence and unrun live recovery.
+
+<!-- /REQUIREMENT: REQ-041 -->
+
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->

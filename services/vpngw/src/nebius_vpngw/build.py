@@ -93,6 +93,8 @@ def build_binary() -> None:
         "agent/vm_ha/evidence.py",
         "agent/vm_ha/heartbeat.py",
         "agent/vm_ha/mtls.py",
+        "support_bundle/projection.py",
+        "support_bundle/probe.py",
     ):
         source = Path(__file__).parent / relative
         if not source.is_file():

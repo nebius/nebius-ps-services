@@ -432,7 +432,7 @@ jobs:
 
   build:
     needs: [merge-inputs, unit-tests]
-    if: (github.event_name != 'workflow_dispatch') || needs.merge-inputs.outputs.post_merge == 'true' || needs.merge-inputs.outputs.candidate == 'true'
+    if: (github.event_name != 'workflow_dispatch') || needs.merge-inputs.outputs.post_merge == 'true' || needs.merge-inputs.outputs.candidate == 'true' || needs.merge-inputs.outputs.qualification == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -494,7 +494,7 @@ jobs:
 
   integration-tests:
     needs: [merge-inputs, unit-tests]
-    if: github.event_name == 'workflow_dispatch' && needs.merge-inputs.outputs.post_merge != 'true'
+    if: github.event_name == 'workflow_dispatch' && needs.merge-inputs.outputs.post_merge != 'true' && needs.merge-inputs.outputs.qualification != 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -550,7 +550,7 @@ jobs:
 
   coverage:
     needs: [merge-inputs, unit-tests]
-    if: github.event_name == 'workflow_dispatch' && needs.merge-inputs.outputs.post_merge != 'true'
+    if: github.event_name == 'workflow_dispatch' && needs.merge-inputs.outputs.post_merge != 'true' && needs.merge-inputs.outputs.qualification != 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -611,7 +611,7 @@ jobs:
 
   packaging:
     needs: [merge-inputs, ordinary-job-settlement, historical-package-upgrades, integration-tests, coverage]
-    if: github.event_name == 'workflow_dispatch' && needs.merge-inputs.outputs.post_merge != 'true'
+    if: github.event_name == 'workflow_dispatch' && needs.merge-inputs.outputs.post_merge != 'true' && needs.merge-inputs.outputs.qualification != 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
