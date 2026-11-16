@@ -1,0 +1,73 @@
+{
+  "skill_name": "ai-stack",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "A frozen design requires one bounded agent to choose diagnostic read tools from observations. We need two approved model providers and application-owned state. Select a minimal general agent stack; no framework is fixed.",
+      "expected_output": "Prefer OpenAI Agents SDK while qualifying each provider route and retaining application controls.",
+      "files": [],
+      "assertions": [
+        "Selects OpenAI Agents SDK as the preferred general kernel without requiring OpenAI models.",
+        "Keeps one bounded agent and avoids mandatory gateway, vector store or workflow engine.",
+        "Qualifies tool, structured-output, stream and data-policy support for each exact route.",
+        "Distinguishes documented SDK support from measured target readiness."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Our approved architecture explicitly fixes Pydantic AI for a bounded agent. Review its model-access, tools and durable-state boundaries; do not migrate frameworks.",
+      "expected_output": "Honor the explicit Pydantic AI decision and review only undecided boundaries.",
+      "files": [],
+      "assertions": [
+        "Preserves the explicitly fixed Pydantic AI framework.",
+        "Does not wrap OpenAI Agents SDK inside Pydantic AI or recommend an unsolicited migration.",
+        "Retains application-owned authorization, state, budgets and provider qualification."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Select a stack for one structured extraction model call followed by validation and saving. Code decides every transition. The existing provider task API supplies the required schema.",
+      "expected_output": "Use a direct call with deterministic processing and no agent kernel.",
+      "files": [],
+      "assertions": [
+        "Classifies the model operation as direct-call behavior and continuation as code-owned.",
+        "Does not introduce Agents SDK, Pydantic AI Agent, multi-agent topology or a graph merely for consistency.",
+        "Keeps saving behind deterministic validation and effect authority."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "A frozen agent design requires strict schemas on a mandatory provider. Controlled tests prove that neither the preferred SDK built-in route nor its qualified adapters can deliver that capability. No alternate framework has been authorized. Give the stack decision.",
+      "expected_output": "Report the preferred-SDK gate as blocked and offer an explicit override decision.",
+      "files": [],
+      "assertions": [
+        "Does not claim compatibility or waive the schema requirement.",
+        "Does not silently select another general kernel.",
+        "Explains the evidence gap or failure, identifies a viable alternative for explicit override, and preserves the frozen behavior contract."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Review a proposed Agents SDK service: every tenant shares a mutable default client; it replays SDK history and provider conversation state together, trusts restored approvals, treats cancelled streams as stopped tools, and exports all traces by default.",
+      "expected_output": "Identify concrete authority, state, concurrency, cleanup and privacy defects.",
+      "files": [],
+      "assertions": [
+        "Scopes identity-bearing clients and route configuration per admitted run or tenant.",
+        "Selects one coherent history owner and revalidates approvals against current authority.",
+        "Separates stream termination from remote quiescence and retains unknown effects.",
+        "Sets approved trace export and retention before execution."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "An existing app uses direct calls. We now need a general agent that calls a coding specialist for repository analysis. Select the agent runtime and specialist boundary without requiring a hosted provider or new infrastructure.",
+      "expected_output": "Prefer Agents SDK for the general agent and a scoped Codex coding specialist when its harness is justified.",
+      "files": [],
+      "assertions": [
+        "Separates general-agent kernel from coding-harness selection.",
+        "Keeps specialist context, tools, authority and budget bounded.",
+        "Does not infer deep app-server integration or distributed infrastructure from a specialist requirement."
+      ]
+    }
+  ]
+}

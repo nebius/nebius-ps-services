@@ -925,6 +925,86 @@ def test_rearm_blocks_owner_or_alias_drift_without_start(tmp_path: Path) -> None
     assert cloud.starts == []
 
 
+@pytest.mark.parametrize("boundary", ["allocation", "owner", "target"])
+@pytest.mark.parametrize("stage", ["initial", "after-finalize", "after-start"])
+def test_rearm_preserves_authority_when_sdk_observation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, stage: str
+) -> None:
+    from grpc import StatusCode
+    from nebius.aio.service_error import RequestError
+
+    from nebius_vpngw.agent.vm_ha_rearm import SDKRearmCloudPort
+
+    runtime, cloud = _runtime(tmp_path, local_node_id="node-a")
+    path = tmp_path / REARM_CHECKPOINT_PATH.name
+    if stage == "after-finalize":
+        operation_id = _operation_id(NODE_A_RECEIPT_ID, "node-b", "20")
+        _write_checkpoint(
+            path,
+            RearmCheckpoint(
+                receipt_id=NODE_A_RECEIPT_ID,
+                target_node_id="node-b",
+                stopped_revision="20",
+                operation_id=operation_id,
+                phase="starting",
+                attempted_at=90.0,
+            ),
+        )
+        cloud.accepted = AcceptedCloudOperation(
+            action_operation_id=operation_id,
+            kind="start-instance",
+            cloud_operation_id="cloud-operation-a",
+        )
+    baseline = path.read_bytes() if path.exists() else None
+    port = SDKRearmCloudPort(object(), journal=t.cast(t.Any, SimpleNamespace()))
+    error = RequestError(
+        t.cast(t.Any, SimpleNamespace(code=StatusCode.NOT_FOUND, message="private-provider-detail"))
+    )
+
+    def failed_read(_: str) -> t.NoReturn:
+        raise error
+
+    monkeypatch.setattr(port.calls, "get_instance", failed_read)
+    monkeypatch.setattr(port.calls, "get_allocation", failed_read)
+    original_instance = cloud.observe_instance
+    original_allocation = cloud.observe_allocation
+    reads = 0
+
+    def should_fail() -> bool:
+        nonlocal reads
+        reads += 1
+        return reads == (1 if stage == "initial" else 2)
+
+    def instance(identifier: str) -> ComputeObservation:
+        selected = "compute-a" if boundary == "owner" else "compute-b"
+        if boundary != "allocation" and identifier == selected and should_fail():
+            return port.observe_instance(identifier)
+        return original_instance(identifier)
+
+    def allocation(identifier: str) -> AllocationObservation:
+        if boundary == "allocation" and should_fail():
+            return port.observe_allocation(identifier)
+        return original_allocation(identifier)
+
+    monkeypatch.setattr(cloud, "observe_instance", instance)
+    monkeypatch.setattr(cloud, "observe_allocation", allocation)
+    status = runtime.step()
+    assert status["phase"] == "blocked"
+    assert status["reason"] == "rearm-cloud-observation-unavailable"
+    assert "private-provider-detail" not in json.dumps(status)
+    assert len(cloud.starts) == (1 if stage == "after-start" else 0)
+    if stage == "after-start":
+        assert json.loads(path.read_text())["phase"] == "starting"
+    else:
+        assert (path.read_bytes() if path.exists() else None) == baseline
+    assert len(cloud.finalized) == (1 if stage == "after-finalize" else 0)
+    if stage == "after-finalize":
+        assert cloud.accepted is None
+    # A fresh observation completes the original authority without a duplicate Start.
+    assert runtime.step()["phase"] == "running"
+    assert len(cloud.starts) == (0 if stage == "after-finalize" else 1)
+
+
 def test_rearm_blocks_a_stale_receipt_from_an_earlier_ownership_epoch(
     tmp_path: Path,
 ) -> None:
@@ -939,6 +1019,109 @@ def test_rearm_blocks_a_stale_receipt_from_an_earlier_ownership_epoch(
     assert status["phase"] == "blocked"
     assert status["reason"] == "ownership-or-alias-drift"
     assert cloud.starts == []
+
+
+@pytest.mark.parametrize("method", ["instance", "allocation"])
+@pytest.mark.parametrize("kind", [TimeoutError, ConnectionError, PermissionError, ValueError])
+def test_rearm_sdk_read_errors_are_sanitized_at_the_read_boundary(
+    monkeypatch: pytest.MonkeyPatch, method: str, kind: type[Exception]
+) -> None:
+    from nebius_vpngw.agent.vm_ha_rearm import (
+        RearmCloudObservationUnavailable,
+        SDKRearmCloudPort,
+    )
+
+    port = SDKRearmCloudPort(object(), journal=t.cast(t.Any, SimpleNamespace()))
+    error = kind("private-provider-detail")
+
+    def fail(_: str) -> t.NoReturn:
+        raise error
+
+    monkeypatch.setattr(port.calls, "get_" + method, fail)
+    with pytest.raises(RearmCloudObservationUnavailable) as caught:
+        getattr(port, "observe_" + method)("exact-resource")
+    assert str(caught.value) == "rearm-cloud-observation-unavailable"
+    assert caught.value.__cause__ is error
+
+
+@pytest.mark.parametrize("method", ["instance", "allocation"])
+def test_rearm_sdk_observation_parsing_is_not_classified_as_a_failed_read(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    from nebius_vpngw.agent import vm_ha_rearm as rearm
+
+    port = rearm.SDKRearmCloudPort(object(), journal=t.cast(t.Any, SimpleNamespace()))
+    monkeypatch.setattr(port.calls, "get_" + method, lambda _: object())
+    error = ValueError("malformed-observation")
+
+    def fail(*_: object) -> t.NoReturn:
+        raise error
+
+    monkeypatch.setattr(
+        rearm, "compute_observation" if method == "instance" else "allocation_observation", fail
+    )
+    with pytest.raises(ValueError) as caught:
+        getattr(port, "observe_" + method)("exact-resource")
+    assert caught.value is error
+
+
+@pytest.mark.parametrize("method", ["instance", "allocation"])
+def test_rearm_sdk_read_does_not_swallow_process_interruption(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    from nebius_vpngw.agent.vm_ha_rearm import SDKRearmCloudPort
+
+    port = SDKRearmCloudPort(object(), journal=t.cast(t.Any, SimpleNamespace()))
+
+    def interrupt(_: str) -> t.NoReturn:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(port.calls, "get_" + method, interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        getattr(port, "observe_" + method)("exact-resource")
+
+
+def test_rearm_service_reobserves_after_failed_read_without_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from nebius_vpngw.agent import vm_ha_rearm as rearm
+    from nebius_vpngw.cli import _safe_vm_ha_reason
+
+    runtime, cloud = _runtime(
+        tmp_path, local_node_id="node-a", target_state=InstanceCloudState.RUNNING
+    )
+    original = cloud.observe_instance
+    reads = 0
+    sleeps = 0
+
+    def observe(identifier: str) -> ComputeObservation:
+        nonlocal reads
+        reads += 1
+        if reads == 1:
+            raise rearm.RearmCloudObservationUnavailable("private-provider-detail")
+        return original(identifier)
+
+    def sleep(_: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 2:
+            raise StopIteration
+
+    monkeypatch.setattr(cloud, "observe_instance", observe)
+    monkeypatch.setattr(rearm.time, "sleep", sleep)
+    with pytest.raises(StopIteration):
+        rearm.run_rearm_service(runtime)
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 2
+    assert '"reason":"rearm-cloud-observation-unavailable"' in lines[0]
+    assert '"phase":"running"' in lines[1]
+    assert "private-provider-detail" not in "\n".join(lines)
+    assert cloud.starts == []
+    assert (
+        _safe_vm_ha_reason("rearm-cloud-observation-unavailable")
+        == "rearm-cloud-observation-unavailable"
+    )
+    assert _safe_vm_ha_reason("private-provider-detail") == "controller-reported-condition"
 
 
 def test_rearm_apply_lock_inhibits_before_cloud_observation(tmp_path: Path) -> None:
@@ -1486,10 +1669,11 @@ def _reverse_generation_transfer(
         auto_healing_policy_digest=policy.decision_digest,
     )
     generation_store = AtomicGenerationStore(tmp_path / "generation-store")
-    generation_store.save_replay_state(
-        peer.node_id, ReplayState(heartbeat.boot_id, heartbeat.sequence, ())
+    generation_store.save_accepted_peer_heartbeat(
+        peer.node_id,
+        heartbeat,
+        replay_state=ReplayState(heartbeat.boot_id, heartbeat.sequence, ()),
     )
-    generation_store.save_accepted_peer_heartbeat(peer.node_id, heartbeat)
     PolicyAgreementStore(tmp_path).capture(policy=policy, heartbeat=heartbeat, captured_at=120.0)
     config = {
         "cluster_id": "cluster-a",
@@ -1860,3 +2044,174 @@ def test_reverse_generation_unusable_evidence_never_authorizes_start(
     _commit_generation_transfer(tmp_path, config)
     assert runtime.step()["phase"] == "inhibited"
     assert cloud.starts == []
+
+
+@pytest.mark.parametrize("local_node_id", ["node-a", "node-b"])
+def test_rearm_tracks_replaced_peer_without_restarting_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, local_node_id: str
+) -> None:
+    from nebius_vpngw.agent.vm_ha_rearm import RearmCloudObservationUnavailable
+
+    runtime, cloud = _runtime(
+        tmp_path, local_node_id=local_node_id, target_state=InstanceCloudState.RUNNING
+    )
+    peer = runtime.peer
+    # The production service remains running while managed mTLS publishes the
+    # replacement identity. No config reload or owner restart is part of this path.
+    runtime.peer_binding_provider = lambda: peer
+    assert runtime.step()["phase"] == "running"
+    old_compute_id = peer.compute_id
+    replacement = peer.model_copy(update={"compute_id": old_compute_id + "-replacement"})
+    cloud.instances[replacement.compute_id] = replace(
+        cloud.instances.pop(old_compute_id), instance_id=replacement.compute_id
+    )
+    original = cloud.observe_instance
+    reads: list[str] = []
+
+    def observe(instance_id: str) -> ComputeObservation:
+        reads.append(instance_id)
+        if instance_id == old_compute_id:
+            raise RearmCloudObservationUnavailable("rearm-cloud-observation-unavailable")
+        return original(instance_id)
+
+    monkeypatch.setattr(cloud, "observe_instance", observe)
+    peer = replacement
+    result = runtime.step()
+    assert result["phase"] == "running", result
+    assert old_compute_id not in reads
+    assert replacement.compute_id in reads
+    assert cloud.starts == []
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "unavailable",
+        "foreign-node",
+        "changed-interface",
+        "empty-compute",
+        "pending",
+        "malformed-journal",
+    ],
+)
+def test_rearm_replacement_peer_failure_does_not_observe_or_mutate_cloud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    runtime, cloud = _runtime(tmp_path, local_node_id="node-a")
+    original_peer = runtime.peer
+    checkpoint = tmp_path / REARM_CHECKPOINT_PATH.name
+
+    def provider():
+        if failure == "unavailable":
+            raise RuntimeError("sensitive diagnostic must not escape")
+        updates = {"compute_id": "compute-b-new"}
+        if failure == "foreign-node":
+            updates["node_id"] = "foreign"
+        if failure == "changed-interface":
+            updates["network_interface_name"] = "eth9"
+        if failure == "empty-compute":
+            updates["compute_id"] = ""
+        return original_peer.model_copy(update=updates)
+
+    runtime.peer_binding_provider = provider
+    if failure == "pending":
+        cloud.accepted = AcceptedCloudOperation(
+            action_operation_id="existing-start",
+            kind="start-instance",
+            cloud_operation_id="provider-operation",
+        )
+    if failure == "malformed-journal":
+        cloud.invalid_journal = True
+
+    def unexpected_read(*_args):
+        pytest.fail("invalid peer identity must stop before cloud observation")
+
+    monkeypatch.setattr(cloud, "observe_instance", unexpected_read)
+    monkeypatch.setattr(cloud, "observe_allocation", unexpected_read)
+    result = runtime.step()
+    assert result["phase"] == "blocked"
+    assert result["reason"] == (
+        "rearm-peer-change-operation-pending"
+        if failure == "pending"
+        else "rearm-peer-binding-unavailable"
+    )
+    assert runtime.peer == original_peer
+    assert cloud.starts == cloud.finalized == []
+    assert not checkpoint.exists()
+    assert "sensitive" not in json.dumps(result)
+
+
+def test_rearm_inhibition_precedes_live_peer_refresh(tmp_path: Path) -> None:
+    runtime, cloud = _runtime(tmp_path, local_node_id="node-a")
+    (tmp_path / APPLY_LOCK_PATH.name).touch()
+
+    def unexpected_refresh():
+        pytest.fail("inhibited rearm must not refresh peer identity")
+
+    runtime.peer_binding_provider = unexpected_refresh
+    assert runtime.step()["reason"] == "apply-lock-held"
+    assert cloud.starts == []
+
+
+def test_default_rearm_reads_current_managed_peer_each_cycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nebius_vpngw.agent import vm_ha_rearm as rearm
+
+    binding = _binding()
+    local, peer = binding.nodes
+    cloud = FakeCloud(owner=local.compute_id, target_state=InstanceCloudState.RUNNING)
+    sdk = SimpleNamespace(client=object(), close=lambda: None)
+    selected = SimpleNamespace(node_id=peer.node_id, compute_id=peer.compute_id)
+    calls = []
+
+    def snapshot():
+        calls.append(selected.compute_id)
+        return SimpleNamespace(
+            cluster_id=binding.cluster_id,
+            node_id=local.node_id,
+            compute_id=local.compute_id,
+            current_peer=selected,
+            peers=(selected,),
+        )
+
+    monkeypatch.setattr(rearm, "_boot_id", lambda: "boot-a")
+    monkeypatch.setattr(rearm, "begin_runtime_identity_preflight", lambda **_kw: None)
+    monkeypatch.setattr(
+        rearm,
+        "_read_config",
+        lambda _path: {
+            "runtime_binding": binding.model_dump(),
+            "node": {"node_id": local.node_id},
+        },
+    )
+    monkeypatch.setattr(rearm, "runtime_identity_binding_is_explicit", lambda *_args: True)
+    monkeypatch.setattr(rearm, "validate_installed_credential_bundle", lambda *_args: object())
+    monkeypatch.setattr(rearm, "build_identity_bound_sdk", lambda **_kw: sdk)
+    monkeypatch.setattr(rearm, "SDKRearmCloudPort", lambda *_args, **_kw: cloud)
+    monkeypatch.setattr(
+        rearm,
+        "ManagedMTLSStore",
+        lambda *_args, **_kw: SimpleNamespace(
+            snapshot=snapshot,
+            inhibition_operation_id=lambda: None,
+        ),
+    )
+    active = rearm.build_default_rearm_runtime(state_dir=tmp_path)
+    active.runtime.enabled_path = tmp_path / "enabled"
+    active.runtime.enabled_path.touch()
+    active.runtime.auto_healing_inhibition_provider = lambda: None
+    _write_receipt(tmp_path / PROMOTION_RECEIPT_PATH.name, owner=local.node_id)
+    try:
+        assert active.step()["phase"] == "running"
+        replacement = selected.compute_id + "-new"
+        cloud.instances[replacement] = replace(
+            cloud.instances.pop(selected.compute_id), instance_id=replacement
+        )
+        selected = SimpleNamespace(node_id=peer.node_id, compute_id=replacement)
+        assert active.step()["phase"] == "running"
+        assert calls == [peer.compute_id, replacement]
+        assert active.runtime.peer.compute_id == replacement
+        assert cloud.starts == []
+    finally:
+        active.close()

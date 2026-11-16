@@ -43,6 +43,14 @@ public command menu but remains available to the verified coordinator.
 
 ## Purpose
 
+Read `../worktree/references/optional-uat.md` for the shared acceptance policy.
+No UAT by default; requested UAT runs at a meaningful ready objective/release
+scope (or explicitly selected coherent milestone). Missing optional prerequisites
+remain pending without blocking implementation or otherwise eligible PR/merge.
+Keep required development checks and correctness dependencies mandatory. Use
+container/Nebius testing skills only when explicitly requested; an existing
+environment uses its own project harness directly.
+
 Prepare one locked delivery slice for isolated TDD and bounded dependency-wave implementation.
 
 ## When To Use
@@ -73,13 +81,12 @@ Prepare one locked delivery slice for isolated TDD and bounded dependency-wave i
 
 ## Required Reads
 
-- `../worktree/references/document-delivery.md` for source coverage, phase/slice
-  identities, shared-skill caller contracts and protected completion policy.
-
-- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
-  assignment/ownership and evidence to the current immutable execution basis.
-  Before preparation, bind evidence to the accepted objective and applicable
-  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+- `../worktree/references/workflow-invariants.md` for shared ownership,
+  evidence, failure and conditional-read rules.
+- `../worktree/references/workflow-contract.md` for execution lifecycle operations.
+- Read `../worktree/references/document-delivery.md` when accepted inputs include
+  a source manifest/program, this phase handles SLICE/source coverage or phase
+  barriers, or it handles delivery admission, phase exit or protected completion.
 
 - Reload `current-state.json`, the latest checkpoint, and active feature state.
 - Read the locked plan and the state-schema reference owned by `sdlc-start`.
@@ -97,6 +104,10 @@ Prepare one locked delivery slice for isolated TDD and bounded dependency-wave i
 - State transition to `execution_prepared` and checkpoint evidence.
 
 ## Process
+
+Preparation requires a current coordinator steering receipt covering the exact
+locked plan and sidecars. `STEERING_PENDING` is pending `sdlc-auto-steering` work,
+not an execution failure or repair dispatch. Preserve the serial wave barrier.
 
 1. Require the accepted named source checkout or an exact completed workflow
    checkpoint. Only the selected canonical pair and, for document programs,
@@ -116,14 +127,15 @@ Prepare one locked delivery slice for isolated TDD and bounded dependency-wave i
    remote default or exact managed-local identity, parses stable `TASK-*`
    records, validates dependencies/claims/domains, builds logical waves and
    creates integration from the exact contract `HEAD`. Claims and worker cwd
-   remain inside the initialized folder. Managed SDLC intake acquires its v4
+   remain inside the initialized folder. Managed SDLC intake acquires its v5
    lease while clean, before canonical authoring; preparation verifies that
    existing lease, records the contract head, and reuses ownership. A dirty
    unleased child cannot acquire ownership. Register integration/worker resource
    intent before creation and retain each full task-definition digest.
 4. Re-observe branch, `HEAD`, Git common directory, worktree registration,
    cleanliness, plan digest, and private state before recording completion.
-5. Return the integration cwd and route the next phase to `sdlc-tdd` there.
+5. Return `integration_worktree / project_scope` as the authoring cwd and route
+   `sdlc-tdd` there. Keep the raw integration root for Git registration and identity.
 
 ## Idempotency
 
@@ -203,6 +215,9 @@ Follow the shared worker wave and acceptance contract in the required sibling
 Before preparation, freeze execution policy and the executable `<plan>.validation.json`
 sidecar covering every task and combined checks. No-change results require independent
 acceptance; all waves require a producer receipt before cleanup and dependency release.
+Also follow the sibling `worktree/references/task-acceptance.md` contract: freeze
+`<plan>.acceptance.json`, execute applicable checks before worker success, retain
+explicit deferred obligations, and preserve requested meaningful-scope UAT.
 
 ## Completion Criteria
 

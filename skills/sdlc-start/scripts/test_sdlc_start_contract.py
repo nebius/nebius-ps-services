@@ -14,7 +14,7 @@ class SdlcStartContractTests(unittest.TestCase):
     def test_public_interface_is_mirrored(self):
         for path in ('sdlc-start/SKILL.md', 'sdlc-start/README.md'):
             content = self.text(path)
-            for command in ('$sdlc-start', '$sdlc-start <objective>', '$sdlc-start continue [project-folder]'):
+            for command in ('$sdlc-start', '$sdlc-start <objective>', '$sdlc-start continue [project-folder]', '$sdlc-start status [project-folder]'):
                 self.assertIn(command, content)
             self.assertNotIn('$sdlc-start workspace init', content)
             self.assertNotIn('$sdlc-start run <', content)
@@ -24,11 +24,22 @@ class SdlcStartContractTests(unittest.TestCase):
         self.assertIn('disable-model-invocation: true', self.text('sdlc-start/SKILL.md'))
 
     def test_phase_consumers_read_shared_execution_contract(self):
+        owners = {'sdlc-start', 'sdlc-create-plan', 'sdlc-prepare-execution', 'sdlc-tdd',
+                  'sdlc-implement-plan', 'sdlc-classify-failure', 'sdlc-commit'}
         for folder in SKILLS.glob('sdlc-*'):
             if folder.name == 'sdlc-workflow-test':
                 continue
             content = self.text(str(folder.relative_to(SKILLS) / 'SKILL.md'))
+            self.assertIn('workflow-invariants.md', content, folder.name)
             self.assertIn('workflow-contract.md', content, folder.name)
+            self.assertIn('document-delivery.md', content, folder.name)
+            if folder.name in owners:
+                self.assertRegex(content, r'(?m)^- `\.\./worktree/references/workflow-contract\.md`')
+            if folder.name == 'sdlc-merge-pr':
+                self.assertIn('- `../worktree/references/document-delivery.md` and', content)
+            if folder.name not in {'sdlc-merge-pr', 'sdlc-uat-tests'}:
+                self.assertIn('source', content)
+                self.assertIn('phase', content)
 
     def test_no_capture_or_prompt_file_entry(self):
         self.assertFalse((SKILLS / 'prompt-session-intake').exists())
@@ -40,13 +51,15 @@ class SdlcStartContractTests(unittest.TestCase):
     def test_private_completion_helpers_do_not_expand_public_surface(self):
         content = self.text('sdlc-start/SKILL.md')
         lines = re.findall(r'(?m)^\$sdlc-start[^\n]*$', content)
-        self.assertEqual(lines, ['$sdlc-start', '$sdlc-start <objective>', '$sdlc-start continue [project-folder]', '$sdlc-start -h', '$sdlc-start --help'])
+        self.assertEqual(lines, ['$sdlc-start', '$sdlc-start <objective>', '$sdlc-start continue [project-folder]', '$sdlc-start status [project-folder]', '$sdlc-start -h', '$sdlc-start --help'])
 
     def test_post_uat_documents_preserve_promotion_boundary(self):
         for path in ('sdlc-start/SKILL.md', 'sdlc-update-documents/SKILL.md'):
             content = ' '.join(self.text(path).split())
             self.assertIn('post-promotion documentation assessment is read-only', content)
-            self.assertIn('corrective run from the exact promoted commit', content)
+            self.assertIn('fresh corrective execution before automatic release', content)
+            self.assertIn('fresh objective after terminal release', content)
+            self.assertIn('Preserve completed execution', content)
             self.assertIn('DOCUMENTATION_DRIFT', content)
 
     def test_raw_commit_authorization_does_not_gate_private_sealing(self):

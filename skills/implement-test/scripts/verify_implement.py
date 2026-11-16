@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -128,10 +128,19 @@ from agent_runtime import agent_home, installed_skills_dir  # noqa: E402
 TEST_SCRIPTS = (
     "implement/scripts/test_implement_contract.py",
     "worktree/scripts/test_workflow_objectives.py",
+    "worktree/scripts/test_workflow_projects.py",
+    "worktree/scripts/test_workflow_automatic.py",
     "worktree/scripts/test_workflow_contracts.py",
     "worktree/scripts/test_workflow_execution.py",
     "worktree/scripts/test_workflow_dispatch.py",
     "worktree/scripts/test_workflow_security.py",
+    "worktree/scripts/test_workflow_readiness.py",
+    "worktree/scripts/test_workflow_statistics.py",
+    "worktree/scripts/test_workflow_overhead.py",
+    "worktree/scripts/test_workflow_process.py",
+    "worktree/scripts/test_workflow_native_stream.py",
+    "worktree/scripts/test_workflow_verification.py",
+    "worktree/scripts/test_workflow_implement_statistics.py",
     "worktree/scripts/test-worktree-manager.py",
 )
 HARNESS_TEST_SCRIPTS = (
@@ -141,12 +150,15 @@ HARNESS_TEST_SCRIPTS = (
     "test_collect_live_evidence.py",
     "test_implement_lifecycle.py",
     "test_implement_reporting.py",
+    "test_implement_statistics.py",
+    "test_implement_browser.py",
+    "test_implement_catalog.py",
     "test_implement_semantics.py",
     "test_implement_test_contract.py",
     "test_verify_implement.py",
 )
 IGNORED_NAMES = {"__pycache__", ".install-source-id"}
-DEFAULT_SUITE_TIMEOUT_SECONDS = 900
+OBSERVATION_INTERVAL_SECONDS = 30
 
 
 def default_private_root() -> Path:
@@ -192,7 +204,8 @@ def contract(source: Path) -> tuple[str, str]:
     metadata = (source / "agents" / "openai.yaml").read_text(encoding="utf-8")
     required_commands = (
         "$implement", "$implement <implementation request>",
-        "$implement continue [project-folder]", "$implement -h", "$implement --help",
+        "$implement continue [project-folder]", "$implement status [project-folder]",
+        "$implement -h", "$implement --help",
     )
     frontmatter = re.match(r"\A---\n(?P<body>.*?)\n---\n", skill, re.DOTALL)
     if source.name != "implement" or frontmatter is None:
@@ -228,101 +241,56 @@ def contract(source: Path) -> tuple[str, str]:
     )
 
 
-def run_tests(source: Path, timeout: int) -> list[dict[str, str]]:
-    results: list[dict[str, str]] = []
-    env = os.environ.copy()
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    for name in TEST_SCRIPTS:
-        script = source.parent / name
-        if not script.is_file():
-            results.append(
-                {"name": name, "status": "FAIL", "detail": "test script is missing"}
-            )
-            continue
-        try:
-            completed = subprocess.run(
-                [sys.executable, str(script)],
-                cwd=source.parent,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            results.append({"name": name, "status": "FAIL", "detail": "test timed out"})
-            continue
-        detail = (
-            "test suite passed"
-            if completed.returncode == 0
-            else f"test suite exited {completed.returncode}"
-        )
-        results.append(
-            {
-                "name": name,
-                "status": "PASS" if completed.returncode == 0 else "FAIL",
-                "detail": detail,
-            }
-        )
-    return results
+def scheduler():
+    path = Path(__file__).resolve().parents[2] / "worktree/scripts/workflow_verification.py"
+    previous = sys.modules.get("workflow_verification")
+    if previous is not None:
+        if Path(getattr(previous, "__file__", "")).resolve() != path.resolve():
+            raise ImportError("conflicting verification scheduler")
+        return previous
+    spec = importlib.util.spec_from_file_location("workflow_verification", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
-def run_harness_tests(harness: Path, timeout: int) -> dict[str, str]:
-    scripts = harness / "scripts"
-    missing = [name for name in HARNESS_TEST_SCRIPTS if not (scripts / name).is_file()]
+def run_profile(source, harness=None, observation_interval_seconds=OBSERVATION_INTERVAL_SECONDS, *, on_result=None):
+    owner = scheduler()
+    commands = [(name, [sys.executable, str(source.parent / name)], source.parent) for name in TEST_SCRIPTS]
+    missing = [name for name in TEST_SCRIPTS if not (source.parent / name).is_file()]
+    if harness is not None:
+        scripts = harness / "scripts"
+        missing += [name for name in HARNESS_TEST_SCRIPTS if not (scripts / name).is_file()]
+        commands.append(("implement-test helper suites", [sys.executable, "-m", "unittest", "discover",
+                         "-s", str(scripts), "-p", "test_*.py"], harness.parent))
     if missing:
-        return {
-            "name": "implement-test helper suites",
-            "status": "FAIL",
-            "detail": "required helper test script is missing",
-        }
-    env = os.environ.copy()
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    try:
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "unittest",
-                "discover",
-                "-s",
-                str(scripts),
-                "-p",
-                "test_*.py",
-            ],
-            cwd=harness.parent,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return {
-            "name": "implement-test helper suites",
-            "status": "FAIL",
-            "detail": "helper test suite timed out",
-        }
-    return {
-        "name": "implement-test helper suites",
-        "status": "PASS" if completed.returncode == 0 else "FAIL",
-        "detail": (
-            "helper test suite passed"
-            if completed.returncode == 0
-            else f"helper test suite exited {completed.returncode}"
-        ),
-    }
+        return [{"name": "test inventory", "status": "FAIL", "detail": "required test script is missing"}], []
+    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHON_COLORS": "0"}
+    groups = owner.groups_for_commands(commands, source.parent)
+    rows = owner.schedule(groups, environment, on_result=on_result, observation_interval_seconds=observation_interval_seconds,
+                          on_checkpoint=lambda row: print(json.dumps({"verification_progress": row}), flush=True))
+    checks = []
+    for name, _, _ in commands:
+        selected = [row for row in rows if row["suite"] == name]
+        states = {row["status"] for row in selected}
+        status = "PASS" if states == {"PASS"} else "NOT_RUN" if states == {"NOT_RUN"} else "FAIL"
+        checks.append({"name": name, "status": status,
+                       "detail": ", ".join(sorted(states)) + "; " + str(sum(len(row["outcomes"]) for row in selected)) + " exact test outcomes"})
+    return checks, rows
 
 
 def verify(
     source: Path,
     installed: Path,
-    timeout: int,
+    observation_interval_seconds: int = OBSERVATION_INTERVAL_SECONDS,
     harness: Path | None = None,
     dependency_source: Path | None = None,
     dependency_installed: Path | None = None,
+    *, on_result=None,
 ) -> dict[str, Any]:
     checks: list[dict[str, str]] = []
+    groups = []
     if not source.is_dir():
         checks.append(
             {
@@ -345,15 +313,22 @@ def verify(
                     "detail": detail,
                 }
             )
-        checks.extend(run_tests(source, timeout))
-        if harness is not None:
-            checks.append(run_harness_tests(harness, timeout))
+        if not any(check["status"] == "FAIL" for check in checks):
+            executed, groups = run_profile(source, harness, observation_interval_seconds, on_result=on_result)
+            checks.extend(executed)
+        else:
+            groups = []
+            checks.extend({"name": name, "status": "NOT_RUN", "detail": "prerequisite failure stopped admission"}
+                          for name in TEST_SCRIPTS)
+            if harness is not None:
+                checks.append({"name": "implement-test helper suites", "status": "NOT_RUN", "detail": "prerequisite failure stopped admission"})
     deterministic = (
         "FAIL" if any(item["status"] == "FAIL" for item in checks) else "PASS"
     )
-    if deterministic == "PASS" and any(item["status"] == "PARTIAL" for item in checks):
+    if deterministic == "PASS" and any(item["status"] in {"PARTIAL", "NOT_RUN"} for item in checks):
         deterministic = "PARTIAL"
     return {
+        "test_groups": groups,
         "mode": "lightweight",
         "overall": "FAIL" if deterministic == "FAIL" else "PARTIAL",
         "deterministic": deterministic,
@@ -406,23 +381,49 @@ def main() -> int:
     parser.add_argument(
         "--report", type=Path, default=default_private_root() / "report.md"
     )
-    parser.add_argument("--timeout", type=int, default=DEFAULT_SUITE_TIMEOUT_SECONDS)
+    parser.add_argument("--observation-interval", type=int, default=OBSERVATION_INTERVAL_SECONDS)
     args = parser.parse_args()
-    if args.timeout <= 0:
-        parser.error("--timeout must be positive")
-    summary = verify(
-        args.source_root.resolve(),
-        args.installed_root.expanduser().resolve(),
-        args.timeout,
-        skill_root,
-        args.worktree_source_root.resolve(),
-        args.worktree_installed_root.expanduser().resolve(),
-    )
+    if not 1 <= args.observation_interval <= 300:
+        parser.error("--observation-interval must be between 1 and 300 seconds")
+    import implement_catalog as catalog
     report = args.report.expanduser().absolute()
+    retained_groups = {}
+    def retain_group(row):
+        retained_groups[row["id"]] = row
+        write_private(report.with_suffix(".inventory.json"), json.dumps(
+            {"schema": "workflow/verification-observations-v1", "groups": list(retained_groups.values())},
+            sort_keys=True, indent=2) + "\n")
+    try:
+        frozen = catalog.snapshot()
+        source_files = catalog.snapshot(args.source_root.resolve().parent)["files"]
+        installed_files = catalog.snapshot(args.installed_root.expanduser().resolve().parent)["files"]
+        if source_files != installed_files or frozen["files"] != installed_files:
+            raise RuntimeError("catalog parity differs")
+        summary = verify(
+            args.source_root.resolve(), args.installed_root.expanduser().resolve(),
+            args.observation_interval, skill_root, args.worktree_source_root.resolve(),
+            args.worktree_installed_root.expanduser().resolve(),
+            on_result=retain_group,
+        )
+        catalog.validate_record(frozen)
+        if (catalog.snapshot(args.source_root.resolve().parent)["files"] != source_files
+                or catalog.snapshot(args.installed_root.expanduser().resolve().parent)["files"] != installed_files):
+            raise RuntimeError("source or installed catalog changed during preflight")
+    except (OSError, ValueError, RuntimeError) as error:
+        summary = {"mode": "lightweight", "overall": "FAIL", "deterministic": "FAIL",
+                   "live": "NOT_RUN", "lifecycle": "UNCHANGED",
+                   "stages": [{"id": "catalog-integrity", "name": "catalog integrity", "status": "FAIL",
+                               "detail": "Source, verifier or installed catalog is missing, unsafe or changed (" + type(error).__name__ + ")."}],
+                   "next_action": "Restore matching source/install payloads and rerun $implement-test."}
     summary["report_path"] = str(report.resolve())
     if report.parent == default_private_root().expanduser().absolute():
         _ensure_root(report.parent)
+    groups = summary.pop("test_groups", list(retained_groups.values()))
+    verification = {"schema": "workflow/verification-observations-v1", "groups": groups}
+    write_private(report.with_suffix(".inventory.json"), json.dumps(verification, sort_keys=True, indent=2) + "\n")
     write_private(report, build_report(summary))
+    if summary["deterministic"] == "PASS":
+        catalog.publish_preflight(default_private_root(), frozen, {**summary, "verification": verification})
     print(
         json.dumps(
             {"summary": summary, "report": str(report.resolve())}, sort_keys=True

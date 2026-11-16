@@ -182,6 +182,35 @@
         "Refreshes current criteria and discussion; ancestry is insufficient.",
         "Changed-scope member stays pending."
       ]
+    },
+    {
+      "id": "enrolled-lifetime-waiver",
+      "prompt": "Offline contract simulation only; no external calls or mutations. Use $create-pr --waive-live-test \"Documentation-only exercise\" in an enrolled Actions repository. Describe creation and the next commit on that same PR.",
+      "expected_output": "Uses the shared authority and immutable PR identity.",
+      "files": [],
+      "assertions": [
+        "Creates the PR as draft and waits for authorized waiver registration before marking ready.",
+        "The waiver survives subsequent commits but does not waive CI, cleanup, review or protection.",
+        "Does not start a competing local merge loop."
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "Implement the accepted application scope; no UAT campaign was requested and no live environment exists.",
+      "expected_output": "Run mandatory development checks, retain not_requested UAT, and allow otherwise eligible delivery without runtime identities or synthetic PASS.",
+      "files": [],
+      "assertions": [
+        "Run mandatory development checks, retain not_requested UAT, and allow otherwise eligible delivery without runtime identities or synthetic PASS."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "UAT was requested after implementation, but a required external service is unavailable when the scope is complete.",
+      "expected_output": "Record pending UAT and missing prerequisites with the exact candidate handoff; do not retry optional setup indefinitely or block eligible PR/merge. Preserve any actual failed assertions.",
+      "files": [],
+      "assertions": [
+        "Record pending UAT and missing prerequisites with the exact candidate handoff; do not retry optional setup indefinitely or block eligible PR/merge. Preserve any actual failed assertions."
+      ]
     }
   ]
 }

@@ -44,6 +44,7 @@ from ..agent.vm_ha.mtls import MTLSReceipt, PeerLeaf
 from ..agent.vm_ha.mtls_actions import ACTION_NAMES, ACTION_SCHEMA, encode_action_request
 from ..agent.vm_ha.restoration import STANDBY_RESTORATION_CAPABILITY
 from ..config_loader import InstanceResolvedConfig
+from ..deployment_assets import HA as _VM_HA_SERVICE_ASSET_DESTINATIONS
 from ..replay_window import (
     REPLAY_WINDOW_CAPABILITY,
     REPLAY_WINDOW_SOURCES,
@@ -59,6 +60,7 @@ from ..vm_ha_credentials import (
 )
 from ..vm_ha_diagnostics import decode_not_ready, readiness_reasons
 from . import ingress_ssh
+from .apply_diagnostics import ManagedMTLSActionFailure
 from .ssh_client_auth import SSHClientAuth, operator_identity, resolve_ssh_client_auth
 from .ssh_policy import SSHTrustPolicy, configure_paramiko_host_verification
 from .vm_ha_identity import LegacyVMHAIdentity, parse_legacy_vm_ha_identity
@@ -318,94 +320,6 @@ class VMHAStandbyReplacementNotReady(RuntimeError):
     def __init__(self, message: str, *, reasons: tuple[str, ...] = ()) -> None:
         super().__init__(message)
         self.reasons = readiness_reasons(reasons)
-
-
-_VM_HA_SERVICE_ASSET_DESTINATIONS = (
-    ("nebius-vpngw-agent.service", "/etc/systemd/system/nebius-vpngw-agent.service", 0o644),
-    (
-        "nebius-vpngw-agent-ordering.conf",
-        "/etc/systemd/system/nebius-vpngw-agent.service.d/override.conf",
-        0o644,
-    ),
-    (
-        "nebius-vpngw-fix-routes.service",
-        "/etc/systemd/system/nebius-vpngw-fix-routes.service",
-        0o644,
-    ),
-    (
-        "nebius-vpngw-fix-routes.timer",
-        "/etc/systemd/system/nebius-vpngw-fix-routes.timer",
-        0o644,
-    ),
-    (
-        "nebius-vpngw-health-monitor.service",
-        "/etc/systemd/system/nebius-vpngw-health-monitor.service",
-        0o644,
-    ),
-    ("nebius-vpngw-ingress.service", "/etc/systemd/system/nebius-vpngw-ingress.service", 0o644),
-    (
-        "nebius-vpngw-strongswan.conf",
-        "/etc/systemd/system/strongswan.service.d/override.conf",
-        0o644,
-    ),
-    (
-        "nebius-vpngw-ufw-ordering.conf",
-        "/etc/systemd/system/ufw.service.d/override.conf",
-        0o644,
-    ),
-    ("nebius-vpngw-ingress.py", "/usr/local/lib/nebius-vpngw-ingress.py", 0o644),
-    ("setup-vpngw-firewall.sh", "/usr/local/bin/setup-vpngw-firewall.sh", 0o755),
-    (
-        "nebius-vpngw-vm-ha-peer-firewall.sh",
-        "/usr/local/bin/nebius-vpngw-vm-ha-peer-firewall.sh",
-        0o755,
-    ),
-    (
-        "nebius-vpngw-esp4-preflight.sh",
-        "/usr/local/bin/nebius-vpngw-esp4-preflight.sh",
-        0o755,
-    ),
-    (
-        "nebius-vpngw-esp4-preflight.service",
-        "/etc/systemd/system/nebius-vpngw-esp4-preflight.service",
-        0o644,
-    ),
-    (
-        "nebius-vpngw-vm-ha-guard.service",
-        "/etc/systemd/system/nebius-vpngw-vm-ha-guard.service",
-        0o644,
-    ),
-    (
-        "nebius-vpngw-vm-ha.service",
-        "/etc/systemd/system/nebius-vpngw-vm-ha.service",
-        0o644,
-    ),
-    (
-        "nebius-vpngw-vm-ha-rearm.service",
-        "/etc/systemd/system/nebius-vpngw-vm-ha-rearm.service",
-        0o644,
-    ),
-    (
-        "nebius-vpngw-vm-ha-ordering.conf",
-        "/etc/systemd/system/strongswan.service.d/30-vm-ha.conf",
-        0o644,
-    ),
-    (
-        "nebius-vpngw-vm-ha-ordering.conf",
-        "/etc/systemd/system/frr.service.d/30-vm-ha.conf",
-        0o644,
-    ),
-    (
-        "nebius-vpngw-vm-ha-ordering.conf",
-        "/etc/systemd/system/nebius-vpngw-agent.service.d/30-vm-ha.conf",
-        0o644,
-    ),
-    (
-        "nebius-vpngw-ufw-lock.conf",
-        "/usr/lib/tmpfiles.d/nebius-vpngw-ufw-lock.conf",
-        0o644,
-    ),
-)
 
 
 @dataclass(frozen=True)
@@ -746,6 +660,8 @@ class VMHAAgentArtifact:
                     "agent/strongswan_renderer.py",
                     "agent/vm_ha/runtime.py",
                     "agent/vm_ha/models.py",
+                    "agent/vm_ha/heartbeat.py",
+                    "agent/vm_ha/evidence.py",
                 ):
                     member_name = "nebius_vpngw/" + source_name
                     required[member_name] = cls._read_wheel_member(
@@ -812,6 +728,8 @@ class VMHAAgentArtifact:
                     "agent/strongswan_renderer.py",
                     "agent/vm_ha/runtime.py",
                     "agent/vm_ha/models.py",
+                    "agent/vm_ha/heartbeat.py",
+                    "agent/vm_ha/evidence.py",
                 ):
                     member_name = "nebius_vpngw/" + source_name
                     if (
@@ -1874,6 +1792,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         runtime_binding: VMHARuntimeBinding,
         lock_receipt: VMHAApplyLockReceipt,
         predecessor_operation_id: str | None = None,
+        predecessor_record_sha256: str | None = None,
     ) -> VMHAOwnerAdoptionReceipt:
         """Declare the exact cloud-selected owner inside its fenced apply."""
 
@@ -1908,17 +1827,20 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
         predecessor_check = (
             f"echo '{receipt.record_sha256}  {destination}' | sudo sha256sum --check --status"
         )
-        if predecessor_operation_id is not None:
+        if predecessor_operation_id is not None or predecessor_record_sha256 is not None:
             from .. import ha_repair
 
-            if (
-                re.fullmatch(r"[a-f0-9]{64}", predecessor_operation_id) is None
-                or predecessor_operation_id == lock_receipt.operation_id
-            ):
-                raise ValueError("VM-HA owner adoption predecessor is invalid")
-            previous = json.loads(encoded)
-            previous["operation_id"] = predecessor_operation_id
-            previous_digest = hashlib.sha256(apply_lock.encode(previous)).hexdigest()
+            if predecessor_record_sha256 is not None:
+                if predecessor_operation_id is not None or re.fullmatch(r"[a-f0-9]{64}", predecessor_record_sha256) is None:
+                    raise ValueError("VM-HA owner adoption exact predecessor is invalid")
+                previous_digest = predecessor_record_sha256
+            else:
+                assert predecessor_operation_id is not None
+                if re.fullmatch(r"[a-f0-9]{64}", predecessor_operation_id) is None or predecessor_operation_id == lock_receipt.operation_id:
+                    raise ValueError("VM-HA owner adoption predecessor is invalid")
+                previous = json.loads(encoded)
+                previous["operation_id"] = predecessor_operation_id
+                previous_digest = hashlib.sha256(apply_lock.encode(previous)).hexdigest()
             script = Path(ha_repair.__file__).read_text() + (
                 "\nimport sys\narchive_apply_owner_adoption(*sys.argv[1:])\n"
             )
@@ -2766,9 +2688,9 @@ printf "VM_HA_DEACTIVATED=1\\n"
                 f"--vm-ha-mtls-action {shlex.quote(action)} "
                 f"--vm-ha-mtls-request {shlex.quote(encoded)}"
             )
-            _stdin, stdout, _stderr = client.exec_command(command, timeout=90)
+            _stdin, stdout, stderr = client.exec_command(command, timeout=90)
             if stdout.channel.recv_exit_status() != 0:
-                raise RuntimeError("managed mTLS remote action failed")
+                raise ManagedMTLSActionFailure(stderr.read(4097))
             try:
                 response = json.loads(stdout.read().decode("ascii"))
             except (UnicodeError, json.JSONDecodeError):
@@ -3170,6 +3092,23 @@ printf "VM_HA_MUTATION_SERVICES_STOPPED=1\\n"
             + repr(generation_id)
             + "\n"
             + UPGRADE_RECOVERY_INSPECTION,
+        )
+
+    def inspect_vm_ha_predecessor(
+        self, ssh_target: str, instance_name: str, local_cfg: dict, *, generation_id: str | None = None
+    ) -> dict:
+        """Observe the old locked generation without trusting the new configuration."""
+        from .checkpoint_conversion import source as checkpoint_source
+        from .ha_replan import PREDECESSOR_INSPECTION
+
+        script = PREDECESSOR_INSPECTION
+        if generation_id is not None:
+            if re.fullmatch(r"[a-f0-9]{64}", generation_id) is None:
+                raise ValueError("HA predecessor generation is invalid")
+            script = script.replace("generation_id = original_lock['generation_id']", "generation_id = " + repr(generation_id))
+        return self._inspect_vm_ha_host(
+            ssh_target, instance_name, local_cfg,
+            script=checkpoint_source() + script,
         )
 
     def _inspect_vm_ha_host(

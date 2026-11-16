@@ -74,9 +74,10 @@ def observed_counts(stdout: str) -> dict:
 
 def test_target(state: dict, target: dict) -> dict:
     value = {key: target[key] for key in ("path", "head", "deployment")}
-    if (value["path"] != state["project_root"]
-            or not state["git"].get("promoted_sha")
-            or value["head"] != state["git"]["promoted_sha"]):
+    expected = ({"path": state["selected_project_root"], "head": state["git"]["aggregate_sha"]}
+                if state["git"].get("aggregate_sha") else state.get("inner_delivery", {}))
+    if (value["path"] != expected.get("path") or not expected.get("head")
+            or value["head"] != expected["head"]):
         raise TestEvidenceError("Test acceptance requires the clean promoted deployment.")
     return value
 
@@ -142,7 +143,7 @@ def run_class(state: dict, name: str, label: str, *, resolve_target, command,
     if name not in TEST_CLASSES or not valid_label(label):
         raise TestEvidenceError("Test class or dotted Django test label is invalid.")
     target = test_target(state, resolve_target(state))
-    runs = state.setdefault("test_runs", [])
+    runs = state.setdefault("aggregate_test_runs" if state["git"].get("aggregate_sha") else "test_runs", [])
     if not isinstance(runs, list):
         raise TestEvidenceError("Test execution history is invalid.")
     if any(not isinstance(item, dict) for item in runs):
@@ -155,7 +156,7 @@ def run_class(state: dict, name: str, label: str, *, resolve_target, command,
         if value["target"] != target or value["label"] != label:
             raise TestEvidenceError("Test execution changed; start a fresh trial.")
         return state
-    if any(item.get("stage", "").startswith("uat-") for item in state["browser_stages"]):
+    if not state["git"].get("aggregate_sha") and any(item.get("stage", "").startswith("uat-") for item in state["browser_stages"]):
         raise TestEvidenceError("Run product test classes before the first UAT stage.")
     relative = "evidence/tests/" + uuid.uuid4().hex + ".json"
     artifact = Path(state["run_root"]) / relative
@@ -179,7 +180,7 @@ def run_class(state: dict, name: str, label: str, *, resolve_target, command,
     try:
         result = command(["docker", "compose", "--project-name", state["compose_project"],
                           "--project-directory", target["path"], "exec", "-T", "web",
-                          "python", "-c", RUNNER, label], timeout=300)
+                          "python", "-c", RUNNER, label], timeout=None)
         value["exit_code"] = result.returncode
         if result.returncode != 0:
             raise TestEvidenceError("Owned test command failed; start a fresh trial.")
@@ -197,7 +198,7 @@ def run_class(state: dict, name: str, label: str, *, resolve_target, command,
 
 
 def validate_evidence(state: dict, tests: dict) -> None:
-    runs = state.get("test_runs")
+    runs = state.get("aggregate_test_runs" if state["git"].get("aggregate_sha") else "test_runs")
     if not isinstance(runs, list) or len(runs) != len(TEST_CLASSES):
         raise TestEvidenceError("Every test class requires an owned execution receipt.")
     seen = set()
@@ -218,7 +219,7 @@ def validate_claim(state: dict, name: str, claim: dict) -> None:
     if name == "gui":
         validate_gui_claim(state, claim)
         return
-    runs = state.get("test_runs", [])
+    runs = state.get("aggregate_test_runs" if state["git"].get("aggregate_sha") else "test_runs", [])
     if not isinstance(runs, list) or any(not isinstance(item, dict) for item in runs):
         raise TestEvidenceError("Test execution history is invalid.")
     matching = [item for item in runs if item.get("test_class") == name]

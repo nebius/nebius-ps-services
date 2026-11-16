@@ -151,7 +151,7 @@ def test_apply_requires_successor_approval_and_preserves_original_resume_authori
     assert json.loads(json.dumps(report.mapping()))["pending"] == ["attachments"]
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
     for supplied in (None, original):
-        with pytest.raises(RuntimeError, match="approve-disruption|stale"):
+        with pytest.raises(RuntimeError, match="displayed exact approval|approval-state-changed"):
             cli._review_attachment_request_retry(
                 manager,
                 parent,
@@ -400,3 +400,57 @@ def test_ha_rejected_owner_request_preserves_both_locks_and_settled_standby(
     assert mutations == ["compute-b", "compute-a"]
     assert all(current["operations"][key] == value for key, value in settled.items())
     assert len({operation for _, operation in lock_history}) == 1
+
+
+@pytest.mark.parametrize("drift", [False, True])
+def test_typed_ha_retry_approval_reaches_original_attachment_owner(rejected, monkeypatch, drift):
+    from nebius_vpngw import cli
+    from nebius_vpngw.deploy.apply_result import ApplyReport
+
+    state, manager, parent, child, command, instances = rejected
+    original = cli._VMHAApplyPlanReport(
+        kind="security-groups",
+        digest=command.approval,
+        engine_digest=command.approval,
+        effects=("attachments",),
+        has_destructive_changes=False,
+        managed_ssh_action=None,
+        authorization_persisted=True,
+    )
+    before = (parent.path.read_bytes(), child.path.read_bytes())
+
+    def engine(**kwargs):
+        retry, approval = cli._review_attachment_request_retry(
+            manager,
+            parent,
+            child.pending(),
+            supplied=kwargs.get("approve_disruption"),
+            dry_run=kwargs["dry_run"],
+            result_report=ApplyReport(),
+        )
+        assert approval == command.approval
+        reviewed = cli._vm_ha_reviewed_attachment_plan(original, retry)
+        cli._validate_vm_ha_expected_apply_plan(reviewed, kwargs.get("expected_vm_ha_plan"))
+        if kwargs.get("stop_after_vm_ha_plan"):
+            raise cli._VMHAApplyPlanCaptured(reviewed)
+        command.execute(
+            manager, object(), {}, instances, child, verify_ha=lambda: None, request_retry=retry
+        )
+
+    monkeypatch.setattr(cli, "_apply_impl", engine)
+    plan = cli._plan_vm_ha_apply_convergence(parent.path)
+    assert not plan.authorization_persisted
+    assert plan.digest != original.digest
+    assert plan.attachment_retry_approval and plan.attachment_retry_approval != plan.digest
+    assert "retry-rejected-cloud-attachment-request" in plan.effects
+    assert (parent.path.read_bytes(), child.path.read_bytes()) == before
+    if drift:
+        state.instance.metadata.resource_version += 1
+        with pytest.raises(cli._VMHAApplyConvergenceFailed):
+            cli._execute_vm_ha_apply_convergence(parent.path, plan)
+        assert state.effects == 0
+        assert (parent.path.read_bytes(), child.path.read_bytes()) == before
+    else:
+        cli._execute_vm_ha_apply_convergence(parent.path, plan)
+        assert state.effects == 1 and parent.pending() is None
+        assert child.read_transaction()["request_successors"]

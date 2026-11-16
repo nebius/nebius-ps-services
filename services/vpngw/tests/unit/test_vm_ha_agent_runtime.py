@@ -4,9 +4,11 @@ import json
 import os
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import yaml
@@ -521,7 +523,7 @@ def test_controller_status_proves_processed_quiescent_mtls_inhibition(tmp_path: 
         "independent-heartbeat-v6",
         "connection-tunnel-selection-v1",
         "vm-ha-mtls-rotation-quiescence-v1",
-        "vm-ha-live-peer-replacement-v4",
+        "vm-ha-live-peer-replacement-v5",
         "vm-ha-standby-replacement-inhibition-v2",
         "vm-ha-standby-restoration-v2",
     ]
@@ -771,7 +773,7 @@ def test_standby_replacement_inhibition_preserves_active_owner_and_releases_idem
                 "transfer_inhibition_quiescent": True,
                 "pending_operation_id": None,
                 "controller_capabilities": [
-                    "vm-ha-live-peer-replacement-v4",
+                    "vm-ha-live-peer-replacement-v5",
                     "vm-ha-standby-replacement-inhibition-v2",
                 ],
             }
@@ -961,7 +963,7 @@ def test_standby_replacement_peer_binding_commit_changes_only_peer_compute(
     )
 
     installed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert receipt["schema"] == "vm-ha-live-peer-replacement-v4"
+    assert receipt["schema"] == "vm-ha-live-peer-replacement-v5"
     assert installed["vm_ha"]["runtime_binding"]["nodes"][1]["compute_id"] == ("compute-b-new")
     assert (
         installed["vm_ha"]["runtime_binding"]["nodes"][0]
@@ -1625,7 +1627,7 @@ def test_promoted_passive_owner_reconciliation_uses_exact_receipt_without_lineag
 @pytest.mark.parametrize(
     ("receipt_epoch", "lineage_started_at", "expected_discarded"),
     [
-        ("9", 20.0, True),
+        ("9", 20.0, False),
         ("8", 20.0, False),
         ("9", 9.0, False),
     ],
@@ -2219,8 +2221,10 @@ def test_first_reverse_automatic_effect_retires_exact_prior_generation_receipt(
     assert lineage["former_owner_node_id"] == "node-b"
 
 
+@pytest.mark.parametrize("retry_time", [12.0, 25.0, 5.0])
 def test_promotion_receipt_requires_consumed_request_and_terminal_postconditions(
     tmp_path: Path,
+    retry_time: float,
 ) -> None:
     config = _runtime_config()
     generation = config["generation"]
@@ -2296,6 +2300,7 @@ def test_promotion_receipt_requires_consumed_request_and_terminal_postconditions
 
     assert receipt_path.exists()
     assert lineage_path.exists()
+    durable_receipt_bytes = receipt_path.read_bytes()
 
     policy = AutoHealingPolicyStore(tmp_path).initialize(
         cluster_id="cluster-a",
@@ -2344,12 +2349,14 @@ def test_promotion_receipt_requires_consumed_request_and_terminal_postconditions
         lineage_path=lineage_path,
         receipt_path=receipt_path,
         request_paths=(request_path,),
-        clock=lambda: 12.0,
+        clock=lambda: retry_time,
     )
 
     assert receipt is not None
     assert receipt["intent"] == "planned-failback"
     assert receipt["common_cutover_seconds"] == 2.0
+    assert receipt["committed_at"] == 12.0
+    assert receipt_path.read_bytes() == durable_receipt_bytes
     assert receipt_path.exists()
     assert not lineage_path.exists()
     committed = StandbyRestorationStore(tmp_path).load()
@@ -5903,6 +5910,16 @@ def test_default_service_runtime_consumes_validated_manual_failback_after_restor
 ) -> None:
     failback_path = tmp_path / "manual-failback.json"
     failback_path.write_text("{}", encoding="utf-8")
+    restored_guard = {
+        "schema": "nebius-vpngw/vm-ha-status-v1",
+        "guard_boot_id": "boot-a",
+        "data_plane_mode": "active",
+        "node_id": "node-a",
+        "allocation_id": "allocation-a",
+        "generation_id": "a" * 64,
+        "digests": {"configuration": "a" * 64, "static_routes": "b" * 64, "bgp_policy": "c" * 64},
+        "installed_at": 10.0,
+    }
 
     class Peer:
         def poll(self, *, timeout_seconds: float) -> None:
@@ -5942,6 +5959,10 @@ def test_default_service_runtime_consumes_validated_manual_failback_after_restor
 
         def step(self) -> dict[str, object]:
             self.snapshots.observation_observer(SimpleNamespace())
+            # The admitted data-plane effect publishes the guard before readiness.
+            from nebius_vpngw.agent.main import _atomic_write_json
+
+            _atomic_write_json(tmp_path / "guard.json", restored_guard)
             return {"promotion_ready": True, "observed_owner_node_id": "node-a"}
 
     runtime = DefaultVMHAControllerRuntime(  # type: ignore[arg-type]
@@ -5953,12 +5974,14 @@ def test_default_service_runtime_consumes_validated_manual_failback_after_restor
         manual_failback_path=failback_path,
     )
 
-    runtime.step()
-    runtime.close(restore_guard=False)
+    try:
+        runtime.step()
+    finally:
+        runtime.close(restore_guard=False)
 
     assert not failback_path.exists()
     guard = json.loads((tmp_path / "guard.json").read_text(encoding="utf-8"))
-    assert guard["data_plane_mode"] == "active"
+    assert guard == restored_guard
 
 
 def test_default_service_runtime_consumes_validated_manual_failover_after_promotion(
@@ -6211,3 +6234,762 @@ def test_automatic_stop_cancellation_is_durable_only_before_dispatch(tmp_path, d
         assert journal_path.read_bytes() == before
     if dispatch == "dangling":
         assert journal_path.is_symlink()
+
+
+def _pending_repair_verification_case(tmp_path: Path) -> SimpleNamespace:
+    """Real controller/checkpoint orchestration with deadline-obeying I/O fakes."""
+    from nebius_vpngw.agent.local_commands import CURRENT
+    from nebius_vpngw.deploy.vm_ha_cloud import vm_ha_observation_remaining
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"vm_ha": _runtime_config()}))
+    now = [100.0]
+    mode = [DataPlaneMode.ACTIVE]
+    boot = ["boot-a"]
+    route = [None]
+    slow = [None]
+    healthy = [False]
+    calls: list[tuple[str, float]] = []
+    budgets: list[tuple[str, float]] = []
+    peer = PeerHeartbeat(
+        cluster_id="cluster-a",
+        node_id="node-b",
+        boot_id="peer-boot",
+        sequence=1,
+        sent_at="2026-08-12T00:00:00Z",
+        configured_role="passive",
+        observed_owner_id="node-a",
+        generation_id="a" * 64,
+        mtls_epoch=1,
+        certificate_fingerprint="d" * 64,
+        digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
+        service_healthy=True,
+        route_ready=True,
+        promotion_ready=True,
+        auto_healing_policy_state="enabled",
+        auto_healing_policy_digest="e" * 64,
+        evidence=HeartbeatEvidence(state="healthy"),
+        health_valid_until=1000,
+        service_valid_until=1000,
+    )
+    cloud = CloudObservation(
+        True,
+        "allocation-a",
+        "node-a",
+        "node-b",
+        ComputeState.RUNNING,
+        True,
+        True,
+        True,
+        "7",
+    )
+
+    def consume(stage: str) -> None:
+        remaining = vm_ha_observation_remaining()
+        local = CURRENT.get()
+        if stage == "local" and local is not None:
+            remaining = min(remaining, local.deadline - now[0])
+        budgets.append((stage, remaining))
+        if slow[0] == stage:
+            now[0] += min(8.0, remaining)
+            if remaining <= 8:
+                raise TimeoutError("observation exceeded its admitted allowance")
+
+    def observe_cloud() -> CloudObservation:
+        consume("cloud")
+        return cloud
+
+    def readiness() -> LocalReadiness:
+        consume("local")
+        return LocalReadiness(
+            healthy[0],
+            True,
+            healthy[0],
+            True,
+            protection_ready=True,
+            local_defects=() if healthy[0] else ("daemon-failed:frr",),
+        )
+
+    def guard_record() -> None:
+        (tmp_path / "guard.json").write_text(
+            json.dumps(
+                {
+                    "guard_boot_id": boot[0],
+                    "data_plane_mode": mode[0].value,
+                }
+            )
+        )
+
+    def effect(action: ControllerAction) -> None:
+        calls.append((action.kind.value, now[0]))
+        if action.kind is ActionKind.DISABLE_ACTIVE:
+            mode[0] = DataPlaneMode.BLOCKED
+            guard_record()
+
+    guard_record()
+    runtime = build_vm_ha_controller_runtime(
+        config_path=config_path,
+        providers=VMHASnapshotProviders(
+            peer=lambda: (peer, now[0] - 1),
+            readiness=readiness,
+            cloud=observe_cloud,
+            data_plane=lambda: mode[0],
+            routes=lambda: route[0],
+        ),
+        handlers={kind: effect for kind in ActionKind},
+        state_dir=tmp_path,
+        clock=lambda: now[0],
+        boot_id=lambda: boot[0],
+    )
+    initial = runtime.snapshots.observe()
+    route[0] = replace(initial.route_reconciliation_context, operation_id="existing-route")
+    runtime.controller.checkpoints.save(ControllerCheckpoint(state=HAState.ACTIVE))
+    runtime.step()
+    repair = runtime.controller.checkpoints.load().repair_attempt
+    assert repair is not None and repair.started_at == 100 and repair.deadline_at == 105
+    assert calls == [("repair-local-dataplane", 100)]
+
+    def physical_fence(_repair: object) -> None:
+        calls.append(("emergency-fence", now[0]))
+        mode[0] = DataPlaneMode.BLOCKED
+        guard_record()
+
+    def shutdown_guard() -> dict[str, object]:
+        calls.append(("shutdown-guard", now[0]))
+        mode[0] = DataPlaneMode.BLOCKED
+        guard_record()
+        return {}
+
+    runtime.repair_fence = physical_fence
+    runtime.guard = shutdown_guard
+    runtime.tunnel_step = lambda: consume("tunnel")
+    runtime.controller.before_observe = lambda _checkpoint: consume("settlement")
+    return SimpleNamespace(
+        runtime=runtime,
+        now=now,
+        mode=mode,
+        boot=boot,
+        slow=slow,
+        healthy=healthy,
+        calls=calls,
+        budgets=budgets,
+        repair=repair,
+        guard_record=guard_record,
+    )
+
+
+@pytest.mark.parametrize("observation_seconds", [1.0, 1.3])
+def test_active_repair_verification_precedes_competing_tunnel_observations(
+    tmp_path: Path, observation_seconds: float
+) -> None:
+    from nebius_vpngw.deploy.vm_ha_cloud import vm_ha_observation_remaining
+
+    case = _pending_repair_verification_case(tmp_path)
+    case.now[0] = 100.4  # The admitted effect completed within its original deadline.
+    case.healthy[0] = True
+    providers = case.runtime.snapshots.providers
+    observations: list[tuple[str, float]] = []
+    tunnel_calls: list[float] = []
+
+    def delayed(stage: str, observe: Callable[[], Any]) -> Any:
+        remaining = vm_ha_observation_remaining()
+        duration = observation_seconds / 2
+        case.now[0] += min(duration, remaining)
+        if remaining <= duration:
+            raise TimeoutError("fresh observation exhausted the admitted deadline")
+        observations.append((stage, case.now[0]))
+        return observe()
+
+    case.runtime.snapshots.providers = replace(
+        providers,
+        cloud=lambda: delayed("cloud", providers.cloud),
+        readiness=lambda: delayed("local", providers.readiness),
+    )
+
+    def tunnel_step() -> None:
+        # The native tunnel selector obtains its own full authority/readiness
+        # snapshot, which does not count toward component-repair confirmation.
+        tunnel_calls.append(case.now[0])
+        case.runtime.snapshots.observe()
+
+    case.runtime.tunnel_step = tunnel_step
+    for expected in (1, 2):
+        case.runtime.step()
+        repair = case.runtime.controller.checkpoints.load().repair_attempt
+        assert repair is not None
+        assert repair.healthy_observations == expected
+        assert repair.operation_id == case.repair.operation_id
+        assert repair.deadline_at == case.repair.deadline_at
+        assert case.mode[0] is DataPlaneMode.ACTIVE
+        case.now[0] += 0.25
+
+    assert [stage for stage, _ in observations] == ["cloud", "local", "cloud", "local"]
+    assert case.now[0] < case.repair.deadline_at - 1
+    assert tunnel_calls == []
+    assert [kind for kind, _ in case.calls] == ["repair-local-dataplane"]
+    # Once both fresh confirmations exist, ordinary tunnel work resumes. The
+    # consumed repair remains durable until the normal healthy reset interval.
+    case.now[0] = 110
+    case.runtime.step()
+    assert tunnel_calls == [110]
+    assert case.runtime.controller.checkpoints.load().repair_attempt is not None
+
+
+@pytest.mark.parametrize(
+    "repair_state", ["absent", "confirmed", "previous-boot", "passive", "fenced"]
+)
+def test_tunnel_work_runs_without_unfinished_active_repair(
+    tmp_path: Path, repair_state: str
+) -> None:
+    case = _pending_repair_verification_case(tmp_path)
+    checkpoint = case.runtime.controller.checkpoints.load()
+    repair = case.repair
+    if repair_state == "absent":
+        repair = None
+    elif repair_state == "confirmed":
+        repair = replace(repair, healthy_since=100, healthy_observations=2)
+    elif repair_state == "previous-boot":
+        repair = replace(repair, boot_id="previous-boot")
+    elif repair_state == "passive":
+        repair = replace(repair, repair_mode=DataPlaneMode.PASSIVE)
+    else:
+        case.mode[0] = DataPlaneMode.BLOCKED
+        case.guard_record()
+    case.runtime.controller.checkpoints.save(
+        replace(checkpoint, pending_action=None, repair_attempt=repair)
+    )
+    case.healthy[0] = True
+    case.now[0] = 101
+    tunnel_calls = []
+    case.runtime.tunnel_step = lambda: tunnel_calls.append(case.now[0])
+    case.runtime.step()
+    assert tunnel_calls == [101]
+    assert all(kind != "emergency-fence" for kind, _ in case.calls)
+
+
+@pytest.mark.parametrize("stage", ["settlement", "cloud", "local"])
+def test_pending_repair_verification_preserves_fencing_reserve(tmp_path: Path, stage: str) -> None:
+    case = _pending_repair_verification_case(tmp_path)
+    case.now[0] = 101
+    case.slow[0] = stage
+    with pytest.raises(TimeoutError):
+        case.runtime.step()
+    assert ("emergency-fence", 104) in case.calls
+    assert case.calls.index(("emergency-fence", 104)) < case.calls.index(("shutdown-guard", 104))
+    assert (stage, 3) in case.budgets
+    assert case.runtime.controller.checkpoints.load().repair_attempt == case.repair
+    assert [name for name, _ in case.calls].count("repair-local-dataplane") == 1
+
+
+def test_expired_repair_verification_fences_before_any_new_observation(tmp_path: Path) -> None:
+    case = _pending_repair_verification_case(tmp_path)
+    case.now[0] = 104
+    case.budgets.clear()
+    with pytest.raises(TimeoutError):
+        case.runtime.step()
+    assert case.calls[1] == ("emergency-fence", 104)
+    # Subsequent best-effort status reads happen only after the physical fence.
+    assert case.calls[2] == ("shutdown-guard", 104)
+    assert case.runtime.controller.checkpoints.load().repair_attempt == case.repair
+
+
+def test_verified_repair_does_not_limit_later_healthy_observations(tmp_path: Path) -> None:
+    case = _pending_repair_verification_case(tmp_path)
+    case.healthy[0] = True
+    for now in (101, 102):
+        case.now[0] = now
+        case.runtime.step()
+    assert case.runtime.controller.checkpoints.load().repair_attempt.healthy_observations == 2
+    case.now[0] = 170
+    case.budgets.clear()
+    case.runtime.step()
+    assert ("cloud", 30) in case.budgets
+    assert case.runtime.controller.checkpoints.load().repair_attempt is None
+    assert all(name != "emergency-fence" for name, _ in case.calls)
+
+
+def test_fenced_repair_does_not_reapply_expired_observation_budget(tmp_path: Path) -> None:
+    case = _pending_repair_verification_case(tmp_path)
+    case.mode[0] = DataPlaneMode.BLOCKED
+    case.guard_record()
+    case.now[0] = 110
+    case.budgets.clear()
+    case.runtime.step()
+    assert ("cloud", 30) in case.budgets
+    assert all(name != "emergency-fence" for name, _ in case.calls)
+
+
+@pytest.mark.parametrize("parent_kind", ["cloud", "local"])
+def test_repair_verification_inherits_stricter_parent_budget(
+    tmp_path: Path, parent_kind: str
+) -> None:
+    from contextlib import nullcontext
+
+    from nebius_vpngw.agent.local_commands import CURRENT, CommandBudget
+    from nebius_vpngw.deploy.vm_ha_cloud import vm_ha_observation_budget
+
+    case = _pending_repair_verification_case(tmp_path)
+    case.now[0] = 101
+    case.slow[0] = "cloud"
+    parent = CommandBudget(102) if parent_kind == "local" else None
+    token = CURRENT.set(parent)
+    context = (
+        vm_ha_observation_budget(seconds=1, clock=lambda: case.now[0])
+        if parent_kind == "cloud"
+        else nullcontext()
+    )
+    try:
+        with pytest.raises(TimeoutError), context:
+            case.runtime.step()
+        assert CURRENT.get() is parent
+    finally:
+        CURRENT.reset(token)
+    assert ("emergency-fence", 102) in case.calls
+    assert ("cloud", 1) in case.budgets
+    assert case.runtime.controller.checkpoints.load().repair_attempt == case.repair
+
+
+def test_prior_boot_repair_does_not_inherit_old_monotonic_deadline(tmp_path: Path) -> None:
+    case = _pending_repair_verification_case(tmp_path)
+    case.boot[0] = "boot-next"
+    case.mode[0] = DataPlaneMode.BLOCKED
+    case.guard_record()
+    case.now[0] = 1000
+    case.budgets.clear()
+    case.runtime.step()
+    assert ("cloud", 30) in case.budgets
+    assert all(name != "emergency-fence" for name, _ in case.calls)
+
+
+def test_blocked_guard_intent_does_not_replace_current_kernel_fence(tmp_path: Path) -> None:
+    case = _pending_repair_verification_case(tmp_path)
+    # Normal mode changes revoke the guard before their physical sysctl write.
+    (tmp_path / "guard.json").write_text(
+        json.dumps(
+            {
+                "guard_boot_id": "boot-a",
+                "data_plane_mode": "blocked",
+            }
+        )
+    )
+    case.now[0] = 101
+    case.slow[0] = "cloud"
+    with pytest.raises(TimeoutError):
+        case.runtime.step()
+    assert ("emergency-fence", 104) in case.calls
+    assert case.runtime.controller.checkpoints.load().repair_attempt == case.repair
+
+
+@pytest.mark.parametrize("outcome", ["unavailable", "late", "unknown"])
+def test_unproven_kernel_fence_preserves_original_repair_deadline(
+    tmp_path: Path, outcome: str
+) -> None:
+    from nebius_vpngw.agent.local_commands import CURRENT
+
+    case = _pending_repair_verification_case(tmp_path)
+    case.mode[0] = DataPlaneMode.BLOCKED
+    case.guard_record()
+    case.now[0] = 104
+    observed = []
+
+    def unproven_fence():
+        budget = CURRENT.get()
+        observed.append(budget.deadline - case.now[0])
+        if outcome == "unavailable":
+            raise RuntimeError("kernel state unavailable")
+        if outcome == "late":
+            case.now[0] = budget.deadline
+            return DataPlaneMode.BLOCKED
+        return None
+
+    case.runtime.snapshots.providers = replace(
+        case.runtime.snapshots.providers, data_plane=unproven_fence
+    )
+    with pytest.raises(TimeoutError):
+        case.runtime.step()
+    assert observed[0] == pytest.approx(0.05)
+    assert case.calls[1][0] == "emergency-fence"
+    assert case.calls[1][1] <= 104.05
+    assert CURRENT.get() is None
+    assert case.runtime.controller.checkpoints.load().repair_attempt == case.repair
+
+
+@pytest.fixture
+def pending_completion(tmp_path):
+    def prepare(intent="planned-failback", role="active", committed=False):
+        config = _runtime_config() if role == "active" else _passive_runtime_config()
+        owner = "node-a" if role == "active" else "node-b"
+        peer = "node-b" if role == "active" else "node-a"
+        policy = AutoHealingPolicyStore(tmp_path).initialize(
+            cluster_id="cluster-a",
+            node_id=owner,
+            peer_node_id=peer,
+            generation_id="a" * 64,
+            updated_at=10.0,
+        )
+        certificate = PolicyAgreementStore(tmp_path).capture(
+            policy=policy,
+            heartbeat=PeerHeartbeat(
+                cluster_id="cluster-a",
+                node_id=peer,
+                boot_id="peer-boot",
+                sequence=1,
+                sent_at="1970-01-01T00:00:10Z",
+                configured_role="passive" if role == "active" else "active",
+                observed_owner_id=owner,
+                generation_id="a" * 64,
+                mtls_epoch=1,
+                certificate_fingerprint="d" * 64,
+                digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
+                service_healthy=True,
+                route_ready=True,
+                promotion_ready=False,
+                auto_healing_policy_state="enabled",
+                auto_healing_policy_digest=policy.decision_digest,
+            ),
+            captured_at=10.0,
+        )
+        store = StandbyRestorationStore(tmp_path)
+        source = {
+            "planned-failback": RestorationSource.PLANNED_FAILBACK,
+            "planned-failover": RestorationSource.PLANNED_FAILOVER,
+            "automatic-failover": RestorationSource.AUTOMATIC_FAILOVER,
+        }[intent]
+        store.arm(
+            source=source,
+            certificate=certificate,
+            owner_node_id=owner,
+            former_owner_node_id=peer,
+            allocation_id="allocation-a",
+            generation_id="a" * 64,
+            digests=certificate.digests,
+            request_fingerprint=None if intent == "automatic-failover" else "e" * 64,
+            first_operation_id="first-effect",
+            updated_at=10.0,
+        )
+        lineage = {
+            **_automatic_lineage(),
+            "intent": intent,
+            "candidate_node_id": owner,
+            "former_owner_node_id": peer,
+            "first_operation_id": "first-effect",
+            "started_at": 10.0,
+        }
+        receipt = {
+            **_promotion_receipt(owner=owner),
+            "intent": intent,
+            "former_owner_node_id": peer,
+            "committed_at": 20.0,
+            "common_cutover_seconds": 10.0,
+        }
+        receipt["receipt_id"] = promotion_receipt_id_v1(
+            allocation_id="allocation-a",
+            first_operation_id="first-effect",
+            generation_id="a" * 64,
+            intent=intent,
+            owner_node_id=owner,
+            ownership_epoch="9",
+            route_operation_id=receipt["route_operation_id"],
+        )
+        (tmp_path / "promotion-receipt.json").write_text(json.dumps(receipt))
+        (tmp_path / "transfer-lineage.json").write_text(json.dumps(lineage))
+        (tmp_path / "guard.json").write_text(json.dumps({"guard_boot_id": "boot-a"}))
+        if committed:
+            store.commit(receipt=receipt, updated_at=20.0)
+            store.accept_start(
+                receipt_id=receipt["receipt_id"],
+                stopped_revision="revision-8",
+                rearm_operation_id="rearm-operation",
+                updated_at=21.0,
+            )
+            store.mark_running(receipt_id=receipt["receipt_id"], updated_at=22.0)
+        cloud = CloudObservation(
+            True, "allocation-a", owner, peer, ComputeState.RUNNING, True, True, True, "9"
+        )
+        adapter = VMHASnapshotAdapter(
+            config=config,
+            providers=VMHASnapshotProviders(
+                peer=lambda: (None, None),
+                readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
+                cloud=lambda: cloud,
+                data_plane=lambda: DataPlaneMode.ACTIVE,
+                routes=lambda: None,
+                transfer_intent=_typed_transfer_intent_provider(state_dir=tmp_path, config=config),
+            ),
+            state_dir=tmp_path,
+            clock=lambda: 5.0,
+            boot_id=lambda: "boot-a",
+        )
+        return config, store, cloud, adapter
+
+    return prepare
+
+
+@pytest.mark.parametrize(
+    "intent,role",
+    [
+        ("planned-failback", "active"),
+        ("planned-failover", "passive"),
+        ("automatic-failover", "active"),
+        ("automatic-failover", "passive"),
+    ],
+)
+@pytest.mark.parametrize("committed", [False, True])
+@pytest.mark.parametrize("contended", [False, True])
+def test_committed_transfer_recovers_with_rearmed_peer_and_backward_clock(
+    tmp_path, pending_completion, intent, role, committed, contended
+):
+    config, store, cloud, adapter = pending_completion(intent, role, committed)
+    receipt_path = tmp_path / "promotion-receipt.json"
+    lineage_path = tmp_path / "transfer-lineage.json"
+    receipt_bytes, lineage_bytes = receipt_path.read_bytes(), lineage_path.read_bytes()
+    descriptor = (
+        _acquire_rearm_lock(tmp_path / REARM_LOCK_PATH.name, timeout_seconds=0)
+        if contended
+        else None
+    )
+    try:
+        snapshot = adapter.observe()
+        assert snapshot.transfer_completion_recorded
+        assert snapshot.transfer_intent is None
+        assert not snapshot.transfer_effect_started
+        assert receipt_path.read_bytes() == receipt_bytes
+        if contended:
+            assert lineage_path.read_bytes() == lineage_bytes
+        else:
+            assert not lineage_path.exists()
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if contended:
+        assert adapter.observe().transfer_completion_recorded
+        assert not lineage_path.exists()
+    record = store.load()
+    assert record.phase is (RestorationPhase.RUNNING if committed else RestorationPhase.COMMITTED)
+    assert receipt_path.read_bytes() == receipt_bytes
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("first_operation_id", "other-effect"),
+        ("intent", "automatic-failover"),
+        ("generation_id", "f" * 64),
+    ],
+)
+def test_completion_refuses_foreign_lineage(tmp_path, pending_completion, field, value):
+    from nebius_vpngw.agent.main import _recover_committed_transfer
+
+    config, store, cloud, adapter = pending_completion()
+    path = tmp_path / "transfer-lineage.json"
+    record = json.loads(path.read_text())
+    record[field] = value
+    path.write_text(json.dumps(record))
+    before = path.read_bytes()
+    if field == "generation_id":
+        with pytest.raises(ValueError):
+            _recover_committed_transfer(
+                state_dir=tmp_path, config=config, cloud=cloud, node_id="node-a"
+            )
+    else:
+        assert not _recover_committed_transfer(
+            state_dir=tmp_path, config=config, cloud=cloud, node_id="node-a"
+        )
+    assert path.read_bytes() == before
+    assert store.load().phase is RestorationPhase.ARMED
+
+
+@pytest.mark.parametrize(
+    "intent,role",
+    [
+        ("planned-failback", "active"),
+        ("planned-failover", "passive"),
+        ("automatic-failover", "active"),
+    ],
+)
+@pytest.mark.parametrize("blocker", ["lock", "commit_io", "unlink_io", "missing_authorization"])
+def test_committed_cleanup_blockers_preserve_real_controller_forwarding(
+    tmp_path, pending_completion, monkeypatch, intent, role, blocker
+):
+    from nebius_vpngw.agent import main
+
+    config, store, cloud, adapter = pending_completion(intent, role)
+    receipt_path = tmp_path / "promotion-receipt.json"
+    original_receipt = receipt_path.read_bytes()
+    receipt = json.loads(original_receipt)
+    context = RouteReconciliationContext(
+        owner_node_id=receipt["owner_node_id"],
+        allocation_id="allocation-a",
+        ownership_epoch="9",
+        generation_id="a" * 64,
+        digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
+        route_runtime_id=adapter.route_runtime_id,
+        operation_id=receipt["route_operation_id"],
+    )
+    adapter.providers = replace(
+        adapter.providers, routes=lambda: context, established_routes=lambda: context
+    )
+    checkpoints = VMHACheckpointFileStore(tmp_path / "controller-checkpoint.json")
+    calls = []
+    controller = RecoverableController(
+        policy=VMHAController(peer_timeout_seconds=5, suspicion_seconds=1),
+        snapshots=adapter,
+        checkpoints=checkpoints,
+        effects=SimpleNamespace(apply=calls.append),
+    )
+    authorization = tmp_path / RESTORATION_AUTHORIZATION_FILENAME
+    saved_authorization = authorization.read_bytes()
+
+    def unavailable(*args, **kwargs):
+        raise OSError("bookkeeping unavailable")
+
+    descriptor = None
+    with monkeypatch.context() as patch:
+        if blocker == "lock":
+            descriptor = _acquire_rearm_lock(tmp_path / REARM_LOCK_PATH.name, timeout_seconds=0)
+        elif blocker == "commit_io":
+            patch.setattr(StandbyRestorationStore, "commit", unavailable)
+        elif blocker == "unlink_io":
+            patch.setattr(main, "_durably_unlink", unavailable)
+        else:
+            authorization.unlink()
+        try:
+            decision = controller.step()
+            assert decision.action is None
+            assert decision.forwarding_enabled
+            assert not calls
+            assert receipt_path.read_bytes() == original_receipt
+            assert (
+                decision.checkpoint.established_ownership_context
+                == adapter.observe().ownership_context
+            )
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+    if blocker == "missing_authorization":
+        # Missing authorization is never reconstructed by product recovery.
+        assert not authorization.exists()
+        if intent == "automatic-failover":
+            return  # Existing automatic policy deliberately discards unusable authorization.
+        authorization.write_bytes(saved_authorization)
+    # Reconstruct the controller against durable evidence, as after process restart.
+    controller = RecoverableController(
+        policy=VMHAController(peer_timeout_seconds=5, suspicion_seconds=1),
+        snapshots=adapter,
+        checkpoints=VMHACheckpointFileStore(checkpoints.path),
+        effects=SimpleNamespace(apply=calls.append),
+    )
+    decision = controller.step()
+    assert decision.action is None and decision.forwarding_enabled and not calls
+    assert not (tmp_path / "transfer-lineage.json").exists()
+    assert receipt_path.read_bytes() == original_receipt
+
+
+@pytest.mark.parametrize("changed", ["epoch", "receipt_swap", "lineage_swap"])
+def test_completion_rejects_changed_epoch_or_evidence_under_lock(
+    tmp_path, pending_completion, monkeypatch, changed
+):
+    from nebius_vpngw.agent import main, vm_ha_rearm
+
+    config, store, cloud, adapter = pending_completion()
+    if changed == "epoch":
+        assert not main._recover_committed_transfer(
+            state_dir=tmp_path,
+            config=config,
+            cloud=replace(cloud, ownership_epoch="10"),
+            node_id="node-a",
+        )
+    else:
+        acquire = vm_ha_rearm._acquire_rearm_lock
+        path = tmp_path / (
+            "promotion-receipt.json" if changed == "receipt_swap" else "transfer-lineage.json"
+        )
+
+        def swap(*args, **kwargs):
+            descriptor = acquire(*args, **kwargs)
+            value = json.loads(path.read_text())
+            value["committed_at" if changed == "receipt_swap" else "started_at"] += 1
+            path.write_text(json.dumps(value))
+            return descriptor
+
+        monkeypatch.setattr(vm_ha_rearm, "_acquire_rearm_lock", swap)
+        with pytest.raises(ValueError, match="changed under"):
+            main._recover_committed_transfer(
+                state_dir=tmp_path, config=config, cloud=cloud, node_id="node-a"
+            )
+    assert (tmp_path / "transfer-lineage.json").exists()
+    assert store.load().phase is RestorationPhase.ARMED
+
+
+@pytest.mark.parametrize("corruption", ["malformed", "foreign"])
+def test_service_step_defers_invalid_planned_restoration_after_exact_completion(
+    tmp_path, pending_completion, corruption
+):
+    from nebius_vpngw.agent.main import VMHAControllerRuntime
+
+    config, store, cloud, adapter = pending_completion()
+    context = RouteReconciliationContext(
+        owner_node_id="node-a",
+        allocation_id="allocation-a",
+        ownership_epoch="9",
+        generation_id="a" * 64,
+        digests=DigestSet("a" * 64, "b" * 64, "c" * 64),
+        route_runtime_id=adapter.route_runtime_id,
+        operation_id="route-effect",
+    )
+    adapter.providers = replace(
+        adapter.providers, routes=lambda: context, established_routes=lambda: context
+    )
+    authorization = tmp_path / RESTORATION_AUTHORIZATION_FILENAME
+    if corruption == "malformed":
+        authorization.write_text("{")
+    else:
+        value = json.loads(authorization.read_text())
+        value["cluster_id"] = "foreign"
+        authorization.write_text(json.dumps(value))
+    evidence = {
+        name: (tmp_path / name).read_bytes()
+        for name in (
+            "promotion-receipt.json",
+            "transfer-lineage.json",
+            RESTORATION_AUTHORIZATION_FILENAME,
+        )
+    }
+    effects = []
+    controller = VMHAControllerRuntime(
+        snapshots=adapter,
+        effects=SimpleNamespace(apply=effects.append),
+        checkpoints=VMHACheckpointFileStore(tmp_path / "controller-checkpoint.json"),
+        status_path=tmp_path / "status.json",
+        guard=lambda: effects.append("guard"),
+    )
+    ports = SimpleNamespace(
+        local=SimpleNamespace(node_id="node-a", role=ConfiguredRole.ACTIVE),
+        install_shutdown_guard=lambda **kwargs: effects.append("shutdown-guard"),
+        data_plane=SimpleNamespace(),
+    )
+    runtime = DefaultVMHAControllerRuntime(
+        controller,
+        ports,
+        boot_id="boot-a",
+        sequence_path=tmp_path / "sequence.json",
+        guard_path=tmp_path / "guard.json",
+        config=config,
+        transfer_lineage_path=tmp_path / "transfer-lineage.json",
+        promotion_receipt_path=tmp_path / "promotion-receipt.json",
+        clock=lambda: 30.0,
+    )
+    # Already-running owner; peer transport is outside this filesystem recovery test.
+    runtime.started_guarded = True
+    runtime.active_reconcile_requested = True
+    runtime._start_peer_listener = lambda: None
+    runtime.publisher = SimpleNamespace(
+        start=lambda: None, check=lambda: None, progress=lambda value: None
+    )
+    adapter.observation_observer = lambda snapshot: None
+    for _ in range(2):
+        status = runtime.step()
+        assert status["data_plane_mode"] == "active" and status["pending_operation_id"] is None
+        assert adapter.last_snapshot.data_plane_mode is DataPlaneMode.ACTIVE
+        assert not effects
+        assert {name: (tmp_path / name).read_bytes() for name in evidence} == evidence

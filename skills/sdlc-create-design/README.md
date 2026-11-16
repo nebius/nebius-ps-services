@@ -14,7 +14,13 @@ validation, test, evaluation, rollout, and rollback boundaries before planning
 starts.
 
 Write source citations as descriptive Markdown links and check the complete
-design candidate before paired publication. Use the project's Markdown settings
+pair through the canonical candidate owner first. Eligible syntax rejection
+must be submitted unchanged to the paired publisher to reserve the shared
+two-submission/five-active-minute correction allowance before editing. Missing
+record terminators and literal HTTP route formatting use that same allowance;
+missing content and generic lint errors do not. After the read-only candidate
+check returns valid, check Markdown before final paired publication.
+Use the project's Markdown settings
 even when the candidate is private. Without a configured checker, the private
 `scripts/check_design_markdown.py` helper runs `markdownlint` from the selected
 project and applies MD013 exceptions only to recognized schema-marker lines

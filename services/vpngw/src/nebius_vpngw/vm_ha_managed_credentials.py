@@ -7,9 +7,11 @@ import errno
 import hashlib
 import json
 import os
+import random
 import secrets
 import stat
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from copy import deepcopy
@@ -25,7 +27,12 @@ if TYPE_CHECKING:
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from .nebius_pagination import collect_nebius_pages, nebius_resource_id
+from .deploy.vm_ha_cloud import (
+    vm_ha_observation_budget,
+    vm_ha_observation_remaining,
+    vm_ha_request_kwargs,
+)
+from .nebius_pagination import NebiusPaginationError, collect_nebius_pages, nebius_resource_id
 from .vm_ha_credentials import (
     VM_HA_CREDENTIAL_MAX_BYTES,
     CredentialPurpose,
@@ -40,12 +47,12 @@ from .vm_ha_credentials import (
     read_vm_ha_credential_source,
 )
 from .vpngw_sa import (
-    ServiceAccountTokenIdentity,
+    ServiceAccountIdentity,
     VMHAIAMReconciliationPlan,
     _close_client,
     _init_client,
     _wait_operation,
-    ensure_vm_ha_service_account_identity_and_token,
+    ensure_vm_ha_service_account_identity,
     inspect_vm_ha_service_account_identity,
 )
 
@@ -209,7 +216,7 @@ class VMHAManagedCredentialPlan:
 @dataclass(frozen=True)
 class VMHAManagedCredentialResult:
     credentials: VMHACredentialSet
-    token_identity: ServiceAccountTokenIdentity
+    identity: ServiceAccountIdentity
 
 
 @dataclass(frozen=True)
@@ -673,7 +680,12 @@ def _key_identity(item: Any) -> tuple[str, str, str, dict[str, str], str, str, s
     )
 
 
-def _list_service_account_keys(service: Any, service_account_id: str) -> tuple[Any, ...]:
+def _list_service_account_keys(
+    service: Any,
+    service_account_id: str,
+    *,
+    request_kwargs: Callable[[], dict[str, Any]] = vm_ha_request_kwargs,
+) -> tuple[Any, ...]:
     from nebius.api.nebius.iam.v1 import Account, ListAuthPublicKeyByAccountRequest
 
     account = Account(service_account=Account.ServiceAccount(id=service_account_id))
@@ -683,11 +695,52 @@ def _list_service_account_keys(service: Any, service_account_id: str) -> tuple[A
                 account=account,
                 page_size=_IAM_PAGE_SIZE,
                 page_token=page_token,
-            )
+            ),
+            **request_kwargs(),
         ),
         context="Authorized key",
         item_identity=nebius_resource_id,
     )
+
+
+def _reread_authorized_key(service: Any, service_account_id: str) -> tuple[Any, ...]:
+    """Observe an expected key within the existing budget; never replay creation."""
+
+    def request_kwargs() -> dict[str, Any]:
+        # Authentication in SDK 0.3 may use another 200ms for synchronous cleanup.
+        remaining = vm_ha_observation_remaining() - 0.2
+        if remaining <= 0:
+            raise TimeoutError("Managed authorized-key readback deadline exceeded")
+        allowance = min(10.0, remaining)
+        return {
+            "timeout": allowance,
+            "auth_timeout": allowance,
+            "per_retry_timeout": allowance,
+            "retries": 1,
+        }
+
+    try:
+        with vm_ha_observation_budget(clock=time.monotonic):
+            delay = 0.2
+            while True:
+                items = _list_service_account_keys(
+                    service, service_account_id, request_kwargs=request_kwargs
+                )
+                vm_ha_observation_remaining()  # Late evidence grants no authority.
+                if items:
+                    # Duplicate or changed identities are rejected by the caller.
+                    return items
+                pause = delay * (0.5 + 0.5 * random.random())
+                time.sleep(min(pause, vm_ha_observation_remaining()))
+                delay = min(2.0, delay * 2)
+    except (TimeoutError, NebiusPaginationError) as error:
+        if isinstance(error, NebiusPaginationError) and not isinstance(
+            error.__cause__, TimeoutError
+        ):
+            raise
+        raise VMHAManagedCredentialError(
+            "managed authorized key is pending exact readback; resume the same command"
+        ) from error
 
 
 def _require_exact_key(
@@ -738,7 +791,11 @@ def _reconcile_authorized_key(
     )
 
     completed = cloud.completed("authorized-key") if cloud is not None else None
-    items = _list_service_account_keys(service, service_account_id)
+    items = (
+        _reread_authorized_key(service, service_account_id)
+        if completed is not None or action == "reuse"
+        else _list_service_account_keys(service, service_account_id)
+    )
     if len(items) > 1:
         raise VMHAManagedCredentialError("managed service account has unexpected authorized keys")
     if action == "reuse" or completed is not None:
@@ -775,9 +832,9 @@ def _reconcile_authorized_key(
             completed = cloud.mutate("authorized-key", request, service.create)
     except Exception as error:
         raise VMHAManagedCredentialError("managed authorized-key creation failed") from error
-    reread = _list_service_account_keys(service, service_account_id)
+    reread = _reread_authorized_key(service, service_account_id)
     if len(reread) != 1:
-        raise VMHAManagedCredentialError("managed authorized key did not reread exactly")
+        raise VMHAManagedCredentialError("managed service account has unexpected authorized keys")
     return _require_exact_key(
         reread[0],
         project_id=project_id,
@@ -1000,7 +1057,12 @@ def _inspect_authorized_key(
         client, _ = client_factory(tenant_id, project_id, region_id)
         from nebius.api.nebius.iam.v1 import AuthPublicKeyServiceClient
 
-        items = _list_service_account_keys(AuthPublicKeyServiceClient(client), service_account_id)
+        service = AuthPublicKeyServiceClient(client)
+        items = (
+            _reread_authorized_key(service, service_account_id)
+            if expected_key_id is not None or mode == "reuse"
+            else _list_service_account_keys(service, service_account_id)
+        )
     except VMHAManagedCredentialError:
         raise
     except Exception as error:
@@ -1054,6 +1116,82 @@ def _require_approved_local_state(
         raise VMHAManagedCredentialError("managed credential local state changed after approval")
 
 
+def _pair_pending_enrollment(plan: VMHAManagedCredentialPlan, fingerprint: str) -> dict:
+    """Pair the existing key through the one canonical protected metadata owner."""
+    journal_path = plan.source_path.parent / _JOURNAL_NAME
+    journal = _read_journal(journal_path)
+    if journal is None:
+        journal = {
+            "authorized_key_name": plan.authorized_key_name,
+            "gateway_name": plan.gateway_name,
+            "project_id": plan.project_id,
+            "public_key_sha256": fingerprint,
+            "service_account_name": plan.service_account_name,
+            "version": _JOURNAL_VERSION,
+        }
+        _write_journal(journal_path, journal)
+    else:
+        _validate_journal(
+            journal,
+            project_id=plan.project_id,
+            gateway_name=plan.gateway_name,
+            service_account_name=plan.service_account_name,
+            authorized_key_name=plan.authorized_key_name,
+            public_key_sha256=fingerprint,
+            credentials=None,
+        )
+    return journal
+
+
+def settle_managed_vm_ha_enrollment(
+    plan: VMHAManagedCredentialPlan,
+    *,
+    enrollment: EnrollmentJournal,
+    tenant_id: str | None,
+    region_id: str | None,
+    client_factory: Callable[..., tuple[Any, bool]] = _init_client,
+) -> None:
+    """Under separate settlement approval, reconcile only original IAM requests.
+
+    No new key or unsubmitted graph action is created. The caller retains every
+    participating owner lock and must independently inspect the resulting graph
+    before retiring this enrollment or approving a fresh deployment.
+    """
+    from .deploy.recovery import ReplanRejected
+
+    if enrollment._lock is None:
+        raise ReplanRejected("Enrollment settlement requires its exact active writer")
+    enrollment.admit(plan)
+    current = enrollment.state["transaction"]
+    try:
+        if plan.source_present:
+            public_key = _public_key_from_credential_payload(read_vm_ha_credential_source(plan.source_path))
+            fingerprint = hashlib.sha256(public_key.encode("ascii")).hexdigest()
+        elif plan.pending_present:
+            _private, public_key, fingerprint = _private_key_material(plan.source_path.parent / _PENDING_KEY_NAME)
+            # Pair the original key after a crash before local metadata publication.
+            # This cannot authorize an unsubmitted IAM request.
+            if not plan.journal_present and not enrollment.permits_unpaired_pending_key():
+                raise ReplanRejected("Enrollment settlement lacks original key authority", code="predecessor-credential-unproven")
+        elif not current["operations"] and current["selected"] is None:
+            return
+        else:
+            raise ReplanRejected("Enrollment settlement requires the original private key", code="predecessor-credential-unproven")
+    except (VMHACredentialIdentityError, VMHAManagedCredentialError) as error:
+        raise ReplanRejected("Enrollment settlement cannot verify the retained key", code="predecessor-credential-unproven") from error
+    if fingerprint != plan.public_key_sha256 or current["selected"] not in {None, fingerprint}:
+        raise ReplanRejected("Enrollment settlement key changed after review", code="predecessor-credential-unproven")
+    if not plan.source_present:
+        _pair_pending_enrollment(plan, fingerprint)
+    if not current["operations"]:
+        return
+    client, _ = client_factory(tenant_id, plan.project_id, region_id)
+    try:
+        enrollment.cloud(client, public_key).settle()
+    finally:
+        _close_client(client)
+
+
 def _cleanup_enrollment_state(*, pending_path: Path, journal_path: Path) -> None:
     try:
         for path in (pending_path, journal_path):
@@ -1076,8 +1214,8 @@ def ensure_managed_vm_ha_credentials(
     node_ids: Sequence[str],
     tenant_id: str | None,
     region_id: str | None,
-    identity_ensurer: Callable[..., ServiceAccountTokenIdentity] = (
-        ensure_vm_ha_service_account_identity_and_token
+    identity_ensurer: Callable[..., ServiceAccountIdentity] = (
+        ensure_vm_ha_service_account_identity
     ),
     client_factory: Callable[..., tuple[Any, bool]] = _init_client,
     preflight: Callable[..., VMHACredentialSet] = preflight_vm_ha_credentials,
@@ -1183,34 +1321,13 @@ def ensure_managed_vm_ha_credentials(
         if _path_present(plan.source_path, label="managed credential source"):
             raise VMHAManagedCredentialError("managed credential source appeared after approval")
         private_pem, public_key, fingerprint = _load_or_create_pending_key(pending_path)
-        expected_journal: dict[str, object] = {
-            "authorized_key_name": plan.authorized_key_name,
-            "gateway_name": plan.gateway_name,
-            "project_id": plan.project_id,
-            "public_key_sha256": fingerprint,
-            "service_account_name": plan.service_account_name,
-            "version": _JOURNAL_VERSION,
-        }
-        journal = _read_journal(journal_path)
-        if journal is None:
-            journal = dict(expected_journal)
-            _write_journal(journal_path, journal)
-        else:
-            _validate_journal(
-                journal,
-                project_id=plan.project_id,
-                gateway_name=plan.gateway_name,
-                service_account_name=plan.service_account_name,
-                authorized_key_name=plan.authorized_key_name,
-                public_key_sha256=fingerprint,
-                credentials=None,
-            )
+        journal = _pair_pending_enrollment(plan, fingerprint)
 
     if enrollment is not None:
         enrollment.select(public_key)
 
     try:
-        token_identity = identity_ensurer(
+        identity = identity_ensurer(
             plan.service_account_name,
             tenant_id,
             plan.project_id,
@@ -1230,7 +1347,7 @@ def ensure_managed_vm_ha_credentials(
         raise VMHAManagedCredentialError("managed service-account reconciliation failed") from error
     if (
         plan.credentials is not None
-        and token_identity.service_account_id != plan.credentials.service_account_id
+        and identity.service_account_id != plan.credentials.service_account_id
     ):
         raise VMHAManagedCredentialError("managed service-account identity changed after approval")
 
@@ -1243,7 +1360,7 @@ def ensure_managed_vm_ha_credentials(
             AuthPublicKeyServiceClient(client),
             action=plan.authorized_key_action,
             project_id=plan.project_id,
-            service_account_id=token_identity.service_account_id,
+            service_account_id=identity.service_account_id,
             key_name=plan.authorized_key_name,
             labels=labels,
             public_key=public_key,
@@ -1266,17 +1383,17 @@ def ensure_managed_vm_ha_credentials(
         journal = {
             **journal,
             "authorized_key_id": key_id,
-            "service_account_id": token_identity.service_account_id,
+            "service_account_id": identity.service_account_id,
         }
         _write_journal(journal_path, journal)
         credential_payload = json.dumps(
             {
                 "subject-credentials": {
                     "alg": _KEY_ALGORITHM,
-                    "iss": token_identity.service_account_id,
+                    "iss": identity.service_account_id,
                     "kid": key_id,
                     "private-key": private_pem.decode("ascii"),
-                    "sub": token_identity.service_account_id,
+                    "sub": identity.service_account_id,
                     "type": "JWT",
                 }
             },
@@ -1293,7 +1410,7 @@ def ensure_managed_vm_ha_credentials(
     )
     if credentials.purpose != plan.purpose or tuple(credentials.by_node()) != plan.node_ids:
         raise VMHAManagedCredentialError("Published credential runtime scope changed")
-    if credentials.service_account_id != token_identity.service_account_id:
+    if credentials.service_account_id != identity.service_account_id:
         raise VMHAManagedCredentialError("published credential service account did not verify")
     if credentials.authorized_key_id != key_id:
         raise VMHAManagedCredentialError("published credential authorized key did not verify")
@@ -1306,5 +1423,5 @@ def ensure_managed_vm_ha_credentials(
         )
     return VMHAManagedCredentialResult(
         credentials=credentials,
-        token_identity=token_identity,
+        identity=identity,
     )

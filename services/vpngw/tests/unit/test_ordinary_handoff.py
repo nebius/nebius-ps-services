@@ -13,6 +13,147 @@ from nebius_vpngw.deploy.ordinary_handoff import Handoff
 pytestmark = pytest.mark.usefixtures("runtime_migration_guest")
 
 
+def test_reserved_handoff_refreshes_transport_and_checkpoint_verifiers(tmp_path, monkeypatch):
+    """An approved Compute revision must not leave a retained holder on old SSH evidence."""
+    import hashlib
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from nebius_vpngw.deploy import ordinary_handoff, package_recovery
+    from nebius_vpngw.deploy.ssh_policy import SSHTrustPolicy
+    from nebius_vpngw.deploy.ssh_push import SSHPush
+
+    revision = ["before-alias"]
+
+    def evidence(expected):
+        def check():
+            if revision[0] != expected:
+                raise RuntimeError("Compute revision changed")
+
+        return check
+
+    pins = tmp_path / "known_hosts"
+    pins.write_text("immutable pins\n")
+    policy = SSHTrustPolicy(
+        pins,
+        hashlib.sha256(pins.read_bytes()).hexdigest(),
+        transport_targets=(("gateway-0", "203.0.113.10"),),
+        _evidence_checks=(evidence("before-alias"),),
+    )
+    ssh = SSHPush(ssh_policy=policy)
+    instance = SimpleNamespace(
+        hostname="gateway-0",
+        config_yaml="vm_ha:\n  cluster_id: cluster\n",
+        vm_ha_node=SimpleNamespace(node_id="node"),
+        vm_ha_generation=SimpleNamespace(generation_id="generation"),
+    )
+
+    @contextlib.contextmanager
+    def connection(transport, *_args):
+        transport._ssh_policy.assert_current()
+        yield Mock()
+
+    def reserve_owned(job, request):
+        job.identity, job.request = "original-owner", request
+        return {"ready": True}
+
+    def control(job, request):
+        job.ssh._ssh_policy.assert_current()
+        if request["action"] == "worker-receipts":
+            return {}
+        return {"state": "PREPARED", "identity": job.identity, "result": {"ok": True}}
+
+    checkpoints = []
+
+    def verify(transport, target, member, local, **expected):
+        transport._ssh_policy.assert_current()
+        checkpoints.append((transport, target, member, local, expected))
+
+    monkeypatch.setattr(ordinary_handoff, "_connection", connection)
+    monkeypatch.setattr(package_recovery, "reserve", reserve_owned)
+    monkeypatch.setattr(ordinary_handoff.PackageJob, "control", control)
+    monkeypatch.setattr(ordinary_handoff.ingress_ssh, "preflight", lambda *_args: "original-boot")
+    monkeypatch.setattr(ordinary_handoff.ingress_ssh, "verify_fresh", verify)
+    monkeypatch.setattr(ordinary_handoff.ingress_ssh, "verify_repair_checkpoint", verify)
+    with ordinary_handoff.reserve(
+        ssh,
+        "203.0.113.10",
+        instance,
+        {},
+        observed={"config_sha256": "a" * 64},
+        approval="b" * 64,
+        artifact="c" * 64,
+    ) as holder:
+        original_request = holder.job.request
+        revision[0] = "after-approved-alias"
+        with pytest.raises(RuntimeError, match="Compute revision changed"):
+            holder.exchange({"action": "probe"})
+        refreshed = SSHPush(
+            ssh_policy=replace(
+                policy,
+                _evidence_checks=(evidence("after-approved-alias"),),
+            )
+        )
+        holder.rebind_ssh(refreshed)
+        assert holder.exchange({"action": "probe"}) == {"ok": True}
+        holder.activated_config_sha256 = "d" * 64
+        holder.fresh_verifier()
+        holder.repair_verifier()
+        assert holder.job.identity == "original-owner"
+        assert holder.job.request is original_request
+        assert holder.job.submitted == {"probe": {"action": "probe"}}
+        assert [item[0] for item in checkpoints] == [refreshed, refreshed]
+        assert [item[4] for item in checkpoints] == [
+            {"boot_id": "original-boot", "config_sha256": "d" * 64},
+            {"boot_id": "original-boot", "config_sha256": "a" * 64},
+        ]
+        revision[0] = "unapproved-later-change"
+        with pytest.raises(RuntimeError, match="Compute revision changed"):
+            holder.exchange({"action": "probe"})
+
+
+@pytest.mark.parametrize("problem", ["missing-policy", "different-member", "changed-evidence"])
+def test_handoff_rebind_rejects_unverified_transport_without_replacing_it(problem):
+    from types import SimpleNamespace
+
+    original = object()
+    job = SimpleNamespace(
+        ssh=original, target="203.0.113.10", instance=SimpleNamespace(hostname="a")
+    )
+    policy = Mock(spec=["hostname_for_transport", "assert_current"])
+    policy.hostname_for_transport.return_value = "b" if problem == "different-member" else "a"
+    if problem == "changed-evidence":
+        policy.assert_current.side_effect = RuntimeError("changed evidence")
+    replacement = SimpleNamespace(_ssh_policy=None if problem == "missing-policy" else policy)
+    with pytest.raises(RuntimeError):
+        Handoff(job, ha={}).rebind_ssh(replacement)
+    assert job.ssh is original
+
+
+def test_handoff_rejects_mutation_of_the_original_package_object_before_any_effect():
+    from types import SimpleNamespace
+
+    from nebius_vpngw.deploy.vm_ha_package import VMHAAgentPackageError, VMHAPackagePlan
+
+    package = VMHAPackagePlan(
+        "host",
+        SimpleNamespace(hostname="gateway-a"),
+        None,
+        {"ha_parent": "a" * 64},
+        {},
+        [],
+        ["install"],
+        "compute-a",
+        None,
+    )
+    job = Mock()
+    holder = Handoff(job, ha={}, package=package)
+    package.manifest["ha_parent"] = "b" * 64
+    with pytest.raises(VMHAAgentPackageError, match="package plan changed"):
+        holder.prepare_package(package)
+    assert not job.mock_calls
+
+
 @pytest.fixture(autouse=True)
 def route_runtime_guest(tmp_path, monkeypatch):
     from nebius_vpngw.agent import ordinary_route_authority
@@ -176,6 +317,131 @@ def test_streamed_bootstrap_uses_small_command_and_preserves_request_framing(mon
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == request
+
+
+@pytest.mark.parametrize("action", ["corrective-reserve", "replan-settle"])
+@pytest.mark.parametrize(
+    "deadline,expected", [(340.0, 240.0), (None, 600.0), (105.0, 5.0), (900.0, 600.0)]
+)
+def test_effectful_handoff_waits_within_existing_budget(monkeypatch, action, deadline, expected):
+    from nebius_vpngw.deploy import ordinary_handoff, ssh_commands
+
+    client = Mock()
+    client.exec_command.return_value = (io.StringIO(), io.StringIO(), io.StringIO())
+    monkeypatch.setattr(ordinary_handoff, "streamed_source", lambda: "# fixture\n")
+    monkeypatch.setattr(ordinary_handoff.time, "monotonic", lambda: 100.0)
+    token = ssh_commands.DEADLINE.set(deadline)
+    try:
+        ordinary_handoff._start(client, {"action": action})
+    finally:
+        ssh_commands.DEADLINE.reset(token)
+    assert client.exec_command.call_args.kwargs["timeout"] == expected
+
+
+@pytest.mark.parametrize("action", ["corrective-reserve", "replan-settle", "worker-status"])
+@pytest.mark.parametrize("deadline", [100.0, 99.0])
+def test_handoff_expired_budget_never_submits(monkeypatch, action, deadline):
+    from nebius_vpngw.deploy import ordinary_handoff, ssh_commands
+
+    client = Mock()
+    monkeypatch.setattr(ordinary_handoff, "streamed_source", lambda: "# fixture\n")
+    monkeypatch.setattr(ordinary_handoff.time, "monotonic", lambda: 100.0)
+    token = ssh_commands.DEADLINE.set(deadline)
+    try:
+        with pytest.raises(TimeoutError, match="before submission"):
+            ordinary_handoff._start(client, {"action": action})
+    finally:
+        ssh_commands.DEADLINE.reset(token)
+    client.exec_command.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["corrective-reserve", "replan-settle"])
+@pytest.mark.parametrize("inherited,expected", [(None, 700.0), (340.0, 340.0)])
+def test_corrective_transport_keeps_one_budget_through_connect_send_and_read(
+    monkeypatch, action, inherited, expected
+):
+    from nebius_vpngw.deploy import ordinary_handoff, ssh_commands
+
+    observed = []
+
+    @contextlib.contextmanager
+    def connection(*_):
+        observed.append(("connect", ssh_commands.DEADLINE.get()))
+        yield object()
+        observed.append(("close", ssh_commands.DEADLINE.get()))
+
+    def start(*_):
+        observed.append(("send", ssh_commands.DEADLINE.get()))
+        return None, object()
+
+    def receive(*_):
+        observed.append(("read", ssh_commands.DEADLINE.get()))
+        return {"settled": True}
+
+    monkeypatch.setattr(ordinary_handoff, "_connection", connection)
+    monkeypatch.setattr(ordinary_handoff, "_start", start)
+    monkeypatch.setattr(ordinary_handoff, "_receive", receive)
+    monkeypatch.setattr(ordinary_handoff.time, "monotonic", lambda: 100.0)
+    token = ssh_commands.DEADLINE.set(inherited)
+    try:
+        assert ordinary_handoff.corrective_action(None, "target", None, {}, {"action": action}) == {
+            "settled": True
+        }
+        assert ssh_commands.DEADLINE.get() == inherited
+    finally:
+        ssh_commands.DEADLINE.reset(token)
+    assert observed == [(stage, expected) for stage in ("connect", "send", "read", "close")]
+
+
+@pytest.mark.parametrize("command", ["apply"])
+@pytest.mark.parametrize("stage", ["connect", "send", "read"])
+def test_corrective_eof_reports_unknown_guest_outcome_with_repair_guidance(
+    monkeypatch, command, stage
+):
+    from pathlib import Path
+
+    from nebius_vpngw.deploy import ordinary_handoff
+    from nebius_vpngw.deploy.apply_diagnostics import GuestResponseUnavailable, observation_pending
+    from nebius_vpngw.deploy.recovery import Invocation, advice
+
+    def lost(where):
+        if stage == where:
+            raise EOFError("private transport detail must never appear")
+
+    @contextlib.contextmanager
+    def connection(*_):
+        lost("connect")
+        yield object()
+
+    def start(*_):
+        lost("send")
+        return None, io.StringIO("")
+
+    monkeypatch.setattr(ordinary_handoff, "_connection", connection)
+    monkeypatch.setattr(ordinary_handoff, "_start", start)
+    with pytest.raises(GuestResponseUnavailable) as caught:
+        ordinary_handoff.corrective_action(
+            None, "target", None, {}, {"action": "corrective-reserve"}
+        )
+    assert observation_pending(caught.value)
+    recovery = advice(Invocation(command, Path("gateway with spaces.yaml")), caught.value)
+    assert recovery.reason_code == "guest-response-unavailable"
+    assert "unknown" in recovery.reason
+    assert "original request" in recovery.next_action
+    assert recovery.repair_command == (
+        "nebius-vpngw apply --local-config-file 'gateway with spaces.yaml' --repair"
+    )
+    assert recovery.destroy_command is None
+    assert "interrupted" not in recovery.text()
+    assert "private transport detail" not in json.dumps(recovery.mapping())
+    from nebius_vpngw import cli
+
+    projected = cli._vm_ha_convergence_diagnostics(
+        caught.value, cli._VMHAProgressPhase.EXECUTE_APPLY
+    )
+    wrapped = advice(Invocation("apply"), codes=projected, pending=True)
+    assert wrapped.reason_code == recovery.reason_code
+    assert wrapped.reason == recovery.reason
 
 
 def test_repair_admission_works_before_new_package_is_installed(monkeypatch, tmp_path):

@@ -23,13 +23,14 @@ from implement_semantics import (
 
 def manifest(generation: str, digest: str, status: str = "PARTIAL") -> dict:
     return {
-        "schema": "implement-test/live-results-v1",
+        "schema": "implement-test/live-results-v2",
         "generation_id": generation,
         "status": status,
         "project_head": "a" * 40,
         "orchestration": {key: True for key in ORCHESTRATION_KEYS},
         "application": {key: True for key in APPLICATION_KEYS},
         "artifacts": {
+            "browser": None,
             "application": {
                 "path": "evidence/application.json",
                 "sha256": digest,
@@ -68,6 +69,7 @@ class SemanticsTests(unittest.TestCase):
 
         fixture = DirectExecutionTests()
         fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
         self.addCleanup(fixture.tearDown)
         coordinator = fixture.prepare()
         pending = execution.prepare_wave(fixture.run_dir, "FEAT-001", "WAVE-001")
@@ -83,7 +85,20 @@ class SemanticsTests(unittest.TestCase):
         objective = objectives.validate_run(fixture.run_dir)[1]["revisions"][-1]["sha256"]
         fixture.publication(integration, objective=objective, basis=_basis(fixture.run_dir, "FEAT-001"))
         git(integration, "add", "-A")
-        fixture.settle()
+        # Initial planning has effects; final owner publication fulfills the
+        # same statements without changing the locked execution contract.
+        from workflow_refinement import refinement, settle
+        from project_specs_lib.impact import statement_inventory
+        refined = refinement(fixture.run_dir)
+        claim = {key: refined[key] for key in ("objective_id", "revision", "intent_sha256")}
+        claim.update(
+            schema=impact.CLAIM_SCHEMA, declared_effects=[], declared_plan_action="retain_plan",
+            dispositions=[{
+                "statement": item["key"], "disposition": "existing_contract",
+                "requirements": ["REQ-001"], "design": ["FEAT-001"], "effects": [], "reason": None,
+            } for item in statement_inventory(refined["extracted"])],
+        )
+        settle(fixture.run_dir, claim)
         basis = impact.settle_execution(fixture.run_dir, "FEAT-001", coordinator["plan_digest"], fixture.project)
         self.assertNotEqual(first["basis_sha256"], impact.canonical_digest(basis))
         execution.seal_feature(fixture.run_dir, "FEAT-001", "validation and alignment passed", "test: final specs")
@@ -127,6 +142,106 @@ class SemanticsTests(unittest.TestCase):
                     semantics._validate_admission_basis(fixture.run_dir, first, admission, mutated_basis, impact, state)
         state.write(receipt_path, receipt)
         semantics._validate_admission_basis(fixture.run_dir, first, admission, basis, impact, state)
+        for field in ("statement", "category", "statement_sha256", "effects", "disposition"):
+            with self.subTest(changed_coverage=field):
+                changed = copy.deepcopy(receipt)
+                changed["coverage"][0][field] = ["execution"] if field == "effects" else "different"
+                state.write(receipt_path, changed)
+                mutated_basis = {**basis, "impact_sha256": impact.canonical_digest(changed)}
+                with self.assertRaisesRegex(ValueError, "valid owner reconciliation"):
+                    semantics._validate_admission_basis(fixture.run_dir, first, admission, mutated_basis, impact, state)
+        state.write(receipt_path, receipt)
+        with self.assertRaisesRegex(ValueError, "hash-bound impact receipt"):
+            semantics._validate_admission_basis(
+                fixture.run_dir, first, admission, {**basis, "plan_action": "replan_required"}, impact, state,
+            )
+
+    def _recovered_worker(self, *, blocked):
+        scripts = Path(__file__).resolve().parents[2] / "worktree/scripts"
+        sys.path.insert(0, str(scripts))
+        from test_workflow_contracts import DirectExecutionTests
+        import workflow_execution as execution
+        import workflow_reconcile as reconcile
+        import workflow_state as state
+        from workflow_objectives import session_hash
+
+        fixture = DirectExecutionTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.addCleanup(fixture.tearDown)
+        assignment, _ = fixture.result_fixture()
+        if blocked:
+            _, observation, _ = fixture.result_ingest(assignment, "blocked")
+        else:
+            observation = fixture.result_observation(assignment)
+        native = "fresh-recovery-verifier-test"
+        reconcile.authorize_recovery(
+            fixture.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"],
+            observation, fixture.session, session_hash(native),
+        )
+        execution.recover_task(
+            fixture.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"], native,
+            Path(assignment["scope_cwd"]), expected_attempt=1, confirmed_stopped=True,
+        )
+        fixture.result_write(assignment)
+        receipt, observation, _ = fixture.result_ingest(assignment)
+        result = fixture.result_finish(assignment, receipt, observation)
+        admission = execution.admit_task(
+            fixture.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"], observation,
+        )
+        task = state.read(execution.task_path(fixture.run_dir, "FEAT-001", "WAVE-001", assignment["task_id"]))
+        return fixture, assignment, task, result, admission, execution, state
+
+    def test_completed_worker_preserves_authorized_recovery_history(self):
+        fixture, assignment, task, result, admission, execution, state = self._recovered_worker(blocked=True)
+
+        def verify(task_value=task, result_value=result, admission_value=admission):
+            return semantics._validate_worker_history(
+                fixture.run_dir, assignment, task_value, result_value, admission_value, execution, state,
+            )
+
+        self.assertEqual(len(verify()), 2)
+        with self.assertRaisesRegex(ValueError, "session history"):
+            verify({**task, "attempt": 1})
+        with self.assertRaises(execution.ExecutionError):
+            verify({**task, "worker_session_hash_history": [task["worker_session_hash"]] * 2})
+        with self.assertRaisesRegex(ValueError, "session history"):
+            verify(result_value={**result, "worker_session_hash": "0" * 64})
+        with self.assertRaisesRegex(ValueError, "termination evidence"):
+            verify(admission_value={**admission, "termination_sha256": "0" * 64})
+
+        root = fixture.run_dir / "execution/FEAT-001"
+        authorization_path = next((root / "recoveries").glob("*.json"))
+        authorization = state.read(authorization_path)
+        authorization_path.unlink()
+        with self.assertRaisesRegex(ValueError, "history is missing"):
+            verify()
+        state.write(authorization_path, authorization)
+        for field, value in (
+            ("assignment_digest", "0" * 64), ("prior_worker_session_hash", "0" * 64),
+            ("next_worker_session_hash", "0" * 64), ("termination_sha256", "0" * 64),
+            ("worker_result_receipt_sha256", None), ("repair_authority", {}),
+        ):
+            with self.subTest(changed_recovery=field):
+                state.write(authorization_path, {**authorization, field: value})
+                with self.assertRaises(ValueError):
+                    verify()
+        state.write(authorization_path, authorization)
+        from workflow_worker_results import receipt_path
+        failed_path = receipt_path(assignment, 1)
+        failed = state.read(failed_path)
+        failed_path.unlink()
+        with self.assertRaisesRegex(ValueError, "authority changed"):
+            verify()
+        state.write(failed_path, failed)
+        self.assertEqual(len(verify()), 2)
+
+    def test_completed_worker_preserves_interruption_recovery(self):
+        fixture, assignment, task, result, admission, execution, state = self._recovered_worker(blocked=False)
+        history = semantics._validate_worker_history(
+            fixture.run_dir, assignment, task, result, admission, execution, state,
+        )
+        self.assertEqual(len(history), 2)
 
     def test_assignment_context_is_bound_to_the_canonical_task(self) -> None:
         task = {
@@ -140,8 +255,7 @@ class SemanticsTests(unittest.TestCase):
         }
         liveness = {
             "worker_profile": "integration",
-            "read_only_warning_seconds": 360,
-            "read_only_seconds": 420,
+            "health_policy": __import__("workflow_liveness").health_policy("integration"),
         }
         assignment = {
             **task,
@@ -169,13 +283,13 @@ class SemanticsTests(unittest.TestCase):
                 "write_claims": [{"kind": "prefix", "path": path}],
             }
             for index, path in enumerate(
-                ("app/frontend", "app/api", "app/database"), start=1
+                ("project-a/app/frontend", "project-a/app/api", "project-a/app/database"), start=1
             )
         ]
         integration = {
             "task_id": "task-4",
             "dependencies": ["task-1", "task-2", "task-3"],
-            "write_claims": [{"kind": "exact", "path": "compose.yaml"}],
+            "write_claims": [{"kind": "exact", "path": "project-a/compose.yaml"}],
         }
         waves = [{"tasks": tiers}, {"tasks": [integration]}]
         self.assertEqual(_dependency_contract_errors(waves), [])
@@ -185,13 +299,13 @@ class SemanticsTests(unittest.TestCase):
             _dependency_contract_errors(waves),
         )
         integration["dependencies"] = ["task-1", "task-2", "task-3"]
-        tiers[1]["write_claims"] = [{"kind": "prefix", "path": "app/frontend/api"}]
+        tiers[1]["write_claims"] = [{"kind": "prefix", "path": "project-a/app/frontend/api"}]
         self.assertIn(
             "first-wave task write claims overlap",
             _dependency_contract_errors(waves),
         )
-        tiers[0]["write_claims"] = [{"kind": "prefix", "path": "app/frontend/nested"}]
-        tiers[1]["write_claims"] = [{"kind": "prefix", "path": "app/frontend"}]
+        tiers[0]["write_claims"] = [{"kind": "prefix", "path": "project-a/app/frontend/nested"}]
+        tiers[1]["write_claims"] = [{"kind": "prefix", "path": "project-a/app/frontend"}]
         self.assertIn(
             "first-wave task write claims overlap",
             _dependency_contract_errors(waves),
@@ -203,13 +317,13 @@ class SemanticsTests(unittest.TestCase):
             "dependencies": [],
             "write_claims": [
                 {"kind": "prefix", "path": path}
-                for path in ("app/frontend", "app/api", "app/database")
+                for path in ("project-a/app/frontend", "project-a/app/api", "project-a/app/database")
             ],
         }
         integration = {
             "task_id": "task-2",
             "dependencies": ["task-1"],
-            "write_claims": [{"kind": "exact", "path": "compose.yaml"}],
+            "write_claims": [{"kind": "exact", "path": "project-a/compose.yaml"}],
         }
         self.assertIn(
             "first wave must have three distinct tier task owners",
@@ -290,13 +404,18 @@ class SemanticsTests(unittest.TestCase):
                         "live_started": True,
                         "web_port": 49152,
                         "application_evidence_sha256": digest,
+                        "browser_evidence_sha256": "b" * 64,
                     }
                 ),
                 encoding="utf-8",
             )
-            with patch.object(semantics, "_validate_orchestration", return_value=[]):
+            with patch.object(semantics, "_validate_orchestration", return_value=[]), patch(
+                "implement_catalog.validate"
+            ), patch("implement_browser.validate") as browser_check:
+                data = manifest(generation, digest, "PASS")
+                data["artifacts"]["browser"] = {"path": "evidence/browser.json", "sha256": "b" * 64}
                 errors = validate_results(
-                    manifest(generation, digest, "PASS"),
+                    data,
                     evidence,
                     generation,
                     project_root=project,
@@ -306,6 +425,7 @@ class SemanticsTests(unittest.TestCase):
                     lifecycle_state=lifecycle,
                 )
             self.assertEqual(errors, [])
+            browser_check.assert_called_once()
 
 
 if __name__ == "__main__":

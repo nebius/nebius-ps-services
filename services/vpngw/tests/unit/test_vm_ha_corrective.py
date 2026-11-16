@@ -13,7 +13,9 @@ from nebius_vpngw.deploy.vm_ha_lifecycle import (
     VMHALifecycleStatus,
     VMHALifecycleStore,
     _validate_successor,
+    vm_ha_missing_standby_disk_name,
 )
+from nebius_vpngw.runtime_migration import release as real_runtime_release
 
 
 def failed_release():
@@ -77,6 +79,21 @@ def test_corrective_cycle_retains_identity_and_archives_failed_release(tmp_path)
     corrective.archive(state, store.path)
 
 
+@pytest.mark.parametrize("phase", ["installed", "activating"])
+def test_corrective_cycle_admits_completed_packages_before_owner_release(phase):
+    state = checkpoint()
+    state = replace(state, transaction=replace(state.transaction, pending_effect="activate-node-1"))
+    value = record(state)
+    for child in value["children"].values():
+        child["runtime"]["phase"] = phase
+    new = corrective.successor(state, value, bindings={})
+    assert new.has_same_identity(state)
+    assert new.transaction.operation_id != state.transaction.operation_id
+    assert new.transaction.completed_effects == ()
+    assert corrective.authority(new)["children"] == value["children"]
+    assert state.transaction.pending_effect == "activate-node-1"
+
+
 @pytest.mark.parametrize("completed", [False, True])
 def test_destroy_after_corrective_release_retains_history_and_exact_authority(tmp_path, completed):
     failed = failed_release()
@@ -133,10 +150,95 @@ def test_destroy_after_corrective_release_retains_history_and_exact_authority(tm
             _validate_successor(state, invalid)
 
 
+def test_missing_standby_after_corrective_release_preserves_history(tmp_path):
+    failed = failed_release()
+    corrected = corrective.successor(failed, record(failed), bindings={})
+    state = replace(
+        corrected,
+        status=VMHALifecycleStatus.ACTIVE,
+        transaction=replace(
+            corrected.transaction,
+            checkpoint="activation-complete",
+            pending_effect=None,
+            completed_effects=("activate-node-0", "activate-node-1"),
+        ),
+    )
+    owner, target = state.members
+    replacement = VMHALifecycleState.start_missing_standby_replacement(
+        state,
+        target_instance_name=target.instance_name,
+        replacement_cycle=1,
+        replacement_disk_name=vm_ha_missing_standby_disk_name(
+            gateway_name=state.gateway_name,
+            instance_name=target.instance_name,
+            predecessor_sha256=state.record_sha256,
+            cycle=1,
+        ),
+        operation_id="4" * 64,
+        approval_digest="5" * 64,
+        desired_state_digest=state.transaction.desired_state_digest,
+        current_state_digest="6" * 64,
+        current_observation={
+            "members": [
+                {
+                    "instance_name": owner.instance_name,
+                    "present": True,
+                    "state": "running",
+                    "compute_id": owner.compute_id,
+                    "network_interface_name": owner.network_interface_name,
+                },
+                {"instance_name": target.instance_name, "present": False},
+            ],
+            "shared_allocation": {
+                "owner": {
+                    "compute_id": owner.compute_id,
+                    "network_interface_name": owner.network_interface_name,
+                },
+            },
+        },
+        artifact_sha256="c" * 64,
+    )
+    store = VMHALifecycleStore(tmp_path / "gateway.yaml")
+    store.path.write_text(json.dumps(state.to_dict()))
+    store.path.chmod(0o600)
+    original = store.path.read_bytes()
+    bindings = dict(replacement.transaction.resource_bindings)
+    assert (
+        bindings[corrective.AUTHORITY_KEY]
+        == dict(state.transaction.resource_bindings)[corrective.AUTHORITY_KEY]
+    )
+    for resources in (
+        {key: value for key, value in bindings.items() if key != corrective.AUTHORITY_KEY},
+        {**bindings, corrective.AUTHORITY_KEY: "{}"},
+        {**bindings, "compute:gateway-0": "foreign-owner"},
+    ):
+        invalid = replace(
+            replacement,
+            transaction=replace(
+                replacement.transaction, resource_bindings=tuple(sorted(resources.items()))
+            ),
+        )
+        with pytest.raises(ValueError):
+            store.write_verified(invalid, predecessor_sha256=state.record_sha256)
+        assert store.path.read_bytes() == original
+
+    store.write_verified(replacement, predecessor_sha256=state.record_sha256)
+    restored = store.read_hardened(
+        expected_project_id=state.project_id, expected_gateway_name=state.gateway_name
+    ).state
+    assert restored == replacement
+    assert restored.members[0] == owner
+    assert not restored.members[1].compute_id and not restored.members[1].disk_id
+    store.write_verified(replacement, predecessor_sha256=state.record_sha256)
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("phase", "installed"),
+        ("phase", "packages"),
+        ("phase", "prepared"),
+        ("phase", "inhibited"),
+        ("phase", "releasing"),
         ("parent", "9" * 64),
         ("artifact", "9" * 64),
         ("operation", "9" * 32),
@@ -228,8 +330,10 @@ def reservation_guest(monkeypatch, tmp_path, ordinary_operation_guest, runtime_m
     from contextlib import nullcontext
 
     from nebius_vpngw import ordinary_operations as ops
+    from nebius_vpngw import package_worker
     from nebius_vpngw.deploy import handoff_remote as guest
 
+    monkeypatch.setattr(package_worker, "native_lock", lambda _path, **kwargs: nullcontext())
     state_dir = tmp_path / "ha"
     state_dir.mkdir(mode=0o700)
     forwarding = tmp_path / "forwarding"
@@ -251,10 +355,10 @@ def reservation_guest(monkeypatch, tmp_path, ordinary_operation_guest, runtime_m
 
     monkeypatch.setattr(guest.repair, "publish", publish)
 
+    canonical_exact = guest.repair.exact_lock
+
     def exact(expected, state_dir=state_dir):
-        actual = json.loads((state_dir / "apply.lock").read_text())
-        assert all(actual[k] == v for k, v in expected.items() if v is not None)
-        return actual
+        return canonical_exact(expected, state_dir)
 
     monkeypatch.setattr(guest.repair, "exact_lock", exact)
     monkeypatch.setattr(guest.repair, "cold_guard", lambda **kw: None)
@@ -309,8 +413,15 @@ def reservation_guest(monkeypatch, tmp_path, ordinary_operation_guest, runtime_m
 
 
 @pytest.mark.parametrize("boundary", ["reservation", "runtime", "inhibition", "lock", "receipt"])
-def test_guest_reservation_resumes_every_durable_boundary(reservation_guest, monkeypatch, boundary):
+@pytest.mark.parametrize("phase", ["installed", "activating", "complete"])
+def test_guest_reservation_resumes_every_durable_boundary(
+    reservation_guest, monkeypatch, boundary, phase
+):
     guest, request = reservation_guest
+    predecessor = guest.remote.migration.state()
+    predecessor["phase"] = phase
+    guest.remote.migration.save(predecessor)
+    request["children"] = guest.corrective_children()
     ops = guest.ops
     publish = guest.repair.publish
     begin = guest.remote.migration.begin
@@ -334,8 +445,8 @@ def test_guest_reservation_resumes_every_durable_boundary(reservation_guest, mon
         if boundary == "lock" and path.name == "apply.lock":
             crash()
 
-    def native(*args):
-        begin(*args)
+    def native(*args, **kwargs):
+        begin(*args, **kwargs)
         if boundary == "runtime":
             crash()
 
@@ -373,10 +484,273 @@ def test_guest_reservation_resumes_every_durable_boundary(reservation_guest, mon
         assert (
             guest.repair.STATE / "corrective" / (request["operation"] + "-" + name + ".json")
         ).exists()
+    assert (
+        guest.repair.read_json(
+            guest.repair.STATE / "corrective" / (request["operation"] + "-runtime.json")
+        )
+        == predecessor
+    )
     changed = copy.deepcopy(request)
     changed["package"]["desired"]["wheel_sha256"] = "e" * 64
     with pytest.raises(RuntimeError, match="authority changed"):
         guest.reserve_corrective(changed)
+
+
+@pytest.mark.parametrize("phase", ["prepared", "inhibited", "packages", "releasing"])
+def test_corrective_reservation_refuses_unfinished_package_or_release_work(
+    reservation_guest, phase
+):
+    guest, request = reservation_guest
+    state = guest.remote.migration.state()
+    state["phase"] = phase
+    guest.remote.migration.save(state)
+    request["children"] = guest.corrective_children()
+    with pytest.raises(RuntimeError, match="package work is incomplete"):
+        guest.reserve_corrective(request)
+    assert guest.remote.migration.state() == state
+    assert not (guest.repair.STATE / "corrective").exists()
+
+
+def test_corrective_proposal_is_read_only_and_uses_current_native_inventory(
+    reservation_guest, monkeypatch
+):
+    guest, request = reservation_guest
+    state = guest.remote.migration.state()
+    state["phase"] = "activating"
+    guest.remote.migration.save(state)
+    request["children"] = guest.corrective_children()
+    manifest = request["package"]["desired"]
+    seen = []
+    fresh = copy.deepcopy(state["plan"])
+    fresh["before"]["another-package"] = ["1.0", "installed"]
+    monkeypatch.setattr(guest.remote.migration, "plan_current", lambda: fresh)
+    monkeypatch.setattr(
+        guest.remote,
+        "inspect",
+        lambda proposed, **kw: (
+            seen.append((proposed, kw)) or {"runtime_plan": proposed["runtime_plan"]}
+        ),
+    )
+    assert guest.corrective_plan({**request, "manifest": manifest}) == {
+        "dependency_inventory": {},
+        "observation": {"runtime_plan": fresh}
+    }
+    assert seen == [({**manifest, "runtime_plan": fresh}, {"runtime_admission": False, "dependency_inventory": {}})]
+    assert guest.remote.migration.state() == state
+    assert guest.corrective_children() == request["children"]
+    assert not (guest.repair.STATE / "corrective").exists()
+
+
+def test_corrective_native_package_exclusion_precedes_any_reservation(
+    reservation_guest, monkeypatch
+):
+    from contextlib import contextmanager
+
+    from nebius_vpngw import package_worker
+
+    guest, request = reservation_guest
+    before = guest.corrective_children()
+
+    @contextmanager
+    def unavailable(_path, *, deadline):
+        assert deadline == guest.remote.DEADLINE
+        raise RuntimeError("native package lock unavailable")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(package_worker, "native_lock", unavailable)
+    with pytest.raises(RuntimeError, match="native package lock unavailable"):
+        guest.reserve_corrective(request)
+    assert guest.corrective_children() == before
+    assert not (guest.repair.STATE / "corrective").exists()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        None,
+        "boot",
+        "node",
+        "allocation",
+        "generation",
+        "digests",
+        "operation",
+        "incarnation",
+        "kind",
+    ],
+)
+def test_corrective_guest_retains_only_exact_local_passive_intent(tmp_path, monkeypatch, change):
+    from types import SimpleNamespace
+
+    from nebius_vpngw.agent.vm_ha.models import DigestSet
+    from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_to_dict
+    from nebius_vpngw.agent.vm_ha_controller import (
+        ActionKind,
+        ControllerAction,
+        ControllerCheckpoint,
+    )
+    from nebius_vpngw.deploy import handoff_remote as guest
+
+    def write(path, value):
+        path.write_text(json.dumps(value))
+        path.chmod(0o600)
+
+    state = tmp_path / "state"
+    state.mkdir()
+    boot = tmp_path / "boot"
+    boot.write_text("boot-current")
+    forwarding = tmp_path / "forwarding"
+    forwarding.write_text("0")
+    lock = {
+        "schema": "nebius-vpngw/vm-ha-apply-lock-v2",
+        "apply_locked": True,
+        "cluster_id": "cluster",
+        "node_id": "node",
+        "generation_id": "a" * 64,
+        "operation_id": "b" * 64,
+    }
+    write(state / "apply.lock", lock)
+    write(
+        state / "guard.json",
+        {
+            "schema": guest.repair.STATUS_SCHEMA,
+            "guard_boot_id": "boot-current",
+            "data_plane_mode": "blocked",
+        },
+    )
+    digests = {"configuration": "a" * 64, "static_routes": "c" * 64, "bgp_policy": "d" * 64}
+    configuration = tmp_path / "configuration"
+    write(
+        configuration,
+        {
+            "vm_ha": {
+                "cluster_id": "cluster",
+                "node": {"node_id": "node"},
+                "generation": {"generation_id": "a" * 64, "digests": digests},
+                "runtime_binding": {"shared_allocation_id": "allocation"},
+            }
+        },
+    )
+    action = ControllerAction(
+        kind=ActionKind.ENTER_PASSIVE,
+        operation_id="boot-current:1:enter-passive:node",
+        boot_id="boot-current",
+        target_node_id="node",
+        allocation_id="allocation",
+        ownership_epoch="1",
+        generation_id="a" * 64,
+        digests=DigestSet(**digests),
+    )
+    payload = controller_checkpoint_to_dict(ControllerCheckpoint(sequence=1, pending_action=action))
+    mutations = {
+        "boot": ("boot_id", "old"),
+        "node": ("target_node_id", "foreign"),
+        "allocation": ("allocation_id", "foreign"),
+        "generation": ("generation_id", "e" * 64),
+        "digests": ("digests", dict(digests, configuration="e" * 64)),
+        "operation": ("operation_id", "foreign"),
+        "incarnation": ("ownership_incarnation", 1),
+        "kind": ("kind", "enable-active"),
+    }
+    if change is not None:
+        key, value = mutations[change]
+        payload["pending_action"][key] = value
+    checkpoint = state / "controller-checkpoint.json"
+    write(checkpoint, payload)
+    original = checkpoint.read_bytes()
+    monkeypatch.setattr(guest.repair, "STATE", state)
+    monkeypatch.setattr(guest.repair, "FORWARDING", forwarding)
+    monkeypatch.setattr(guest.ops, "BOOT", boot)
+    monkeypatch.setattr(guest.remote, "CONFIG", configuration)
+    exact = guest.repair.exact_lock
+    monkeypatch.setattr(guest.repair, "exact_lock", lambda expected: exact(expected, state))
+    monkeypatch.setattr(guest.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0))
+    if change is None:
+        guest.corrective_fence(lock)
+    else:
+        with pytest.raises((RuntimeError, ValueError)):
+            guest.corrective_fence(lock)
+    assert checkpoint.read_bytes() == original
+    assert json.loads((state / "apply.lock").read_text()) == lock
+    assert forwarding.read_text() == "0"
+
+
+@pytest.mark.parametrize(
+    "operator_policy", [None, {"content": "IyEvYmluL3NoCmV4aXQgMTAxCg==", "mode": 0o755}]
+)
+def test_corrective_runtime_preserves_original_policy_after_inhibited_activation(
+    reservation_guest, monkeypatch, operator_policy
+):
+    import base64
+
+    guest, request = reservation_guest
+    migration = guest.remote.migration
+    # The unit fixture runs without root; retain its explicit OS ownership
+    # boundary while exercising actual begin/release and policy bytes.
+    monkeypatch.setattr(
+        migration,
+        "policy_payload",
+        lambda: (
+            None
+            if not migration.POLICY.exists()
+            else {
+                "content": base64.b64encode(migration.POLICY.read_bytes()).decode(),
+                "mode": migration.POLICY.stat().st_mode & 0o777,
+            }
+        ),
+    )
+    monkeypatch.setattr(migration, "policy_snapshot", lambda: migration.policy_identity(migration.policy_payload()))
+    previous = migration.state()
+    previous.update(phase="activating", policy=operator_policy)
+    migration.save(previous)
+    migration.write(migration.POLICY, migration.POLICY_BYTES, 0o755)
+    approved = copy.deepcopy(previous["plan"])
+    approved["startup_policy"] = migration.policy_snapshot()
+    migration.stage(approved)
+    manifest = {**request["package"]["desired"], "runtime_plan": approved}
+    migration.begin(approved, "e" * 32, manifest, superseded_sha256=migration.digest(previous))
+    assert migration.state()["policy"] == operator_policy
+    real_runtime_release()
+    assert migration.state()["phase"] == "complete"
+    if operator_policy is None:
+        assert not migration.POLICY.exists()
+    else:
+        assert migration.POLICY.read_bytes() == base64.b64decode(operator_policy["content"])
+
+
+def test_corrective_native_plan_refuses_changed_operator_boot_policy(reservation_guest):
+    guest, _request = reservation_guest
+    migration = guest.remote.migration
+    previous = migration.state()
+    previous["phase"] = "activating"
+    previous["plan"]["unit_policy"] = {"strongswan.service": {"UnitFileState": "disabled"}}
+    approved = copy.deepcopy(previous["plan"])
+    approved["unit_policy"]["strongswan.service"]["UnitFileState"] = "enabled"
+    with pytest.raises(RuntimeError, match="operator boot policy changed"):
+        migration.corrective_policy(previous, approved)
+
+
+@pytest.mark.parametrize("change", ["digest", "parent", "phase", "packages"])
+def test_runtime_successor_requires_exact_completed_native_predecessor(
+    reservation_guest, monkeypatch, change
+):
+    guest, request = reservation_guest
+    migration = guest.remote.migration
+    before = migration.state()
+    before["phase"] = "activating" if change != "phase" else "packages"
+    migration.save(before)
+    manifest = copy.deepcopy(request["package"]["desired"])
+    if change == "parent":
+        manifest["ha_parent"] = before["manifest"]["ha_parent"]
+    if change == "packages":
+        monkeypatch.setattr(migration, "packages", lambda: {})
+    with pytest.raises(RuntimeError, match="predecessor differs|postconditions are incomplete"):
+        migration.begin(
+            manifest["runtime_plan"],
+            "f" * 32,
+            manifest,
+            superseded_sha256="0" * 64 if change == "digest" else migration.digest(before),
+        )
+    assert migration.state() == before
 
 
 def test_inhibited_quiescence_recovery_retains_writer_and_effect_proofs(
@@ -414,8 +788,9 @@ def test_inhibited_quiescence_recovery_retains_writer_and_effect_proofs(
 
 @pytest.mark.parametrize("unused", [False, True])
 @pytest.mark.parametrize("interrupt_write", range(1, 10))
+@pytest.mark.parametrize("passive_pending", [False, True], ids=["terminal", "pending-passive"])
 def test_cli_corrective_resumes_without_losing_old_release_or_replacing_resources(
-    tmp_path, monkeypatch, interrupt_write, unused
+    tmp_path, monkeypatch, interrupt_write, unused, passive_pending
 ):
     from types import SimpleNamespace
 
@@ -424,6 +799,18 @@ def test_cli_corrective_resumes_without_losing_old_release_or_replacing_resource
     from nebius_vpngw.deploy.vm_ha_lifecycle import VMHALifecycleJournal
 
     initial, evidence, generations = evidence_fixture(tmp_path)
+    if passive_pending:
+        item = evidence["node-0"]
+        item["controller"]["pending_action"] = dict(
+            kind="enter-passive",
+            boot_id=item["boot_id"],
+            target_node_id="node-0",
+            allocation_id=initial.allocation_id,
+            generation_id=generations["node-0"][0],
+            digests=generations["node-0"][1],
+            ownership_incarnation=item["controller"]["ownership_incarnation"],
+            operation_id=f"{item['boot_id']}:{item['controller']['sequence']}:enter-passive:node-0",
+        )
     initial = replace(
         initial,
         transaction=replace(

@@ -4,6 +4,7 @@ import copy
 import io
 import json
 import os
+import shlex
 import stat
 from pathlib import Path
 from types import SimpleNamespace
@@ -187,7 +188,8 @@ def test_vm_ha_missing_region_fails_before_input_or_effects(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
+            "--convert-to-ha",
             "-c",
             str(source),
             "--output-format",
@@ -196,7 +198,9 @@ def test_vm_ha_missing_region_fails_before_input_or_effects(
     )
 
     assert result.exit_code == 1
-    assert json.loads(result.stdout)["reasons"] == ["configuration-not-convertible"]
+    assert json.loads(result.stdout)["recovery"]["reason_code"] == "configuration-invalid", (
+        result.stdout
+    )
     assert not destination.exists()
 
 
@@ -446,11 +450,11 @@ def test_peer_not_ready_reserves_passive_ip_without_writing_candidate(
     ):
         result = CliRunner().invoke(
             app,
-            ["vm-ha", "-c", str(source), "--region", "eu-north1"],
+            ["apply", "--convert-to-ha", "-c", str(source), "--region", "eu-north1"],
             input=answers,
         )
 
-    assert result.exit_code == 3, result.output
+    assert result.exit_code == 1, result.output
     reserve.assert_called_once()
     assert reserve.call_args.kwargs["region"] == "eu-north1"
     assert "✓ preparing the passive Nebius public IP." in result.output
@@ -458,7 +462,23 @@ def test_peer_not_ready_reserves_passive_ip_without_writing_candidate(
     assert not destination.exists()
     assert "No candidate was written; rerun when peer details are ready" in result.output
     assert "203.0.113.20 remains allocated" in result.output
-    assert "apply --local-config-file" not in result.output
+    assert (
+        shlex.join(
+            [
+                "nebius-vpngw",
+                "apply",
+                "--local-config-file",
+                str(source),
+                "--project-id",
+                "project-test",
+                "--region",
+                "eu-north1",
+                "--repair",
+            ]
+        )
+        in result.output
+    )
+    assert "Repair prerequisite: Complete peer settings" in result.output
 
 
 def test_declining_passive_reservation_never_authenticates(
@@ -477,14 +497,115 @@ def test_declining_passive_reservation_never_authenticates(
     ):
         result = CliRunner().invoke(
             app,
-            ["vm-ha", "-c", str(source)],
+            ["apply", "--convert-to-ha", "-c", str(source)],
             input=answers,
         )
 
-    assert result.exit_code == 3, result.output
+    assert result.exit_code == 1, result.output
     reserve.assert_not_called()
     assert source.read_text(encoding="utf-8") == original
     assert not (tmp_path / "ordinary.vm-ha.config.yaml").exists()
+
+
+@pytest.mark.parametrize("output_format", ["text", "json"])
+@pytest.mark.parametrize("changed", [False, True])
+def test_permission_blocked_candidate_repair_uses_only_verified_ha_config(
+    sample_config,
+    monkeypatch,
+    tmp_path,
+    output_format,
+    changed,
+):
+    from nebius_vpngw import cli
+
+    source, target = tmp_path / "ordinary.yaml", tmp_path / "candidate's HA.yaml"
+    _apply_nebius_region_precedence(sample_config, explicit_region=None)
+    source.write_text(yaml.safe_dump(sample_config))
+    _answer_prompts(monkeypatch, _happy_answers(tmp_path))
+    converted = run_vm_ha_conversion_wizard(
+        Console(file=io.StringIO(), force_terminal=False, color_system=None),
+        sample_config,
+        target,
+        reserve_passive_ip=lambda: pytest.fail("No reservation"),
+    )
+    target.write_text(converted.yaml_text)
+    target.chmod(0o644)
+    before = (source.read_bytes(), target.read_bytes())
+    if changed:
+        verify = cli.is_vm_ha_conversion_candidate
+
+        def drift(*args):
+            assert verify(*args)
+            target.write_text(target.read_text() + "# concurrent edit\n")
+            return True
+
+        monkeypatch.setattr(cli, "is_vm_ha_conversion_candidate", drift)
+    result = CliRunner().invoke(
+        app,
+        [
+            "apply",
+            "--convert-to-ha",
+            "-c",
+            str(source),
+            "--output",
+            str(target),
+            "--output-format",
+            output_format,
+        ],
+    )
+    assert result.exit_code == 1
+    expected = source if changed else target
+    if output_format == "json":
+        payload = json.loads(result.stdout)
+        recovery = payload["recovery"]
+        assert shlex.split(recovery["repair_command"]) == [
+            "nebius-vpngw",
+            "apply",
+            "--local-config-file",
+            str(expected),
+            "--project-id",
+            "project-test",
+            "--region",
+            "eu-west1",
+            "--repair",
+        ]
+        if not changed:
+            assert recovery["reason_code"] == "candidate-permissions-not-private"
+            assert "0600" in recovery["repair_prerequisite"]
+            assert shlex.split(recovery["resume_command"]) == [
+                "nebius-vpngw",
+                "apply",
+                "--local-config-file",
+                str(source),
+                "--project-id",
+                "project-test",
+                "--region",
+                "eu-west1",
+                "--convert-to-ha",
+                "--output",
+                str(target),
+                "--force",
+            ]
+    else:
+        assert (
+            shlex.join(
+                [
+                    "nebius-vpngw",
+                    "apply",
+                    "--local-config-file",
+                    str(expected),
+                    "--project-id",
+                    "project-test",
+                    "--region",
+                    "eu-west1",
+                    "--repair",
+                ]
+            )
+            in result.stdout
+        )
+    assert source.read_bytes() == before[0]
+    assert target.read_bytes() == before[1] + (b"# concurrent edit\n" if changed else b"")
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
 
 
 def test_command_publishes_mode_0600_and_rerun_is_noop(
@@ -520,7 +641,7 @@ def test_command_publishes_mode_0600_and_rerun_is_noop(
         try:
             result = CliRunner().invoke(
                 app,
-                ["vm-ha", "-c", str(source)],
+                ["apply", "--convert-to-ha", "-c", str(source)],
                 input=answers,
             )
         finally:
@@ -617,14 +738,40 @@ def test_command_publishes_mode_0600_and_rerun_is_noop(
         patch("nebius_vpngw.cli.VMManager", FakeVMManager),
         patch("nebius_vpngw.cli.SSHPush") as ssh_push,
     ):
-        dry_run = CliRunner().invoke(
-            app,
-            ["apply", "--local-config-file", str(destination), "--dry-run"],
-        )
+        from dataclasses import replace
+
+        from test_vm_ha_command import _inspection, _snapshot
+
+        with patch(
+            "nebius_vpngw.cli._inspect_vm_ha_status_with_region",
+            return_value=replace(
+                _inspection(
+                    replace(
+                        _snapshot(
+                            overall="BLOCKED",
+                            action="inspect",
+                            reasons=("lifecycle-status-unavailable",),
+                        ),
+                        lifecycle_state=None,
+                    )
+                ),
+                project_id="project-test",
+            ),
+        ):
+            dry_run = CliRunner().invoke(
+                app,
+                [
+                    "apply",
+                    "--local-config-file",
+                    str(destination),
+                    "--dry-run",
+                    "--output-format",
+                    "json",
+                ],
+            )
 
     assert dry_run.exit_code == 0, dry_run.output
-    assert "Ordinary gateway to VM-HA migration plan" in dry_run.output
-    assert "no lifecycle, cloud, route, or host state was changed" in dry_run.output
+    assert json.loads(dry_run.stdout)["ha"]["approval"]["kind"] == "migration"
     assert calls == ["discover", "verify-existing", "check-changes"]
     ensure_credentials.assert_not_called()
     ordinary_handoff_preview.assert_called_once()
@@ -666,7 +813,7 @@ def test_reserved_ip_is_reported_when_candidate_publication_fails(
     ):
         result = CliRunner().invoke(
             app,
-            ["vm-ha", "-c", str(source)],
+            ["apply", "--convert-to-ha", "-c", str(source)],
             input=answers,
         )
 
@@ -758,7 +905,7 @@ def test_source_change_before_passive_reservation_blocks_authentication(
     ):
         result = CliRunner().invoke(
             app,
-            ["vm-ha", "-c", str(source)],
+            ["apply", "--convert-to-ha", "-c", str(source)],
             input=answers,
         )
 
@@ -785,7 +932,7 @@ def test_possibly_accepted_passive_reservation_failure_reports_reuse_identity(
     ):
         result = CliRunner().invoke(
             app,
-            ["vm-ha", "-c", str(source)],
+            ["apply", "--convert-to-ha", "-c", str(source)],
             input=answers,
         )
 
@@ -810,7 +957,7 @@ def test_source_change_during_wizard_blocks_candidate_publication(
     ):
         result = CliRunner().invoke(
             app,
-            ["vm-ha", "-c", str(source)],
+            ["apply", "--convert-to-ha", "-c", str(source)],
             input=answers,
         )
 
@@ -840,7 +987,8 @@ def test_command_rejects_source_alias_destinations(
         result = CliRunner().invoke(
             app,
             [
-                "vm-ha",
+                "apply",
+                "--convert-to-ha",
                 "-c",
                 str(source),
                 "-o",
@@ -850,15 +998,17 @@ def test_command_rejects_source_alias_destinations(
 
     assert result.exit_code == 1
     assert source.read_text(encoding="utf-8") == original
-    assert "candidate-path-unsafe" in result.output
+    assert (
+        "candidate-path-unsafe" if destination == source else "conversion-file-unsafe"
+    ) in result.output
 
 
 def test_command_requires_tty_before_auth_or_write(sample_config: dict, tmp_path: Path) -> None:
     source = tmp_path / "ordinary.config.yaml"
     source.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")
     with patch("nebius_vpngw.cli._reserve_vm_ha_passive_public_ip") as reserve:
-        result = CliRunner().invoke(app, ["vm-ha", "-c", str(source)])
-    assert result.exit_code == 3
+        result = CliRunner().invoke(app, ["apply", "--convert-to-ha", "-c", str(source)])
+    assert result.exit_code == 1
     reserve.assert_not_called()
     assert "conversion-input-required" in result.output
     assert not (tmp_path / "ordinary.vm-ha.config.yaml").exists()

@@ -133,6 +133,35 @@ Use a transaction, uniqueness constraint, or equivalent proven mechanism for
 these invariants. Do not add lifecycle generations to short, independent calls
 that have no restart or concurrency requirement.
 
+## Helper Operations And Parent Settlement
+
+A parent tool grant does not authorize arbitrary internal helper commands.
+Bind each helper to a finite release-owned phase, original operands, target,
+workspace generation, deadline and remaining budget. Its semantic operation
+identity is independent of the transport retry key. A new transport key cannot
+create a second execution of the same semantic phase; changed payloads conflict.
+Reconcile lost acknowledgments using the registered operation and receipt.
+
+Close the parent's phase-submission gate atomically with final observation
+commit or an authorized cleanup transition. Reject late submissions and settle
+only after the gate is closed and every registered descendant is independently
+quiescent. An idle or empty child snapshot while submission remains open is
+not completion. Preserve uncertain effects and reservations across failure to
+persist an observation.
+
+## Cleanup After Expiry Or Cancellation
+
+Deny new ordinary dispatch before stopping/draining work. Preserve a durable,
+separately scoped cleanup intent after task expiry, user-session loss or normal
+authority revocation. Cleanup may stop exact owned resources and remove exact
+task-created grants; it cannot expand access, renew the task, remediate the
+business target, or delete pre-existing grants.
+
+Track dispatch denial, remote quiescence and access removal separately. Retry
+cleanup idempotently under its own finite scope and owner. Report verified task
+outcome and unresolved cleanup independently; an incomplete cleanup must not
+be hidden by a successful model answer.
+
 ## Delivery and Idempotency
 
 Assume at-least-once execution whenever queues, retries, workflow replay,

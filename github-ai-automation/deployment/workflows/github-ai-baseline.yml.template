@@ -1,0 +1,90 @@
+name: GitHub AI baseline
+'on':
+  workflow_dispatch:
+    inputs:
+      action:
+        type: choice
+        options:
+        - inspect
+        - adopt
+        default: inspect
+        required: true
+        description: Inspect first, then adopt the reviewed digest
+      project:
+        type: choice
+        options:
+        - nebius-cxcli
+        required: true
+        description: Historical publisher format
+      tag:
+        type: string
+        required: true
+        description: Exact existing stable tag
+      release_run:
+        type: string
+        required: true
+        description: Original successful release run
+      expected_digest:
+        type: string
+        default: ''
+        description: SHA256 printed by inspection, required for adoption
+      expected_revision:
+        type: string
+        default: '0'
+        description: Current baseline revision, zero for first adoption
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: ai-baseline-${{ github.repository }}-${{ inputs.project }}
+  cancel-in-progress: false
+jobs:
+  baseline:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: github-ai-automation
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      with:
+        version: 0.13.7
+        enable-cache: false
+    - name: Inspect current release bytes
+      if: inputs.action == 'inspect'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+        PROJECT: ${{ inputs.project }}
+        TAG: ${{ inputs.tag }}
+        RELEASE_RUN: ${{ inputs.release_run }}
+        EXPECTED_DIGEST: ${{ inputs.expected_digest }}
+        EXPECTED_REVISION: ${{ inputs.expected_revision }}
+      run: uv run --locked --project github-ai-automation github-ai-automation baseline-inspect "$PROJECT" "$TAG"
+        "$RELEASE_RUN" "$RUNNER_TEMP/baseline.json"
+    - if: inputs.action == 'inspect'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: baseline-inspection-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/baseline.json
+        retention-days: 90
+        if-no-files-found: error
+    - name: Adopt exactly reviewed baseline
+      if: inputs.action == 'adopt'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+        PROJECT: ${{ inputs.project }}
+        TAG: ${{ inputs.tag }}
+        RELEASE_RUN: ${{ inputs.release_run }}
+        EXPECTED_DIGEST: ${{ inputs.expected_digest }}
+        EXPECTED_REVISION: ${{ inputs.expected_revision }}
+        AI_AUTOMATION_STATE_BUCKET: ${{ secrets.AI_AUTOMATION_STATE_BUCKET }}
+        AI_AUTOMATION_STATE_ENDPOINT: ${{ secrets.AI_AUTOMATION_STATE_ENDPOINT }}
+        AI_AUTOMATION_STATE_ACCESS_KEY_ID: ${{ secrets.AI_AUTOMATION_STATE_ACCESS_KEY_ID }}
+        AI_AUTOMATION_STATE_SECRET_ACCESS_KEY: ${{ secrets.AI_AUTOMATION_STATE_SECRET_ACCESS_KEY }}
+      run: uv run --locked --project github-ai-automation github-ai-automation baseline-adopt "$PROJECT" "$TAG"
+        "$RELEASE_RUN" "$EXPECTED_DIGEST" "$EXPECTED_REVISION"

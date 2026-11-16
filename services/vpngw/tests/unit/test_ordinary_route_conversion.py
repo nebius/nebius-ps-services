@@ -174,17 +174,27 @@ def copying(tmp_path, monkeypatch, request):
 
         return NS(wait=wait)
 
-    monkeypatch.setattr(vpc, "RouteTableServiceClient", lambda sdk: NS(create=mutate))
-    monkeypatch.setattr(vpc, "RouteServiceClient", lambda sdk: NS(create=mutate))
-    monkeypatch.setattr(vpc, "SubnetServiceClient", lambda sdk: NS(update=mutate))
-    monkeypatch.setattr(
-        common,
-        "OperationServiceClient",
-        lambda sdk: NS(
+    def operation_service():
+        return NS(
             get=lambda request, **kwargs: NS(
                 wait=lambda: next(op for op in state.operations.values() if op.id == request.id)
             )
-        ),
+        )
+
+    monkeypatch.setattr(
+        vpc,
+        "RouteTableServiceClient",
+        lambda sdk: NS(create=mutate, operation_service=operation_service),
+    )
+    monkeypatch.setattr(
+        vpc,
+        "RouteServiceClient",
+        lambda sdk: NS(create=mutate, operation_service=operation_service),
+    )
+    monkeypatch.setattr(
+        vpc,
+        "SubnetServiceClient",
+        lambda sdk: NS(update=mutate, operation_service=operation_service),
     )
     observation = observe()
     plan = inspect(

@@ -371,7 +371,7 @@ Migrated from a validated Task Implementer design record.
 
 Add a dedicated `configure-vm-ha` command that reads one admitted ordinary raw YAML document, derives an allowlisted two-member transform in memory, and uses a two-phase peer handoff. Phase one derives deterministic member-one topology, collects and preflights the two local mode-`0600` credential bundles before authentication, and either accepts a preallocated passive IP or, after a separate default-No confirmation, invokes a selected-index allocation seam for instance one only. It prints the incremental peer parameters and exits without a candidate until the peer is ready. Phase two collects the peer's remote endpoints, validates the complete candidate, presents a redacted summary, and conditionally publishes a new owner-only file without clobbering a racing writer. Existing apply remains the only migration discovery, approval, provisioning, activation, fencing, and recovery engine.
 
-**Supersession:** FEAT-015 and TI-DES-022 define the current `vm-ha` command and managed-credential behavior. The credential prompts and preflight below are retained only as historical rationale and are not an active contract.
+**Supersession:** FEAT-015 and TI-DES-022 define the current `apply` command and managed-credential behavior. The credential prompts and preflight below are retained only as historical rationale and are not an active contract.
 
 #### Selected Option
 
@@ -626,7 +626,7 @@ The mapped requirements, validation, and evaluation all pass.
   validator/classifier/renderer tests, all 16 standby auto-healing unit tests,
   Ruff, mypy across 54 source files, and all 1,876 unit tests. The isolated
   integration suite passed 83 of 84 tests; its sole failure is the pre-existing
-  `vm-ha --help` assertion that expects `default-No`, outside this status
+  `apply --help` assertion that expects `default-No`, outside this status
   presentation boundary. No live cloud or gateway command was run.
 - The Role projection now maps only the authoritative owner identity to
   `active`, the other configured member to `standby`, and an absent owner to
@@ -696,19 +696,19 @@ Migrated from a validated Task Implementer design record.
 
 #### Design Details
 
-Replace operator-supplied VM-HA CA/leaf/key bundles with one self-signed CA-false leaf generated independently on each VM. Exact-pinned management SSH is the enrollment and recovery authority: it invokes idempotent root-only node actions, returns only public certificate receipts, and cross-installs the peer leaf as an exact trust anchor. Keep mTLS identity generation independent from the VPN configuration generation, bootstrap it automatically during initial apply, regenerate only a fenced replacement member during apply, and reserve whole-cluster rotation for the explicit `vm-ha --rotate-mtls` transaction. Use a clean protocol-v2 peer envelope that binds a monotonic mTLS epoch to the certificate presented on that TLS connection.
+Replace operator-supplied VM-HA CA/leaf/key bundles with one self-signed CA-false leaf generated independently on each VM. Exact-pinned management SSH is the enrollment and recovery authority: it invokes idempotent root-only node actions, returns only public certificate receipts, and cross-installs the peer leaf as an exact trust anchor. Keep mTLS identity generation independent from the VPN configuration generation, bootstrap it automatically during initial apply, regenerate only a fenced replacement member during apply, and reserve whole-cluster rotation for the explicit `apply --rotate-mtls` transaction. Use a clean protocol-v2 peer envelope that binds a monotonic mTLS epoch to the certificate presented on that TLS connection.
 
 **State and crypto:** Store identities, peer leaves, `active.json`, and transaction journals under the existing root-owned VM-HA state root using no-follow/no-clobber file creation, single-link checks, mode `0600`, file and directory fsync, and atomic rename. Each identity uses an unencrypted PKCS#8 ECDSA P-256 private key, random positive serial, SHA-256 self-signature, CA-false and digital-signature-only constraints, client/server EKUs, canonical node DNS and URI SANs, fixed `2000-01-01T00:00:00Z` `notBefore`, and `9999-12-31T23:59:59Z` `notAfter`. A receipt binds cluster, node, Compute identity, epoch, certificate/SPKI fingerprints, and operation identity; two member SPKIs must differ. Private key bytes never leave the node or enter status, manifests, logs, errors, or receipts.
 
 **Enrollment and replacement:** Initial apply stages both exact node configurations, proves generation parity, installs and verifies the current agent package plus its cryptography/CFFI runtime on both members non-owner-first, and only then installs exact-generation apply locks in that same order. It writes one lock-bound owner-adoption declaration on the independently observed current owner, asks both nodes to generate identities, validates public receipts, and cross-installs direct peer leaves. It then activates non-owner-first under those locks, proves fresh bidirectional heartbeats, commits active snapshots, and only afterward releases the locks and enables the exact owner. Healthy reapply is a cryptographic no-op. Replacement first proves the former Compute stopped/absent and network-fenced; the survivor temporarily accepts old/new replacement leaves, the replacement trusts only the survivor's active leaf, and fresh epoch-bound handshakes precede commit and immediate old-leaf pruning. The survivor key remains unchanged.
 
-**Rotation transaction:** `vm-ha --rotate-mtls` dispatches before ordinary facade conversion or convergence. It accepts the required local config plus the existing dry-run and exact approval options, retains human text output, and rejects candidate output, force, standby-policy, explicit-region, and JSON combinations before external effects. Its dry-run binds a secret-free plan digest to the exact config, lifecycle, cluster, members, Compute identities, owner/allocation observation, current epochs/fingerprints, target epoch, and ordered phases. Each mutation-free inspection first queries both fixed installed-agent capability documents over exact-pinned SSH and requires `vm-ha-mtls-rotation-quiescence-v1`; it then requires that same fixed feature in the exact current-generation status persisted by each running controller process. An absent command, malformed document, missing feature, restart-skewed controller, timeout, or transport failure stops before the plan/approval boundary and directs the operator to deploy this CLI's agent through `apply`. The command announces that passive-first overlap trust is designed to preserve VPN availability, renders only the operation kind, target epoch, member count, and exact plan digest, and uses the shared best-effort stderr progress reporter so a TTY sees an animated identity-free rotation row while noninteractive streams receive only its terminal row. After interactive confirmation or exact noninteractive approval, acquire the shared writer lock, install inhibition on the passive, and wait until that exact operation has passed through a controller observation with no pending controller, accepted cloud, or rearm effect and the former owner still Running. Install and prove the owner inhibition only after the passive barrier succeeds. Node-local controller transfer dispatch, rearm, apply locking, and inhibition installation serialize through `rearm.lock`; transfer dispatch re-reads both apply and mTLS inhibition while holding that lock and skips a stale decision without writing an effect receipt. Prepare both pending identities only after both barriers, expand trust to old/new, switch the passive local identity, switch the owner, independently reread active slots and served fingerprints, and require three consecutive fresh bidirectional epoch-bound heartbeats after connection draining before commit/prune. Before any new served leaf is observed the exact transaction may roll back; afterward it can only roll forward. Remote journals, not the CLI's last acknowledgement, decide recovery after any lost response or restart.
+**Rotation transaction:** `apply --rotate-mtls` dispatches before ordinary facade conversion or convergence. It accepts the required local config plus the existing dry-run and exact approval options, retains human text output, and rejects candidate output, force, standby-policy, explicit-region, and JSON combinations before external effects. Its dry-run binds a secret-free plan digest to the exact config, lifecycle, cluster, members, Compute identities, owner/allocation observation, current epochs/fingerprints, target epoch, and ordered phases. Each mutation-free inspection first queries both fixed installed-agent capability documents over exact-pinned SSH and requires `vm-ha-mtls-rotation-quiescence-v1`; it then requires that same fixed feature in the exact current-generation status persisted by each running controller process. An absent command, malformed document, missing feature, restart-skewed controller, timeout, or transport failure stops before the plan/approval boundary and directs the operator to deploy this CLI's agent through `apply`. The command announces that passive-first overlap trust is designed to preserve VPN availability, renders only the operation kind, target epoch, member count, and exact plan digest, and uses the shared best-effort stderr progress reporter so a TTY sees an animated identity-free rotation row while noninteractive streams receive only its terminal row. After interactive confirmation or exact noninteractive approval, acquire the shared writer lock, install inhibition on the passive, and wait until that exact operation has passed through a controller observation with no pending controller, accepted cloud, or rearm effect and the former owner still Running. Install and prove the owner inhibition only after the passive barrier succeeds. Node-local controller transfer dispatch, rearm, apply locking, and inhibition installation serialize through `rearm.lock`; transfer dispatch re-reads both apply and mTLS inhibition while holding that lock and skips a stale decision without writing an effect receipt. Prepare both pending identities only after both barriers, expand trust to old/new, switch the passive local identity, switch the owner, independently reread active slots and served fingerprints, and require three consecutive fresh bidirectional epoch-bound heartbeats after connection draining before commit/prune. Before any new served leaf is observed the exact transaction may roll back; afterward it can only roll forward. Remote journals, not the CLI's last acknowledgement, decide recovery after any lost response or restart.
 
-**Failure handling:** A pending exact transaction is resumed rather than replaced. An inhibition-only interruption is also rendered as resumable rotation. Installed-agent or running-controller skew fails at capability admission before any rotation write and has one canonical recovery: complete `apply` with the same local configuration and CLI version, verify both members and controller services, then retry; the CLI never interprets an older apply-lock projection as rotation inhibition. If topology or controller evidence drifts before any prepare may have begun, the CLI releases every exact inhibition it attempted and exits with retry guidance, so an already-authorized transfer can finish and rearm rather than being stranded. After prepare may have begun, failures retain inhibition for journal-based recovery. Fresh contexts disable session tickets/resumption and old connections are drained before pruning. The controller continues to enforce cloud-ownership fencing while rotation inhibition makes transfer gates fail closed without changing a healthy owner's active dataplane or the non-owner's passive dataplane; rearm reads the same inhibition directly. Both exact members may rebuild an unusable old mTLS pair entirely over strict SSH when both are Running and cloud ownership is unambiguous. Missing SSH trust, a stopped member, identity/topology drift, an unfenced former member, conflicting writer state, corrupt cross-node receipts, or inability to prove inhibition blocks with a closed status reason. `status` is observation-only; bare `vm-ha` delegates restoration to the internal sole Compute-start writer and only explicit `--rotate-mtls` grants the facade rotation authority.
+**Failure handling:** A pending exact transaction is resumed rather than replaced. An inhibition-only interruption is also rendered as resumable rotation. Installed-agent or running-controller skew fails at capability admission before any rotation write and has one canonical recovery: complete `apply` with the same local configuration and CLI version, verify both members and controller services, then retry; the CLI never interprets an older apply-lock projection as rotation inhibition. If topology or controller evidence drifts before any prepare may have begun, the CLI releases every exact inhibition it attempted and exits with retry guidance, so an already-authorized transfer can finish and rearm rather than being stranded. After prepare may have begun, failures retain inhibition for journal-based recovery. Fresh contexts disable session tickets/resumption and old connections are drained before pruning. The controller continues to enforce cloud-ownership fencing while rotation inhibition makes transfer gates fail closed without changing a healthy owner's active dataplane or the non-owner's passive dataplane; rearm reads the same inhibition directly. Both exact members may rebuild an unusable old mTLS pair entirely over strict SSH when both are Running and cloud ownership is unambiguous. Missing SSH trust, a stopped member, identity/topology drift, an unfenced former member, conflicting writer state, corrupt cross-node receipts, or inability to prove inhibition blocks with a closed status reason. `status` is observation-only; bare `apply` delegates restoration to the internal sole Compute-start writer and only explicit `--rotate-mtls` grants the facade rotation authority.
 
 #### Selected Option
 
-Replace operator-supplied VM-HA CA/leaf/key bundles with one self-signed CA-false leaf generated independently on each VM. Exact-pinned management SSH is the enrollment and recovery authority: it invokes idempotent root-only node actions, returns only public certificate receipts, and cross-installs the peer leaf as an exact trust anchor. Keep mTLS identity generation independent from the VPN configuration generation, bootstrap it automatically during initial apply, regenerate only a fenced replacement member during apply, and reserve whole-cluster rotation for the explicit `vm-ha --rotate-mtls` transaction. Use a clean protocol-v2 peer envelope that binds a monotonic mTLS epoch to the certificate presented on that TLS connection.
+Replace operator-supplied VM-HA CA/leaf/key bundles with one self-signed CA-false leaf generated independently on each VM. Exact-pinned management SSH is the enrollment and recovery authority: it invokes idempotent root-only node actions, returns only public certificate receipts, and cross-installs the peer leaf as an exact trust anchor. Keep mTLS identity generation independent from the VPN configuration generation, bootstrap it automatically during initial apply, regenerate only a fenced replacement member during apply, and reserve whole-cluster rotation for the explicit `apply --rotate-mtls` transaction. Use a clean protocol-v2 peer envelope that binds a monotonic mTLS epoch to the certificate presented on that TLS connection.
 
 #### Alternatives Considered
 
@@ -728,11 +728,11 @@ Replace operator-supplied VM-HA CA/leaf/key bundles with one self-signed CA-fals
 
 #### Validation Plan
 
-Direct-leaf/profile tests cover exact self-signature, CA-false usage, the year-9999 sentinel, distinct SPKIs, direct-pinned handshakes, and wrong-leaf rejection. State, SSH, apply, replacement, rotation, heartbeat-v2, status, CLI, schema, wizard, runtime, rearm, and package tests cover the product workflow and private-key non-export boundary. Controller regressions separately prove that rotation inhibition blocks new transfer effects while preserving active/passive dataplane modes and that true apply locks retain their existing fencing behavior. Presentation regressions prove concise non-JSON preview/completion text and best-effort interactive spinner cleanup. Offline on 2026-08-19, Ruff and mypy passed, all 1,094 unit tests and 63 isolated integration tests passed, 14 focused build/release tests passed, and README/changelog Markdown lint passed. Supported Python/OpenSSL CI lanes remain the portability gate; a live two-VM trial remains separately authorized and cannot be inferred from offline proof. On 2026-08-25 the availability/output refinement passed full Ruff, mypy across 52 source files, 1,627 unit tests, 79 isolated integration tests, changed-document lint, diff integrity, and a final independent no-blocker risk review. The composed regressions prove that inhibition and controller dispatch cannot cross, pre-prepare drift releases exact inhibition, and an inhibition-only interruption remains a visible resumable rotation. No live cloud, SSH, service, route, or gateway operation was performed. On 2026-08-29 the public-command consolidation retained the private rotation engine and placed only an early exclusive dispatcher in the `vm-ha` facade. Parser, option-manifest, applicability, bare-facade, digest-approval, interactive-confirmation, status-guidance, progress, release-build, and controller/rearm regressions passed alongside Ruff, mypy, all 1,925 unit tests, and all 84 isolated integration tests. Changed-scope documentation, security, alignment, and diff-integrity checks found no introduced blocker; no live target was contacted or mutated.
+Direct-leaf/profile tests cover exact self-signature, CA-false usage, the year-9999 sentinel, distinct SPKIs, direct-pinned handshakes, and wrong-leaf rejection. State, SSH, apply, replacement, rotation, heartbeat-v2, status, CLI, schema, wizard, runtime, rearm, and package tests cover the product workflow and private-key non-export boundary. Controller regressions separately prove that rotation inhibition blocks new transfer effects while preserving active/passive dataplane modes and that true apply locks retain their existing fencing behavior. Presentation regressions prove concise non-JSON preview/completion text and best-effort interactive spinner cleanup. Offline on 2026-08-19, Ruff and mypy passed, all 1,094 unit tests and 63 isolated integration tests passed, 14 focused build/release tests passed, and README/changelog Markdown lint passed. Supported Python/OpenSSL CI lanes remain the portability gate; a live two-VM trial remains separately authorized and cannot be inferred from offline proof. On 2026-08-25 the availability/output refinement passed full Ruff, mypy across 52 source files, 1,627 unit tests, 79 isolated integration tests, changed-document lint, diff integrity, and a final independent no-blocker risk review. The composed regressions prove that inhibition and controller dispatch cannot cross, pre-prepare drift releases exact inhibition, and an inhibition-only interruption remains a visible resumable rotation. No live cloud, SSH, service, route, or gateway operation was performed. On 2026-08-29 the public-command consolidation retained the private rotation engine and placed only an early exclusive dispatcher in the `apply` facade. Parser, option-manifest, applicability, bare-facade, digest-approval, interactive-confirmation, status-guidance, progress, release-build, and controller/rearm regressions passed alongside Ruff, mypy, all 1,925 unit tests, and all 84 isolated integration tests. Changed-scope documentation, security, alignment, and diff-integrity checks found no introduced blocker; no live target was contacted or mutated.
 
 #### Test Plan
 
-Direct-leaf/profile tests cover exact self-signature, CA-false usage, the year-9999 sentinel, distinct SPKIs, direct-pinned handshakes, and wrong-leaf rejection. State, SSH, apply, replacement, rotation, heartbeat-v2, status, CLI, schema, wizard, runtime, rearm, and package tests cover the product workflow and private-key non-export boundary. Controller regressions separately prove that rotation inhibition blocks new transfer effects while preserving active/passive dataplane modes and that true apply locks retain their existing fencing behavior. Presentation regressions prove concise non-JSON preview/completion text and best-effort interactive spinner cleanup. Offline on 2026-08-19, Ruff and mypy passed, all 1,094 unit tests and 63 isolated integration tests passed, 14 focused build/release tests passed, and README/changelog Markdown lint passed. Supported Python/OpenSSL CI lanes remain the portability gate; a live two-VM trial remains separately authorized and cannot be inferred from offline proof. On 2026-08-25 the availability/output refinement passed full Ruff, mypy across 52 source files, 1,627 unit tests, 79 isolated integration tests, changed-document lint, diff integrity, and a final independent no-blocker risk review. The composed regressions prove that inhibition and controller dispatch cannot cross, pre-prepare drift releases exact inhibition, and an inhibition-only interruption remains a visible resumable rotation. No live cloud, SSH, service, route, or gateway operation was performed. On 2026-08-29 the public-command consolidation retained the private rotation engine and placed only an early exclusive dispatcher in the `vm-ha` facade. Parser, option-manifest, applicability, bare-facade, digest-approval, interactive-confirmation, status-guidance, progress, release-build, and controller/rearm regressions passed alongside Ruff, mypy, all 1,925 unit tests, and all 84 isolated integration tests. Changed-scope documentation, security, alignment, and diff-integrity checks found no introduced blocker; no live target was contacted or mutated.
+Direct-leaf/profile tests cover exact self-signature, CA-false usage, the year-9999 sentinel, distinct SPKIs, direct-pinned handshakes, and wrong-leaf rejection. State, SSH, apply, replacement, rotation, heartbeat-v2, status, CLI, schema, wizard, runtime, rearm, and package tests cover the product workflow and private-key non-export boundary. Controller regressions separately prove that rotation inhibition blocks new transfer effects while preserving active/passive dataplane modes and that true apply locks retain their existing fencing behavior. Presentation regressions prove concise non-JSON preview/completion text and best-effort interactive spinner cleanup. Offline on 2026-08-19, Ruff and mypy passed, all 1,094 unit tests and 63 isolated integration tests passed, 14 focused build/release tests passed, and README/changelog Markdown lint passed. Supported Python/OpenSSL CI lanes remain the portability gate; a live two-VM trial remains separately authorized and cannot be inferred from offline proof. On 2026-08-25 the availability/output refinement passed full Ruff, mypy across 52 source files, 1,627 unit tests, 79 isolated integration tests, changed-document lint, diff integrity, and a final independent no-blocker risk review. The composed regressions prove that inhibition and controller dispatch cannot cross, pre-prepare drift releases exact inhibition, and an inhibition-only interruption remains a visible resumable rotation. No live cloud, SSH, service, route, or gateway operation was performed. On 2026-08-29 the public-command consolidation retained the private rotation engine and placed only an early exclusive dispatcher in the `apply` facade. Parser, option-manifest, applicability, bare-facade, digest-approval, interactive-confirmation, status-guidance, progress, release-build, and controller/rearm regressions passed alongside Ruff, mypy, all 1,925 unit tests, and all 84 isolated integration tests. Changed-scope documentation, security, alignment, and diff-integrity checks found no introduced blocker; no live target was contacted or mutated.
 
 #### Evaluation Plan
 
@@ -1194,13 +1194,13 @@ Migrated from a validated Task Implementer design record.
 
 Keep one operator trust-store engine under `~/.ssh/nebius-vpngw/<scope-sha256>/` for ordinary and VM-HA deployments. Bind the scope digest to canonical tenant, project, region, gateway-group, and either the fixed ordinary topology discriminator or the VM-HA cluster identity. Store one v2 stable-hostname receipt with closed per-member authority plus one derived exact-address OpenSSH projection; VM-HA is pre-adoption, so v1 has no reader. Keep `VPNGW_SSH_KNOWN_HOSTS_FILE` as the strict highest-precedence import/override. When it is unset and scoped public authority is missing for a retained member, let actual `apply` consult literal `~/.ssh/known_hosts` as a read-only one-time migration candidate, then authenticated product cloud-init. If neither source exists for one exact unchanged pre-branch ordinary VM, admit only the named `legacy-ordinary-network-enrollment-v1` transaction. It observes stable H1/cloud/H2, authenticates with H1 pinned and only the configured client identity, correlates guest and Compute identity, reproves cloud state, and publishes once. The accepted limitation is an active transparent attacker during that first observation; no retry may relearn a published member. When `VPNGW_SSH_HOST_KEYS_DIR` is absent, keep the private namespace at `~/.ssh/nebius-vpngw/host-keys/<gateway-group>/<scope-sha256>`; an explicit value still wins. Prepare a missing key only for a genuinely fresh member, install it through product cloud-init before first SSH, and use the stable member hostname as `HostKeyAlias` for every transport. The rotation exception remains limited to an approved, authoritatively absent current non-owner whose trust receipt and private-key namespace are both product-managed.
 
-**Ordinary-to-HA refinement:** The ordinary source must first complete ordinary `apply`; `vm-ha` checks for its authority-bearing receipt before any prompt, candidate publication, or passive allocation reservation. Migration imports the retained active's exact pin into the HA receipt with the ordinary predecessor digest and a freshly proved Compute binding, and the desired receipt digest enters the public approval. After shared-alias attachment and passive creation, `cli.py` performs fresh exact member discovery and rebuilds the immutable policy with the same managed pins before any staging SSH; only the Compute revision closure changes. An explicit candidate cannot reconstruct its source path, so a missing predecessor returns generic `<ordinary-source>` guidance without effects.
+**Ordinary-to-HA refinement:** The ordinary source must first complete ordinary `apply`; `apply` checks for its authority-bearing receipt before any prompt, candidate publication, or passive allocation reservation. Migration imports the retained active's exact pin into the HA receipt with the ordinary predecessor digest and a freshly proved Compute binding, and the desired receipt digest enters the public approval. After shared-alias attachment and passive creation, `cli.py` performs fresh exact member discovery and rebuilds the immutable policy with the same managed pins before any staging SSH; only the Compute revision closure changes. An explicit candidate cannot reconstruct its source path, so a missing predecessor returns generic `<ordinary-source>` guidance without effects.
 
 **State and recovery:** The receipt binds schema, scope fields/digest, and exact raw public records for each stable member; private keys and credentials never enter it. The projection remains a reproducible compatibility cache. A general-known-hosts candidate is opened without symlink following, must be a current-user-owned single-link regular file without group or other write access, and is retained as an fd-derived content and identity snapshot. Only exact stable-hostname or exact configured/discovered-address records, including hashed forms, are considered; requested revoked records block, and unrelated records grant nothing. One raw Ed25519 candidate is bound to the exact Compute member plus independently validated lifecycle or provisioning evidence, proved through strict SSH, and re-read unchanged before import. Cloud recovery uses a bounded duplicate-rejecting YAML parser, accepts only the exact current product marker/path or the exact legacy path with a hardened active lifecycle binding, and requires the derived public key to match any existing pin. Fresh or recovered default private keys are installed create-exclusively, owner-only, single-link, and fsynced; explicit directories are never populated. Publication rechecks every authority source, commits the receipt before the projection, and never modifies the general or explicit files.
 
 **Apply and migration flow:** Dry-run resolves a complete ephemeral policy for fresh members without creating directories and reports secret-free trust intent. If legacy network enrollment is required, it exits nonzero before observing a key. Actual apply discovers immutable members and tries explicit override, scoped receipt, safe default-known-hosts candidate, then authenticated cloud evidence. Only an unchanged non-destructive ordinary plan may enter legacy enrollment; afterward apply rebuilds strict policy, repeats the infrastructure diff, and atomically publishes receipt then projection before any cloud or host mutation. Every configured client public key is matched to exactly one explicit private key, agent key, or supported default private key; zero, ambiguous, insecure, encrypted, or mismatched identities fail. A fresh ordinary member receives its already-pinned product identity in cloud-init. Conversion imports the ordinary receipt rather than rescanning the retained active and uses the same strict-policy rebuild after Compute changes. Approved absent-non-owner rotation keeps its existing journaled publication order. Static and BGP modes share the flow; read-only consumers never import, enroll, repair, or persist.
 
-**Failure handling and observability:** `status` retains member-isolated sanitized unavailability. A normal SSH transport refusal remains retryable inside the existing bounded bootstrap loop; host-key rejection is an identity failure and exits immediately. Plain `apply` never grants active-standby replacement authority and directs that state to `vm-ha`; `vm-ha --approve` enters the internal apply engine with the exact rotation-bound replacement digest. Explicit-source and client-key failures never fall back. A changed H1/H2 key, Compute signature, guest correlation, configuration diff, trust scope, authority, predecessor, or desired receipt digest fails before cloud creation. The enrollment warning names its active-MITM limitation without printing keys, fingerprints, addresses, local paths, cloud identities, or parser payloads. No path uses `ssh-keyscan`, global-file mutation, disabled verification, or network enrollment outside the named one-time ordinary exception.
+**Failure handling and observability:** `status` retains member-isolated sanitized unavailability. A normal SSH transport refusal remains retryable inside the existing bounded bootstrap loop; host-key rejection is an identity failure and exits immediately. Plain `apply` never grants active-standby replacement authority and directs that state to `apply`; `apply --approve` enters the internal apply engine with the exact rotation-bound replacement digest. Explicit-source and client-key failures never fall back. A changed H1/H2 key, Compute signature, guest correlation, configuration diff, trust scope, authority, predecessor, or desired receipt digest fails before cloud creation. The enrollment warning names its active-MITM limitation without printing keys, fingerprints, addresses, local paths, cloud identities, or parser payloads. No path uses `ssh-keyscan`, global-file mutation, disabled verification, or network enrollment outside the named one-time ordinary exception.
 
 #### Selected Option
 
@@ -1344,7 +1344,7 @@ No independent verification evidence was recorded before migration.
 <!-- /FEATURE: FEAT-014 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-015 reqs=REQ-015,REQ-003,REQ-005,REQ-007,REQ-008,REQ-012,TI-REQ-011,TI-REQ-015 status=ready delivery=implemented priority=P1 version=1 -->
+<!-- FEATURE: FEAT-015 reqs=REQ-015,REQ-003,REQ-005,REQ-007,REQ-008,REQ-012,TI-REQ-011,TI-REQ-015 status=ready delivery=implemented priority=P1 version=2 -->
 ### FEAT-015: Canonical VM-HA facade and region-only CLI
 
 #### Requirements Covered
@@ -1364,15 +1364,17 @@ Migrated from a validated Task Implementer design record.
 
 #### Design Details
 
-Delete the three pre-adoption VM-HA Typer wrappers and make the existing `vm-ha` façade the only public entrypoint for conversion, convergence, verification, standby restoration, and explicit managed-mTLS rotation. Move the conversion wrapper's passive-only allocation callback and partial-effect reporting into the façade. Replace every public `--zone` option with `--region`, remove the internal zone abstraction, and resolve one effective Nebius region at the CLI boundary.
+The rearm SDK port converts exceptions from only the exact Compute/allocation read into an internal observation-unavailable error. Parse returned resources outside that catch. All three ownership observation sites publish `rearm-cloud-observation-unavailable` as a blocked result, distinct from contradictory ownership/alias evidence, and leave remaining checkpoint and pending-operation authority unchanged. An operation successfully finalized before the failed read remains settled. The service remains running and uses its normal next-cycle observation; this adds no retry around mutations or extra approval path. The public reason allowlist admits only this closed code, never the provider message. Regressions cover the actual typed missing-resource exception, other unavailable reads, no Start/checkpoint effects, continued service observation and both post-finalization and post-Start read boundaries.
+
+Delete the three pre-adoption VM-HA Typer wrappers and make the existing `apply` façade the only public entrypoint for conversion, convergence, verification, standby restoration, and explicit managed-mTLS rotation. Move the conversion wrapper's passive-only allocation callback and partial-effect reporting into the façade. Replace every public `--zone` option with `--region`, remove the internal zone abstraction, and resolve one effective Nebius region at the CLI boundary.
 
 **Control and failure flow:** The effective region is explicit `--region`, then optional `gateway_group.region`, then top-level `region_id`; unresolved input at the selected authority fails before authentication without falling back to a lower-priority source. Interactive ordinary conversion keeps a separate default-No reservation prompt and fingerprints the source before reservation and publication. Reservation or publication failure reports that the deterministic passive allocation remains or may exist and can be reused; JSON and noninteractive paths never prompt or authenticate for missing conversion input. Existing HA input follows the façade's lock, approval, convergence, observation, rearm, and two-sample health paths.
 
-**Documentation and compatibility:** README, help, canonical specs, and the Unreleased changelog present only `vm-ha`, `vm-ha --rotate-mtls`, and region examples such as `eu-north1`. No command or flag aliases, deprecation window, or public migration mapping are added. Existing persisted field names and schema version remain unchanged; the explicitly approved non-HA surface break is limited to the `--region` spelling.
+**Documentation and compatibility:** README, help, canonical specs, and the Unreleased changelog present only `apply`, `apply --rotate-mtls`, and region examples such as `eu-north1`. No command or flag aliases, deprecation window, or public migration mapping are added. Existing persisted field names and schema version remain unchanged; the explicitly approved non-HA surface break is limited to the `--region` spelling.
 
 #### Selected Option
 
-Delete the three pre-adoption VM-HA Typer wrappers and make the existing `vm-ha` façade the only public entrypoint for conversion, convergence, verification, standby restoration, and explicit managed-mTLS rotation. Move the conversion wrapper's passive-only allocation callback and partial-effect reporting into the façade. Replace every public `--zone` option with `--region`, remove the internal zone abstraction, and resolve one effective Nebius region at the CLI boundary.
+One apply façade with explicit conversion and maintenance flags, retaining the sole rearm effect owner and one effective region.
 
 #### Alternatives Considered
 
@@ -1380,7 +1382,7 @@ Delete the three pre-adoption VM-HA Typer wrappers and make the existing `vm-ha`
   is pre-adoption and the approved contract requires one canonical path.
 - Retaining an internal zone override while only renaming help was rejected
   because it would keep conflicting client and configuration authorities.
-- Removing the internal rearm service was rejected because `vm-ha` must
+- Removing the internal rearm service was rejected because `apply` must
   delegate to, rather than duplicate, the sole Compute-start writer.
 
 #### Implementation Boundaries
@@ -1414,7 +1416,7 @@ The mapped requirements, validation, and evaluation all pass.
 #### Implementation Evidence
 
 - Removed the public Typer registrations, examples, applicability entries, and
-  callbacks for the two pre-adoption commands. `vm-ha` now calls the existing
+  callbacks for the two pre-adoption commands. `apply` now calls the existing
   passive-only reservation seam after its independent default-No confirmation,
   retains source and destination fingerprints, and returns closed partial-
   effect actions that guide deterministic reuse without resource identities.
@@ -2107,7 +2109,7 @@ No independent verification evidence was recorded before migration.
 <!-- /FEATURE: TI-DES-008 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: TI-DES-009 reqs=TI-REQ-006,TI-REQ-007 status=ready delivery=implemented priority=P1 version=1 -->
+<!-- FEATURE: TI-DES-009 reqs=TI-REQ-006,TI-REQ-007 status=ready delivery=implemented priority=P1 version=2 -->
 ### TI-DES-009: Current Nebius runtime identity enrollment
 
 #### Requirements Covered
@@ -2121,11 +2123,11 @@ Migrated from a validated Task Implementer design record.
 
 #### Design Details
 
-Keep `apply --sa NAME` as the explicit ordinary-gateway identity-selection boundary and use the pinned SDK's generated service clients. VM-HA rejects `--sa` and delegates deterministic account, group, permit, and authorized-key enrollment to its managed-credential design. Both paths require the service account to be the dedicated group's only member and the group to have exactly one project `editor` permit. A short-lived token is obtained through supported Nebius CLI service-account impersonation with captured output, a finite timeout, and no token logging or persistence.
+Keep `apply --sa NAME` as the explicit ordinary-gateway identity-selection boundary and use the pinned SDK's generated service clients. VM-HA rejects `--sa` and delegates deterministic account, group, permit, and authorized-key enrollment to its managed-credential design. Both paths require the service account to be the dedicated group's only member and the group to have exactly one project `editor` permit. Only ordinary `--sa` obtains a short-lived token through supported Nebius CLI service-account impersonation, with captured output, a finite timeout, and no token logging or persistence. Managed HA enrollment uses SDK identity reconciliation without requesting a CLI token; apply keeps its selected operator authentication for both discovery and infrastructure execution, while runtime controllers use the independently authenticated managed source.
 
 #### Selected Option
 
-Keep `apply --sa NAME` as the explicit ordinary-gateway identity-selection boundary and use the pinned SDK's generated service clients. VM-HA rejects `--sa` and delegates deterministic account, group, permit, and authorized-key enrollment to its managed-credential design. Both paths require the service account to be the dedicated group's only member and the group to have exactly one project `editor` permit. A short-lived token is obtained through supported Nebius CLI service-account impersonation with captured output, a finite timeout, and no token logging or persistence.
+Keep `apply --sa NAME` as the explicit ordinary-gateway identity-selection boundary and use the pinned SDK's generated service clients. VM-HA rejects `--sa` and delegates deterministic account, group, permit, and authorized-key enrollment to its managed-credential design. Both paths require the service account to be the dedicated group's only member and the group to have exactly one project `editor` permit. Only ordinary `--sa` obtains a short-lived token through supported Nebius CLI service-account impersonation, with captured output, a finite timeout, and no token logging or persistence. Managed HA enrollment uses SDK identity reconciliation without requesting a CLI token; apply keeps its selected operator authentication for both discovery and infrastructure execution, while runtime controllers use the independently authenticated managed source.
 
 #### Alternatives Considered
 
@@ -2183,7 +2185,7 @@ No independent verification evidence was recorded before migration.
 <!-- /FEATURE: TI-DES-009 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: TI-DES-010 reqs=TI-REQ-005,TI-REQ-006,TI-REQ-008 status=ready delivery=implemented priority=P1 version=3 -->
+<!-- FEATURE: TI-DES-010 reqs=TI-REQ-005,TI-REQ-006,TI-REQ-008 status=ready delivery=implemented priority=P1 version=5 -->
 ### TI-DES-010: Owner-bound repair-before-promote controller lane
 
 #### Requirements Covered
@@ -2216,6 +2218,36 @@ Extend the pure VM-HA policy with explicit `DEGRADED_PATH`, `REPAIRING`, `REPAIR
 
 `agent/vm_ha_controller.py` owns pure classification, repair admission, the immutable five-second deadline, flapping, candidate-readiness, and transition policy. `agent/vm_ha/runtime.py` owns the single bounded node-local repair port, canonical owner re-enable path, and an emergency forwarding fence that deliberately bypasses the ordinary routing lock; it never performs cloud or VPC-route effects. Heartbeat v1 remains unchanged: its existing service, route, and promotion-readiness flags distinguish a fresh unhealthy peer from a missing heartbeat without making repair state remote authority. `agent/main.py` owns checkpoint-v5 persistence with deployment-only v1-v4 conversion under FEAT-032, remaining-budget command bounds, state-sensitive evaluation cadence, status, and structured effect timing. In VM-HA mode the tunnel monitor is observer-only; non-HA monitoring and explicit manual restart behavior are unchanged. The existing systemd stop and `ExecStopPost` guard remains authoritative for process shutdown. A short systemd watchdog is intentionally absent because the same controller also executes legitimate cloud operations that can exceed the local repair deadline.
 
+The service composition carries the same unfinished current-boot active repair
+deadline through accepted-effect settlement, cloud reads and local verification.
+Until both complete healthy observations are confirmed, the controller defers
+competing tunnel selection, whose full authority/readiness snapshot cannot
+advance component-repair verification. Each confirmation still takes its own
+fresh complete snapshot; none is cached or shared between decisions. Tunnel work
+resumes after the second confirmation or a verified local fence. These steps
+inherit the stricter existing request or command allowance and reserve the final
+second for verified local fencing.
+Heartbeat phase-only updates take the publisher record lock without waiting for
+an in-flight network send. They do not change sample generation or freshness.
+Entering and leaving an actual health transition still drain the admitted send
+under the publication gate, invalidate the sample and advance its generation;
+shutdown retains the same drain. This prevents advisory phase reporting from
+consuming the controller's remaining confirmation allowance while preserving
+health revocation before effects. Threaded regressions hold a real publication
+in flight and verify both phase independence and transition draining. The local
+counterfactual establishes this scheduling defect; live confirmation remains a
+separate qualification requirement.
+An unavailable or expired verification invokes the existing emergency fence
+before ordinary shutdown can wait for the routing lock. This does not clear
+the attempt, renew its deadline, replay a mutation or grant transfer authority.
+A completed two-observation repair, a previous-boot record or a member whose
+current-boot guard is corroborated by fresh physical non-forwarding evidence
+does not inherit an obsolete verification allowance. Guard intent alone cannot
+prove the kernel fence. The confirmation uses at most the fifty milliseconds
+outside the emergency fence's existing 950-millisecond command bounds; failed,
+late or unknown readback retains the original repair deadline. Physical shutdown remains guarded by the existing
+controller and systemd owners; no watchdog or new repair owner is introduced.
+
 #### Test-First Success Criteria
 
 - The migrated validation contract passes after implementation.
@@ -2246,7 +2278,19 @@ The mapped requirements, validation, and evaluation all pass.
 
 #### Verification Evidence
 
-No independent verification evidence was recorded before migration.
+- A controlled real snapshot/controller/checkpoint reproducer exposed a fresh
+  thirty-second cloud allowance during a five-second repair. Before the fix,
+  an eight-second observation delayed the disable action beyond the original
+  deadline. Five regression cases failed on the original implementation.
+- Fifteen focused repair regressions now cover tunnel, settlement, cloud and local
+  delays, expiry before observation, stricter parent deadlines, completed and
+  already-fenced repairs, previous boots, emergency fencing while a real
+  routing lock is held, and guard intent with active, unavailable, late or unknown
+  physical state. Four fresh-authority composition controls also pass. The
+  guard-intent counterexample failed before physical corroboration was added.
+- New installed-native and live fault qualification remains pending for this
+  implementation. The earlier regional fault does not establish this mechanism
+  as its historical cause; its missing timing evidence remains unresolved.
 
 <!-- /FEATURE: TI-DES-010 -->
 
@@ -2383,7 +2427,7 @@ No independent verification evidence was recorded before migration.
 <!-- /FEATURE: TI-DES-012 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: TI-DES-013 reqs=TI-REQ-003,TI-REQ-004,TI-REQ-005,TI-REQ-006,TI-REQ-007,TI-REQ-009,TI-REQ-011 status=ready delivery=implemented priority=P1 version=2 -->
+<!-- FEATURE: TI-DES-013 reqs=TI-REQ-003,TI-REQ-004,TI-REQ-005,TI-REQ-006,TI-REQ-007,TI-REQ-009,TI-REQ-011 status=ready delivery=implemented priority=P1 version=5 -->
 ### TI-DES-013: Typed transfer lineage and independent warm-standby restoration
 
 #### Requirements Covered
@@ -2414,14 +2458,47 @@ Replace controller request booleans with a typed `TransferIntent` for planned fa
 
 #### Alternatives Considered
 
-- Starting Compute directly from CLI-side `vm-ha` orchestration or planned-failback preparation was rejected because multiple start writers cannot provide one replayable operation journal or safe automatic restoration.
+- Starting Compute directly from CLI-side `apply` orchestration or planned-failback preparation was rejected because multiple start writers cannot provide one replayable operation journal or safe automatic restoration.
 - Making rearm a controller dependency was rejected because standby availability must not reduce the safety controller's ability to fence, remain guarded, or report failure.
 - Inferring promotion completion from current cloud topology was rejected because topology cannot prove route completion, forwarding durability, request consumption, or absence of pending effects and locks.
 - Proactively moving ownership back to the configured active merely to restore preference was rejected because it adds a second failure-sensitive transfer and violates the explicit planned-failback contract. This does not prevent the configured-active survivor from taking over when the configured-passive current owner itself fails.
 
 #### Implementation Boundaries
 
-`agent/vm_ha_controller.py` owns typed intent validation, role-neutral automatic admission, pre-effect cancellation, post-effect stickiness, and cutover policy without changing action order. `agent/main.py` and strict private state modules own exact former-owner/candidate transfer-lineage validation, promotion, rearm request/checkpoint/journal/status, passive-ready serialization, and production wiring of one generation store for both anti-replay and accepted-heartbeat evidence while retaining the existing automatic intent value, heartbeat v1, lifecycle v4, strict checkpoint-v5 reads and deployment-only v1-v4 conversion under FEAT-032, and private record versions. `agent/vm_ha/store.py` checksum-wraps the last accepted heartbeat and rejects it unless its exact peer boot and sequence remain covered by replay state; `agent/vm_ha/runtime.py` reloads that record with `received_at=None`, so liveness and health gates remain stale after restart. Manual request parsing remains configured-role-bound. The rearm cloud port exposes exact journal inspection and read-only terminal finalization separately from Compute start. A shared standard-library `fcntl` helper delivered through pinned SSH owns apply/removal inhibition transitions without depending on target `flock` availability or the newly installed package version. Removal phases every member through exact-operation inhibition, controller acknowledgement with no pending journal, and stopped rearm/controller services before the first deactivation; the lifecycle then checkpoints this global barrier so a partial retry skips unavailable agents and resumes idempotent deactivation. Deactivation preserves its root-only state directory and lock inode while clearing every sibling state entry under that same lock. `cli.py` returns a typed preparation result, emits an identity-free already-owner outcome without writing a request, strictly validates each planned-status identity and runtime binding, and applies one wall-clock deadline to Compute polling, bounded pinned-SSH probes and sleeps, and every repeated readiness read before rendering the existing redundancy panel. Its planned-transfer command boundary catches preparation and observation failures before they reach Typer, emits one fixed journal-guidance diagnostic without formatting exception text, and replaces remote agent stdout/stderr with the same closed guidance; JSON stdout remains request-record-only. The internal rearm service remains the only Compute-start writer; `vm-ha` delegates to it without granting stop, allocation, route, firewall, or forwarding authority.
+`agent/vm_ha_controller.py` owns typed intent validation, role-neutral automatic admission, pre-effect cancellation, post-effect stickiness, and cutover policy without changing action order. `agent/main.py` and strict private state modules own exact former-owner/candidate transfer-lineage validation, promotion, rearm request/checkpoint/journal/status, passive-ready serialization, and production wiring of one generation store for both anti-replay and accepted-heartbeat evidence while retaining the existing automatic intent value, heartbeat v1, lifecycle v4, strict checkpoint-v5 reads and deployment-only v1-v4 conversion under FEAT-032, and private record versions. `agent/vm_ha/store.py` checksum-wraps the last accepted heartbeat and rejects it unless its exact peer boot and sequence remain covered by replay state; `agent/vm_ha/runtime.py` reloads that record with `received_at=None`, so liveness and health gates remain stale after restart. Manual request parsing remains configured-role-bound. The rearm cloud port exposes exact journal inspection and read-only terminal finalization separately from Compute start. A shared standard-library `fcntl` helper delivered through pinned SSH owns apply/removal inhibition transitions without depending on target `flock` availability or the newly installed package version. Removal phases every member through exact-operation inhibition, controller acknowledgement with no pending journal, and stopped rearm/controller services before the first deactivation; the lifecycle then checkpoints this global barrier so a partial retry skips unavailable agents and resumes idempotent deactivation. Deactivation preserves its root-only state directory and lock inode while clearing every sibling state entry under that same lock. `cli.py` returns a typed preparation result, emits an identity-free already-owner outcome without writing a request, strictly validates each planned-status identity and runtime binding, and applies one wall-clock deadline to Compute polling, bounded pinned-SSH probes and sleeps, and every repeated readiness read before rendering the existing redundancy panel. Its planned-transfer command boundary catches preparation and observation failures before they reach Typer, emits one fixed journal-guidance diagnostic without formatting exception text, and replaces remote agent stdout/stderr with the same closed guidance; JSON stdout remains request-record-only. The internal rearm service remains the only Compute-start writer; `apply` delegates to it without granting stop, allocation, route, firewall, or forwarding authority.
+
+#### Accepted heartbeat publication
+
+`PeerStateExchange` owns one publication of the authenticated heartbeat and its
+accepted replay state. `AtomicGenerationStore` validates exact peer, boot and
+sequence binding plus monotonic replay progress, then persists replay first and
+the matching heartbeat second while holding its existing exclusive store lock
+through both writes. `BoundPeerRuntime` consumes that accepted result and only
+loads persisted parity during restart; it is no longer a second cache writer.
+Concurrent policy readers cannot observe an intermediate pair during a successful
+publication. The exchange initializes its in-memory replay guard from durable
+state and advances that guard only after authentication, exact identity, sequence
+and timestamp validation, before attempting durable publication. This guard is a
+conservative consumed-message floor, not accepted parity or ownership authority.
+A failed write never returns an accepted heartbeat, but the running receiver
+retains its consumed sequences and retired boots even if the durable file is
+lost or a partial publication is followed by another peer reboot. The next fresh
+heartbeat can advance the pair; the store independently revalidates monotonic
+progress under its publication lock and rejects corrupt or unreadable state.
+A crash or failed write between the two durable writes still leaves
+the advanced replay boundary authoritative and the older cache unusable until a
+fresh authenticated heartbeat arrives. No freshness window, wire or persisted
+format, public command, ownership gate, or mutation authority changes.
+
+The existing two-lock publication exposes a temporary absent heartbeat to
+strict policy readers. Retrying reads would mask this owner-local gap and spend
+observation time; accepting an older sequence would weaken replay binding. Keep
+strict reads and eliminate the publication gap at the writer instead. A local
+interleaving regression must fail before the repair, then pass with real store
+locking. Inject failures before replay publication and between replay and cache
+writes; preserve monotonicity, retired-boot rejection, exact binding, and recovery
+with a newer authenticated heartbeat. Native installed and fresh live unchanged
+apply/crash qualification remain separate gates.
 
 #### Test-First Success Criteria
 
@@ -2909,7 +2986,7 @@ Migrated from a validated Task Implementer design record.
 
 Preserve the canonical stopped-former cutover and the owner-side rearm service as the sole Compute-start writer, but treat them as two explicit milestones of one planned transfer. The CLI first proves and reports committed service cutover, then observes automatic rearm until the former owner is again a running, alias-free, guarded standby. Terminal failover or failback success therefore means both service ownership and VM redundancy are restored, while a post-cutover rearm problem is reported as safe partial completion rather than an ambiguous transfer failure.
 
-**Control and failure flow:** Preparation first distinguishes an exact healthy already-owner no-op from a real transfer. For a real transfer, the start line is emitted immediately before request submission; subsequent progress names `cutting over` or `restoring standby` and uses total monotonic elapsed time beginning at command execution. Cutover is accepted only through TI-DES-017's promotion receipt, which proves the former owner was stopped before attachment transfer, plus active controller, route, forwarding, exclusive-allocation, and final reread gates that tolerate automatic rearm already progressing. Restoration begins from that frozen result and accepts only terminal owner rearm, both Computes `Running`, exact owner attachment, alias-free standby, fresh standby readiness, and stable final rereads. A restoration timeout or closed rearm failure preserves the serving owner, exits nonzero, states that cutover succeeded, and directs the operator to the existing role-neutral `vm-ha` retry. It never moves the allocation, starts a VM, changes routes, enables forwarding, or performs automatic failback from the CLI.
+**Control and failure flow:** Preparation first distinguishes an exact healthy already-owner no-op from a real transfer. For a real transfer, the start line is emitted immediately before request submission; subsequent progress names `cutting over` or `restoring standby` and uses total monotonic elapsed time beginning at command execution. Cutover is accepted only through TI-DES-017's promotion receipt, which proves the former owner was stopped before attachment transfer, plus active controller, route, forwarding, exclusive-allocation, and final reread gates that tolerate automatic rearm already progressing. Restoration begins from that frozen result and accepts only terminal owner rearm, both Computes `Running`, exact owner attachment, alias-free standby, fresh standby readiness, and stable final rereads. A restoration timeout or closed rearm failure preserves the serving owner, exits nonzero, states that cutover succeeded, and directs the operator to the existing role-neutral `apply` retry. It never moves the allocation, starts a VM, changes routes, enables forwarding, or performs automatic failback from the CLI.
 
 #### Selected Option
 
@@ -3408,7 +3485,7 @@ Migrated from a validated Task Implementer design record.
 
 #### Design Details
 
-Add one top-level `vm-ha` façade with a pure typed planner and stable result model. The façade normalizes ordinary input through the existing allowlisted conversion engine, obtains a strict authoritative snapshot, classifies exactly one next action, delegates effects to the canonical conversion/apply/controller/rearm owner, and reinspects. It never invokes Typer handlers, scrapes presentation output, starts a second writer, or runs a latent failover drill.
+Add one top-level `apply` façade with a pure typed planner and stable result model. The façade normalizes ordinary input through the existing allowlisted conversion engine, obtains a strict authoritative snapshot, classifies exactly one next action, delegates effects to the canonical conversion/apply/controller/rearm owner, and reinspects. It never invokes Typer handlers, scrapes presentation output, starts a second writer, or runs a latent failover drill.
 
 **Planning and execution:** Each invocation computes a sanitized authority digest from the effective config, lifecycle snapshot, exact cloud revisions, locks, controller/rearm state, proposed effects, and a closed typed impact record. That record independently classifies destructive action, possible VPN interruption, and cloud-resource creation and supplies one concise public sentence; safety is never inferred from effect-name strings or from the existing gateway-recreation boolean. Read-only planning and prompts hold no writer lock. Immediately before the selected effect, the façade acquires the canonical gateway/project mutation lock once, rereads and reclassifies, validates the approval domain and digest, invokes the lock-aware typed engine that owns the complete classified repair, releases the lock, and reinspects. It performs at most one writer-owned mutation per invocation. Unchanged retries resume from durable owner checkpoints without duplicating work, and health is reported only after the selected engine's postconditions are independently re-observed. Controller-owned transition observation is capped at three samples and rejects a repeated `(overall, action, authority_digest)` as no progress.
 
@@ -3418,7 +3495,7 @@ Add one top-level `vm-ha` façade with a pure typed planner and stable result mo
 
 **Interactive approval:** In text mode only, when stdin/stdout are terminals and a risk-classified plan requires approval without `--approve` or `--dry-run`, the facade renders a sanitized review block with the digest-bound concise impact and prompts once with default No. An active-standby replacement uses the simpler `Create the missing non-owner VM now? [y/N]` prompt and hides its digest and artifact identity; explicit `y` continues the same invocation. The fallback prompt names the combined serving-owner upgrade/restart and its traffic risk. For artifact standby recovery the message warns that upgrading the serving owner may briefly interrupt VPN traffic and states that no gateway VM or disk is deleted. Explicit acceptance supplies the already-rendered digest to the same lock, replan, equality check, and engine gate used by `--approve`; it is not a second execution path. Refusal performs no effect, retains the plan for recovery, adds `operator-declined-approval`, and exits `3`. An explicitly safe plan skips confirmation in interactive, JSON, and noninteractive modes but still uses the same lock-bound replan, artifact identity check, engine, and terminal health proof. Dry-run never executes. JSON and noninteractive calls never read confirmation input and return action-required for every risky or unknown-impact plan without an exact digest.
 
-**Failure and resume:** Owner-inhibition acknowledgement polls only the agent's typed temporary-not-ready exit for 60 seconds at one-second intervals, which spans one complete 30-second cloud-read deadline and controller retry. Permanent identity, capability, or evidence failures are not retried. A timeout remains on the durable inhibition checkpoint and projects the exact `standby-replacement-inhibition-not-ready` reason, so a later `vm-ha` rerun resumes without replaying accepted cloud effects.
+**Failure and resume:** Owner-inhibition acknowledgement polls only the agent's typed temporary-not-ready exit for 60 seconds at one-second intervals, which spans one complete 30-second cloud-read deadline and controller retry. Permanent identity, capability, or evidence failures are not retried. A timeout remains on the durable inhibition checkpoint and projects the exact `standby-replacement-inhibition-not-ready` reason, so a later `apply` rerun resumes without replaying accepted cloud effects.
 
 **Persistence:** The façade adds no public persisted state or schema. It reuses the current lifecycle, target apply lock, controller state, and rearm request owners. Active-standby replacement adds append-only private lifecycle audit bindings, the existing v4 transaction/effect journal, and strict root-only owner transfer-inhibition and release-receipt records. Those records bind the exact cluster, node, generation, and approved operation and are not an apply lock or a second public workflow. The approved private-state clean-break permission is not exercised because command consolidation and region terminology require no persisted-format change. Existing strict private readers and the sole-start-writer rearm service remain canonical.
 
@@ -3438,13 +3515,13 @@ HA-LIFECYCLE-002 is a proven pre-existing parser defect: `[2-9][0-9]*` omits 10-
 
 #### Selected Option
 
-Add one top-level `vm-ha` façade with a pure typed planner and stable result model. The façade normalizes ordinary input through the existing allowlisted conversion engine, obtains a strict authoritative snapshot, classifies exactly one next action, delegates effects to the canonical conversion/apply/controller/rearm owner, and reinspects. It never invokes Typer handlers, scrapes presentation output, starts a second writer, or runs a latent failover drill.
+Add one top-level `apply` façade with a pure typed planner and stable result model. The façade normalizes ordinary input through the existing allowlisted conversion engine, obtains a strict authoritative snapshot, classifies exactly one next action, delegates effects to the canonical conversion/apply/controller/rearm owner, and reinspects. It never invokes Typer handlers, scrapes presentation output, starts a second writer, or runs a latent failover drill.
 
 #### Alternatives Considered
 
 - An `ensure` subcommand was rejected because the desired public surface is one
   idempotent operation rather than a command group.
-- Calling another public CLI handler from `vm-ha` was rejected because it
+- Calling another public CLI handler from `apply` was rejected because it
   would duplicate parsing, output, locks, and failure semantics instead of
   preserving one effect owner.
 - Automatically running failover as verification was rejected because it is a
@@ -3461,7 +3538,7 @@ Add one top-level `vm-ha` façade with a pure typed planner and stable result mo
 
 #### Implementation Boundaries
 
-`vm-ha` requires `--local-config-file` and accepts `--output`, `--force`, `--region`, `--dry-run`, `--approve DIGEST`, and `--output-format text|json`. JSON emits one versioned result document on stdout. Text retains concise progress and an actionable terminal summary; a healthy result is only `VM-HA is healthy now.`, while non-healthy results keep the context required for recovery. Interactive ordinary conversion closes configuration-resolution progress before transferring terminal ownership to the blocking wizard; the separately confirmed passive-IP preparation opens and closes a dedicated progress phase while the wizard remains effect owner. Closed outcome and classification enums own the documented exit mapping. FEAT-015 makes this facade the only public setup and rearm entrypoint while preserving the internal conversion and rearm effect owners.
+`apply` requires `--local-config-file` and accepts `--output`, `--force`, `--region`, `--dry-run`, `--approve DIGEST`, and `--output-format text|json`. JSON emits one versioned result document on stdout. Text retains concise progress and an actionable terminal summary; a healthy result is only `VM-HA is healthy now.`, while non-healthy results keep the context required for recovery. Interactive ordinary conversion closes configuration-resolution progress before transferring terminal ownership to the blocking wizard; the separately confirmed passive-IP preparation opens and closes a dedicated progress phase while the wizard remains effect owner. Closed outcome and classification enums own the documented exit mapping. FEAT-015 makes this facade the only public setup and rearm entrypoint while preserving the internal conversion and rearm effect owners.
 
 #### Test-First Success Criteria
 
@@ -3528,14 +3605,14 @@ The mapped requirements, validation, and evaluation all pass.
   apply-owned activation exits from authentication exits.
   A separately authorized live static VM-HA recovery captured the first
   controller and guard failures before restart, deployed the repaired wheel and
-  systemd units to both members, completed the exact `vm-ha` resume transaction,
+  systemd units to both members, completed the exact `apply` resume transaction,
   and completed a second direct `apply`. Independent current-boot status and
   systemd checks proved a healthy exact owner, passive standby, preserved
   runtime directories, and zero controller restarts after activation. No
   failover drill was run.
   The presentation refinement then passed 50 focused VM-HA command tests,
   Ruff, mypy across 52 source files, 1,612 unit tests, 79 integration tests,
-  wheel construction, and a read-only interactive `vm-ha --dry-run` against
+  wheel construction, and a read-only interactive `apply --dry-run` against
   the retained healthy deployment. The live TTY proved the Rich spinner-to-
   green-row path, while deterministic ERROR-plus-exception tests covered both
   installed and current SDK retry messages, logger-filter restoration, and the
@@ -3575,7 +3652,7 @@ Migrated from a validated Task Implementer design record.
 
 #### Design Details
 
-Replace the unreleased private v1 policy with one strict `standby-auto-healing-policy-v2` record in the existing VM-HA runtime authority. The public `vm-ha` façade accepts only `--standby-auto-healing enabled|disabled`; omission leaves policy unchanged, and the first successful VM-HA activation writes an explicit enabled policy. The managed rearm service remains installed and running, but the policy gate prevents it from accepting an ordinary stopped-standby start while maintenance is committed. A separate single-use owner-local recovery intent may authorize only the exact start needed to complete an approved policy transaction; rearm remains the only Compute-start writer.
+Replace the unreleased private v1 policy with one strict `standby-auto-healing-policy-v2` record in the existing VM-HA runtime authority. The public `apply` façade accepts only `--standby-auto-healing enabled|disabled`; omission leaves policy unchanged, and the first successful VM-HA activation writes an explicit enabled policy. The managed rearm service remains installed and running, but the policy gate prevents it from accepting an ordinary stopped-standby start while maintenance is committed. A separate single-use owner-local recovery intent may authorize only the exact start needed to complete an approved policy transaction; rearm remains the only Compute-start writer.
 
 **Control flow:** The CLI validates capability, lifecycle, cloud authority, exact member set, generation, apply/removal writers, mTLS, rearm/controller effects, and current policy before planning. A digest-bound approval covers the exact next effects. The deterministic member coordinator prepares first, the peer prepares second and commits first, and the coordinator commits last. Prepare compares the exact mutually acknowledged committed predecessor; an incomplete transaction can resume only its own desired state and operation. Missing-non-owner replacement has one additional apply-owned path: after reading the retained owner's exact acknowledged committed-enabled record, or its exact deterministic initial committed-enabled record whose acknowledgement was lost with the absent member, the CLI binds that record to the replacement's exact apply lock, the exact pending apply-owned managed-mTLS transaction when one exists, and the separately absent or matching rotation inhibition. The fresh member may adopt it only while its local record is still the deterministic default initializer. Adoption runs after config installation and before guard, controller, or rearm service restart, is idempotent after a lost response, and is re-proved on both members before replacement inhibition release or ACTIVE lifecycle completion. When the adopted owner decision was the unacknowledged deterministic initializer, the CLI immediately runs the ordinary two-member enabled-policy transaction with that decision as predecessor, so both members reach a fresh mutually acknowledged terminal decision. Its deterministic prepare and commit phases are the only additional lineage admitted after interruption. An arbitrary split, disabled owner, active recovery, missing or mismatched lock, non-default unacknowledged record, non-default local record, or changed peer decision remains blocked. The CLI rereads complete authority after its local lock and before every cross-node mutation, while each remote mutation repeats writer and predecessor checks under `rearm.lock`. Every reader requires exact committed agreement before allowing an ordinary standby start or planned ownership transfer.
 
@@ -3587,11 +3664,11 @@ Replace the unreleased private v1 policy with one strict `standby-auto-healing-p
 
 **Lifecycle and failure policy:** Apply initializes enabled and preserves the current committed choice across idempotent reapply. Member replacement rebinds the policy only inside the canonical replacement transaction. Removal clears policy and recovery only after the existing removal barrier. Pending or split policy state blocks apply-owned drift repair, replacement, ordinary rearm, and planned failover/failback. Automatic owner-loss failover remains safety-authoritative and is not disabled by standby maintenance policy. Before that local initialization, activation durably requests an exact generation-bound reset and eagerly discards only the last accepted advisory peer heartbeat while retaining its monotonic replay boundary. The new service process consumes that request at the shared systemd preflight or controller runtime-construction boundary, after systemd has stopped the old writer and before strict peer-state loading, deleting any older-schema cache recreated in the intervening window. This clean-breaks an older private heartbeat schema without reading or migrating it and forces fresh authenticated peer evidence. Initialization returns an action-specific local commit receipt and never converts that successful mutation into failure by projecting unrelated peer-heartbeat, recovery, or promotion evidence; the full status action keeps its strict fail-closed projection. Recovery uses only another canonical policy command and an exact new approval when authority changed; operators never edit records directly.
 
-**CLI and presentation:** Enum parsing occurs before authentication and effects. The flag composes with existing `--dry-run`, `--approve`, and output modes, and rejects conflicting force/output combinations using existing result and approval boundaries. Ordinary `vm-ha` without the flag cannot start a stopped standby while disabled and returns maintenance guidance. Public status classifies a proven committed disabled state as yellow `MAINTENANCE`, an incomplete transaction as yellow `TRANSITIONING`, and missing, corrupt, stale, or split policy as red `BLOCKED`. The public summary rows are `Redundancy`, `Identity`, and `Action`; no public `Rearm` row remains.
+**CLI and presentation:** Enum parsing occurs before authentication and effects. The flag composes with existing `--dry-run`, `--approve`, and output modes, and rejects conflicting force/output combinations using existing result and approval boundaries. Ordinary `apply` without the flag cannot start a stopped standby while disabled and returns maintenance guidance. Public status classifies a proven committed disabled state as yellow `MAINTENANCE`, an incomplete transaction as yellow `TRANSITIONING`, and missing, corrupt, stale, or split policy as red `BLOCKED`. The public summary rows are `Redundancy`, `Identity`, and `Action`; no public `Rearm` row remains.
 
 #### Selected Option
 
-Replace the unreleased private v1 policy with one strict `standby-auto-healing-policy-v2` record in the existing VM-HA runtime authority. The public `vm-ha` façade accepts only `--standby-auto-healing enabled|disabled`; omission leaves policy unchanged, and the first successful VM-HA activation writes an explicit enabled policy. The managed rearm service remains installed and running, but the policy gate prevents it from accepting an ordinary stopped-standby start while maintenance is committed. A separate single-use owner-local recovery intent may authorize only the exact start needed to complete an approved policy transaction; rearm remains the only Compute-start writer.
+Replace the unreleased private v1 policy with one strict `standby-auto-healing-policy-v2` record in the existing VM-HA runtime authority. The public `apply` façade accepts only `--standby-auto-healing enabled|disabled`; omission leaves policy unchanged, and the first successful VM-HA activation writes an explicit enabled policy. The managed rearm service remains installed and running, but the policy gate prevents it from accepting an ordinary stopped-standby start while maintenance is committed. A separate single-use owner-local recovery intent may authorize only the exact start needed to complete an approved policy transaction; rearm remains the only Compute-start writer.
 
 #### Alternatives Considered
 
@@ -3626,7 +3703,7 @@ Evaluate the mapped requirements and recorded validation evidence.
 
 #### Rollout And Rollback
 
-Before adoption, rollback is a coherent source, unit, and private v2 state-format reversion; no v1 compatibility reader is retained. After a policy has been written, recovery is a forward `--standby-auto-healing enabled` transaction followed by canonical `vm-ha`; never remove the service or hand-edit policy records.
+Before adoption, rollback is a coherent source, unit, and private v2 state-format reversion; no v1 compatibility reader is retained. After a policy has been written, recovery is a forward `--standby-auto-healing enabled` transaction followed by canonical `apply`; never remove the service or hand-edit policy records.
 
 #### Done Definition
 
@@ -3772,7 +3849,7 @@ No independent verification evidence was recorded before migration.
 <!-- /FEATURE: TI-DES-024 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: TI-DES-025 reqs=TI-REQ-011,TI-REQ-015,TI-REQ-016,TI-REQ-017 status=ready delivery=implemented priority=P1 version=1 -->
+<!-- FEATURE: TI-DES-025 reqs=TI-REQ-011,TI-REQ-015,TI-REQ-016,TI-REQ-017 status=ready delivery=implemented priority=P1 version=3 -->
 ### TI-DES-025: Transfer-bound automatic standby restoration authorization
 
 #### Requirements Covered
@@ -3823,9 +3900,9 @@ Add a separate strict `standby-restoration-authorization-v1` authority rather th
 
 **Rearm ordering and retries:** `agent/vm_ha_rearm.py`, controller status, and explicit retry use one shared local-policy-to-authorization predicate. Every source accepts exact committed-enabled operation and decision identity. Only a committed automatic-failover authorization may additionally survive an exact prepared-disable race whose predecessor is the accepted enabled-policy digest; prepared enable, committed disabled, another predecessor, and planned transfer variants fail closed. Rearm validates the exact active authorization without rereading the mutable latest-agreement cache, then bypasses only peer-heartbeat age. It writes the existing `start-requested` checkpoint, advances authorization to `START_ACCEPTED`, writes `starting`, and then calls the existing journaled SDK start with the same logical operation. Retryable and ambiguous failures retain that operation and schedule five total submissions at 5, 15, 30, and 60-second gaps; permanent failure blocks immediately and final transient exhaustion records `automatic-retry-exhausted`. Accepted cloud operations are finalized before any resubmission. Running Compute advances through `RUNNING` to `AWAITING_STANDBY`; the owner controller advances to `COMPLETED` only from current promotion receipt plus fresh exact redundancy evidence, or to `BLOCKED` after the independent 300-second readiness deadline.
 
-**Operator workflow:** The existing planned CLI restoration deadline is an observation budget and never cancellation authority. Timeout remains nonzero but says durable background retries continue. `vm-ha` joins an active authorization and, only for an exact inert `BLOCKED` record under committed enabled policy, renders and executes the existing approval-bound recovery path as a new `operator-restoration` authorization. Missing, corrupt, disabled, or split policy continues through the explicit `--standby-auto-healing enabled` transaction. Conversion, JSON result, public status rows, default-No confirmation, and exit classes remain unchanged.
+**Operator workflow:** The existing planned CLI restoration deadline is an observation budget and never cancellation authority. Timeout remains nonzero but says durable background retries continue. `apply` joins an active authorization and, only for an exact inert `BLOCKED` record under committed enabled policy, renders and executes the existing approval-bound recovery path as a new `operator-restoration` authorization. Missing, corrupt, disabled, or split policy continues through the explicit `--standby-auto-healing enabled` transaction. Conversion, JSON result, public status rows, default-No confirmation, and exit classes remain unchanged.
 
-**Capability admission:** `agent/main.py` advertises `vm-ha-standby-restoration-v2` in both its configuration-independent private capability document and every current controller status, including blocked status. `cli.py` requires that controller capability whenever an active lifecycle runtime binding is validated, so ordinary status projection marks an older installed runtime as `agent-status-stale`; `vm-ha` consequently plans apply-owned convergence instead of reporting healthy. The private standby-policy action probe requires the fixed feature as well as the v2 policy capability. Planned preparation reuses the same status validator and therefore stops before publishing a failover/failback request or admitting any external transfer effect. Version strings and configuration-generation parity are deliberately insufficient because editable and previously built artifacts may share them. Package preparation resolves only a current build, explicit override, or other non-fallback local artifact, binds its SHA-256, uploads it below a fresh mode-0700 temporary directory, verifies the remote bytes before installation, and runs the configuration-independent capability document in a fresh process before emitting its package receipt. An artifact recorded by the existing installation is not eligible as a VM-HA convergence fallback. One canonical exported capability constant is shared by runtime advertisement, CLI status admission, local wheel inspection, upload receipt, and fresh remote proof, so a v1-only wheel is rejected before approval.
+**Capability admission:** `agent/main.py` advertises `vm-ha-standby-restoration-v2` in both its configuration-independent private capability document and every current controller status, including blocked status. `cli.py` requires that controller capability whenever an active lifecycle runtime binding is validated, so ordinary status projection marks an older installed runtime as `agent-status-stale`; `apply` consequently plans apply-owned convergence instead of reporting healthy. The private standby-policy action probe requires the fixed feature as well as the v2 policy capability. Planned preparation reuses the same status validator and therefore stops before publishing a failover/failback request or admitting any external transfer effect. Version strings and configuration-generation parity are deliberately insufficient because editable and previously built artifacts may share them. Package preparation resolves only a current build, explicit override, or other non-fallback local artifact, binds its SHA-256, uploads it below a fresh mode-0700 temporary directory, verifies the remote bytes before installation, and runs the configuration-independent capability document in a fresh process before emitting its package receipt. An artifact recorded by the existing installation is not eligible as a VM-HA convergence fallback. One canonical exported capability constant is shared by runtime advertisement, CLI status admission, local wheel inspection, upload receipt, and fresh remote proof, so a v1-only wheel is rejected before approval.
 
 **Concurrency and failure policy:** Active phases inhibit competing writers. `COMPLETED` is inert; `BLOCKED` carries no automatic effect authority and is disposable only through exact current-authority recovery. A partially prepared disable does not revoke an already armed automatic restoration when promotion wins; the policy operation replans after redundancy is restored. If a terminal automatic promotion cannot commit its exact restoration authority, the same writer lock durably discards that unusable authorization so the terminal receipt remains authoritative and restoration is disabled. The equivalent planned-transfer failure propagates and retains lineage. Restoration and policy failures cross the durable status boundary only as a closed identity-free reason code shared with the CLI allowlist; exception messages remain internal and never become `rearm_reason`. The generic `controller-reported-condition` projection is reserved for malformed, foreign, or unknown evidence. Transition-only structured logs publish phase, attempt, and closed reason without resource identities, raw exceptions, or loop spam.
 
@@ -3852,11 +3929,11 @@ Add a separate strict `standby-restoration-authorization-v1` authority rather th
 
 #### Validation Plan
 
-Add focused strict-store and transition tests, production-wired rearm tests with heartbeat age greater than 30 seconds, both planned directions, latest-certificate replacement after arming, automatic policy matrices including the exact prepared-disable race, receipt/auth crash ordering, typed provider retry and idempotency, CLI timeout/background continuation, `vm-ha` recovery, status projection, systemd packaging, Ruff, mypy, complete unit/integration suites, wheel/help, security, and diff checks. A repaired wheel must be deployed through supported non-owner-first `apply` before separately authorized clean live planned and automatic trials.
+Add focused strict-store and transition tests, production-wired rearm tests with heartbeat age greater than 30 seconds, both planned directions, latest-certificate replacement after arming, automatic policy matrices including the exact prepared-disable race, receipt/auth crash ordering, typed provider retry and idempotency, CLI timeout/background continuation, `apply` recovery, status projection, systemd packaging, Ruff, mypy, complete unit/integration suites, wheel/help, security, and diff checks. A repaired wheel must be deployed through supported non-owner-first `apply` before separately authorized clean live planned and automatic trials.
 
 #### Test Plan
 
-Add focused strict-store and transition tests, production-wired rearm tests with heartbeat age greater than 30 seconds, both planned directions, latest-certificate replacement after arming, automatic policy matrices including the exact prepared-disable race, receipt/auth crash ordering, typed provider retry and idempotency, CLI timeout/background continuation, `vm-ha` recovery, status projection, systemd packaging, Ruff, mypy, complete unit/integration suites, wheel/help, security, and diff checks. A repaired wheel must be deployed through supported non-owner-first `apply` before separately authorized clean live planned and automatic trials.
+Add focused strict-store and transition tests, production-wired rearm tests with heartbeat age greater than 30 seconds, both planned directions, latest-certificate replacement after arming, automatic policy matrices including the exact prepared-disable race, receipt/auth crash ordering, typed provider retry and idempotency, CLI timeout/background continuation, `apply` recovery, status projection, systemd packaging, Ruff, mypy, complete unit/integration suites, wheel/help, security, and diff checks. A repaired wheel must be deployed through supported non-owner-first `apply` before separately authorized clean live planned and automatic trials.
 
 #### Evaluation Plan
 
@@ -3864,11 +3941,58 @@ Evaluate the mapped requirements and recorded validation evidence.
 
 #### Rollout And Rollback
 
-Before adoption, revert the new source, private records, tests, and documentation together. Do not hand-edit an authorization or widen heartbeat freshness. After a record exists, recover forward with the matching current `vm-ha` workflow or a coherent package rollback while the serving owner stays fenced and authoritative.
+Before adoption, revert the new source, private records, tests, and documentation together. Do not hand-edit an authorization or widen heartbeat freshness. After a record exists, recover forward with the matching current `apply` workflow or a coherent package rollback while the serving owner stays fenced and authoritative.
 
 #### Done Definition
 
 The mapped requirements, validation, and evaluation all pass.
+
+#### Same-owner preparation observation
+
+A pinned SSH readiness probe does not guarantee the next connection will succeed.
+Only the read-only same-owner status check may retry recognized OpenSSH transport
+timeouts or connection resets. Classify the complete stderr using a closed
+allowlist with SSH exit 255; authentication, host-key, unknown and remote-command
+failures remain fatal. Do not expose remote output. Discard partial member sets,
+read both members afresh, and share one command allowance across both reads.
+After a transient failure recheck unchanged configuration and lifecycle authority,
+exact serving ownership, alias exclusion and both Running members. Keep the original
+preparation deadline, bound sleeps and each read by its remaining time, and reject
+late evidence. Reprove final cloud ownership before no-op admission. This path
+never republishes a transfer or rearm request. Persistent unavailability reports
+an unverified no-op with a closed transport reason and status/retry guidance.
+Controller behavior, all mutation paths, public schemas and fencing stay unchanged.
+
+Regression coverage must include a real operator transport failure followed by
+fresh status, permanent/auth/host-key errors, partial member reads, authority drift,
+late replies, exhausted deadlines, redacted diagnostics, and no mutation retries.
+New runtime artifacts require their own affected qualification; retain historical
+failed trials and prior-candidate evidence without promoting them.
+
+#### Accepted terminal completion hardening
+
+For a matching durable receipt ID, compare every non-time field and reuse the
+original validated receipt including timestamps; retain exact restoration-store
+equality. Recognize already-completed transfers by recomputing the receipt ID
+from lineage, route operation and current ownership epoch, for automatic failover,
+planned failover and planned failback. Require exact cluster, members, allocation,
+generation, policy digests and current candidate attachment. A completion proof
+may survive lock contention and a rearmed Running former owner, but cannot create
+new promotion authority from degraded health or stale/cloud-unknown ownership.
+
+Use the existing nonblocking rearm lock for restoration commit and lineage unlink;
+reread both records under the lock and refuse changed evidence. Preserve original
+receipt bytes, attempt budgets and restoration authority. Do not recreate an
+absent authorization. Existing automatic-only optional restoration failure policy
+remains. Test crash after receipt and restoration writes, lock contention, later
+and backward clocks, all intents and foreign operation/epoch/record swaps.
+The shared completion owner now implements this path. Local controller and full
+service regressions cover lock contention, missing/corrupt restoration permission,
+commit/unlink failures and process reconstruction while preserving receipt bytes
+and established forwarding. A current snapshot must prove exact completion before
+the service defers later restoration errors or skips duplicate receipt publication;
+other errors remain blocking. No Start permission is synthesized. Native and live
+verification is deferred to the combined final-candidate qualification campaign.
 
 #### Implementation Evidence
 
@@ -4096,7 +4220,7 @@ Evaluate the mapped requirements and recorded validation evidence.
 
 #### Rollout And Rollback
 
-Before an accepted delete, preserve the checkpoint and rerun after correcting the blocker. Once effects begin, rollback never recreates or re-adopts resources automatically; the same command completes exact teardown, and a later `apply` starts a fresh provisioning transaction.  ## Task Implementer Design Change Log  - 2026-09-01: Tightened TI-DES-027 terminal proof so retained public allocations must be stably detached before success. Clean reprovision now carries and reproves only those retained public IDs, including when `external_ips` is omitted, with direct `DESTROYED`-to-apply convergence coverage. - 2026-09-01: Removed guest/controller readiness and STOPPED-only admission from TI-DES-027. Exact non-stopped Compute deletion is now the fence, and canonical unlabeled product routes to lifecycle-bound private allocations join exact HA-labeled routes in the delete plan; partial/conflicting labels and foreign identities remain blocking. Destroy failures now expose only closed safe reason codes. Current, replacement, and retired lifecycle Compute identities are all exact teardown targets; terminal failed predecessor operations release their checkpoint, unsupported operation lookup replays the bound idempotency key, errors after an effect complete only from the exact postcondition, and a destroy-owned terminal failure advances through durable sequence-qualified attempt history instead of deadlocking its accepted-operation checkpoint. - 2026-08-31: Implemented TI-DES-027 as the single identity-bound ordinary and VM-HA destroy path with durable operation replay, dependency-ordered deletion, retained public/VPC authority, stable terminal absence proof, and clean post-destroy reprovisioning. - 2026-08-30: Hardened TI-DES-025 by extracting the byte-stable v1 promotion receipt identity and requiring every committed-or-later restoration authorization to reprove its exact durable receipt. Reconciled TI-DES-006 so every production `VMManager` owner deterministically closes its single reused SDK, while nested apply keeps discovery authority alive through deferred SSH trust proof. Ruff source roots are aligned across local, pull-request, and release gates without changing mypy or shell-check scope. - 2026-08-29: Refined FEAT-008 and FEAT-015 so the canonical `vm-ha` facade dispatches the existing managed-mTLS transaction only when `--rotate-mtls` is explicit. Rotation is validated as an exclusive text-mode action before conversion or convergence, the old Typer command is deleted without an alias, and all cryptographic, inhibition, approval, and recovery owners stay unchanged. - 2026-08-29: Refined TI-DES-024 after live commands proved the explicit enable-first cleanup workflow remained user-visible. Exact completed-recovery cleanup now precedes either requested policy state, is followed by a fresh two-member read before classification or planning, and remains fail-closed on changed evidence. The text renderer maps same-state and completed opposite-state action codes to clear outcomes without changing JSON v1. - 2026-08-29: Refined TI-DES-024 after bounded live inspection found a valid completed local recovery on each member, using both writer-valid policy bindings. Cleanup now validates the agreeing committed policy once, clears every present record through its own digest CAS, and binds combined-plan approval to pre-cleanup authority, sorted recovery digests, and ordered prerequisite effects before any record can be cleared. - 2026-08-29: Refined TI-DES-024 after live disable/enable verification found the public enabled projection could lag an exact terminal direct transaction and the disabled Action table cell ellipsized its command. The CLI now waits read-only only for that exact stale-policy projection under stable authority, and status renders the complete maintenance command on a standalone soft-wrapped line. - 2026-08-29: Hardened TI-DES-024 after final risk review. The stale-projection observer now freezes and validates both exact owner and cloud observation digest before accepting even a terminal sample, and non-maintenance Action redaction structurally replaces the shell-parsed config token without exposing suffixes from complex quoted paths. - 2026-08-29: Refined TI-DES-024's summary rendering so only the exact `Redundancy=maintenance` and `Auto-healing=disabled` second-column values become red; the status model, details, Action, and structured output are unaffected. - 2026-08-29: Reconciled TI-DES-006 around one operator SDK factory. Explicit tokens are passed directly as credentials; tokenless apply uses an SDK-native bearer backed by bounded, non-interactive current-profile CLI token acquisition and one forced refresh after `UNAUTHENTICATED`; and CLI config is retained only for endpoint context. Strict member discovery treats only typed `NOT_FOUND` as absence while preserving typed authentication failure for sanitized CLI presentation. - 2026-08-28: Implemented TI-DES-026 at the private CLI observer boundary. Exact current-request ownership reproof can now converge inside a fixed 600-second cutover budget, preparation and restoration retain independent 300-second budgets, and exhausted exact reproof reports an unverified cutover without weakening the strict status/cloud/status milestone or changing any controller-owned effect. - 2026-08-28: Added planned TI-DES-026 after live journals proved that the controller safely re-entered the exact planned transfer through ownership reproof while the CLI aborted the observer. The selected repair is CLI-only, uses fixed 300/600/300-second phase budgets, retains strict terminal proof, and keeps all controller/effect authority unchanged. - 2026-08-28: Implemented the TI-DES-017 and TI-DES-021 terminal-observer boundary after durable live state disproved the CLI's generic failback-failed classification. Read-safe agent/cloud observation loss now retries within the unchanged phase deadline and terminates as sanitized unverified evidence; permanent drift remains immediate, late reads cannot authorize success, and the controller, rearm, cloud-effect, route, and forwarding owners are unchanged. Focused every-read transient and persistent coverage, stable text/JSON diagnostics, full unit, Ruff, and mypy gates passed offline; the integration suite passed 83 tests and retained one unrelated dirty-worktree `vm-ha --help` assertion failure. Installed and live replay proof remains a separate boundary. - 2026-08-28: Refined TI-DES-023 at the presentation boundary. Rich live rendering no longer proxies stdout/stderr around the façade's raw-output capture, completion rows use completed-state wording, and two-member config-push readiness plus exact agent-package preparation each produce one managed success row without changing shared apply/provider writers. - 2026-08-28: Refined TI-DES-023 with an apply-plan digest-bound typed impact record and a closed-kind safe policy impact that separates destructive action from possible VPN interruption. Risky or unknown plans retain exact approval and default-No interaction; only an explicitly non-destructive, traffic-neutral plan auto-executes through the unchanged lock, replan, artifact, engine, and health-proof path. The artifact standby recovery impact now warns concisely about possible VPN interruption while stating that no gateway VM or disk is deleted. Exact active-non-owner evidence now enters bounded observation of the controller-owned forwarding fence instead of the ambiguous-state dead end; the CLI gains no mutation authority and stops with journal guidance on repeated state. - 2026-08-28: Implemented the TI-DES-025 reopened repair. Post-arm rearm no longer compares against the mutable latest agreement, rearm/status/retry use one authorization-policy predicate, only automatic failover admits the exact prepared-disable predecessor, capability proof is canonicalized at v2, and closed restoration reason codes replace raw status exception text. Focused regressions cover certificate replacement in both transfer directions and a complete planned failover-then-failback redundancy cycle. Operator retry additionally requires the current committed-enabled policy before it changes the blocked authorization source, preventing a prepared-disable automatic exception from becoming a self-invalidating operator retry. - 2026-08-28: Aligned TI-DES-025 verification and status evidence. The both-direction agreement-refresh regression now runs through the production rearm start and exact terminal completion writer, and maintenance-policy recovery admission projects only canonical closed reason codes. TI-REQ-017 now states the automatic-only prepared-disable predecessor exception already implemented by the shared predicate. - 2026-08-28: Reopened TI-DES-025 after a live failback committed cutover but immediately blocked standby restoration. Source sequencing showed that the controller could replace the singleton latest-agreement certificate after an authorization had bound the preceding certificate, while rearm incorrectly treated that cache movement as authority drift. The selected repair makes the committed authorization self-contained, shares exact policy admission across rearm/status/retry, advances the installed capability to v2, and replaces raw restoration exception projection with closed reason codes. - 2026-08-28: Refined TI-DES-025 with a v2 artifact-bound approval envelope and one exact artifact-first recovery transaction before canonical apply. The recovery-only validator skips only the missing restoration capability; owner package/service proof precedes sole-writer rearm, the stopped peer is waited only through pinned SSH, and the unchanged apply engine then deploys the same bytes non-owner-first and proves two fresh healthy samples. - 2026-08-27: Added planned TI-DES-025 for replay-bound enabled-policy agreement, transfer-bound single-use restoration authority, receipt-first commit ordering, typed durable rearm retries, background continuation, and canonical `vm-ha` operator recovery. - 2026-08-27: Implemented TI-DES-025 with strict private agreement and authorization records, receipt-bound sole-writer rearm, bounded typed retry, terminal redundancy evidence, background continuation, and exact `vm-ha` blocked recovery; offline verification remains distinct from installed and live gateway proof. - 2026-08-27: Added installed-runtime capability admission to TI-DES-025 after the live gateway exposed same-version artifact skew. Missing standby restoration support now becomes apply-owned drift before a healthy `vm-ha` result or planned transfer request. - 2026-08-27: Reconciled TI-DES-013 after bounded live status and controller journals proved an automatic transfer was durably fenced at `stop-former-owner`: the internal colon-delimited controller operation ID was passed unchanged as a Nebius idempotency key, and the API rejected its character set on every retry. The SDK boundary now deterministically encodes only provider-invalid keys while retaining the original durable action identity. All 1,722 unit tests, 83 integration tests, Ruff, and mypy passed; deployment and a clean live recovery replay remain separately unverified. - 2026-08-27: Reconciled TI-DES-023 runtime recovery after the supplied failback retry exposed unconditional started-lineage rejection. Exact same-direction retries now reuse only the unchanged identity-valid initiating request and original fingerprint. Request publication and effect dispatch use the existing writer lock, and dispatch revalidates the typed intent so a post-decision request forces a fresh observation instead of contradictory lineage. A negative control reproduced that race before the fix; 1,715 unit tests, 83 integration tests, Ruff, mypy, CLI help, and diff integrity passed. Installed parity and a clean live failback remain unverified. - 2026-08-27: Refined and implemented TI-DES-023's presentation boundary so healthy text mode ends with one headline after progress, while JSON remains the complete stable passive-current-state result and non-healthy text retains recovery context. Focused command, Ruff, and mypy validation passed. - 2026-08-27: Reconciled VM-HA activation after reproducing a checksum-valid heartbeat-v2 cache failing the new heartbeat-v3 reader only after local policy initialization had committed. Activation now records an exact generation-bound reset under the existing writer lock; the new service process consumes it during systemd preflight/controller runtime construction after the old writer stops and before strict peer-state loading, removing even a cache recreated in that window while preserving anti-replay state. Initialization returns a local receipt and strict status parsing remains unchanged. Focused policy, store, activation, controller-start, and runtime regressions passed; live gateway inspection remains blocked by the current session's explicit incomplete known-hosts override. - 2026-08-27: Reconciled TI-DES-006, FEAT-008, and TI-DES-024 after proving that lock admission called a new installed-agent flag before apply deployed the package that supplied it. Apply now proves both current packages non-owner-first before the first exact-generation lock; a partial package failure attempts no new lock, preserves any pre-existing lock, and activates neither staged configuration. - 2026-08-27: Refined TI-DES-006 so the serialized direct VM-HA apply boundary reuses the exact scoped SDK retry-record filter and maps only a typed exhausted deadline to one sanitized nonzero exit. The finite SDK policy, cloud authority, and ordinary non-HA exception path remain unchanged. - 2026-08-27: Implemented the TI-DES-006 direct-apply boundary with explicit typed-cause traversal, guaranteed logger-filter removal, and negative coverage that preserves implicit unrelated failures. Focused CLI, route-observation, lifecycle, Ruff, and mypy checks passed; no live apply was replayed. - 2026-08-27: Implemented and offline-aligned TI-DES-024's private v2 predecessor CAS, deterministic coordinator ordering, per-write authority guards, exact cancellation of unconsumed pre-start recovery, owner-local single-use maintenance-exit recovery, rearm-only Compute start, and symmetric apply/removal/mTLS writer fencing. Terminal offline gates passed; installed parity and live maintenance proof remain separate authorization boundaries. - 2026-08-27: Selected the owner-mediated single-use recovery intent and deterministic predecessor-bound v2 policy transaction. The design now makes remote writer admission authoritative across concurrent clients, preserves rearm as the sole Compute-start writer, and lets automatic owner-loss transfer win races without a persistent policy inhibition. - 2026-08-26: Alignment reopened TI-DES-024 after proving that stopped-member re-enable has no executable two-member path and policy mutation is not yet excluded from concurrent apply/removal/mTLS/controller authority changes. The verification record now distinguishes current offline coverage from the required transaction, concurrency, deployment, and exact-probe regressions. - 2026-08-26: Implemented TI-DES-024 and reconciled FEAT-007/FEAT-010 with the strict two-member policy, sole-writer start inhibition, planned-transfer gate, maintenance/transition/blocked presentation, mode-neutral uptime, and exact failed-probe retry boundary. Validation remained offline; no live cloud, SSH, service, or gateway effect was performed. - 2026-08-26: Added planned TI-DES-024 for the strict two-member standby auto-healing maintenance policy, accepted-start barrier, lifecycle preservation, fail-closed status projection, and mode-neutral reconciled `Uptime` presentation.  - 2026-08-25: Added planned TI-DES-023 for the additive `vm-ha` convergence façade, strict typed inspection/planning, bounded owner-delegated healing, domain-bound approval, passive two-sample terminal proof, and one canonical private lifecycle format while preserving the existing public setup and rearm commands for this tranche. - 2026-08-25: Implemented and reconciled TI-DES-023. The façade performs one writer-owned action per invocation, observes controller work for at most three samples, and reuses existing conversion, apply, rearm, and persistence owners. It intentionally leaves active-lifecycle member replacement action-required because the durable replacement engine is scoped to failed provisioning; the authorized private-schema clean break was not needed. - 2026-08-25: Aligned TI-DES-023 so the exact public apply plan is rederived and checked inside the executing engine before effects, raw engine diagnostics stay behind the typed presentation boundary, conflicting candidates remain immutable under `--force`, and a verified `REMOVED` tombstone re-enters the canonical provisioning transaction. - 2026-08-25: Reconciled TI-DES-023 progress and failure projection so each phase leaves one terminal row, failed rows render fully red, PTY activation errors retain only a bounded safe class and exit result, and apply-owned activation exits no longer produce authentication recovery guidance. - 2026-08-25: Refined TI-DES-023 before implementation with one default-No interactive approval adapter over the existing digest-bound execution gate and one private typed stderr progress channel covering action-level healing, managed-service work, bounded waits, and verification without exposing raw engine output or changing the stable result schema. - 2026-08-25: Implemented and aligned the TI-DES-023 interaction adapter and progress channel. The single accept path retains the lock/replan/engine equality gate; refusal remains effect-free. Fixed phase labels and presentation-only poll callbacks now report service, apply, rearm, and verification work with bounded elapsed updates while raw execution output and the stable result schema remain unchanged. - 2026-08-25: Reconciled TI-DES-023 after live activation evidence. The manual request boundary now rejects a started durable lineage and the controller recovers only a provably later exact conflict. All systemd units sharing the VM-HA runtime directory preserve it across stop/restart cycles, closing the controller-crash/guard-start race without changing promotion authority. - 2026-08-25: Refined TI-DES-023 so interactive progress uses a real Rich status spinner and an exact, restored SDK logger filter removes only retriable request tracebacks from that managed row. Terminal provider exceptions, SDK retry/deadline policy, and authoritative health checks remain unchanged. - 2026-08-25: Implemented and reconciled the TI-DES-023 spinner and retry-log adapter. Deterministic lifecycle and command regressions plus the full static, unit, integration, and packaging gates passed, and one read-only interactive healthy replay proved the live spinner-to-check transition without changing cloud or gateway state. - 2026-08-25: Refined and implemented TI-DES-020 so the CLI observes the controller's existing guarded durable retry instead of treating every coarse `controller-step-failed` projection as terminal. Exact request/runtime, operation, boot, and action agreement permits only a bounded observer wait; missing or mismatched presentation evidence stays fail-fast. The controller, checkpoint, progress schema, fencing chain, rearm owner, and terminal proof are unchanged. - 2026-08-24: Added planned TI-DES-022 for bounded apply/startup `whoami`, exact service-account/key and per-node digest binding, staging TOCTOU rejection, additive identity-safe status, and ordinary-apply upgrade/key rotation without changing the public YAML or creating a second auth path. - 2026-08-24: Implemented TI-DES-022 across pre-effect apply verification, immutable lifecycle/runtime binding, staging reproof, current-boot startup attestation, shared controller/rearm SDK construction, and identity-safe status. Full offline gates and one ordinary live apply passed on the retained non-production static HA pair with healthy two-node redundancy afterward. - 2026-08-24: Alignment closed boot-wide attestation reuse by binding one-time reuse to a recent exact systemd invocation, forcing new starts, direct launches, and rearm online again, bounding installed credential reads, and replacing stale identity status before any production startup parse.  - 2026-08-24: Reopened TI-DES-013 after live evidence proved automatic admission and durable lineage were still configured-passive-only. The selected design makes owner-loss takeover and automatic lineage role-neutral while retaining role-bound manual requests, the existing private intent/schema versions, strict stopped-owner and exact-attachment gates, the canonical action engine, and post-promotion rearm. Incident recovery also proved controller restart erased in-memory parity evidence; the selected design now persists the last accepted heartbeat behind its anti-replay boundary and reloads it as stale parity evidence only.  - 2026-08-24: Implemented TI-DES-021 with independent phase budgets, truthful restoration phases, durable pre-call rearm status, controller-owned runtime state, and an acyclic early guarded controller readiness boundary. Exact deployment, systemd verification, one clean failover, and one clean failback passed on the retained static test fixture. - 2026-08-24: Added planned TI-DES-021 after live service/journal evidence proved shared deadline depletion, restoration-phase coupling, late rearm status publication, and controller shutdown/runtime-directory failures. The selected repair preserves every fencing and sole-writer boundary while separating phase budgets and fixing VM-HA service lifetime and FRR ordering.  - 2026-08-24: Added planned TI-DES-020 for strict lineage-bound transfer phase projection, role-specific CLI progress, and an external observer-only traffic timing helper that cannot influence promotion or forwarding authority. - 2026-08-24: Implemented TI-DES-020 with postcondition-closed private progress, exact additive status projection, immediate/five-second CLI phase rendering with coarse fallback, and a standalone strict-SSH diagnostic probe.  - 2026-08-24: Implemented TI-DES-019 with one enum-backed optional format, default human stderr output, exact explicit-JSON compatibility, role-specific no-op text, and comma-separated ellipsis progress. Full offline gates and one clean live static transfer in each direction passed with terminal redundancy.  - 2026-08-24: Added planned TI-DES-019 for optional human-first transfer output, exact explicit-JSON compatibility, pre-effect format validation, and the comma-separated ellipsis progress grammar without changing VM-HA control or safety behavior.  - 2026-08-24: Implemented TI-DES-018 with two-milestone terminal observation, exact phase-aware elapsed output, stable both-running postconditions, visible identity-free rearm status, stale-receipt projection, and non-terminating blocked rearm. One clean static failover and failback proved the final candidate live; the full repeated acceptance matrix remains open.  - 2026-08-24: Added planned TI-DES-018 after live owner-side state proved that failback cutover committed before automatic rearm started the stopped former owner and restored it about 32 seconds later. The selected workflow preserves the sole-start-writer boundary, waits for full redundancy, reports phase-specific partial completion, and renders only the closed rearm summary.  - 2026-08-24: Implemented TI-DES-017 with exact prior-generation receipt retirement at fresh planned-transfer admission, identity-free committed promotion status, a shared synchronous failover/failback runner, independent cloud and final-status proof, and exact stderr elapsed-time messages while preserving stdout JSON. - 2026-08-24: Added planned TI-DES-017 for compatibility-safe terminal failover/failback waits, monotonic progress on stderr, exact stdout JSON, and success gated by a committed promotion receipt plus independent cloud ownership proof.  - 2026-08-22: Implemented TI-DES-016, an explicit static-only apply preparation checkpoint that leaves both members exact-generation locked and passive before operator-owned GCP Classic tunnel recreation. Ordinary apply retains the only route and forwarding convergence path. TI-DES-015 now also requires retained infrastructure, enabled VM-HA/GCP topology binding, confirmation-time identity revalidation, and fail-closed route cleanup across the whole mutation transaction.  - 2026-08-21: Implemented TI-DES-015 explicit Classic credential rotation. The isolated helper now preflights a private mode-`0600` two-secret config, deletes only planned routes and tunnels, recreates both tunnels before restoring routes, and retains ordinary create-only behavior plus the rest of the review fixture. The explicit preparation, peer recreation, and ordinary apply recovery sequence has since completed in the isolated non-production fixture.  - 2026-08-17: Live-validated TI-DES-014 in the isolated non-production fixture. Steady state, both planned ownership directions, automatic failover, and all rearm paths passed the frozen stop/ownership/tunnel/route/forwarding order; traffic and BGP non-interference checks passed, causal live defects were repaired at their source boundaries, and review resources were retained.  - 2026-08-17: Implemented TI-DES-014 offline. Static-only passive runtimes now prove a tunnel-cold state and the controller performs one checkpointed, ownership-fenced candidate preparation before routes. Added the isolated Classic helper and focused regression coverage; live fixture and acceptance evidence remain pending.  - 2026-08-17: Added planned TI-DES-014 for an isolated static-only GCP Classic fixture and owner-only IKE lifecycle. The passive remains Compute-warm but tunnel-cold; a new checkpointed preparation effect runs only after ownership confirmation and before routes or forwarding, while BGP behavior remains unchanged.  - 2026-08-17: Reconciled TI-DES-013 after live parity validation repaired current-owner activation lineage and passive planned-status admission, then localized a rejected hybrid Classic static-route rearm trial and restored the configured-active steady state. - 2026-08-17: Reconciled TI-DES-013 after removal-safety alignment added a two-member inhibition and quiescence barrier, stopped both mutation writers everywhere before deactivation, checkpointed that barrier for partial teardown replay, and made planned status reads enforce the complete runtime binding before request admission. - 2026-08-17: Reconciled TI-DES-013 after final alignment: deactivation now retains the stable writer-lock inode while clearing sibling state, and one deadline bounds Compute observation, pinned-SSH probes and sleeps, and every planned-readiness subprocess call. - 2026-08-17: Reopened TI-DES-013 to repair same-owner request admission, accepted-start journal finalization, one-shot retries, shared apply/removal exclusion, bounded readiness polling, and passive heartbeat redundancy semantics while preserving the public and persisted-version boundaries. - 2026-08-17: Marked TI-DES-013 implemented after typed sticky lineage, terminal receipt replacement, ownership-revision-bound automatic rearm, strict current-boot standby evidence, shared planned preparation, independent systemd/package lifecycle, and additive redundancy reporting passed focused offline tests. Live symmetry and packet-loss acceptance remains separate. - 2026-08-17: Superseded TI-DES-011 and TI-DES-012 with planned TI-DES-013, separating typed sticky transfer lineage and terminal promotion commitment from an independent role-neutral sole-start-writer rearm service, shared planned preparation, fresh standby evidence, and additive redundancy status. - 2026-08-17: Added implemented TI-DES-011 and TI-DES-012 for the planned passive-targeted VM ownership request and exact standby rearm paths. Live planned failover, failback, automatic failover, final recovery, and bidirectional traffic evidence all preserved the strict ownership chain. - 2026-08-17: Added planned TI-DES-010 for deterministic repair-before-promote: one owner-bound five-second attempt, prefix-aware classification, sole repair writer, and unchanged authoritative Compute-stop transfer safety. Marked it implemented after checkpoint, runtime, routing, monitor, CLI, and composed failover tests passed; retained heartbeat v1 and the existing systemd stop guard, and rejected a short watchdog on the combined local/cloud process. - 2026-08-17: Marked TI-DES-008 and TI-DES-009 implemented after clean BGP and static workload trials, supported manual failback, independent cloud/route postconditions, passive cold-reboot validation, exact runtime-identity use, and retained secret-reference-only configuration all passed. - 2026-08-17: Reconciled TI-DES-006 so manual-failback request preparation re-reads exact allocation and attachment ownership after pinned SSH readiness before it can submit the controller request. - 2026-08-17: Reconciled TI-DES-005 with the live-proven StrongSwan/VICI boot race fix: exact blocked-mode service stop and connected-socket readiness preserve the cold-start fence without transient guarded failures. - 2026-08-17: Reconciled TI-DES-006 with the live-proven manual-failback request-target startup boundary and its exact ownership, alias, idempotency, and pinned-SSH guards. - 2026-08-17: Reconciled TI-DES-005 and TI-DES-006 with exact post-authority standby firewall preparation, StrongSwan plugin-warning cleanup, the implemented externally fenced activation-recovery successor, approval-bound normalized cloud observation, and canonical passive-first replay without weakening the unchanged `ACTIVATING` retry path. - 2026-08-16: Added planned TI-DES-009 after live diagnosis proved that the former role allowlist and `client.iam()` scaffold do not match the current Nebius IAM or pinned SDK. The selected boundary uses exact generated-service enrollment, one project `editor` permit, separate one-key runtime credentials, supported CLI impersonation, and fail-closed explicit `--sa` semantics. - 2026-08-16: Reconciled TI-DES-008 after implementing and validating the additive four-tunnel helper, secret-safe GCP invocation, fail-closed resource inspection, and authoritative VM-HA status. Live fixture migration, second-node creation, failover, and failback remain pending clean trials. - 2026-08-16: Added planned TI-DES-008 for an additive four-tunnel GCP multi-VM fixture, authoritative VM-HA status, isolated clean product trials, and independent steady-state, failover, and failback evidence. - 2026-08-16: Reconciled the post-implementation safety review into lifecycle v4 path guards and accepted-operation recovery, checkpoint-v2 transfer continuity and v1 reproof, typed status convergence, exact final-activation recovery with passive-first compensation, bounded HA-only SDK operations, exact Compute-create footprint validation, strict checkpoint parsing, and canonical CI type/build gates without changing the opt-in public surface. - 2026-08-15: Closed the migration transaction-ordering review by replacing lifecycle rebinding with one revisioned v3 CAS transaction, exact desired/current approval plus isolated recovery digests, fill-once cloud identity checkpoints, stable-key route outcome resolution, and `ACTIVE`-last passive proof while retaining v2 reads and the ordinary path. - 2026-08-15: Reopened TI-DES-002, TI-DES-003, TI-DES-004, TI-DES-006, and TI-DES-007 for the customer migration correction: replace primary-IP mutation with a movable secondary alias, add verified apply locks and digest-bound approval, preserve the retained gateway, require exact route completion with compensating replacement rollback, and remove HA probes from ordinary apply. - 2026-08-14: Reconciled TI-DES-006 after the final compatibility correction: added the status-bound lifecycle record, service-account-first ordinary discovery, exact-pinned pre-sidecar runtime adoption, repeated cloud and identity proof, removal checkpoint, and verified idempotent tombstone. - 2026-08-14: Reconciled TI-DES-006 after HA-removal review: durable two-member discovery and strict identity recheck now precede complete deactivation, abort paths leave the cluster untouched, retired product mutation services are disabled and verified, and ordinary mutation starts only after terminal non-HA proof. - 2026-08-14: Marked TI-DES-005 through TI-DES-007 implemented after the retained serial correction passed 557 offline unit and integration tests, Ruff, mypy, diff integrity, and combined correctness and security review. - 2026-08-14: Reopened TI-DES-005 through TI-DES-007 after integration review to separate blocked local rendering from active data-plane effects, establish one fail-fast pinned SSH trust policy shared by OpenSSH and Paramiko before provisioning, and select the composed bootstrap/trust proof in ordinary CI. - 2026-08-13: Marked TI-DES-001 through TI-DES-006 implemented after the retained correction chain closed authoritative runtime binding, immutable credential installation, exact route targets, strict cloud fencing, current-truth route receipts, cold-start guard closure, production factory composition, guarded operator actions, and default-disabled compatibility. TI-DES-007 remains planned until the final composed acceptance wave completes. - 2026-08-12: Reconciled TI-DES-001 through TI-DES-006 after retained integration review: added the post-provision runtime-binding phase, strict shared allocation provisioning, Compute resource revision as ownership epoch, concrete mTLS and route-receipt ownership, complete controller composition, guard closure across all forwarding writers, verified activation/deactivation, and IAM allowlist boundaries. - 2026-08-11: Added TI-DES-001 through TI-DES-007 for additive two-node VM-level active/passive HA.  ## Core Design Change Log  - 2026-08-28: Refined FEAT-007 at the public status projection boundary. The footer now carries the validated standby auto-healing state after Identity, and committed disabled maintenance exposes the existing shell-quoted config-bound enable action without widening agent, policy, cloud, or mutation authority.  - 2026-08-26: Refined FEAT-012's help metadata and rendered-help coverage so restart, tunnel failover, and tunnel failback explicitly identify regular gateways (non-HA), while retaining restart's Static/BGP support and the transfer commands' BGP-only contract.  - 2026-08-25: Refined FEAT-008 to separate mTLS transfer inhibition from the dataplane-fencing apply lock, require exact controller-processed inhibition, serialize transfer dispatch against inhibition, clean up pre-prepare drift, preserve the healthy active/passive dataplanes during rotation, and replace raw preview/result JSON with concise text plus shared spinner progress.  - 2026-08-23: Implemented FEAT-014: the core VM-HA preparation checkpoint is provider- and routing-neutral, peer mutation remains operator or adapter owned, and ordinary apply remains the sole owner-unlock and convergence path.  - 2026-08-22: Implemented FEAT-013's hybrid retained-member recovery path: actual apply selectively imports an exact verified default-known-hosts Ed25519 pin, falls back to exact product cloud-init when public or private authority requires it, binds all evidence to the current Compute/lifecycle identity, and publishes only after strict SSH plus bounded unchanged-source rereads. A lifecycle-recorded Compute identity remains retained even when that member is temporarily absent from discovery, preventing implicit key rotation during interrupted replacement.  - 2026-08-21: Refined FEAT-013 so the SSH policy resolver uses the validated deployment scope to select a deployment-scoped private host-key directory under the SSH product root when the explicit environment value is absent, without mutating process state or weakening exact-key validation.  - 2026-08-21: Corrected FEAT-013's default private-key lifecycle: actual apply owns a namespaced `~/.ssh/nebius-vpngw/host-keys/<gateway-group>/<scope-sha256>` hierarchy and may prepare missing keys only for fresh members; retained identity recovery stays authoritative and fail-closed, explicit directories remain operator-owned, and dry-run remains write-free.  - 2026-08-21: Implemented FEAT-011 presentation behavior so one private stable audit result supplies both advertisement parity and authoritative gateway role headings; active is green, standby and unknown remain explicit, and non-VM-HA output and the public audit return contract are unchanged.  - 2026-08-21: Completed FEAT-011's periodic passive routing-hygiene path with role-aware systemd admission, lock-held authority rechecks, exact passive mutation bounds, recurring enforcement, exact table-token parsing that preserves unrelated rules, and fail-closed readiness/status observation with owning-workflow remediation without changing public CLI, configuration, heartbeat, or persisted-state schemas.  - 2026-08-21: Revalidated FEAT-002 on the current 1,284-test suite and removed a test-only two-second SDK polling delay while preserving the real SDK wait/update path, exact assertions, selection, outcomes, configuration, and production behavior.  - 2026-08-21: Reconciled FEAT-001 after the warning-free setuptools-scm migration centralized runtime configuration, nested tag matching, explicit build-time source version-file behavior, dependency/lock bounds, and focused warning-strict regressions; the full `make all` workflow passed.  - 2026-08-23: Completed FEAT-012's static-only explicit VM-HA convergence waiter with exact installed-generation authority, both-member controller capability, autonomous repair-chain observation, receipt-plus-cloud postconditions, bounded polling, and unequal-overlap preservation without a second route writer or request. - 2026-08-20: Implemented FEAT-012 with centralized command applicability, canonical static-prefix resolution, read-only installed-agent capability preflight, controller-owned VM-HA route handling, typed fail-before-success route operations, and complete offline matrix validation.  - 2026-08-20: Added planned FEAT-011 for per-neighbor allow/deny export rendering, mode-aware Adj-RIB-Out readiness, receipt-last passive cleanup, exact-authority tri-state audit, and separation of route inspection from repair. - 2026-08-20: Marked the FEAT-007 Role correction implemented after the authoritative `active`/`standby`/`unknown` projection passed negative-control, focused, full-suite, static, documentation, security, and alignment checks. - 2026-08-20: Reopened FEAT-007 to derive the public Role cell only from authoritative current ownership and remove the misleading configured-role suffix. - 2026-08-20: Reopened FEAT-007 to replace summary-plus-member VM-HA rendering with one conservative four-column table while retaining authoritative classification and redaction. - 2026-08-20: Added planned FEAT-010 for a compact primary VPN status table with complete folded tunnel names and preserved Traffic Override detection. - 2026-08-20: Marked the FEAT-007 presentation revision and FEAT-010 implemented after exact table-shape, semantic color, unavailable-member, long-name, row-arity, full static, unit, integration, documentation, security, alignment, and diff-integrity checks passed without live execution. - 2026-08-20: Marked FEAT-009 implemented after separating provisioning progress from authoritative VM-HA network rereads, adding recreate-aware VM discovery text, and passing focused and complete offline validation without a live gateway trial. - 2026-08-19: Added planned FEAT-008 for clean-slate VM-local self-signed identities, exact peer-leaf enrollment over pinned SSH, automatic bootstrap and replacement, explicit crash-safe dual rotation, and epoch-bound peer protocol v2 without an external CA or HA compatibility path. - 2026-08-19: Marked FEAT-008 implemented after direct-pinned managed identities, apply bootstrap/replacement, passive-first explicit rotation, heartbeat v2, secret-free status, complete offline suites, static checks, and package tests passed without a live gateway trial.  - 2026-08-19: Marked FEAT-007 implemented after structured authority, complete display validation, conservative classification, identity-safe rendering, hard parser removal, and complete offline test suites passed. - 2026-08-19: Added planned FEAT-007 for hard removal of the unpublished recovery read, structured cloud/member correlation, strict status-v1 display validation, conservative HA classification, sanitized summary-plus-member rendering, and unchanged read-only/non-HA boundaries.  - 2026-08-18: Marked FEAT-006 implemented after the path-aware Typer groups, unchanged leaf routing, zero-effect old-path rejection, migration guidance, and complete offline validation passed. - 2026-08-18: Added planned FEAT-006 for native `failover` and `failback` subapplications, VM/tunnel leaves, path-aware help ordering, no-alias parser rejection, unchanged callback bodies, and explicit migration guidance. - 2026-08-18: Marked FEAT-005 implemented after all 18 public commands and the root help rendered canonical tested examples with no execution-path or safety-gate change. - 2026-08-18: Added FEAT-005 for a canonical example registry, Typer root and command epilogs, complete rendered-help coverage, and aligned user documentation without changing execution behavior. - 2026-08-18: Marked FEAT-004 implemented after offline verification of the dedicated conversion module, credential preflight, semantic placeholder handling, passive-only allocation seam, no-clobber publication and recovery boundary, and real migration dry-run handoff. - 2026-08-18: Added FEAT-004 for an additive two-phase `configure-vm-ha` wizard, raw-YAML allowlisted conversion, safe candidate publication, passive-only allocation preparation, and handoff to the existing approved apply engine. - 2026-08-18: Added FEAT-003 for the TTY-default wizard, exact noninteractive compatibility path, in-memory validation and atomic write, secret-reference/redaction policy, explicit VM-HA gating, and optional confirmed reuse of standalone network preparation. - 2026-08-16: Marked FEAT-002 implemented after a test-only sleeper injection removed unrelated real retry delays from the seven-case crash-replay matrix, reducing the five-sample serial unit median by about 31% with all 682 outcomes preserved. - 2026-08-16: Added FEAT-002 for measured, like-for-like pytest optimization with preserved selection, isolation, diagnostics, and correctness gates. - 2026-08-16: Marked FEAT-001 implemented after adding the bounded direct Git version probe, focused Python-project contract tests, and local artifact hygiene without changing runtime or public interfaces. - 2026-08-16: Added FEAT-001 for an additive, compatibility-preserving Python-project hardening pass over version discovery, regression contracts, and local artifact hygiene.
+Before an accepted delete, preserve the checkpoint and rerun after correcting the blocker. Once effects begin, rollback never recreates or re-adopts resources automatically; the same command completes exact teardown, and a later `apply` starts a fresh provisioning transaction.  ## Task Implementer Design Change Log  - 2026-09-01: Tightened TI-DES-027 terminal proof so retained public allocations must be stably detached before success. Clean reprovision now carries and reproves only those retained public IDs, including when `external_ips` is omitted, with direct `DESTROYED`-to-apply convergence coverage. - 2026-09-01: Removed guest/controller readiness and STOPPED-only admission from TI-DES-027. Exact non-stopped Compute deletion is now the fence, and canonical unlabeled product routes to lifecycle-bound private allocations join exact HA-labeled routes in the delete plan; partial/conflicting labels and foreign identities remain blocking. Destroy failures now expose only closed safe reason codes. Current, replacement, and retired lifecycle Compute identities are all exact teardown targets; terminal failed predecessor operations release their checkpoint, unsupported operation lookup replays the bound idempotency key, errors after an effect complete only from the exact postcondition, and a destroy-owned terminal failure advances through durable sequence-qualified attempt history instead of deadlocking its accepted-operation checkpoint. - 2026-08-31: Implemented TI-DES-027 as the single identity-bound ordinary and VM-HA destroy path with durable operation replay, dependency-ordered deletion, retained public/VPC authority, stable terminal absence proof, and clean post-destroy reprovisioning. - 2026-08-30: Hardened TI-DES-025 by extracting the byte-stable v1 promotion receipt identity and requiring every committed-or-later restoration authorization to reprove its exact durable receipt. Reconciled TI-DES-006 so every production `VMManager` owner deterministically closes its single reused SDK, while nested apply keeps discovery authority alive through deferred SSH trust proof. Ruff source roots are aligned across local, pull-request, and release gates without changing mypy or shell-check scope. - 2026-08-29: Refined FEAT-008 and FEAT-015 so the canonical `apply` facade dispatches the existing managed-mTLS transaction only when `--rotate-mtls` is explicit. Rotation is validated as an exclusive text-mode action before conversion or convergence, the old Typer command is deleted without an alias, and all cryptographic, inhibition, approval, and recovery owners stay unchanged. - 2026-08-29: Refined TI-DES-024 after live commands proved the explicit enable-first cleanup workflow remained user-visible. Exact completed-recovery cleanup now precedes either requested policy state, is followed by a fresh two-member read before classification or planning, and remains fail-closed on changed evidence. The text renderer maps same-state and completed opposite-state action codes to clear outcomes without changing JSON v1. - 2026-08-29: Refined TI-DES-024 after bounded live inspection found a valid completed local recovery on each member, using both writer-valid policy bindings. Cleanup now validates the agreeing committed policy once, clears every present record through its own digest CAS, and binds combined-plan approval to pre-cleanup authority, sorted recovery digests, and ordered prerequisite effects before any record can be cleared. - 2026-08-29: Refined TI-DES-024 after live disable/enable verification found the public enabled projection could lag an exact terminal direct transaction and the disabled Action table cell ellipsized its command. The CLI now waits read-only only for that exact stale-policy projection under stable authority, and status renders the complete maintenance command on a standalone soft-wrapped line. - 2026-08-29: Hardened TI-DES-024 after final risk review. The stale-projection observer now freezes and validates both exact owner and cloud observation digest before accepting even a terminal sample, and non-maintenance Action redaction structurally replaces the shell-parsed config token without exposing suffixes from complex quoted paths. - 2026-08-29: Refined TI-DES-024's summary rendering so only the exact `Redundancy=maintenance` and `Auto-healing=disabled` second-column values become red; the status model, details, Action, and structured output are unaffected. - 2026-08-29: Reconciled TI-DES-006 around one operator SDK factory. Explicit tokens are passed directly as credentials; tokenless apply uses an SDK-native bearer backed by bounded, non-interactive current-profile CLI token acquisition and one forced refresh after `UNAUTHENTICATED`; and CLI config is retained only for endpoint context. Strict member discovery treats only typed `NOT_FOUND` as absence while preserving typed authentication failure for sanitized CLI presentation. - 2026-08-28: Implemented TI-DES-026 at the private CLI observer boundary. Exact current-request ownership reproof can now converge inside a fixed 600-second cutover budget, preparation and restoration retain independent 300-second budgets, and exhausted exact reproof reports an unverified cutover without weakening the strict status/cloud/status milestone or changing any controller-owned effect. - 2026-08-28: Added planned TI-DES-026 after live journals proved that the controller safely re-entered the exact planned transfer through ownership reproof while the CLI aborted the observer. The selected repair is CLI-only, uses fixed 300/600/300-second phase budgets, retains strict terminal proof, and keeps all controller/effect authority unchanged. - 2026-08-28: Implemented the TI-DES-017 and TI-DES-021 terminal-observer boundary after durable live state disproved the CLI's generic failback-failed classification. Read-safe agent/cloud observation loss now retries within the unchanged phase deadline and terminates as sanitized unverified evidence; permanent drift remains immediate, late reads cannot authorize success, and the controller, rearm, cloud-effect, route, and forwarding owners are unchanged. Focused every-read transient and persistent coverage, stable text/JSON diagnostics, full unit, Ruff, and mypy gates passed offline; the integration suite passed 83 tests and retained one unrelated dirty-worktree `apply --help` assertion failure. Installed and live replay proof remains a separate boundary. - 2026-08-28: Refined TI-DES-023 at the presentation boundary. Rich live rendering no longer proxies stdout/stderr around the façade's raw-output capture, completion rows use completed-state wording, and two-member config-push readiness plus exact agent-package preparation each produce one managed success row without changing shared apply/provider writers. - 2026-08-28: Refined TI-DES-023 with an apply-plan digest-bound typed impact record and a closed-kind safe policy impact that separates destructive action from possible VPN interruption. Risky or unknown plans retain exact approval and default-No interaction; only an explicitly non-destructive, traffic-neutral plan auto-executes through the unchanged lock, replan, artifact, engine, and health-proof path. The artifact standby recovery impact now warns concisely about possible VPN interruption while stating that no gateway VM or disk is deleted. Exact active-non-owner evidence now enters bounded observation of the controller-owned forwarding fence instead of the ambiguous-state dead end; the CLI gains no mutation authority and stops with journal guidance on repeated state. - 2026-08-28: Implemented the TI-DES-025 reopened repair. Post-arm rearm no longer compares against the mutable latest agreement, rearm/status/retry use one authorization-policy predicate, only automatic failover admits the exact prepared-disable predecessor, capability proof is canonicalized at v2, and closed restoration reason codes replace raw status exception text. Focused regressions cover certificate replacement in both transfer directions and a complete planned failover-then-failback redundancy cycle. Operator retry additionally requires the current committed-enabled policy before it changes the blocked authorization source, preventing a prepared-disable automatic exception from becoming a self-invalidating operator retry. - 2026-08-28: Aligned TI-DES-025 verification and status evidence. The both-direction agreement-refresh regression now runs through the production rearm start and exact terminal completion writer, and maintenance-policy recovery admission projects only canonical closed reason codes. TI-REQ-017 now states the automatic-only prepared-disable predecessor exception already implemented by the shared predicate. - 2026-08-28: Reopened TI-DES-025 after a live failback committed cutover but immediately blocked standby restoration. Source sequencing showed that the controller could replace the singleton latest-agreement certificate after an authorization had bound the preceding certificate, while rearm incorrectly treated that cache movement as authority drift. The selected repair makes the committed authorization self-contained, shares exact policy admission across rearm/status/retry, advances the installed capability to v2, and replaces raw restoration exception projection with closed reason codes. - 2026-08-28: Refined TI-DES-025 with a v2 artifact-bound approval envelope and one exact artifact-first recovery transaction before canonical apply. The recovery-only validator skips only the missing restoration capability; owner package/service proof precedes sole-writer rearm, the stopped peer is waited only through pinned SSH, and the unchanged apply engine then deploys the same bytes non-owner-first and proves two fresh healthy samples. - 2026-08-27: Added planned TI-DES-025 for replay-bound enabled-policy agreement, transfer-bound single-use restoration authority, receipt-first commit ordering, typed durable rearm retries, background continuation, and canonical `apply` operator recovery. - 2026-08-27: Implemented TI-DES-025 with strict private agreement and authorization records, receipt-bound sole-writer rearm, bounded typed retry, terminal redundancy evidence, background continuation, and exact `apply` blocked recovery; offline verification remains distinct from installed and live gateway proof. - 2026-08-27: Added installed-runtime capability admission to TI-DES-025 after the live gateway exposed same-version artifact skew. Missing standby restoration support now becomes apply-owned drift before a healthy `apply` result or planned transfer request. - 2026-08-27: Reconciled TI-DES-013 after bounded live status and controller journals proved an automatic transfer was durably fenced at `stop-former-owner`: the internal colon-delimited controller operation ID was passed unchanged as a Nebius idempotency key, and the API rejected its character set on every retry. The SDK boundary now deterministically encodes only provider-invalid keys while retaining the original durable action identity. All 1,722 unit tests, 83 integration tests, Ruff, and mypy passed; deployment and a clean live recovery replay remain separately unverified. - 2026-08-27: Reconciled TI-DES-023 runtime recovery after the supplied failback retry exposed unconditional started-lineage rejection. Exact same-direction retries now reuse only the unchanged identity-valid initiating request and original fingerprint. Request publication and effect dispatch use the existing writer lock, and dispatch revalidates the typed intent so a post-decision request forces a fresh observation instead of contradictory lineage. A negative control reproduced that race before the fix; 1,715 unit tests, 83 integration tests, Ruff, mypy, CLI help, and diff integrity passed. Installed parity and a clean live failback remain unverified. - 2026-08-27: Refined and implemented TI-DES-023's presentation boundary so healthy text mode ends with one headline after progress, while JSON remains the complete stable passive-current-state result and non-healthy text retains recovery context. Focused command, Ruff, and mypy validation passed. - 2026-08-27: Reconciled VM-HA activation after reproducing a checksum-valid heartbeat-v2 cache failing the new heartbeat-v3 reader only after local policy initialization had committed. Activation now records an exact generation-bound reset under the existing writer lock; the new service process consumes it during systemd preflight/controller runtime construction after the old writer stops and before strict peer-state loading, removing even a cache recreated in that window while preserving anti-replay state. Initialization returns a local receipt and strict status parsing remains unchanged. Focused policy, store, activation, controller-start, and runtime regressions passed; live gateway inspection remains blocked by the current session's explicit incomplete known-hosts override. - 2026-08-27: Reconciled TI-DES-006, FEAT-008, and TI-DES-024 after proving that lock admission called a new installed-agent flag before apply deployed the package that supplied it. Apply now proves both current packages non-owner-first before the first exact-generation lock; a partial package failure attempts no new lock, preserves any pre-existing lock, and activates neither staged configuration. - 2026-08-27: Refined TI-DES-006 so the serialized direct VM-HA apply boundary reuses the exact scoped SDK retry-record filter and maps only a typed exhausted deadline to one sanitized nonzero exit. The finite SDK policy, cloud authority, and ordinary non-HA exception path remain unchanged. - 2026-08-27: Implemented the TI-DES-006 direct-apply boundary with explicit typed-cause traversal, guaranteed logger-filter removal, and negative coverage that preserves implicit unrelated failures. Focused CLI, route-observation, lifecycle, Ruff, and mypy checks passed; no live apply was replayed. - 2026-08-27: Implemented and offline-aligned TI-DES-024's private v2 predecessor CAS, deterministic coordinator ordering, per-write authority guards, exact cancellation of unconsumed pre-start recovery, owner-local single-use maintenance-exit recovery, rearm-only Compute start, and symmetric apply/removal/mTLS writer fencing. Terminal offline gates passed; installed parity and live maintenance proof remain separate authorization boundaries. - 2026-08-27: Selected the owner-mediated single-use recovery intent and deterministic predecessor-bound v2 policy transaction. The design now makes remote writer admission authoritative across concurrent clients, preserves rearm as the sole Compute-start writer, and lets automatic owner-loss transfer win races without a persistent policy inhibition. - 2026-08-26: Alignment reopened TI-DES-024 after proving that stopped-member re-enable has no executable two-member path and policy mutation is not yet excluded from concurrent apply/removal/mTLS/controller authority changes. The verification record now distinguishes current offline coverage from the required transaction, concurrency, deployment, and exact-probe regressions. - 2026-08-26: Implemented TI-DES-024 and reconciled FEAT-007/FEAT-010 with the strict two-member policy, sole-writer start inhibition, planned-transfer gate, maintenance/transition/blocked presentation, mode-neutral uptime, and exact failed-probe retry boundary. Validation remained offline; no live cloud, SSH, service, or gateway effect was performed. - 2026-08-26: Added planned TI-DES-024 for the strict two-member standby auto-healing maintenance policy, accepted-start barrier, lifecycle preservation, fail-closed status projection, and mode-neutral reconciled `Uptime` presentation.  - 2026-08-25: Added planned TI-DES-023 for the additive `apply` convergence façade, strict typed inspection/planning, bounded owner-delegated healing, domain-bound approval, passive two-sample terminal proof, and one canonical private lifecycle format while preserving the existing public setup and rearm commands for this tranche. - 2026-08-25: Implemented and reconciled TI-DES-023. The façade performs one writer-owned action per invocation, observes controller work for at most three samples, and reuses existing conversion, apply, rearm, and persistence owners. It intentionally leaves active-lifecycle member replacement action-required because the durable replacement engine is scoped to failed provisioning; the authorized private-schema clean break was not needed. - 2026-08-25: Aligned TI-DES-023 so the exact public apply plan is rederived and checked inside the executing engine before effects, raw engine diagnostics stay behind the typed presentation boundary, conflicting candidates remain immutable under `--force`, and a verified `REMOVED` tombstone re-enters the canonical provisioning transaction. - 2026-08-25: Reconciled TI-DES-023 progress and failure projection so each phase leaves one terminal row, failed rows render fully red, PTY activation errors retain only a bounded safe class and exit result, and apply-owned activation exits no longer produce authentication recovery guidance. - 2026-08-25: Refined TI-DES-023 before implementation with one default-No interactive approval adapter over the existing digest-bound execution gate and one private typed stderr progress channel covering action-level healing, managed-service work, bounded waits, and verification without exposing raw engine output or changing the stable result schema. - 2026-08-25: Implemented and aligned the TI-DES-023 interaction adapter and progress channel. The single accept path retains the lock/replan/engine equality gate; refusal remains effect-free. Fixed phase labels and presentation-only poll callbacks now report service, apply, rearm, and verification work with bounded elapsed updates while raw execution output and the stable result schema remain unchanged. - 2026-08-25: Reconciled TI-DES-023 after live activation evidence. The manual request boundary now rejects a started durable lineage and the controller recovers only a provably later exact conflict. All systemd units sharing the VM-HA runtime directory preserve it across stop/restart cycles, closing the controller-crash/guard-start race without changing promotion authority. - 2026-08-25: Refined TI-DES-023 so interactive progress uses a real Rich status spinner and an exact, restored SDK logger filter removes only retriable request tracebacks from that managed row. Terminal provider exceptions, SDK retry/deadline policy, and authoritative health checks remain unchanged. - 2026-08-25: Implemented and reconciled the TI-DES-023 spinner and retry-log adapter. Deterministic lifecycle and command regressions plus the full static, unit, integration, and packaging gates passed, and one read-only interactive healthy replay proved the live spinner-to-check transition without changing cloud or gateway state. - 2026-08-25: Refined and implemented TI-DES-020 so the CLI observes the controller's existing guarded durable retry instead of treating every coarse `controller-step-failed` projection as terminal. Exact request/runtime, operation, boot, and action agreement permits only a bounded observer wait; missing or mismatched presentation evidence stays fail-fast. The controller, checkpoint, progress schema, fencing chain, rearm owner, and terminal proof are unchanged. - 2026-08-24: Added planned TI-DES-022 for bounded apply/startup `whoami`, exact service-account/key and per-node digest binding, staging TOCTOU rejection, additive identity-safe status, and ordinary-apply upgrade/key rotation without changing the public YAML or creating a second auth path. - 2026-08-24: Implemented TI-DES-022 across pre-effect apply verification, immutable lifecycle/runtime binding, staging reproof, current-boot startup attestation, shared controller/rearm SDK construction, and identity-safe status. Full offline gates and one ordinary live apply passed on the retained non-production static HA pair with healthy two-node redundancy afterward. - 2026-08-24: Alignment closed boot-wide attestation reuse by binding one-time reuse to a recent exact systemd invocation, forcing new starts, direct launches, and rearm online again, bounding installed credential reads, and replacing stale identity status before any production startup parse.  - 2026-08-24: Reopened TI-DES-013 after live evidence proved automatic admission and durable lineage were still configured-passive-only. The selected design makes owner-loss takeover and automatic lineage role-neutral while retaining role-bound manual requests, the existing private intent/schema versions, strict stopped-owner and exact-attachment gates, the canonical action engine, and post-promotion rearm. Incident recovery also proved controller restart erased in-memory parity evidence; the selected design now persists the last accepted heartbeat behind its anti-replay boundary and reloads it as stale parity evidence only.  - 2026-08-24: Implemented TI-DES-021 with independent phase budgets, truthful restoration phases, durable pre-call rearm status, controller-owned runtime state, and an acyclic early guarded controller readiness boundary. Exact deployment, systemd verification, one clean failover, and one clean failback passed on the retained static test fixture. - 2026-08-24: Added planned TI-DES-021 after live service/journal evidence proved shared deadline depletion, restoration-phase coupling, late rearm status publication, and controller shutdown/runtime-directory failures. The selected repair preserves every fencing and sole-writer boundary while separating phase budgets and fixing VM-HA service lifetime and FRR ordering.  - 2026-08-24: Added planned TI-DES-020 for strict lineage-bound transfer phase projection, role-specific CLI progress, and an external observer-only traffic timing helper that cannot influence promotion or forwarding authority. - 2026-08-24: Implemented TI-DES-020 with postcondition-closed private progress, exact additive status projection, immediate/five-second CLI phase rendering with coarse fallback, and a standalone strict-SSH diagnostic probe.  - 2026-08-24: Implemented TI-DES-019 with one enum-backed optional format, default human stderr output, exact explicit-JSON compatibility, role-specific no-op text, and comma-separated ellipsis progress. Full offline gates and one clean live static transfer in each direction passed with terminal redundancy.  - 2026-08-24: Added planned TI-DES-019 for optional human-first transfer output, exact explicit-JSON compatibility, pre-effect format validation, and the comma-separated ellipsis progress grammar without changing VM-HA control or safety behavior.  - 2026-08-24: Implemented TI-DES-018 with two-milestone terminal observation, exact phase-aware elapsed output, stable both-running postconditions, visible identity-free rearm status, stale-receipt projection, and non-terminating blocked rearm. One clean static failover and failback proved the final candidate live; the full repeated acceptance matrix remains open.  - 2026-08-24: Added planned TI-DES-018 after live owner-side state proved that failback cutover committed before automatic rearm started the stopped former owner and restored it about 32 seconds later. The selected workflow preserves the sole-start-writer boundary, waits for full redundancy, reports phase-specific partial completion, and renders only the closed rearm summary.  - 2026-08-24: Implemented TI-DES-017 with exact prior-generation receipt retirement at fresh planned-transfer admission, identity-free committed promotion status, a shared synchronous failover/failback runner, independent cloud and final-status proof, and exact stderr elapsed-time messages while preserving stdout JSON. - 2026-08-24: Added planned TI-DES-017 for compatibility-safe terminal failover/failback waits, monotonic progress on stderr, exact stdout JSON, and success gated by a committed promotion receipt plus independent cloud ownership proof.  - 2026-08-22: Implemented TI-DES-016, an explicit static-only apply preparation checkpoint that leaves both members exact-generation locked and passive before operator-owned GCP Classic tunnel recreation. Ordinary apply retains the only route and forwarding convergence path. TI-DES-015 now also requires retained infrastructure, enabled VM-HA/GCP topology binding, confirmation-time identity revalidation, and fail-closed route cleanup across the whole mutation transaction.  - 2026-08-21: Implemented TI-DES-015 explicit Classic credential rotation. The isolated helper now preflights a private mode-`0600` two-secret config, deletes only planned routes and tunnels, recreates both tunnels before restoring routes, and retains ordinary create-only behavior plus the rest of the review fixture. The explicit preparation, peer recreation, and ordinary apply recovery sequence has since completed in the isolated non-production fixture.  - 2026-08-17: Live-validated TI-DES-014 in the isolated non-production fixture. Steady state, both planned ownership directions, automatic failover, and all rearm paths passed the frozen stop/ownership/tunnel/route/forwarding order; traffic and BGP non-interference checks passed, causal live defects were repaired at their source boundaries, and review resources were retained.  - 2026-08-17: Implemented TI-DES-014 offline. Static-only passive runtimes now prove a tunnel-cold state and the controller performs one checkpointed, ownership-fenced candidate preparation before routes. Added the isolated Classic helper and focused regression coverage; live fixture and acceptance evidence remain pending.  - 2026-08-17: Added planned TI-DES-014 for an isolated static-only GCP Classic fixture and owner-only IKE lifecycle. The passive remains Compute-warm but tunnel-cold; a new checkpointed preparation effect runs only after ownership confirmation and before routes or forwarding, while BGP behavior remains unchanged.  - 2026-08-17: Reconciled TI-DES-013 after live parity validation repaired current-owner activation lineage and passive planned-status admission, then localized a rejected hybrid Classic static-route rearm trial and restored the configured-active steady state. - 2026-08-17: Reconciled TI-DES-013 after removal-safety alignment added a two-member inhibition and quiescence barrier, stopped both mutation writers everywhere before deactivation, checkpointed that barrier for partial teardown replay, and made planned status reads enforce the complete runtime binding before request admission. - 2026-08-17: Reconciled TI-DES-013 after final alignment: deactivation now retains the stable writer-lock inode while clearing sibling state, and one deadline bounds Compute observation, pinned-SSH probes and sleeps, and every planned-readiness subprocess call. - 2026-08-17: Reopened TI-DES-013 to repair same-owner request admission, accepted-start journal finalization, one-shot retries, shared apply/removal exclusion, bounded readiness polling, and passive heartbeat redundancy semantics while preserving the public and persisted-version boundaries. - 2026-08-17: Marked TI-DES-013 implemented after typed sticky lineage, terminal receipt replacement, ownership-revision-bound automatic rearm, strict current-boot standby evidence, shared planned preparation, independent systemd/package lifecycle, and additive redundancy reporting passed focused offline tests. Live symmetry and packet-loss acceptance remains separate. - 2026-08-17: Superseded TI-DES-011 and TI-DES-012 with planned TI-DES-013, separating typed sticky transfer lineage and terminal promotion commitment from an independent role-neutral sole-start-writer rearm service, shared planned preparation, fresh standby evidence, and additive redundancy status. - 2026-08-17: Added implemented TI-DES-011 and TI-DES-012 for the planned passive-targeted VM ownership request and exact standby rearm paths. Live planned failover, failback, automatic failover, final recovery, and bidirectional traffic evidence all preserved the strict ownership chain. - 2026-08-17: Added planned TI-DES-010 for deterministic repair-before-promote: one owner-bound five-second attempt, prefix-aware classification, sole repair writer, and unchanged authoritative Compute-stop transfer safety. Marked it implemented after checkpoint, runtime, routing, monitor, CLI, and composed failover tests passed; retained heartbeat v1 and the existing systemd stop guard, and rejected a short watchdog on the combined local/cloud process. - 2026-08-17: Marked TI-DES-008 and TI-DES-009 implemented after clean BGP and static workload trials, supported manual failback, independent cloud/route postconditions, passive cold-reboot validation, exact runtime-identity use, and retained secret-reference-only configuration all passed. - 2026-08-17: Reconciled TI-DES-006 so manual-failback request preparation re-reads exact allocation and attachment ownership after pinned SSH readiness before it can submit the controller request. - 2026-08-17: Reconciled TI-DES-005 with the live-proven StrongSwan/VICI boot race fix: exact blocked-mode service stop and connected-socket readiness preserve the cold-start fence without transient guarded failures. - 2026-08-17: Reconciled TI-DES-006 with the live-proven manual-failback request-target startup boundary and its exact ownership, alias, idempotency, and pinned-SSH guards. - 2026-08-17: Reconciled TI-DES-005 and TI-DES-006 with exact post-authority standby firewall preparation, StrongSwan plugin-warning cleanup, the implemented externally fenced activation-recovery successor, approval-bound normalized cloud observation, and canonical passive-first replay without weakening the unchanged `ACTIVATING` retry path. - 2026-08-16: Added planned TI-DES-009 after live diagnosis proved that the former role allowlist and `client.iam()` scaffold do not match the current Nebius IAM or pinned SDK. The selected boundary uses exact generated-service enrollment, one project `editor` permit, separate one-key runtime credentials, supported CLI impersonation, and fail-closed explicit `--sa` semantics. - 2026-08-16: Reconciled TI-DES-008 after implementing and validating the additive four-tunnel helper, secret-safe GCP invocation, fail-closed resource inspection, and authoritative VM-HA status. Live fixture migration, second-node creation, failover, and failback remain pending clean trials. - 2026-08-16: Added planned TI-DES-008 for an additive four-tunnel GCP multi-VM fixture, authoritative VM-HA status, isolated clean product trials, and independent steady-state, failover, and failback evidence. - 2026-08-16: Reconciled the post-implementation safety review into lifecycle v4 path guards and accepted-operation recovery, checkpoint-v2 transfer continuity and v1 reproof, typed status convergence, exact final-activation recovery with passive-first compensation, bounded HA-only SDK operations, exact Compute-create footprint validation, strict checkpoint parsing, and canonical CI type/build gates without changing the opt-in public surface. - 2026-08-15: Closed the migration transaction-ordering review by replacing lifecycle rebinding with one revisioned v3 CAS transaction, exact desired/current approval plus isolated recovery digests, fill-once cloud identity checkpoints, stable-key route outcome resolution, and `ACTIVE`-last passive proof while retaining v2 reads and the ordinary path. - 2026-08-15: Reopened TI-DES-002, TI-DES-003, TI-DES-004, TI-DES-006, and TI-DES-007 for the customer migration correction: replace primary-IP mutation with a movable secondary alias, add verified apply locks and digest-bound approval, preserve the retained gateway, require exact route completion with compensating replacement rollback, and remove HA probes from ordinary apply. - 2026-08-14: Reconciled TI-DES-006 after the final compatibility correction: added the status-bound lifecycle record, service-account-first ordinary discovery, exact-pinned pre-sidecar runtime adoption, repeated cloud and identity proof, removal checkpoint, and verified idempotent tombstone. - 2026-08-14: Reconciled TI-DES-006 after HA-removal review: durable two-member discovery and strict identity recheck now precede complete deactivation, abort paths leave the cluster untouched, retired product mutation services are disabled and verified, and ordinary mutation starts only after terminal non-HA proof. - 2026-08-14: Marked TI-DES-005 through TI-DES-007 implemented after the retained serial correction passed 557 offline unit and integration tests, Ruff, mypy, diff integrity, and combined correctness and security review. - 2026-08-14: Reopened TI-DES-005 through TI-DES-007 after integration review to separate blocked local rendering from active data-plane effects, establish one fail-fast pinned SSH trust policy shared by OpenSSH and Paramiko before provisioning, and select the composed bootstrap/trust proof in ordinary CI. - 2026-08-13: Marked TI-DES-001 through TI-DES-006 implemented after the retained correction chain closed authoritative runtime binding, immutable credential installation, exact route targets, strict cloud fencing, current-truth route receipts, cold-start guard closure, production factory composition, guarded operator actions, and default-disabled compatibility. TI-DES-007 remains planned until the final composed acceptance wave completes. - 2026-08-12: Reconciled TI-DES-001 through TI-DES-006 after retained integration review: added the post-provision runtime-binding phase, strict shared allocation provisioning, Compute resource revision as ownership epoch, concrete mTLS and route-receipt ownership, complete controller composition, guard closure across all forwarding writers, verified activation/deactivation, and IAM allowlist boundaries. - 2026-08-11: Added TI-DES-001 through TI-DES-007 for additive two-node VM-level active/passive HA.  ## Core Design Change Log  - 2026-08-28: Refined FEAT-007 at the public status projection boundary. The footer now carries the validated standby auto-healing state after Identity, and committed disabled maintenance exposes the existing shell-quoted config-bound enable action without widening agent, policy, cloud, or mutation authority.  - 2026-08-26: Refined FEAT-012's help metadata and rendered-help coverage so restart, tunnel failover, and tunnel failback explicitly identify regular gateways (non-HA), while retaining restart's Static/BGP support and the transfer commands' BGP-only contract.  - 2026-08-25: Refined FEAT-008 to separate mTLS transfer inhibition from the dataplane-fencing apply lock, require exact controller-processed inhibition, serialize transfer dispatch against inhibition, clean up pre-prepare drift, preserve the healthy active/passive dataplanes during rotation, and replace raw preview/result JSON with concise text plus shared spinner progress.  - 2026-08-23: Implemented FEAT-014: the core VM-HA preparation checkpoint is provider- and routing-neutral, peer mutation remains operator or adapter owned, and ordinary apply remains the sole owner-unlock and convergence path.  - 2026-08-22: Implemented FEAT-013's hybrid retained-member recovery path: actual apply selectively imports an exact verified default-known-hosts Ed25519 pin, falls back to exact product cloud-init when public or private authority requires it, binds all evidence to the current Compute/lifecycle identity, and publishes only after strict SSH plus bounded unchanged-source rereads. A lifecycle-recorded Compute identity remains retained even when that member is temporarily absent from discovery, preventing implicit key rotation during interrupted replacement.  - 2026-08-21: Refined FEAT-013 so the SSH policy resolver uses the validated deployment scope to select a deployment-scoped private host-key directory under the SSH product root when the explicit environment value is absent, without mutating process state or weakening exact-key validation.  - 2026-08-21: Corrected FEAT-013's default private-key lifecycle: actual apply owns a namespaced `~/.ssh/nebius-vpngw/host-keys/<gateway-group>/<scope-sha256>` hierarchy and may prepare missing keys only for fresh members; retained identity recovery stays authoritative and fail-closed, explicit directories remain operator-owned, and dry-run remains write-free.  - 2026-08-21: Implemented FEAT-011 presentation behavior so one private stable audit result supplies both advertisement parity and authoritative gateway role headings; active is green, standby and unknown remain explicit, and non-VM-HA output and the public audit return contract are unchanged.  - 2026-08-21: Completed FEAT-011's periodic passive routing-hygiene path with role-aware systemd admission, lock-held authority rechecks, exact passive mutation bounds, recurring enforcement, exact table-token parsing that preserves unrelated rules, and fail-closed readiness/status observation with owning-workflow remediation without changing public CLI, configuration, heartbeat, or persisted-state schemas.  - 2026-08-21: Revalidated FEAT-002 on the current 1,284-test suite and removed a test-only two-second SDK polling delay while preserving the real SDK wait/update path, exact assertions, selection, outcomes, configuration, and production behavior.  - 2026-08-21: Reconciled FEAT-001 after the warning-free setuptools-scm migration centralized runtime configuration, nested tag matching, explicit build-time source version-file behavior, dependency/lock bounds, and focused warning-strict regressions; the full `make all` workflow passed.  - 2026-08-23: Completed FEAT-012's static-only explicit VM-HA convergence waiter with exact installed-generation authority, both-member controller capability, autonomous repair-chain observation, receipt-plus-cloud postconditions, bounded polling, and unequal-overlap preservation without a second route writer or request. - 2026-08-20: Implemented FEAT-012 with centralized command applicability, canonical static-prefix resolution, read-only installed-agent capability preflight, controller-owned VM-HA route handling, typed fail-before-success route operations, and complete offline matrix validation.  - 2026-08-20: Added planned FEAT-011 for per-neighbor allow/deny export rendering, mode-aware Adj-RIB-Out readiness, receipt-last passive cleanup, exact-authority tri-state audit, and separation of route inspection from repair. - 2026-08-20: Marked the FEAT-007 Role correction implemented after the authoritative `active`/`standby`/`unknown` projection passed negative-control, focused, full-suite, static, documentation, security, and alignment checks. - 2026-08-20: Reopened FEAT-007 to derive the public Role cell only from authoritative current ownership and remove the misleading configured-role suffix. - 2026-08-20: Reopened FEAT-007 to replace summary-plus-member VM-HA rendering with one conservative four-column table while retaining authoritative classification and redaction. - 2026-08-20: Added planned FEAT-010 for a compact primary VPN status table with complete folded tunnel names and preserved Traffic Override detection. - 2026-08-20: Marked the FEAT-007 presentation revision and FEAT-010 implemented after exact table-shape, semantic color, unavailable-member, long-name, row-arity, full static, unit, integration, documentation, security, alignment, and diff-integrity checks passed without live execution. - 2026-08-20: Marked FEAT-009 implemented after separating provisioning progress from authoritative VM-HA network rereads, adding recreate-aware VM discovery text, and passing focused and complete offline validation without a live gateway trial. - 2026-08-19: Added planned FEAT-008 for clean-slate VM-local self-signed identities, exact peer-leaf enrollment over pinned SSH, automatic bootstrap and replacement, explicit crash-safe dual rotation, and epoch-bound peer protocol v2 without an external CA or HA compatibility path. - 2026-08-19: Marked FEAT-008 implemented after direct-pinned managed identities, apply bootstrap/replacement, passive-first explicit rotation, heartbeat v2, secret-free status, complete offline suites, static checks, and package tests passed without a live gateway trial.  - 2026-08-19: Marked FEAT-007 implemented after structured authority, complete display validation, conservative classification, identity-safe rendering, hard parser removal, and complete offline test suites passed. - 2026-08-19: Added planned FEAT-007 for hard removal of the unpublished recovery read, structured cloud/member correlation, strict status-v1 display validation, conservative HA classification, sanitized summary-plus-member rendering, and unchanged read-only/non-HA boundaries.  - 2026-08-18: Marked FEAT-006 implemented after the path-aware Typer groups, unchanged leaf routing, zero-effect old-path rejection, migration guidance, and complete offline validation passed. - 2026-08-18: Added planned FEAT-006 for native `failover` and `failback` subapplications, VM/tunnel leaves, path-aware help ordering, no-alias parser rejection, unchanged callback bodies, and explicit migration guidance. - 2026-08-18: Marked FEAT-005 implemented after all 18 public commands and the root help rendered canonical tested examples with no execution-path or safety-gate change. - 2026-08-18: Added FEAT-005 for a canonical example registry, Typer root and command epilogs, complete rendered-help coverage, and aligned user documentation without changing execution behavior. - 2026-08-18: Marked FEAT-004 implemented after offline verification of the dedicated conversion module, credential preflight, semantic placeholder handling, passive-only allocation seam, no-clobber publication and recovery boundary, and real migration dry-run handoff. - 2026-08-18: Added FEAT-004 for an additive two-phase `configure-vm-ha` wizard, raw-YAML allowlisted conversion, safe candidate publication, passive-only allocation preparation, and handoff to the existing approved apply engine. - 2026-08-18: Added FEAT-003 for the TTY-default wizard, exact noninteractive compatibility path, in-memory validation and atomic write, secret-reference/redaction policy, explicit VM-HA gating, and optional confirmed reuse of standalone network preparation. - 2026-08-16: Marked FEAT-002 implemented after a test-only sleeper injection removed unrelated real retry delays from the seven-case crash-replay matrix, reducing the five-sample serial unit median by about 31% with all 682 outcomes preserved. - 2026-08-16: Added FEAT-002 for measured, like-for-like pytest optimization with preserved selection, isolation, diagnostics, and correctness gates. - 2026-08-16: Marked FEAT-001 implemented after adding the bounded direct Git version probe, focused Python-project contract tests, and local artifact hygiene without changing runtime or public interfaces. - 2026-08-16: Added FEAT-001 for an additive, compatibility-preserving Python-project hardening pass over version discovery, regression contracts, and local artifact hygiene.
 
 #### Done Definition
 
@@ -4275,7 +4399,7 @@ false status, and the focused and repository quality gates pass.
 
 <!-- /FEATURE: FEAT-016 -->
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-017 reqs=REQ-018 status=ready delivery=implemented priority=P0 version=3 -->
+<!-- FEATURE: FEAT-017 reqs=REQ-018 status=ready delivery=implemented priority=P0 version=4 -->
 ### FEAT-017: Compatible, serialized, agent-confirmed apply
 
 #### Requirements Covered
@@ -4337,6 +4461,14 @@ the routing lock while waiting for jobs. After either wait, obtain a fresh agent
 receipt and repeat the complete final artifact, runtime and route proof before
 completing the journal. Do not replay installation or reconciliation. Ownership
 drift, observation errors and deadline expiry still fail closed.
+Initial ordinary inspection also waits for brief routing-lock contention within
+the existing transaction deadline. After a wait, release the lock and repeat the
+entire boot, configuration, artifact, runtime and route observation; pre-wait
+values cannot authorize a plan or effect. Check expiry again after acquisition.
+Only lock contention is recoverable here; permission errors, conflicting
+operation journals and invalid evidence remain failures. Native advisory-lock
+regressions cover release, timeout, refreshed evidence and post-acquisition expiry;
+full installed and live qualification remains separate.
 HA retains its staged-receipt and controller-owned activation branches, with
 disruption approval composed with existing effect-bound lifecycle approval.
 
@@ -4783,7 +4915,7 @@ routes/rules or broad APIPA route remained. This observation made no live change
 The exact issue-190 route lookup resolved both members through the real Compute
 API with SDK 0.3.101, while the former facade request failed its raw serializer
 locally. The repaired disk planner also inspected both real attached disks without
-reporting an infrastructure change. Public `status`, `vm-ha --dry-run` and
+reporting an infrastructure change. Public `status`, `apply --dry-run` and
 `apply --dry-run` completed successfully. This establishes the named read boundaries
 and current retained-HA health; source parity does not prove that an older
 long-running health-monitor process reloaded its Python modules. The operator's
@@ -4838,6 +4970,43 @@ No trust publication is performed by the wizard or observer. Other managed-trust
 actions and destructive plans keep their prior gates. Four admission/composed-CLI
 regressions failed against the former adapter. The actual migration then passed
 this admission boundary from the retained ordinary gateway and completed candidate.
+
+A resumed migration can already have a verified SSH prerequisite while its
+runtime remains incomplete. Reimporting the ordinary receipt at that point
+recomputes a provenance digest containing the later Compute revision and falsely
+conflicts with the selected bootstrap receipt. Reuse the published HA trust after
+the exact parent marks SSH verified; retain current Compute/lifecycle assertions
+and the bootstrap owner's exact child receipt, pins and private-key comparison.
+Before verification, preserve the original predecessor import and drift gates.
+Keep migration handoff membership independent of whether SSH provenance still
+needs import. A verified SSH receipt does not settle a reserved package worker.
+Reconstruct the original handoff from its validated saved reservation and current
+guest readback; never substitute guarded preparation for a reserved takeover.
+This restores idempotent replay without changing public or persisted formats.
+Four regression cases distinguish verified from incomplete publication and
+reject changed current Compute authority. The verified replay case reproduced
+the original receipt mismatch before the fix. All 701 focused migration, SSH
+and CLI checks pass; an additional 59 trust, command and recovery checks pass,
+including both commands in text and JSON modes with specific SSH conflict and
+repair-prerequisite guidance. Live resume cleared the trust conflict but exposed
+a shared host-selection error that skipped the reserved package handoff. Keep
+that failed result. Handoff eligibility now remains independent of repeated SSH
+import. Three native CLI observation regressions reproduce the skipped running,
+completed and blocked worker cases before the correction; all 580 focused CLI
+and trust tests pass afterward. They retain the real reservation identity and
+reject substitution of a guarded preparation request. The next live resume reached
+the original reservation but compared it with a newly computed approval digest.
+A pre-effect native request comparison established that approval was the only
+changed identity field; the saved value matched the active lifecycle transaction.
+Reattach using that lifecycle approval only when the validated reservation agrees.
+Keep exact request, artifact and worker-source checks; a successor uses its own
+approval instead of inheriting the predecessor's reservation. A regression using
+the actual CLI approval argument and real package reservation reproduces the
+failure before repair. The six authority/artifact cases and 113 focused package,
+trust and command-guidance checks pass afterward. Package reservation conflicts
+carry a bounded reason, immediate action and conditional repair prerequisites in
+both commands and structured results. Clean live conversion and resume remain
+required; this local correction grants no release qualification.
 
 #### Stable Fresh-Member Trust Approval
 
@@ -4904,7 +5073,7 @@ its existing cloud-init, package and ESP4 checks.
 #### Classic Lifecycle Replay Evidence
 
 The isolated live trial used the actual guided `create-config`, `validate-config`,
-ordinary `apply`, `status`, `vm-ha` conversion and final `status` commands. GCP
+ordinary `apply`, `status`, `apply` conversion and final `status` commands. GCP
 Classic peer tunnels, return routes and a narrow ICMP rule were separate fixtures.
 The existing gateway pair and original configuration remained untouched. No guest
 journal, service or HA authority was manually repaired; failed checkpoints were
@@ -5644,7 +5813,11 @@ checkpoint. Preserve the original 0.6.0 BGP baseline blocker and all failed tria
 
 Permit bounded authenticated overlap; reject autonomous replacement after inputs
 end. Check steady traffic without retries and peer-close recovery with a separately
-declared bounded acquisition interval. Verify actual ESP policies and exact fixture
+declared bounded acquisition interval. Rekey and reauthentication acquisition requires
+new identities on both peers with established IKE and an installed ESP CHILD on the
+expected XFRM interface before strict steady-state traffic begins. An unauthenticated
+new IKE identity is not readiness. Keep the original acquisition deadline and packet
+assertions. Verify actual ESP policies and exact fixture
 cleanup. A TCP/179 payload test is not an FRR/BGP protocol test.
 
 #### Evaluation Plan
@@ -5702,7 +5875,7 @@ and the [5.9.13 uniqueness implementation](https://github.com/strongswan/strongs
 
 <!-- /FEATURE: FEAT-020 -->
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-021 reqs=REQ-023 status=ready delivery=implemented priority=P1 version=2 -->
+<!-- FEATURE: FEAT-021 reqs=REQ-023 status=ready delivery=implemented priority=P1 version=3 -->
 ### FEAT-021: Explicit measured-loss acceptance without a fixed duration
 
 #### Requirements Covered
@@ -5717,6 +5890,9 @@ loss without establishing its cause. On 2026-11-05, the accepted normal toleranc
 changed from strictly below 0.2% to strictly below 1% for Internet VPN qualification.
 The absence of a fixed ten-minute observation requirement is retained.
 This policy change accepts measured performance; it is not a network repair.
+On 2026-11-14, the accepted policy explicitly includes VM-HA passive-restoration
+windows. Earlier absolute zero-loss phase assertions remain historical verdicts;
+new declarations require the same measured tolerance plus independent invariants.
 
 #### Design Details
 
@@ -5728,6 +5904,17 @@ representative observation interval before execution; no universal duration is i
 Baseline and recovery use the same threshold. Retain operation-specific baseline
 duration, outage and recovery deadlines, BGP/HA health, ownership and compatibility.
 Transition outage/loss remains reported separately from the declared steady-state sample.
+For passive restoration, retain the existing conservative clock-bracketed interval
+from standby-start intent through terminal command verification. Compare missing
+unique replies against every transmitted sequence in that complete interval, in
+both directions, using the same strict integer threshold. Keep serving ownership,
+allocation, managed routes and forwarding checks separate and mandatory. Neither
+quiet controller logs nor a loss-only pass proves the absence of runtime effects.
+Preserve native zero-loss checks that have a different declared acceptance purpose.
+Report traffic interruption, committed cutover, standby readiness and total command
+duration separately. Keep the 120-second soft interruption target and existing
+observation deadlines; do not equate an observation timeout with cancellation of an
+accepted provider operation.
 
 #### Selected Option
 
@@ -5746,12 +5933,23 @@ change is justified by the acceptance revision.
 This is a qualification/reporting policy in the canonical docs, README and changelog.
 It adds no runtime option, health gate, schema, CLI or network behavior. Historical
 failures retain their original verdict; any new comparison is labeled separately.
+Implement this extension only in qualification declarations, evaluators, tests and
+documentation. Preserve a complete immutable original source snapshot and original
+wheel, native and guest-payload identities; bind revised verification inputs through
+a separate exact manifest and policy digest. Never modify executed trial inputs or
+weaken original artifact checks. Use fresh successor trials for incomplete repeats.
+A production-runtime change starts a new candidate and affected qualification.
 
 #### Test-First Success Criteria
 
 Below-threshold complete samples pass; equality, above-threshold and empty samples
 do not. The same recorded sample has the same verdict regardless of nominal test
 duration. A passing old-artifact sample never supplies an unrun candidate transition.
+Require identical early/final/group acceptance policy, complete phase accounting,
+positive denominator, equality rejection and rejection of changed artifact or policy
+identity. Test missing evidence and failed ownership/route/forwarding checks even
+when measured loss is below threshold. Retain composed promotion/reload, migration
+trust/handoff/resume and apply/repair failure-guidance regression coverage.
 
 #### Validation Plan
 
@@ -5781,8 +5979,9 @@ contract change; it never changes retained observations or original trial verdic
 
 #### Done Definition
 
-All current acceptance statements agree on strictly below 1% without a fixed
-ten-minute gate. Counts and scope substantiate every reported pass, while incomplete
+All current Internet workload and passive-restoration acceptance statements agree
+on strictly below 1% without a universal ten-minute gate; independent native
+zero-loss criteria retain their separate scope. Counts and scope substantiate every reported pass, while incomplete
 candidate operations and unresolved root causes remain visible.
 
 #### Implementation Evidence
@@ -5792,6 +5991,14 @@ with the normal strictly-below-1% REQ-023 criterion. The README and unreleased
 changelog now describe the same rule and equality rejection. Historical
 measurements retain their original criteria and verdicts. Product source,
 measurement helpers and their 5 Hz probe interval are unchanged.
+
+The 2026-11-14 extension preserves the production candidate and all original
+source/artifact identities. A separately frozen policy and verifier manifest bind
+fresh passive-restoration trials to exact integer loss accounting and unchanged
+serving-owner, allocation, route and forwarding checks. Original failed verdicts
+remain immutable. Composed regression coverage now exercises promotion followed by
+asynchronous daemon reload, pending-work suppression and reload failure propagation;
+its controlled effect ports do not establish native kernel behavior.
 
 #### Verification Evidence
 
@@ -5809,6 +6016,13 @@ The twelve isolated candidate operation trials already passed the stricter zero-
 criterion. The four candidate transitions on the existing cross-cloud VPN remain
 unexecuted. The packet-loss cause remains unresolved and no universal loss guarantee
 or product fix is inferred from these samples.
+
+The extension passed 7,348 unit tests and 154 integration tests, with 134 existing
+integration skips. Private evaluator controls reject equality, incomplete samples,
+changed policy and changed source/verifier identities; early-oracle replay preserves
+the old failed result. Current live repeat groups and final Single-to-HA conversion
+remain pending. These local results establish implementation coverage, not complete
+release qualification or a packet-loss causal fix.
 
 <!-- /FEATURE: FEAT-021 -->
 <!-- markdownlint-disable-next-line MD013 -->
@@ -6042,7 +6256,7 @@ Clean final-artifact live replay remains pending.
 
 <!-- /FEATURE: FEAT-022 -->
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-023 reqs=REQ-025,REQ-012 status=ready delivery=implemented priority=P0 version=36 -->
+<!-- FEATURE: FEAT-023 reqs=REQ-025,REQ-012 status=ready delivery=implemented priority=P0 version=38 -->
 ### FEAT-023: Controller-owned connection tunnel policy
 
 #### Requirements Covered
@@ -6059,6 +6273,25 @@ selection amendment. Historical implementation evidence below describes the
 pre-amendment baseline and is not verification of this release change.
 
 #### Design Details
+
+At the HA tunnel adapter's pure snapshot-read boundary, convert retryable or
+ambiguous cloud-read exceptions into a private deferred-observation signal. Catch
+that signal only at the enclosing tunnel pass, after writer-lock cleanup. It must
+not become a local service failure, confirmed ownership change or corrective
+attempt. Preserve any already-admitted operation and original deadlines; later
+work reobserves current authority. Do not translate unavailable evidence into a
+successful read or let a stale last snapshot retire intent.
+
+The existing VM controller then performs its own current snapshot and ordinary
+policy evaluation. Its unavailable-authority guard and error path remain intact,
+as do permanent identity/access failures and all effect guards. This addresses a
+secondary tunnel observation escaping before the canonical controller decision;
+it introduces no grace interval, cached authority, background owner, SDK retry
+change or policy for continued forwarding during prolonged cloud-authority loss.
+Validate Static and BGP initial reads, repeated pre-effect reads, pending native
+work, current-owner drift and permanent failures. Exercise the composed controller
+with fresh, unavailable and conflicting subsequent authority. Native and live
+candidate verification remain separate from source regression evidence.
 
 Generalize the existing connection policy and controller, with separate authority
 adapters. Ordinary operations bind semantic configuration, boot and the ordinary
@@ -6103,6 +6336,11 @@ desired intent; native tunnel effects and operation completion remain forbidden.
 Changed intent invalidates installed origination policy, so the controller revokes
 exports and rematerializes the canonical policy before activation. Preserve the
 operation identity and original deadlines; unknown observations alone never release intent.
+Candidate-attempt expiry selects fallback only for confirmed-down health. An
+unknown verification, including incomplete native probe hysteresis, remains
+pending under the same operation and original overall deadline. Fresh healthy
+evidence can finish verification; overall expiry retains existing restoration
+authority without renewing the budget or admitting late selection success.
 
 #### Selected Option
 
@@ -6532,6 +6770,15 @@ Both independent 900-packet streams completed with maximum reply gaps below
 deduplication remains distinct evidence. Final combined release qualification
 and the live BGP equivalent-request case remain outstanding.
 
+A later native Static probe-loss trial exposed restoration from unknown
+candidate health at the per-attempt cutoff, before probe hysteresis completed.
+A previous-artifact control succeeded while the affected artifact restored the
+failed preferred path. The selector now requires confirmed-down evidence for
+attempt fallback. Six focused Static/BGP regressions cover pending unknown
+health, subsequent positive health, confirmed failure and original-deadline
+cleanup, including persisted replay. The broader source, native and live
+qualification of this repair remain separate and pending.
+
 <!-- /FEATURE: FEAT-023 -->
 <!-- markdownlint-disable-next-line MD013 -->
 <!-- FEATURE: FEAT-024 reqs=REQ-025,REQ-008 status=ready delivery=implemented priority=P0 version=3 -->
@@ -6655,7 +6902,7 @@ passing lifecycle trials do not replace that missing recovery-sequence proof.
 
 <!-- /FEATURE: FEAT-024 -->
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-025 reqs=REQ-026 status=ready delivery=implemented priority=P1 version=3 -->
+<!-- FEATURE: FEAT-025 reqs=REQ-026 status=ready delivery=implemented priority=P1 version=6 -->
 ### FEAT-025: Independent heartbeat and bounded VM-HA evidence
 
 #### Requirements Covered
@@ -6681,6 +6928,15 @@ boot/configuration identity separately for daemon service evidence: path identit
 changes discard path readiness while retaining only independently sampled service
 liveness below five seconds old. Recheck both identities and age at send admission;
 service liveness cannot establish forwarding, readiness or ownership.
+A completed local repair remains journalled until sixty seconds of continuous
+health. After two healthy observations, with no pending effect and matching
+normal/passive or active/active state, its bookkeeping is excluded from sample
+identity. Retirement alone therefore cannot discard a fresh positive sample.
+Validate the complete checkpoint before this projection, without modifying it.
+Unconfirmed repairs, mode mismatches, pending effects and all other checkpoint,
+guard, configuration, policy and tunnel identity fields still invalidate samples.
+The original repair budget, reset interval and independent readiness checks stay
+unchanged; historical completion never supplies a positive health observation.
 
 Strict v5 retains identity/parity/policy/recovery fields and adds typed local
 healthy/unhealthy/unknown, cloud status, progress and sample metadata. Sample ID
@@ -6851,7 +7107,52 @@ Then repeat all six API trials and sixteen transition steps on the same candidat
 All local, native and live gates pass for one identified candidate. Separately
 reported Static consequences require their own causal proof.
 
+#### Accepted bounded observation and artifact hardening
+
+The useful availability goal is recovery of individual transient reads within
+one existing 30-second observation budget. Add one typed status classifier and
+paced read-only helper at Compute, allocation and route-page RPC boundaries.
+Recognize SDK RequestError.status.code and explicit pagination causes; retain
+permanent, malformed and contradictory failure handling. Each retry receives
+only remaining time and disables nested SDK retries. Reject late successful
+results. Do not retry the complete snapshot, which also owns durable retirement,
+or any mutation or uncertain submission. Independent publication continues while
+the admitted read runs; exhausted authority follows the existing guarded shutdown.
+
+A recognized proxy HTTP 52x response carried by a typed SDK `UNKNOWN` error
+also consumes this read-only budget. Require the known HTTP header diagnostic
+and no service-error details; arbitrary `UNKNOWN`, permanent statuses and
+untyped message matches remain failures. Retry the failed route-target read,
+then freshly validate the returned parent chain. This restores bounded handling
+when a gateway response would otherwise escape route receipt observation and
+restart the controller. Regressions cover direct and paginated failures,
+exhaustion, foreign target evidence and unchanged uncertain-mutation handling.
+Installed and live qualification must use the resulting candidate.
+
+Require heartbeat.py and evidence.py in the artifact capability closure; check
+RECORD bytes and canonical admitting-CLI source before deployment. Reuse current
+v6 publication/evidence/transport and coordinated activation. Reject PR250's
+older wire representation, indefinite cached ownership and unconditional resource
+closure while a worker still uses it. No new dependencies or public interfaces.
+
+Verification must exercise typed and wrapped reads, shared deadlines, jitter,
+late success, permanent errors, no mutation replay, missing/altered artifact
+members and existing independent publisher lifecycle. The shared helper and
+artifact admission now implement this refinement. Local regressions prove the
+initial caller allowance cannot renew across retries, exact later-page retry
+without refetching earlier pages, exhausted inventory refusal and unchanged
+mutation admission. Installed/native/live qualification remains separate.
+
 #### Implementation Evidence
+
+A later standby-daemon fault trial isolated a transient readiness regression:
+only the completed repair record retired, then the next heartbeat reported an
+unknown path despite unchanged service, routing and standby readiness. The local
+counterfactual reproduces this by changing only that validated history. The
+semantic projection now preserves fresh health through retirement, with active
+and passive collection/publication regressions and negative controls for pending,
+unconfirmed, malformed and mismatched repair state. Post-repair installed and
+live replay remain pending; this source repair is not final HA qualification.
 
 Implemented on 2026-11-02 in heartbeat/evidence models, isolated publisher/sampler,
 transport/runtime wiring, controller/Stop admission, cumulative cloud budget,
@@ -6986,7 +7287,7 @@ A dedicated final barrier transition supersedes the current artifact pin only
 after separately journalled package installation on both stopped, fenced members;
 the original artifact remains in immutable audit. Unrelated record mutations fail.
 
-Expose recovery as a typed `vm-ha` convergence plan, using existing approval and
+Expose recovery as a typed `apply` convergence plan, using existing approval and
 writer-lock orchestration. Preserve the owner's exact replacement inhibition;
 installing a normal owner apply lock would conflict with it. Verify the standby's
 existing lock, stop mutation services on both, and independently prove current-boot
@@ -8240,7 +8541,7 @@ implementation delivery does not claim that qualification.
 
 <!-- /FEATURE: FEAT-032 -->
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-033 reqs=REQ-034 status=ready delivery=implemented priority=P0 version=11 -->
+<!-- FEATURE: FEAT-033 reqs=REQ-034 status=ready delivery=implemented priority=P0 version=20 -->
 ### FEAT-033: Native VICI runtime and coverage-aware recovery transaction
 
 #### Requirements Covered
@@ -8276,6 +8577,78 @@ controller notification precedes daemon readiness. Route repair shares existing
 upgrade/ownership admission. Diagnostic restart-needed state has no authority.
 Render only eligible native retries/traps with REQ-034 settings. Remove loaded
 initiation authority before termination; explicit refresh waits for recovery.
+
+Assign each managed CHILD a fixed local reqid equal to its existing XFRM
+interface identifier. This keeps trap-triggered acquisition and direct
+initiation on the same kernel policy identity when peers narrow the configured
+traffic selectors. The maximum 200 configured tunnels occupy identifiers
+100–299; start dynamic reqid allocation at 65536. Reject managed identifiers
+outside that reserved range. Preserve selectors, `unique=no`, native rekey and
+reauthentication overlap, and every existing eligibility and fencing gate.
+These identifiers are internal generated policy, not a new user setting.
+
+The dynamic allocator reads its base when the daemon starts. Ordinary
+materialization and changed or unproven HA runtime settings must successfully
+restart strongSwan before loading connections; a failed restart stops the path.
+HA Static passive materialization may reuse only the same running daemon proven
+by a private runtime receipt binding systemd InvocationID/MainPID, its selected
+configuration path, complete supported startup configuration closure and exact
+managed netplan file. Only successful network preparation can publish reuse
+evidence; an unchanged proven passive refresh skips netplan application. Changed
+networking retains application and restart. Optional daemon probes use the existing
+bounded observation runner outside mutation accounting and respect its deadline.
+The renderer records this optimization evidence only after a successful product
+restart and explicit VICI load, with unchanged daemon identity/configuration
+rechecked before publication. Validate the same evidence before rendering and
+before/after reloading. Known runtime or startup-configuration contradictions
+also fail after a restart, including a retry after failed passive reuse. They
+prevent both last-applied state and materialization publication; an unavailable
+optional probe before restart still retains the supported restart path. Missing, malformed, foreign-owned, writable, symlinked or
+changed evidence cannot authorize reuse. Unsupported configuration selection or
+includes retain restart behavior. The receipt contains only identities/hashes,
+lives under the existing private runtime directory and grants no forwarding or
+promotion authority. The existing routing writer serializes these effects.
+Reload-only recovery retains exact current policy and activation authority.
+Never treat writing settings, service activity or a healthy SA as proof of the
+startup allocator. Qualify old dynamic-policy upgrades through their native
+apply owners, proving fresh daemon identity and retirement of old kernel objects.
+
+On a mixed standby, first fence forwarding and withdraw exports. Materialize
+and load the cold Static policy while retaining BGP connections, prove loaded
+Static responders absent, terminate only exact Static IKE identities, then prove
+SA absence and perform existing exact kernel cleanup before BGP readiness waits.
+BLOCKED continues whole-cluster suspension. Canonical tunnel projection supplies
+Static names including inherited routing modes and disabled-tunnel exclusions.
+Cold readiness requires completed connection and SA inventories; unknown, loaded
+responders and residual Static SAs are not cold. Candidate preparation waits for
+Static identities only, then retains the separate CHILD/XFRM/route readiness and
+ownership gates. No new retry episode or tunnel-selection owner is introduced.
+
+Acceptance includes repeated mixed transitions retaining exact daemon/BGP
+identities, stale/missing/unsafe receipt and config controls, load failure and
+process/config race controls, responder-only and incomplete-inventory negatives,
+and BGP-only candidate-wait rejection. Keep native and composed production-path
+qualification distinct from local unit evidence. These accepted refinements
+are implemented in the renderer and existing data-plane owner. Local regressions
+exercise real Agent reload and both renderers with simulated process boundaries,
+ordinary command-budget admission, unsafe receipt directories and unchanged
+networking. Local Static inventory and candidate-wait negative controls pass.
+Native/session and cloud qualification remains deferred; no release proof is
+inferred from these simulated checks.
+A native daemon-race trial exposed a restart-path validation gap: a later
+service invocation could publish passive materialization after another raced
+load. The renderer now rejects the contradiction on that path as well. Local
+regressions cover missing and stale receipts, repeated failed reuse, daemon and
+configuration changes, observation loss, and rejected applied-state publication.
+The repaired artifact still requires fresh native and cloud qualification.
+
+Local renderer controls cover the reserved range through 200 tunnels and
+refusal to load after failed restart. An isolated native counterfactual covers
+concurrent narrowed-selector restart, CHILD/IKE rekey and IKEv2
+reauthentication. Exact-artifact native and live qualification remains open,
+including fixed/dynamic coexistence, retained overlap, IKEv1, disable/reorder,
+multiple tunnels and ordinary/HA upgrades; these experiments do not establish
+release qualification.
 Static suspension also proves kernel teardown after VICI termination. A killed
 daemon can forget SAs that remain in the kernel. The existing selector validates
 all affected objects against configured XFRM interface identities, assigned
@@ -8287,6 +8660,36 @@ unrelated paths and serialize cleanup with the existing routing writer and
 operation deadline. The shared parser validates native statistics identities
 and rejects ambiguous policy templates. No additional cleanup owner is added.
 
+HA component repair also reconciles forgotten kernel objects before its existing
+configuration reload. Under the same routing writer, complete VICI connection
+and SA inventories identify only currently authorized paths with neither loaded
+connection nor IKE session. The existing exact kernel scope validator and deletion
+readback remove those objects before loading; no unload or termination is added.
+The shared planner validates unsigned policy priority and revokes policies in
+descending numeric priority before SAs, so removing a negotiated policy cannot
+expose a lower-precedence trap. Equal-priority overlapping selectors with different
+reqids are ambiguous and stop cleanup. Each fresh plan must be an ordered subset
+of the remaining admitted plan; deleted or expired identities cannot return.
+Verify every scoped policy absent before the first SA deletion.
+Cleanup is one bounded local revocation transaction under fresh cloud/peer
+admission. Each deletion rechecks the bound boot/guard, mode, canonical policy
+and complete native absence; fresh cloud/peer admission is required again before
+loading. Typed VICI reads run in-process with separate bounded sessions, avoiding
+a Python process per object. The original absolute repair deadline, including any
+shorter inherited command deadline, covers dispatch, observations and effects.
+Known VICI failures normalize to unknown evidence and retain failure fencing. Credential-only loss and surviving sessions grant no deletion authority.
+Static owners and warm BGP owners/standbys use the same mechanism; cold Static
+standbys remain inert. Any partial or uncertain cleanup consumes the existing
+attempt and follows its fenced failure handling. This prevents new residual state
+at daemon restart; it does not authorize deleting a live path's extra SPIs later.
+The effect adapter preserves a returned terminal attempted disposition if the
+observation context expires on exit; admission failures, raised repair failures
+and deferred work never gain a receipt. Passive failure fencing reserves at most
+0.95 seconds of subprocess allowances inside the existing one-second reserve;
+filesystem and scheduling latency remain subject to measured qualification.
+Focused regression and native Static/BGP VICI/kernel crash counterfactuals pass.
+Installed-artifact and live gateway crash-replay qualification remain pending.
+
 A daemon can automatically restart before the recovery owner observes a failed
 unit. Detect lost loaded configuration using the shared complete VICI
 connection and shared-key identifier inventory, compared with the canonical
@@ -8297,7 +8700,11 @@ uses upstream load-all, which loads credentials before connections over one
 session; connection-only loads cannot mask lost credential state. The existing
 ordinary monitor or HA controller admits a bounded reload, retaining
 its durable attempt/deadline and healthy reset. The HA repair binds its persisted
-data-plane mode explicitly. An active repair requires exact local ownership;
+data-plane mode explicitly. The admitted data-plane effect owns the guard record.
+Routine active status publication must not replace that record or discard its
+node, allocation, generation or digests; subsequent component recovery consumes
+those exact fields. Native crash coverage includes the intervening service-loop
+publication, with cloud and heartbeat authority explicitly remaining fixture inputs. An active repair requires exact local ownership;
 a passive repair requires an exact healthy peer owner, absent local allocation
 attachment, current-boot passive guard and disabled forwarding. Only the already
 authorized warm BGP configuration may reload on a standby; cold Static paths
@@ -8420,6 +8827,26 @@ Compare interruption with the 120-second soft target and report any overrun;
 passing correctness does not imply that the timing target was met.
 This revised evidence split supersedes the earlier all-predecessor live matrix;
 historical failed/intervened results remain unchanged.
+
+Package convergence observes conversion receipts when present. If no receipt
+exists, require regular current and predecessor checkpoint files, identical
+bytes and successful validation by the current runtime reader. Record the
+predecessor digest with the explicit absence; any receipt creation, removal or
+change between repeat observations fails comparison. This covers predecessors
+already using the current checkpoint schema without fabricating conversion work.
+The frozen package manifest now covers releases 0.6.1 through 0.6.4; retain prior
+manifest results separately. The frozen candidate package matrix passed all
+20 current cases, including four latest-release interruptions and 20 repeat
+checks. This is package qualification, not final-artifact VPN qualification.
+The product-wheel fault records each selected service asset immediately before
+calling the real installer. After interruption, compare bytes, file metadata and
+absence with that inventory while independently verifying inhibition, stopped
+writers and the original runtime operation. Do not require candidate assets to
+differ from their predecessor: unchanged assets remain valid package inputs.
+Changed, replaced, missing or newly published assets fail this boundary check.
+Unit fixtures assemble the same inventory and interruption hook used by the
+native driver. They retain the exact-install trigger and unrelated-command
+negative cases, and verify the captured pre-install asset digest.
 
 #### Rollout And Rollback
 
@@ -8604,9 +9031,46 @@ transaction too. Its successor links the immediate failed record while retaining
 the original completed package lineage; never infer unused authority from an
 absent client acknowledgement after a guest reservation exists.
 
+A failed member activation before unlock may use this same corrective owner once
+both package-owner journals completed. Admit only an exact member activation or
+release frontier, with native runtime phases `installed`, `activating` or
+`complete`, the same completed ordinary operation and completed conversion.
+Earlier package phases, `releasing`, foreign work and unavailable evidence reject
+successor admission. A completed package phase never proves completed activation.
+
+For a new or unreserved corrective member, an observation-only proposal binds the
+exact predecessor child journals and computes a fresh native package plan from
+current inventory and startup policy. It does not alter or ignore pending work
+for normal apply. The shared recovery inspector fingerprints each installed source
+file with a separate 4 MiB bound; configuration and authority records retain their
+1 MiB bound, regular-file checks and no-symlink reads. Execution repeats predecessor and native postcondition checks
+under the canonical package exclusion and writer admission, archives the original
+records without changing their phases, and persists the new child reservation
+before atomically replacing the native transaction. The runtime owner accepts
+that replacement only for the exact archived predecessor digest and retains its
+ordinary begin checks. Preserve the original operator package-start policy across
+unfinished activation and restore it after success; temporary inhibition must
+never become the permanent policy. Reject changed operator service boot policy.
+Replay after publication proves the same new child and manifest; it never
+replaces a different pending operation. Fresh locks invalidate
+old clients. Both members must be reserved before installation, followed by the
+existing passive-first activation and independent release gates.
+
+Rejected alternatives are deleting history, falsely completing activation,
+overwriting a pending journal through generic apply, or adding a recovery owner.
+Qualification must exercise pre-unlock activation failure, every archive and
+publication interruption, exact resume, partial/foreign package refusal and
+final-artifact Static/BGP activation with independent traffic checks.
+
 Use canonical apply quiescence admission for terminal restoration and transfer
-history. Historical completed records remain audit evidence; unresolved controller,
-rearm, tunnel, policy and cloud work still rejects reservation. The ordinary
+history. Historical completed records remain audit evidence. Share the existing
+upgrade checkpoint predicate with corrective planning and guest reservation: an
+exact current-boot local `enter-passive` intent may remain under the current
+forwarding fence, bound to the node, allocation, generation, configuration digests,
+sequence and ownership incarnation. Preserve its bytes and original operation;
+only the subsequently activated controller may replay it. Foreign or stale intent,
+all other pending actions, transfer/repair continuity, rearm, tunnel, policy and
+cloud work still reject reservation. The ordinary
 first-start repair admission rejects any such history and is not the correct
 owner for this retained-release transition.
 
@@ -8761,7 +9225,7 @@ Sources: [Debian maintainer-script retry contract](https://www.debian.org/doc/de
 <!-- /FEATURE: FEAT-034 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-035 reqs=REQ-035 status=ready delivery=implemented priority=P0 version=39 -->
+<!-- FEATURE: FEAT-035 reqs=REQ-035 status=ready delivery=implemented priority=P0 version=60 -->
 ### FEAT-035: Composed apply planning, authority and results
 
 #### Requirements Covered
@@ -8783,6 +9247,175 @@ retirement authority. Existing HA route authority is tied to shared-owner gates
 and cannot be reused as ordinary ownership.
 
 #### Design Details
+
+##### Shared failure and recovery boundary
+
+Use one recovery value for reason, technical codes, immediate action, repair
+command and prerequisite. Installed entry points and Click parsing enter the
+same command boundary as direct invocation. Preserve Click usage/exit semantics;
+normal exits and declined confirmations are not deployment failures. Resolve
+structured diagnostics before result serialization and pair-child publication.
+Command wrappers carry effective configuration, project, region and SSH selector;
+conversion replaces the repair target only after authoritative HA publication.
+Never infer a cause from arbitrary exception text or reflect secrets in unknown
+errors. Typed preparation causes survive outer convergence wrappers. Render
+advice once in text or structured recovery, retaining existing result fields.
+Pending operations offer exact resume and explain why repair must wait. Failed
+repair explains its blocker; destructive fallback remains conditional on exact
+owned retained VMs, never automatic or an unconditional success claim.
+An ended guest response is an unknown operation outcome, not proof of operator
+interruption. Preserve this typed predicate through convergence and structured
+results, with original-request reconciliation and conditional repair guidance.
+
+The activation owner also emits a typed exhaustion predicate when its three
+corrective attempts are consumed. Preserve that settled guard and the existing
+unchanged-correction predicate through shared advice and regional reports,
+including when an earlier attempt ended with a timeout. Explain the known
+blocker and retained-VM reconstruction option without resetting the allowance
+or inferring causes from exception text. Public text and JSON regression checks
+exercise the actual guard, preserve history bytes and retain selector quoting.
+
+Cache immutable package preparation only for one invocation and exact artifact.
+Refresh cloud authority, host identity, package/manager state and shared dependency
+consumers before effects. Recompute obsolete broad manifests only in an approved
+successor; never rewrite the predecessor to make it match.
+
+Bind each HA package plan to its existing command-owned lifecycle parent before
+staging or submitting a guest reservation. Validate every manifest and member
+before changing any in-memory plan, and freeze the submitted request and digest.
+Activation must agree with that parent; a persisted reservation is never rewritten
+because the current configuration differs. Guarded successor owners retain their
+own package authority. Route creation receipts remain with their adoption owner;
+exclude only that receipt metadata from cloud-resource identity comparisons.
+
+An empty authorized-key read after confirmed creation or during exact reuse is
+an unavailable observation. Retry the read within the existing parent deadline,
+with bounded backoff and unchanged complete-pagination and exact-key validation.
+Never replay creation, accept extra or foreign keys, or extend the operation
+budget. Route handoff failures return closed categories for lock deadline,
+pending ordinary work, conflicting authority, missing imports and failed source
+integrity. Unknown failures remain unknown. Shared recovery includes the category,
+immediate action and repair prerequisites without reflecting remote stderr.
+
+Final acceptance runs HA BGP regular apply, repair and vm-ha in that order before
+the remaining matrix. Keep all 28 core cells, authentic upgrade independent of
+repair, changed-intent settlement and failure regressions, one dedicated HA BGP
+destroy/fresh trial, regional and repeated/native obligations. Prior candidate
+passes remain historical. Source implementation and live qualification remain
+separate. The shared recovery boundary and eligible owner-specific successor
+paths are implemented in source; final-candidate qualification remains open.
+
+##### Recoverable command admission
+
+Normal apply and vm-ha have a measured 120-second soft interruption target
+across the topology/routing matrix. Explicit --repair has no overall outage
+limit. Neither elapsed time nor the normal-operation target authorizes discarding
+outstanding work. Keep package preparation before disruption when the selected
+workflow permits it.
+
+Use existing command, guest and effect owners; introduce no force mode, parallel
+recovery framework or blanket exception handler. Prefer bounded reconciliation
+and an accurately reviewed successor over immediate refusal. Preserve exact
+VM/disk/allocation/SSH identity, writer exclusion, accepted-effect settlement,
+former-owner Compute Stopped and candidate allocation proof before forwarding,
+and ownership of routes being changed.
+
+| Finding | Single Static | Single BGP | HA Static | HA BGP | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| Product repair guard rejected | Applies | Applies | Shared handoff | Shared handoff | Verify the canonical guard and admit it |
+| Short-lived manager work | Applies | Applies | Shared inspection | Shared inspection | Bounded read-only wait and complete refresh |
+| Unrelated Python metadata | Applies | Applies | Shared inspection | Shared inspection | Scope checks to the active dependency closure |
+| Healthy rerun with old approval | N/A | N/A | Applies | Applies | Successful verified no-op, no new authority |
+| Interactive recovery digest copying | N/A | N/A | Applies | Applies | One exact default-No confirmation |
+| Changed interrupted intent | Applies | Applies | Applies | Applies | Classify before approval; never pretend exact resume |
+
+Separate unsupported manager APIs and malformed observations from positively
+identified transient jobs. Retry only the transient category, at most120 seconds
+and never beyond the existing request deadline. Repeat the complete inspection
+after waiting; no fixture or observer may stop services to pre-satisfy admission.
+Persistent work remains an explicit pending condition.
+
+For a healthy VM-HA no-op, accept a surplus approval token only after the existing
+independent healthy confirmation establishes zero effects. Conversion needing
+input, ambiguous state, standby rearm and any material effect still require their
+own authority. For interactive recovery/replacement, bind the one confirmation
+to the exact current plan internally and retain execution-time revalidation.
+An explicitly supplied stale digest remains invalid; noninteractive execution
+never infers consent from elapsed time or an old token.
+
+Inspect interrupted desired-state compatibility during planning. Pre-host
+recovery and owner-transition recovery retain their different validated frontiers.
+Changed activation intent must not be routed through either by deleting a digest
+comparison. Assess every participating command, lifecycle, guest, package,
+credential, route, security-group, provisioning and replacement owner. Require
+exact predecessor hashes, quiescent prior writers and known submitted-operation
+outcomes, reconciling uncertain responses with original operation identities.
+Support both unexecuted and conclusively settled partial predecessors. Archive
+through owning components, then build a fresh plan from current desired settings
+and independently observed actual state. Never execute obsolete unsubmitted
+steps. Settlement requiring effects is a separately displayed and approved scope;
+reobserve afterward and obtain normal approval for the resulting deployment plan.
+Dry-run and declined confirmation perform neither settlement nor archival.
+PLANNED labels alone are insufficient proof. Unproven settlement remains blocked
+with an actionable prerequisite and the explicit reconstruction alternative.
+
+Host-only recovery distinguishes immutable replacement ownership history from
+replacement execution authority. Validate complete, connected approval/retired/
+replacement identity cycles against the current raw Compute/disk bindings and
+member identities. Reject current replacement approval, submitted replacement
+effects, remaining execution metadata, foreign keys and incomplete or changed
+history. Reuse this admission in corrective planning, upgrade-artifact recovery
+and changed-intent settlement; retain every historical identity in successors.
+Checkpoint refusals expose the typed predecessor-not-settled recovery guidance.
+
+Dependency closure includes active markers, extras and transitive requirements.
+Preserve shared-package reverse-dependency checks and original pending-manifest
+approval; settle or reconstruct through its owner without rewriting bytes.
+Use expected dependency/version and requirement maps as exact scope. New plans
+include current/prospective VPNGW closures plus installed/prospective pip closure;
+only changed dependencies select artifacts. Reinspection freezes final scope
+before approval and projects the original full inventory under that scope to
+detect changes during resolution. Refresh pending manifests under original scope.
+Recheck shared consumers under package exclusion before Python mutation,
+including resumed per-wheel recovery and ordinary pip execution. Full repair
+uses the rebuilt distro parser in isolation, reads original guest metadata paths
+without importing local packages, retains duplicate consumer constraints and
+rejects unavailable or malformed verification results.
+
+Package-start policy scripts stay in the protected guest-local rollback record.
+Plans and controller journals carry only their SHA-256 and mode. Capture and
+validate the original local payload before inhibition, retain it through an
+interrupted successor, and restore exact bytes only from that local record.
+Content-bearing obsolete plans require confirmed reconstruction; never weaken
+the controller journal's metadata-only rule.
+
+Separate SDK service-account identity reconciliation from optional short-lived
+token issuance. Managed HA credentials use identity-only reconciliation and
+forced-renewal authentication of the selected runtime source. Normal HA apply
+keeps the same selected operator credentials for discovery, IAM reconciliation
+and infrastructure execution; it does not switch to a minted runtime-identity
+token. Explicit ordinary --sa retains token issuance. Cover CLI-unavailable
+create/reuse/resume, revoked or changed keys, authentication failure and
+operator selection through execution. This dependency correction is implemented with SDK/CLI regression coverage;
+independent live qualification remains pending.
+
+Both streamed guest paths share this projection, and final equality stays exact.
+
+Transaction preparation raises allowlisted diagnostic predicates rather than
+printing a reason then throwing a bare exit that vm-ha discards. Preserve the
+first typed cause through the convergence facade without exposing raw output.
+Changed desired intent, artifact continuity, resource binding, approval drift
+and command-parent mismatch remain separate recoveries. These source paths are
+proven; the cause of a particular external report is not inferred from the
+generic wrapper. Replanning ignores only independently proven unrelated changes
+and retains all identities, owned-route effects and execution-time authority.
+
+Implementation order: canonical repair-guard correction, typed transient waits,
+healthy no-op approval handling, interactive recovery approval, accurate changed
+intent planning, then dependency and never-started successor changes only with
+complete owner evidence. Each boundary needs positive recovery and negative
+identity/concurrency/unknown-state regression tests, followed by the exact native
+and live matrix. This amendment does not mark release qualification complete.
 
 Accepted runtime-route amendment: retain current fresh publication and extend the
 existing ordinary agent loop with bounded BGP observation. Discovery supplies an
@@ -8825,7 +9458,33 @@ Qualification selection is explicit ha|ordinary|all, default all. Package report
 record topology selection and expected cases/repeats: four predecessors, two modes
 and two latest-release interruption cases per topology yield 10 cases plus 10 saved
 request repeats for HA. Native reports preserve exact collected node IDs, shared
-coverage and omissions; HA-only cannot claim full-lane completion. Full restart-driver stdout and stderr, including every transition observation, are retained for passing, failing and timed-out trials. Evidence retention does not add observations or extend the original recovery and process deadlines.
+coverage and omissions; HA-only cannot claim full-lane completion. Full restart-driver
+stdout and stderr, including every transition observation, are retained for
+passing, failing and timed-out trials. Preserve the original product request
+identity and deadline. Native BGP restart verification distinguishes timely
+selection success from an expired request that must restore normal policy. One
+50-second observation bound includes that durable cleanup inside the unchanged
+60-second process limit; it never renews selection authority. Require exact
+normal policy, readiness, protection and unchanged operation identity before
+accepting expired-request cleanup. Pending cleanup is incomplete, and late
+selection success fails. Measure completion at the native selector terminal
+return, separately from the later controller readback, without substituting
+product state or clock inputs. Include explicit scheduling-delay expiry and
+late-readback-after-timely-completion cases.
+The delayed-readback case freezes its checkpoint immediately after durable request
+admission, before the first selection effect. Do not pre-apply and rewind that
+selection inside the same request deadline. The restarted native owner performs
+the effect and both healthy verifications; separate scenarios retain after-effect
+crash checkpoints and explicit expiry and slow-verification controls. This is a
+fixture-boundary correction, not a product deadline or performance change.
+The shared tunnel selector includes elapsed monotonic time spent in native health,
+authority and verification calls in its existing persisted request deadline.
+Recheck time before operation advancement and after verification before recording
+success. This applies to Static and BGP, including unchanged-path verification.
+An expired selection resumes the existing durable restoration path; cleanup can
+continue without extending the original request identity or deadline. A delayed
+verification cannot manufacture a timely successful selection. Keep separate
+native tests for delayed verification and delayed readback after timely completion.
 
 The accepted completion sequence first integrates HA prerequisites and immutable
 fresh-guest package selection, then freezes one candidate for the revised REQ-034
@@ -8976,6 +9635,19 @@ registration from the protected selected key, keeping key material and tokens
 out of both journals. A crash after pending-key publication may finish its local
 metadata pair only under the same unstarted approved enrollment. Verify the
 credential source and child receipt before removing temporary enrollment files.
+After successful authorized-key creation or an exact settled creation receipt,
+recover a temporarily empty complete inventory with at most three fresh reads.
+Share one thirty-second observation allowance and any shorter enclosing deadline
+across authentication, every inventory page and bounded jittered backoff. Each
+request uses at most ten seconds and one SDK attempt; reject late evidence.
+Return conflicting or extra keys immediately to exact identity validation, and
+keep malformed, denied or otherwise unavailable reads closed. Exhausted empty
+readback remains pending with the original selected key and settled operations;
+it cannot replay IAM effects or consume activation repair attempts. Source
+regressions cover delayed visibility, unchanged receipt continuity on resume,
+conflicting evidence, pagination deadlines, late results and cancellation. This
+source repair does not establish the cause of a historical provider read failure
+or replace live final-artifact qualification.
 
 Use observe, classify, plan, approve, stage, admit, execute, verify and complete
 phases. Stage all required artifacts before disruption. Select only effects that
@@ -9107,6 +9779,59 @@ passes; otherwise report implemented versus unverified boundaries explicitly.
 
 #### Implementation Evidence
 
+The shared `deployment_cli` boundary and `deploy/recovery` model cover installed,
+module and direct apply/vm-ha invocation, parsing and pair-child publication.
+They retain native exit behavior, effective selectors and the authoritative HA
+conversion target. Generated commands retain only selectors supported by their
+operation: repair and repair-resume omit the ordinary-only `--sa` option and
+explain that the current operator authentication must have deployment access.
+Ordinary resume and same-configuration fresh apply retain the requested `--sa`. Conversion prerequisites retain repair guidance; a foreign or
+unpublished output never selects the repair target. A verified existing HA
+candidate with unsafe permissions has a separate repair target while resume
+retains its source/output and permission correction. Early parser errors honor
+the accepted case-insensitive VM-HA JSON format. Retained repair worker expiry
+reports pending work; blocked workers retain specific reconciliation guidance
+and neither condition recommends destructive replacement. Typed dependency, guest
+and preparation predicates survive wrapping; unknown details are redacted. Replacement advice uses the canonical
+saved bundle. Repair fallback requires proven retained ownership and remains an
+explicit operator action.
+
+Conversion regressions exercise both provisioning and activation resume with
+route-source receipts, and the CLI-to-guest package reservation ordering. Separate
+negative controls preserve changed-parent, changed-manifest and member-set refusal
+without partial mutation. IAM tests cover delayed exact visibility through reuse
+planning and execution without additional enrollment requests. Transport tests
+exercise selected source against an older installed owner and prove closed,
+redacted failure projection. A composed two-runtime route test uses independent
+local ledgers and one simulated cloud table for A-to-B-to-A reconciliation of
+peer-created successors; disabling authority adoption reproduces the regression.
+These are source-level checks, not final-candidate live qualification.
+
+Successor admission is implemented through the existing command and child owners:
+unused plans, completed ordinary guest work, submitted VPN route effects,
+credential-only work, ordinary infrastructure prefixes before VM submission,
+reuse-only HA pre-host work, host-only HA activation after completed packages,
+and retained-generation ordinary/HA attachment settlement. Composed HA attachment
+retirement independently verifies completed runtime and prerequisite owners.
+All participating writers are excluded, original request identities are retained,
+and archived evidence precedes a fresh separately approved deployment plan.
+Changed-generation reservation admits only the complete exact predecessor lock
+or its approved successor lock, then revalidates it through the canonical reader.
+A missing generation never acts as a wildcard. The fixture now uses that same
+reader: it reproduced the live rejection before the correction and verifies
+successor admission, resume and foreign-lock refusal afterward. An interrupted
+guest response retains an unknown-outcome diagnostic instead of an operator
+interruption claim. Focused checks pass; replacement-artifact live proof remains
+open and prior-candidate results remain historical.
+Dry-run and declined approval preserve all predecessor bytes. Partial VM creation,
+route-table conversion and changed-generation attachment work remain blocked when
+the original owners cannot prove settlement; recovery advice identifies the
+prerequisite. No obsolete unsubmitted step executes to retire a predecessor.
+
+Immutable preparation is reused only inside one invocation. Fresh authority,
+identity, relevant host state and shared consumers are rechecked before effects;
+a successor recomputes its managed closure without rewriting old manifests.
+
 When an installed ordinary runtime writer leaves Single-VM cardinality, compose
 its retirement through the same deployment command. Reserve it before effects,
 import its settled creation ledger, perform existing guest/cloud changes, then
@@ -9123,6 +9848,22 @@ quiesces all former writers, then invokes the ordinary composed apply owner for
 guest changes, route publication and the runtime credential/binding handoff. A
 conversion must not finish with only guest configuration installed. Interrupted
 ordinary completion resumes through the same durable command journal.
+The synchronous ordinary runtime handoff may wait up to ten seconds for its
+routing lock within the existing fifteen-second request allowance. Recheck idle
+operation admission before each attempt and after acquiring the lock. Reserve,
+release or retire runs once after admission; an unknown effect outcome is never
+replayed by this wait. Periodic agent writers retain their nonblocking behavior.
+Native advisory-lock regressions cover one reservation after release, foreign
+operation refusal, deadlines, permission errors and retained effects after a lost
+reply. These source checks do not replace installed or live qualification.
+Pre-install inspection streams both the selected route owner and canonical
+ordinary-operation lock implementation with independent source digests. Deliver
+these through bounded stdin frames so older guest packages and Linux argument
+limits cannot prevent admission. The shared guest bundle includes route-plan and
+conversion readers required to validate saved plans and original provider receipts.
+Isolated subprocess regressions verify valid and changed evidence without package
+fallback; predecessor lock and source-integrity controls cover the selected
+protocol. Authentic installed-package and live qualification remain separate.
 
 The ordinary-to-HA streamed handoff now captures and durably reserves an installed
 ordinary route writer before package changes, rejects unresolved cloud operations,
@@ -9307,6 +10048,17 @@ not use this new journal. Lost-reply regressions preserve opaque metadata and
 specifications without duplicate effects. Rollback JSON is refused when it
 cannot preserve those fields; the completed cutover receipt remains intact.
 Replacement route discovery also preserves unrelated default egress.
+Accepted cloud-operation lookup now binds the generated originating service
+from the original request or its exact secret-free creation owner. Generic
+operation routing is not inferred from an opaque operation ID. HA stop, start
+and alias changes read through Compute Instance service; HA route recovery uses
+VPC Route service. Both reject a different operation identity. Focused regression
+checks cover service routing, receipt
+retention, private bootstrap omission and no accepted-effect resubmission. A
+read-only live counterfactual confirmed that an accepted disk operation failed
+through the generic endpoint and succeeded through Disk service; repaired native
+resume and final-artifact qualification remain pending.
+
 Attachment and replacement request reconstruction preserves SDK-unknown
 Compute metadata and specifications from the same authoritative resource.
 Original known fields, revision and private-data source are restored only
@@ -9397,8 +10149,9 @@ bytes and publishes the complete current manifest, including a newly bound
 lifecycle parent. Missing or changed staged bytes fail closed. Resumed processes
 have no inherited upload hint. No release-timing claim follows from these local
 optimizations until a new frozen build passes authentic-predecessor replay. Accepted failed operations and rejected
-requests with uncertain prior submissions retain their existing recovery boundary;
-no generic cancellation or automatic replan is implemented.
+requests with uncertain prior submissions retain their existing recovery boundary.
+Owner-specific settlement and separately approved successor creation are described
+below; no generic cancellation or unchecked replanning is implemented.
 
 Artifact admission bounds core metadata at 1 MiB, including the packaged README
 in its description body, while retaining exact RECORD hashes, package identity
@@ -9408,6 +10161,45 @@ large valid description and rejection beyond the metadata resource bound. This
 controller preflight completes before guest package changes or traffic inhibition.
 
 #### Verification Evidence
+
+Recovery command regressions cover both a failed ordinary `apply --sa` and a
+rejected `apply --repair --sa`, in text and JSON. They verify preserved exit
+codes, quoted configuration/project/region/SSH identity, usable repair commands,
+ordinary resume impersonation, redaction and operator authentication guidance.
+CLI help and README state the same option boundary. These local checks restore
+the existing recovery contract; installed successor and live proof remain pending.
+
+Shared predecessor-settlement guidance now states that confirmed repair owns
+retirement; it does not require a separate ordinary apply. The diagnostic keeps
+verified retained VM ownership and known prior request outcomes as prerequisites.
+Five regressions cover apply and vm-ha text/JSON output plus regional propagation,
+including exact quoted configuration and selector preservation. The focused
+145-test recovery suite passed. This is source-level guidance evidence; final
+artifact and live qualification remain separate requirements.
+
+Focused local regressions cover the admitted successor frontiers, original
+operation reconciliation, all-owner exclusion, approval separation, lost
+acknowledgements and refusal without mutation. Actual CLI cases cover pre-host
+and composed attachment settlement. Failure regressions exercise parser, auth,
+DNS, dependencies, guest blockers, timeout, verification and unknown causes,
+selector quoting, redaction, JSON/pair consistency and cleanup. An earlier local
+snapshot passed 6,820 unit tests and 143 integration tests with unchanged source
+hashes; 126 native systemd cases remain skipped until the isolated Linux run.
+Scoped lint, Markdown checks and the default 214-file type check passed.
+The preceding full run's three preparation-detail failures remain recorded; their
+owner correction passed the original cases and the full rerun. These are source
+checks and do not qualify an installed or live candidate.
+
+An installed candidate then exposed a separate malformed-YAML classification gap
+in vm-ha. Its failed result is preserved. The safe YAML and region-aware loaders
+now carry typed configuration failures; ordinary loading rejects non-mapping
+inputs before field access. New regressions cover YAML, UTF-8, mapping, schema
+and read failures with no authentication or deployment effects. The corrected
+source passed the full local snapshot above; a new frozen installed candidate
+must repeat the original failure and the wider command checks.
+
+All final-candidate core, regional, repeated, native and strict traffic obligations
+remain open; historical candidate passes are not promoted.
 
 New local regressions cover repeated identical attachment drift with distinct
 execution identities, combined runtime/attachment response loss in Static and BGP,
@@ -9491,7 +10283,7 @@ failed trials remain retained, and no release-qualified claim follows.
 
 <!-- /FEATURE: FEAT-035 -->
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-036 reqs=REQ-036 status=ready delivery=implemented priority=P1 version=12 -->
+<!-- FEATURE: FEAT-036 reqs=REQ-036 status=ready delivery=implemented priority=P1 version=13 -->
 ### FEAT-036: Paired regional configuration and resumable deployment
 
 #### Requirements Covered
@@ -9539,6 +10331,16 @@ The coordinator and surviving children retain one inherited writer lock. A pendi
 pair binds exact configuration and wheel identities; regional child journals own
 resume and effect settlement. Fresh observations release both preparation and
 owner-unlock barriers before any remote-route convergence wait.
+A child discards a typed changed-file observation while a barrier publication
+settles and rereads within its original operation deadline. It checks the parent
+again before every attempt and accepts only the exact invocation and receipt
+digest. This does not retry malformed, unsafe or contradictory release evidence.
+
+The shared apply-result projection converts outcome and readiness enums to plain
+JSON values before the child journal validates metadata. This preserves completed,
+failed and pending reports without a secondary serialization error obscuring the
+regional result. The metadata guard still rejects unsupported objects and secret
+fields; no readiness or resume authority is inferred from report persistence.
 
 Optional create-config flags --profile-a and --profile-b save regional operator
 CLI profile names in the manifest and private assignments, bound to pair identity.
@@ -9570,6 +10372,11 @@ no mutation in preview/status and both preparation phases before convergence wai
 Unit/CLI/composed faults plus all owner combinations for Single-Single, both
 orientations of Single-HA and HA-HA in Static/BGP. Keep source, native, installed
 package and independent cloud/workload evidence separate.
+
+Focused regression evidence covers all six outcomes and three readiness values
+through the actual child metadata guard: 18 cases failed on the preceding
+projection and passed after correction. The 69 affected unit tests pass. Paired
+live cold-start and resume qualification remains open.
 
 #### Test Plan
 
@@ -9656,7 +10463,7 @@ still requires full native, installed-package and all-topology live qualificatio
 
 <!-- /FEATURE: FEAT-036 -->
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-037 reqs=REQ-037 status=ready delivery=implemented priority=P0 version=18 -->
+<!-- FEATURE: FEAT-037 reqs=REQ-037 status=ready delivery=implemented priority=P0 version=23 -->
 ### FEAT-037: Command-owned activation and package recovery
 
 #### Requirements Covered
@@ -9672,6 +10479,39 @@ admission, and unsupported policy could silently disable recovery. The source
 repair below addresses those paths. Customer-incident causality is unproven.
 
 #### Design Details
+
+Controller observation uses semantic operation/member progress, including stage,
+accepted-operation outcome, generation adoption and bounded recovery progress;
+heartbeat timestamps alone are not progress. Preserve exact identity and
+contradiction checks. Keep an operation deadline separate from the normal
+120-second interruption target and a stalled-observation window. Genuine progress
+extends observation only within that deadline; unavailable or exhausted evidence
+returns pending with resume authority and never starts competing repair.
+The semantic observation behavior is implemented in source with focused
+regression coverage; final-candidate installed and live proof remains open.
+Initial BGP route readiness can advance while an empty route plan is being
+verified. When the original plan had no desired prefixes or submitted mutations,
+its only blockers were BGP acquisition, and a fresh plan gains eligible prefixes
+under the same exact allocation owner and route targets, defer the effect without
+a route or completion receipt. The existing controller resumes that same pending
+action with a fresh plan and normal ownership/adoption checks. Do not execute an
+obsolete plan, extend its deadline, infer route ownership from a prefix, or turn
+foreign-route, policy, identity or partial-mutation failures into success. An
+unchanged foreign conflict on the next plan remains a failure. Existing forwarding
+and promotion gates continue to require a verified route receipt.
+Before deriving a standby-policy approval, observe an already accepted recovery
+through complete original recovery and stable two-member authority. A stale
+Stopped cloud snapshot followed by a completed recovery record must not bind
+approval to an intermediate state. Reuse the original recovery identity, retain
+its allocation and exact lifecycle/member bindings, and observe without writes.
+Require stable authority on consecutive complete observations before policy
+planning; retain the strict locked recheck. Actual authority drift reports
+`approval-state-changed` with shared recovery guidance. Unsubmitted recovery,
+missing-policy bootstrap, dry-run and later settled Stops keep their existing
+planning paths. Regression replay reproduces the prior approval failure against
+the frozen predecessor and passes after the source correction; focused tests
+cover progress, deadlines, stall, unavailable reads, identity drift and no-write
+paths. These source checks do not close final-candidate live qualification.
 
 Keep existing command, package and lifecycle journals as authorities. Three
 corrective attempts span both members. Use 120 seconds as a soft progress target
@@ -9735,6 +10575,18 @@ uses the original admission without a repair allowance. Generic historical
 `started` state and already failed repairs retain their existing accounting and
 unchanged-repair refusal. Clear the waiting marker before continuing; a subsequent
 non-observation failure must not inherit unlimited observation retries.
+
+Activation authority distinguishes completed standby-restoration history from an
+active inhibition. Read both protected records without following links, use the
+canonical restoration store to prove shape and promotion-receipt binding, and
+require the completed phase and the exact installed cluster, shared allocation
+and member pair. Recheck unchanged records after validation. A completed earlier
+generation remains historical evidence; it never substitutes for the current
+configuration, apply lock, boot fence or cloud ownership proof. Preserve both
+records unchanged. Active, blocked, malformed, unsafe, missing-receipt or foreign
+restorations still reject activation, as do all other inhibition owners. This
+aligns activation with the existing retained-release quiescence contract without
+relaxing ordinary conversion first-start repair admission.
 
 A retained coordinated upgrade may have durably completed a member stop before
 its package observation loses authority. Resume must not wait for a live
@@ -9997,6 +10849,23 @@ native gates pass, docs agree, and live qualification gaps are explicitly record
 
 #### Implementation Evidence
 
+`controller_observation` derives progress from validated member, operation,
+generation and recovery transitions. Repeated heartbeats and timestamps do not
+extend the stalled window. The existing operation deadline bounds observation
+independently of the normal 120-second interruption target; unavailable or
+exhausted observations preserve pending work and its resume command. Identity
+contradictions still reject the observation and never grant promotion authority.
+Native package and ordinary routing lock contention waits within the original
+request deadline and refreshes relevant state before any effect.
+Activation materialization inspection also reobserves an unknown result from a
+busy routing writer within the same cumulative observation deadline. It checks
+expiry before dispatch, preserves exact authority checks and returns typed pending
+evidence when the window ends. Unknown materialization alone cannot reserve a
+service or configuration correction. Real file-lock regressions cover contention
+that clears and contention that persists; 147 focused activation, native-inspection,
+SSH-reply and authority tests pass. Packaged and live replay of this correction
+remain unverified, and it does not establish the cause of earlier live failures.
+
 The authority-observation slice now uses typed read failures, at most three
 application read attempts with SDK RPC retries disabled, and the existing shared
 observation context through command-thread dispatch, authentication, Compute,
@@ -10069,6 +10938,25 @@ notes and the Unreleased changelog describe these semantics.
 
 #### Verification Evidence
 
+Standby preparation observes the same durable owner Start after either a received
+or lost request acknowledgement. A still-Stopped Compute read does not override
+exact recovery and owner progress. Wait only within the existing preparation
+deadline; unavailable evidence or deadline expiry reports pending work with the
+same resume and conditional repair guidance, without submitting another Start.
+Eight controlled-clock cases cover received/lost acknowledgements, delayed or
+missing exact progress and expiry after progress. Public JSON regressions retain
+both pending predicates, repair prerequisites and sanitized resume guidance.
+The original live failure remains unclassified because its underlying exception
+was not retained; the source defect is independently reproduced. Final-candidate
+live replay remains required.
+
+Focused semantic-progress tests cover unchanged high-level status with real
+progress, heartbeat-only repetition, identity conflicts, unavailable observations
+and bounded pending outcomes. Lock tests cover deadline expiry and fresh
+observation after contention. The affected CLI/pair regression suite, default
+type check and scoped lint pass locally. Final-candidate native and live evidence,
+including measured interruption separately from convergence time, remains open.
+
 Three real-interpreter cache regeneration regressions fail against the preceding
 source at completed-package verification and pass with the repair. Refusal tests
 cover recorded wrong-code caches, altered code or modes, unowned or changed
@@ -10129,6 +11017,609 @@ against its [official systemctl documentation](https://www.freedesktop.org/softw
 documentation evidence does not qualify native supervision.
 
 <!-- /FEATURE: FEAT-037 -->
+
+<!-- FEATURE: FEAT-038 reqs=REQ-038 status=ready delivery=implemented priority=P0 version=5 -->
+### FEAT-038: Confirmed full software repair on retained VMs
+
+#### Requirements Covered
+
+- REQ-038: Explicit disruptive reconstruction on retained gateway VMs.
+
+#### Context Evidence
+
+Current apply resumes old lifecycle and command envelopes before installing.
+Changed desired state can pass preview and fail during late resume. Existing HA
+stop imports the installed package, and normal package convergence can skip
+corrupt same-version files. Existing ordinary bootstrap and runtime package owners
+provide reusable transport and installation primitives, not full reset authority.
+The exact cause of the reported customer mismatch remains unproven.
+
+#### Design Details
+
+Add repair selection before old-state parsing in apply and propagate it through
+pair apply. Resolve configuration, exact existing cloud bindings, pinned SSH and
+matching artifact read-only, then show reset scope and default-No confirmation.
+Do not support repair dry-run or disruption-digest flags. Keep normal paths intact.
+
+Repair is a last-resort rebuild with no overall outage deadline. Individual
+requests and observation loops remain bounded and resumable; elapsed outage
+alone never aborts reconstruction. A genuine retained-VM blocker offers a
+separate explicit destroy then ordinary apply of the unchanged YAML, without
+automatic teardown or manual deletion of authority files. Explain loss of VM
+and disk contents and continuing outage. Destruction must first settle original
+provider requests and exclude competing writers; unavailable provider authority,
+identity or permissions cannot be bypassed or cured by this suggestion.
+
+Qualify this fallback on one dedicated HA BGP pair, with frozen product artifacts
+and unchanged YAML. Independently verify exact old VM/disk/private-allocation
+absence, retained public/network/peer resources, new VM/disk/private-allocation
+identities, healthy ownership and BGP/IPsec, encrypted bidirectional workload
+traffic, then mutation-free normal reapply. Preserve all failed trials and repair
+receipts. The initial healthy-baseline trial does not prove teardown during an
+active or unresolved repair; that boundary needs separate effect-owner proof.
+
+Integrate a repair predecessor adapter into the existing destroy coordinator
+under the canonical gateway lock. Bind the validated repair operation and exact
+resource identities to the immutable destruction plan in protected private
+state, without changing supported destruction receipt formats. Persist native resource
+and route authority, bound to the repair intent, before retiring the old
+lifecycle. If interruption leaves the active lifecycle absent, validate that
+snapshot or the native archived predecessor and publish destruction directly;
+never synthesize ACTIVE state or adopt resources by name. Settle repair
+cloud receipts through their existing owner before final stopping; preserve
+uncertain request identities and failed operation history. After stopping,
+settle resource operations and recheck all members before deleting routes.
+During explicit destruction, the repair owner also exposes retired boot disks
+from its current and digest-linked native repair history. Each contributing
+archive must decode as the current lifecycle format, match the project, gateway
+and cluster, and establish the exact retained Compute/disk targets. A later
+replacement may bridge to the prior targets only through the lifecycle
+owner's recorded member/resource pairs. Stop at missing history, a different
+deployment incarnation or unproved identity; names alone never grant ownership.
+Unreadable archived lifecycle bytes grant no disk authority. Keep those bytes
+unchanged and require normal provider identity, name, revision and approval
+checks before deleting any recovered disk. This read-only authority
+recovery does not restore old runtime state or replay obsolete work. It permits
+explicit destroy after repeated repair and standby replacement without manual
+checkpoint edits. Failed, missing, corrupt and foreign histories must leave
+unowned resources blocked.
+
+Normal apply carries the canonical replacement approval and old/new Compute/disk
+bindings into each new transaction for the same deployment incarnation. Fresh
+cloud observations still own current resource checks; carry no obsolete effect,
+package reservation, credentials or replacement action. The lifecycle publisher
+rejects dropped or changed replacement ownership on a successor. Explicitly
+destroyed deployments start a fresh incarnation without this historical authority.
+Test replacement followed by ordinary apply, repeated repair and explicit
+destruction, including multiple replacement cycles and refusal on identity drift.
+
+Stopped or independently absent Compute excludes guest workers without SSH.
+After Compute absence, delete only independently checked, receipt-owned repair
+quarantine rules and groups; foreign attachments or rules remain blockers.
+Resume partial deletion using exact durable identities and typed absence.
+After destruction verification, archive repair authority and revoke its active
+entry without marking incomplete repair successful. Retain a durable retirement
+receipt so a crash during archival resumes idempotently. Retain the original
+terminal destruction plan until its bound repair retirement finishes. An
+incomplete repair rejects replacement identities even when old targets are
+absent; completed historical repair does not constrain a later independently
+authorized VM incarnation. Fresh ordinary apply
+uses the destroyed lifecycle transition and retained public bindings, creates
+new hosts and boot disks, and never resumes the retired repair operation.
+The CLI does not carry an old apply-lock cycle or ordinary-route migration
+source from a terminal destroyed predecessor. Those records remain historical;
+the clean-successor validator continues to reject stale runtime authority.
+An admission that failed before publishing that fresh lifecycle may be retired
+only when its package checkpoint is the exact terminal destruction record, all
+members are still uncreated with empty Compute and disk identities, and its
+creation tokens exactly match the canonical member intent and terminal member
+names, node IDs, indexes and roles. Fresh stable absence must cover those names.
+Creation tokens remain logical targets; never query them as Compute IDs or use
+them to authorize package reservations or attachment effects. Preserve failed
+admission bytes and diagnostics through the normal retirement publisher.
+Retained and interrupted deployments preserve their existing carry-forward rules.
+
+Regression coverage includes accepted Start/Update and lost replies, unreachable
+guests with active package workers, terminal cloud failure, partial deletion,
+interrupted quarantine cleanup and authority retirement, exact identity drift,
+authorization failures, concurrent writers, and same-YAML fresh deployment.
+Apply the shared adapter to Single VM and VM-HA, Static and BGP; prioritize the
+one authorized HA BGP destroy/recreate live trial before expanding live coverage.
+
+A repair coordinator owns an immutable target/config/artifact intent and a small
+protected journal outside purged product state. Reuse cloud, package, trust and
+route owners; introduce no autonomous daemon. Resume by phase and independent
+readback. Archive unreadable predecessor bytes without interpreting them as active
+authority. A confirmed successor settles preceding effects before replacement.
+Valid JSON with a non-object obsolete transaction is also opaque. Normalize only
+that direct field; recursively inspect the original envelope for recognizable
+accepted cloud receipts and require their settlement before retirement.
+
+The repair cloud owner distinguishes terminal failure from uncertain execution.
+Settle accepted operations using their originating service, preserve failed
+receipts, and issue a new request identity only after terminal settlement and
+fresh resource observation. Failed quarantine creation additionally requires
+authoritative absence of its exact operation-bound name; unresolved partial
+creation remains a real platform blocker. Verify typed absence independently
+when failed cleanup already removed an owned resource. Changed-intent successors
+reinstall inhibition, restore exact original network attachments and clean up
+preceding quarantine before the next repair downloads its packages.
+
+Obtain guest deployment exclusion, settle workers and accepted provider effects,
+and deliver a standalone boot guard through authenticated SSH. Inhibit and settle
+old writers, retaining SSH and base networking. HA reconstruction proves both
+Compute members Stopped. An already-stopped node lacking verified boot inhibition
+uses repair-owned all-NIC provider quarantine before start; permit only management
+and verify workload and guest cloud-API exclusion. Restore exact original group
+attachments after independent boot protection. Account for provider link-local
+exceptions; an unguarded start is not a fallback.
+
+Inhibit the freshly observed non-owner before the owner to reduce takeover races
+with the old controllers. If a member becomes authoritatively Stopped during
+inhibition, retain that observation and require quarantine for its unproven guard.
+Timer quiescence uses activation state and jobs; PID and cgroup verification
+belongs to the separately enumerated services, because timers expose neither.
+Effective service guard verification resolves systemd's canonical `Id` before
+checking `%n` expansion, and requires that identity in the managed service set.
+A retained strongSwan alias must not be mistaken for missing inhibition.
+
+The repair guard archives damaged managed unit files and overrides before
+reloading systemd. An already-running unit can therefore inherit the manager
+stop timeout while settling. Allow 120 seconds for this owned stop observation,
+covering the observed normal 90-second systemd stop within the existing
+600-second guest request and 630-second SSH bounds. Submit the stop once; do
+not reset this absolute observation deadline, change systemd termination policy
+or accept active processes, jobs or descendants. The confirmed repair remains
+resumable if quiescence is still unproved. Regress the former premature
+60-second failure and a writer that outlives the complete observation window.
+
+Repair SSH authority binds the exact retained VM, name, project, disk, primary
+and public NIC allocations, transport address and private-bootstrap hash, while
+the canonical SSH policy continues to verify host pins and trust-store bytes.
+For retained members without the current HA provisioning marker, repair admission
+supplies the same hardened lifecycle snapshot used by ordinary HA apply. Recheck
+that immutable snapshot before every provenance assertion; bind project, gateway,
+cluster, node role, Compute identity and transport through the existing owner.
+Missing, unsafe or changed lifecycle authority is an explicit SSH identity
+blocker. Members already proved by current HA markers do not need an obsolete
+lifecycle journal to parse, preserving reconstruction of damaged product state.
+This admission reads authority only and never imports a new host pin.
+Mutable Compute revisions cannot invalidate that identity after repair-owned
+quarantine or alias updates. Ordinary stopped-node admission performs these
+read-only cloud and pin checks; authenticated SSH is required after a guarded or
+quarantined boot, without an impossible preboot connection requirement.
+Retry transient transport negotiation, EOF and socket failures within a bounded
+boot-readiness window. Identity, authentication, permissions and semantic guest
+admission failures remain immediate and retain their actual diagnostic cause.
+The shared SSH request layer preserves a typed transport failure and its cause;
+repair must not confuse a wrapped socket timeout with a rejected guest receipt.
+Guest deployment-lock contention has a separate authenticated busy receipt. A
+resumed command waits within a fixed package-settlement window, without replacing
+the active worker or weakening exclusion. The ordinary boot transport deadline
+and immediate identity, authentication and semantic-failure behavior remain
+separate. Once the writer settles, admission resumes the same operation and the
+package transport reconciles its original receipt.
+
+A durable HA package owner can remain idle while retaining deployment exclusion
+when its controller fails after package preparation. Confirmed full repair must
+not wait indefinitely for that controller to submit later activation steps.
+Resolve the original protected controller reservation and use the canonical
+package-worker owner to validate its exact request, bootstrap, generation, boot
+and systemd unit. Genuine submitted work retains the existing bounded wait.
+
+Only after confirmation, hold the worker submission lock and require every
+submitted phase to have a complete receipt. Freeze that exact unit and reread
+its unchanged authority, receipts and cgroup membership. The sole process must
+be the exact pinned main process, with no executing children or new request.
+Preserve the original worker evidence, terminate this proven idle process using
+its process descriptor while frozen, and independently verify empty cgroup and
+released instance exclusion. This retires the owner without falsely completing
+the old deployment or running obsolete unsubmitted steps. On refusal, thaw only
+the exact unit frozen by this operation. A protected retirement intent binds
+recovery after a lost response to the same operation and owner; no arbitrary
+service name, PID or source mismatch can select termination. Unsupported or
+uncertain freezer, process or package evidence remains a reported blocker.
+
+The streamed repair bootstrap carries independent canonical handoff and repair
+worker instances. It cannot depend on the installed package or change a live
+worker's backend. Retained VM, disk, pinned SSH and confirmed repair authority
+remain mandatory. Archive old package state through reconstruction after the
+prior worker is conclusively stopped; preserve all failed-trial evidence.
+
+Every newly created private repair storage component uses mode `0700`, including
+intermediate directories. Guest succession may tighten readable directories only
+inside its protected repair archive, after exact ownership and no-follow checks.
+Foreign ownership, symlinks and directories writable by others remain rejected.
+Existing archive contents and the original package-start policy are preserved.
+
+Confirmed reset also owns reconstruction of the retained mTLS writer-lock
+parent. Create it privately, or open its existing directory without following
+symlinks and require current ownership with no group/world write permission.
+Acquire the existing writer lock before tightening its parent to mode `0700`;
+retain both directory and lock inodes. Ordinary repair must leave this canonical
+layout ready for subsequent HA certificate bootstrap. Normal mTLS admission
+continues to reject invalid permissions. Recognize only fixed authenticated
+guest permission diagnostics for shared apply/vm-ha recovery; arbitrary stderr
+never becomes a public failure reason.
+
+The repair coordinator and its recovery accounting retain their execution ID.
+The HA adapter derives a separate canonical operation identity from that execution
+and the confirmed intent, using a fixed domain. Lifecycle records, reset proofs,
+apply locks, startup grants and terminal observations use the same HA identity;
+guest reconstruction and recovery records keep the parent execution identity.
+The adapter cannot reuse an HA operation across another execution or intent.
+
+Before HA repair activation, reuse the ordinary route owner to settle submitted
+work from both the workstation and retained guests while repair guards exclude
+writers. Metadata retirement accepts the exact confirmed repair execution for
+ordinary or HA reconstruction; ordinary runtime reservations remain ordinary-only.
+Archive original evidence and retain only successful creation receipts whose
+complete resource snapshots still match. Copied default routes and foreign routes
+never become gateway authority. Unknown operation outcomes remain blockers.
+
+Persist the fresh observed members, allocation and routes together with the
+settled ordinary creation receipts in the new repair lifecycle before deriving
+the final runtime binding. Attach that lifecycle through the canonical manager
+owner, then reobserve exact Compute/allocation state and derive migration routes
+using the existing receipt and snapshot checks. Resume uses the persisted
+observation and source, never a newly inferred ownership grant. Missing or changed
+receipts remain conflicts; do not infer ownership from a matching destination.
+A lost lifecycle publication resumes the same repair identity without executing
+obsolete route steps. Before forwarding, require the existing verified HA route
+receipt and allocation-owner checks.
+
+During that handoff, an exact approved ordinary route can retain its native
+`ordinary-v1` managed label until replacement. The shared managed-label key does
+not by itself constitute conflicting HA authority. Admit it into route planning
+only when the same observed object matches the installed migration binding
+(ID, name, destination, allocation and revision), the target is currently bound,
+and its durable ledger entry has the current cluster and target. Require absence
+of every HA-specific authority label; changed revisions, other managed values,
+foreign cluster/target entries and partial HA labels remain conflicts. An
+ordinary label without an exact migration binding never grants ownership. Use
+the same route observation for these checks so an extra read cannot authorize
+a different snapshot. Preserve the original labels until the existing owner
+performs the approved replacement and publishes HA authority.
+
+Standalone builds carry every module in the independent repair bootstrap as
+readable source data; bytecode-only inclusion cannot support streaming it to a
+guest with broken installed packages. Packaging validation covers this closure.
+
+Ordinary activation admits the repair-owned service dependency only after exact
+path and content matching and verification of the complete independent boot
+protection, protected repair record and effective startup conditions. Retain the
+guard in the environment fingerprint until product-owned completion removes it.
+Both ordinary and HA handoff source bundles carry the canonical guard verifier;
+no installed-package import is required to recognize that dependency.
+
+Restore the repair worker's package-start policy before inspecting a fresh
+ordinary activation plan, while independent service startup remains inhibited.
+A pending ordinary transaction retains ownership of its own policy and resumes
+its original manifest. Later service grants do not modify package-start policy.
+HA restores the repair worker policy before its canonical activation grant.
+This ordering prevents repair from rejecting its own policy restoration as
+unexpected predecessor drift.
+
+Ordinary finalization leaves the route-maintenance timer inhibited while the
+exact current repair owns its timer guard and boot-bound startup grant. It still
+verifies packages, runtime, routes and management settlement. The outer repair
+completion removes that guard, starts the timer and verifies it is active.
+Normal apply starts the timer directly after releasing package inhibition.
+
+Stage complete verified runtime and Python dependency archives. Force replacement
+of the owned stack including strongSwan and FRR regardless of installed version;
+replace generated config and product units while preserving unrelated packages,
+files and routes. Fresh prospective package receipts describe this repair rather
+than requiring valid predecessor receipts. Keep boot protection across crashes.
+The independent worker also recreates system service units, drop-ins, scripts and
+tmpfiles definitions from the admitted wheel using the same canonical asset
+catalog as normal deployment. Reload systemd without starting services, retain
+repair guards, and verify asset bytes, ownership and modes before recording
+installation complete. Subsequent package verification includes these assets.
+The exact product UFW override is archived before reconstruction; other UFW
+configuration is retained. Interrupted publication resumes under the same guard.
+
+Re-enroll fresh managed node mTLS over pinned SSH, rebuild generation and runtime
+records, and reuse valid external credentials. Select configured preferred HA
+owner, prove former owner Stopped and allocation on candidate before forwarding,
+then restore passive standby. Ordinary activation and routes remain with ordinary
+owners. Regional children retain prepared/originating barriers before convergence.
+Ordinary route settlement preserves the canonical distinction between indexed
+gateway routes and unindexed copies of default or unrelated routes. Settle every
+accepted cloud effect, but record VPN route ownership only for indexed gateway
+creation receipts; retiring an old plan never adopts its unrelated copied routes.
+
+Report local reconstruction and remote connectivity independently. Keep --repair
+in continuation instructions. Same repair resumes; terminal repair followed by a
+new confirmed invocation reconstructs again. Normal apply afterward is unchanged.
+Recoverable product damage is automated; genuine platform/access/storage failure
+retains a clear resumable or blocked result with no false healthy claim.
+
+#### Selected Option
+
+Use an explicit fully disruptive repair owner composed with existing cloud,
+package, route and trust owners. Reset predecessor state only after fresh exclusion.
+
+#### Alternatives Considered
+
+- Relaxing normal apply globally would weaken unchanged and interruption contracts.
+- Deleting VMs would lose the retained infrastructure requested by the operator.
+- Requiring valid old journals would preserve the reported recovery dead end.
+
+#### Implementation Boundaries
+
+The repair branch, independent guest bootstrap, package reinstall, cloud quarantine,
+CLI/pair integration and reporting are in scope. External peer infrastructure and
+unrelated host/cloud state remain outside the reset footprint.
+
+#### Test-First Success Criteria
+
+- TDD-038-001: Confirmation refusal performs no mutation.
+- TDD-038-002: Missing old records and package imports admit retained-VM repair.
+- TDD-038-003: Same-version damaged files are replaced and independently verified.
+- TDD-038-004: Interrupted effects resume once with boot inhibition retained.
+- TDD-038-005: Cold start cannot admit an unfenced former owner or cloud writer.
+
+#### Implementation Plan
+
+1. Add the independent repair coordinator, storage and bootstrap, explicit cloud
+   quarantine/start authority and forced managed-stack replacement.
+2. Integrate CLI and regional repair selection, confirmation, progress and resume.
+3. Cover damage, interruption, isolation and unchanged-reapply regressions; update
+   public help, README and changelog without changing ordinary behavior.
+4. Freeze the candidate, qualify HA BGP first, then all handoff obligations using
+   independent evidence and causal troubleshooting; preserve original trials.
+
+#### Validation Plan
+
+Use deterministic ownership and phase tests, authentic predecessor native package
+fixtures, and real authorized Ubuntu gateways. Negative controls must prove that
+quarantine excludes cloud/workload effects before a stopped damaged node starts.
+Test both stopped, broken imports, same-version binary corruption, missing records,
+interrupted package/cloud effects and pair barriers. Check confirmation refusal
+before every mutation and normal apply no-op after successful repair.
+
+#### Test Plan
+
+Exercise ordinary and HA in BGP and Static, regional supported pairings, upgrades,
+migrations, concurrent writers and repeated interruption/resume. Live assertions
+retain the existing strict encrypted traffic, route, fencing and repetition
+criteria; intentional cold-repair outage is a separate measurement.
+
+#### Evaluation Plan
+
+Separate unit/source, installed/native and live workload proof. Old candidate
+results remain historical unless independently applicable. Record repair outage
+without an overall duration limit. All required final-artifact campaign obligations
+gate readiness.
+
+#### Rollout And Rollback
+
+Expose opt-in repair only; normal apply remains unchanged. Stage before disruption,
+roll forward from verified archives after reset, and retain guards on interruption.
+Never restore stale active ownership or old keys as an automatic rollback.
+
+#### Done Definition
+
+All supported topologies reconstruct through the confirmed public command,
+unchanged apply follows, retained resources remain exact, and final-artifact
+qualification passes every required handoff obligation with HA BGP first.
+
+#### Implementation Evidence
+
+The public repair dispatch, independent bootstrap,
+boot protection, package reconstruction, retained cloud effects and HA/ordinary
+activation composition are present. Regional commands carry exact repair scope
+through both activation barriers. Ordinary route repair preserves creation
+receipts and settles prior effects before replacing a stale reservation.
+
+Explicit destroy now composes repair cloud settlement, Compute fencing,
+quarantine cleanup and durable retirement. Protected native authority survives
+the repair lifecycle reset window. Retained-VM failures offer explicit teardown
+and same-YAML deployment; unavailable signed repository metadata has a distinct
+diagnostic. Focused tests cover lost Start replies, accepted Start settlement,
+unreachable guest workers, quarantine identity and permissions, interrupted
+cleanup and retirement, reused names and completed historical repair.
+
+Final-artifact interruption, native systemd, isolation and all supported topology
+qualification remain open. The implementation does not establish a
+universal repair guarantee or release readiness.
+
+#### Verification Evidence
+
+Native Linux repair exposed premature quiescence failure: the service manager
+completed its normal 90-second shutdown after repair's 60-second polling window
+had ended. The bounded 120-second observation now passes the original simulated
+shutdown regression. All 41 guest-repair tests pass, including immediate stops,
+a single stop submission, fixed deadlines and refusal of unresolved writers.
+The same source passed 7,309 unit tests, 151 integration tests, lint and type
+checks. Native-only tests and new-artifact live replay remain separate gates;
+these source results do not establish release qualification.
+
+Live ordinary Static and BGP replays then reached final verification but rejected
+the timer start that repair intentionally inhibits until outer completion. Both
+independent readbacks found exact packages, configuration, assets, dependencies
+and active runtime; the final recorded action was the condition-blocked timer
+start. The completion handoff now preserves the guard until its owning repair
+finishes. Focused regressions cover normal startup, deferred startup, stale boot
+and operation grants, altered guards, and completion-time active verification.
+Final-artifact live replay remains required.
+
+A subsequent ordinary-to-HA conversion exposed readable mTLS lock storage
+created during ordinary repair. The original retained member had no certificate
+identity and mode `0755`; its new standby prepared correctly with mode `0700`.
+A real reset-to-certificate-bootstrap regression failed for absent and readable
+directories before the fix. All 199 focused guest-repair, SSH and failure-guidance
+tests now pass, including retained inodes, active-writer refusal and unsafe-parent
+rejection. This is source verification; final-artifact live replay remains open.
+
+A live single-VM repair exposed a policy handoff ordering defect after package
+installation: preparation captured the repair sentinel, then the service grant
+restored the original policy before ordinary execution compared it. Independent
+readback found matching package, unit and archive identities and only the policy
+predecessor differed. The corrected handoff passed 107 focused regressions,
+including policy restoration without service grants and preservation of an
+interrupted ordinary owner. Fresh artifact and live verification remain required.
+
+The later destroy/repair composition candidate passed all 6,313 unit tests.
+Linux and macOS standalone audits independently matched every embedded product
+module and required source asset to its exact wheel. The retained Static repair
+also completed strict bidirectional traffic and unchanged normal-apply checks on
+its earlier candidate. These results have different artifact scopes; the latest
+HA BGP, fresh destroy/redeploy and remaining campaign tests remain open.
+
+The subsequent dependency-scope, policy-identity and SDK credential changes
+passed 6,284 unit tests and independent Linux/macOS standalone payload audits.
+Their live repair trials stopped before package installation when the configured
+DNS resolver returned SERVFAIL for Ubuntu repositories. An unchanged healthy
+gateway exhibited the same failure while a comparison resolver answered. Those
+failed trials remain preserved; they do not verify the new activation boundary.
+No DNS override or package repair was used to convert them into passing evidence.
+
+Focused repair tests cover independent boot protection, same-version native and
+Python reconstruction, malformed product records, retained resource authority,
+service asset publication, cloud retry settlement and transport errors. An exact
+candidate passed 6,209 unit tests, 143 local integration tests and typing across
+193 source files. Its installed Ubuntu/systemd suite independently passed all
+262 declared cases with no skips. These counts are bound to that candidate;
+later source changes require affected validation again.
+
+The macOS standalone completed HA BGP reconstruction after malformed lifecycle
+state and after deliberate damage to both native and Python packages. Independent
+checks verified exact package assets, retained VM/disk/allocation identities,
+owner and standby roles, all BGP/IPsec paths, encrypted bidirectional traffic at
+both tested packet sizes, TCP payload integrity and a mutation-free normal apply.
+Concurrent repair was refused. A failed traffic observation was retained and
+followed by a separate complete postcondition check without replaying repair.
+Measured outages are recorded separately; repair has no overall outage limit.
+
+A subsequent interruption trial stopped the CLI after an accepted Compute effect
+and again after an accepted active package worker. Both interruptions retained
+the same repair execution. The final resume failed during guest admission while
+the original worker continued and completed. Local real-lock and shared-transport
+regressions reproduced temporary lock contention being treated as failed proof.
+The implementation now transports a distinct busy receipt and waits for the
+existing writer. All 201 focused repair and ordinary tests pass, including fixed
+wait bounds and immediate authority rejection. The corrected candidate also
+passed 6,213 unit tests, 143 local integration tests and typing across 193 source
+files. Its new Linux and macOS standalone artifacts passed offline payload and
+startup checks. Fresh native and live interruption qualification remain in
+progress; this correction still requires a clean interrupted-worker replay and
+independent postconditions.
+
+The preceding Linux amd64 and macOS arm64 standalone artifacts passed offline
+startup and source/payload audits. Offline evidence does not qualify Linux live
+controller operation. Both-stopped repair, Static and ordinary deployments,
+regional pairs, authentic published-release upgrades and remaining original
+campaign obligations remain open. The repaired source and final release artifact
+are not yet release-qualified.
+
+<!-- /FEATURE: FEAT-038 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-039 reqs=REQ-039 status=ready delivery=implemented priority=P0 version=9 -->
+### FEAT-039: One apply command with shared HA orchestration
+
+#### Requirements Covered
+
+- REQ-039: Consolidate HA lifecycle orchestration into apply.
+
+#### Context Evidence
+
+Apply owns plans, repair, locks and reports.
+
+#### Design Details
+
+Extract private HA orchestration into deploy/ha_convergence.py, retaining existing
+infrastructure, package, rotation, rearm and controller effect owners. The public
+apply callback owns one lock and result. Never invoke a public command from another
+command. Dispatch repair before lifecycle/status parsing. Always plan desired-state
+parity before a successful HA no-op; delegate retained standby restoration to rearm.
+Keep disabled healing and maintenance intent. Missing-standby replacement retains
+approval; remote-only connectivity failure cannot trigger reconstruction.
+
+Conversion is explicit. Preserve the source and use its deterministic default or
+explicit --output destination. Publish a mode-0600 candidate before a mode-0600
+source-side .ha-conversion.json locator with canonical source/candidate paths,
+source digest, initial candidate digest and effective project/region/gateway
+identity. Use hardened owned regular files and compare-and-set publication. The
+initial candidate digest proves origin, not an immutable desired-state lock.
+Repeated unchanged source may select its subsequently edited HA candidate after
+schema/scope validation; lifecycle/cloud owners still prove all resource identity.
+Changed source, selector scope, conflicting output, missing candidate or unsafe
+files fail before effects. A missing locator after a crash may be reconstructed
+only from the existing exact structural conversion proof. Plain Single apply
+never follows the locator. HA input plus conversion flag reconciles HA; output or
+force on HA input is rejected. First noninteractive conversion needs a complete
+existing candidate; otherwise report required peer inputs without effects.
+
+Move explicit rotation and healing policy into this shared flow. Normalize the
+new exact --approve into existing typed domains; preserve old apply options and
+reject mixing the new approval with old approval flags. Repair, conversion,
+rotation and policy are mutually exclusive, and incompatible replacement or peer
+preparation modes are rejected before effects. Dry-run writes nothing. Each
+separately approved preparation stage retains its own reported effects if a later
+stage is declined. Repair remains one default-No confirmation with no outage cap.
+
+Keep ApplyReport's existing fields and exit semantics; add optional HA evidence
+for effective configuration, observed health, actions, reasons and approval impact.
+Diagnostics are populated before JSON and pair-child publication. All selectors
+flow through inspection, planning, composite actions and execution. Repair guidance
+uses the authoritative generated HA YAML after conversion. Unexpected failures
+retain unknown cause honestly; pending operations retain exact resume guidance.
+
+#### Selected Option
+
+One public workflow; existing effect owners and journals. No alias, recursion or scheduler.
+
+#### Alternatives Considered
+
+Reject public-command recursion, runtime rewrites and loss of explicit actions.
+
+#### Implementation Boundaries
+
+Preserve existing engines/journals. Inject CLI collaborators; use ApplyReport.
+
+#### Test-First Success Criteria
+
+Prove lock/report uniqueness, desired parity, repair admission and conversion repeats.
+
+#### Validation Plan
+
+Run focused tests, full unit/isolated integration lanes, installed executable/module
+checks and alignment. Freeze one source/build before live tests. Original runtime
+repair reproducer remains a separate required live check.
+
+#### Test Plan
+
+Use isolated apply and repair fixtures; serialize writers per gateway. Reuse the
+owned conversion fixture for Single-to-HA and both-input repeats. Check default DNS,
+retained infrastructure, exact HA ownership, packages, services, routes and encrypted
+traffic with the existing strict loss criterion.
+
+#### Evaluation Plan
+
+Current delivery: one final-build HA BGP pass per command/action. Full matrix and repeated campaigns are deferred, with coverage limits reported.
+
+#### Rollout And Rollback
+
+Preserve paused operations and unrelated work in a private handoff. Recover through
+public retained-operation paths after settlement; never manually pre-satisfy proof.
+
+#### Done Definition
+
+One-pass final-build checks pass; report deferred qualification.
+
+#### Implementation Evidence
+
+Apply retains existing effect owners and approvals. Conversion initializes HA locks with stopped writers and refreshes retained handoff SSH authority after approved Compute effects, preserving operation, boot and configuration checks. Nested errors retain safe causes before JSON; dry-runs claim no effects. Guest successors require new creation and clean guest proof. Interruptions retain exit 130.
+
+#### Verification Evidence
+
+Local/installed, lock, successor, diagnostic and interruption regressions pass. Handoff refresh regressions preserve original ownership and reject later identity drift. Final-build live acceptance remains pending.
+
+<!-- /FEATURE: FEAT-039 -->
+
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->
 
@@ -10230,6 +11721,34 @@ These features are not currently implemented but may be considered for future en
 - Manages VM lifecycle and IP allocations via Nebius SDK
 - Pushes configuration to VMs over SSH
 - Triggers agent reloads
+
+Lifecycle publication selects an approved missing-standby replacement before
+interpreting retained corrective recovery history. Its existing replacement
+validator preserves prior audit bindings, serving-owner identity, allocations
+and routes while allowing only the absent peer's new provisioning transaction.
+Historical corrective authority never turns that replacement into a new
+corrective release.
+
+The live-peer replacement v5 capability covers both the HA controller and the
+independent rearm service. Rearm resolves the same exact managed-mTLS current peer
+inside its writer lock after checking inhibition, without reloading the serving
+owner. Only the peer Compute identity may change; immutable peer fields, local
+identity, and ownership checks remain fixed. An unresolved accepted operation
+blocks identity adoption. Earlier installed capabilities select the existing
+explicit owner-upgrade approval before replacement. No legacy runtime reader or
+alternate identity source is added.
+
+The effective cloud resource projection excludes retained `repair-reset:`
+receipts. They remain unchanged in the lifecycle record and continue to be
+validated by the repair activation owner against the exact operation, VM, disk,
+artifact, boot identity and guard. Missing-standby planning after completed repair
+compares actual resource identities while retaining that audit evidence; it does
+not skip serving-owner, allocation or route checks.
+
+Final HA health confirmation raises the typed convergence failure with the
+allowlisted `health-observations-did-not-agree` reason. The shared recovery model
+renders the same reason, immediate action, and repair prerequisites before text
+or JSON serialization; provider diagnostics and credentials remain excluded.
 
 **Gateway VM:**
 
@@ -12073,38 +13592,36 @@ nebius-vpngw apply --local-config-file test.config.yaml
 
 ### Release Workflow
 
-- `publish-release.sh` is the local helper for this service.
-- `vpngw-ci.yml` is reserved for pull requests and manual CI runs.
-- `vpngw-release.yml` is the dedicated tag-driven release workflow for `nebius-vpngw-v*`.
-- Source/editable checkouts resolve runtime version from live SCM state instead
-  of trusting a generated `_version.py` cache. They load the canonical
-  `pyproject.toml` configuration through `setuptools-scm` without writing a
-  runtime version file and fall back to bounded `git describe` when the
-  dependency is unavailable. Wheel builds keep the package-local `_version.py`
-  fallback used outside live SCM contexts.
-- The service uses the current `setuptools-scm` `semver-pep440` scheme, nested
-  tag matching, and an explicit build-time source-version-file policy so
-  developer test/build flows do not emit deprecated scheme, tag, or
-  implicit-write warnings.
-- CI validates both `vpngw` workflow YAML files and runs the wheel-build regression test path before publication so workflow edits and packaging metadata regressions are caught before a tag-driven release runs.
+The shared GitHub AI automation coordinator owns releases for this service.
+Package changes carry immutable semver fragments in the original PR. After the
+protected merge and exact-result CI, the coordinator verifies the previous
+release, reserves the next version and annotated tag, invokes the reusable
+`vpngw-release.yml` builder, then publishes independently verified wheel bytes.
+The builder retains source runtime-version, ordinary systemd/networkd settlement,
+quality, packaging and wheel-version checks without publication credentials.
 
-Release sequence:
+The publish-release skill is the sole maintainer entry point and uses that same
+coordinator. Its private client creates no local commit or tag. An optional tag
+assertion retains the coordinator's version allocation. Project-local publication
+scripts, local prep/tag/push and extra release-preparation PRs are retired.
+Automatic and manual requests share durable project reservation and original
+asset evidence; documentation/test-only changes do not trigger a release.
+See the repository component's `github-ai-automation/docs/architecture.md` for
+state, recovery and deployment qualification. Hosted publication is not yet
+qualified; the release switch remains disabled.
 
-1. Run `./publish-release.sh --prep X.Y.Z` on your working branch to update `CHANGELOG.md`, commit it, and push the branch. If the branch has no upstream yet, the script sets `origin/<current-branch>` automatically on that first push. It also fails before editing anything if the target tag already exists locally or on `origin`, preserves markdownlint-safe blank lines between dated release sections, and is otherwise idempotent while the tag remains unreleased.
-2. Merge the release preparation PR into `main`.
-3. Run `./publish-release.sh --publish X.Y.Z` from a clean, synced `main`; the script verifies that the tagged source checkout resolves `nebius_vpngw.__version__ == X.Y.Z` before it pushes the tag. That verification works even when `setuptools-scm` is not installed in the current interpreter because the source checkout can derive the tagged version directly from Git metadata. Its clean-worktree check includes untracked files, and it fails locally if the target changelog section is empty.
-4. The pushed tag triggers `vpngw-release.yml`, which checks out the tagged commit from `services/vpngw`, runs lint/tests, builds the wheel, verifies the artifact version, and creates the GitHub Release.
-
-The local publish script does not build or upload release artifacts itself. Its job is only to create and push the annotated service tag.
+Source/editable runtime version still comes from live SCM using the canonical
+setuptools-scm configuration or bounded git-describe fallback. Wheels retain
+package metadata and their generated version fallback. This release ownership
+change does not alter the service runtime version API.
 
 ## Project Structure
 
 ```text
 ├── nebius-vpngw.config.yaml              # User configuration (git-ignored)
-├── publish-release.sh                    # Release helper (prep changelog commit, then create/push tag)
 ├── .github/workflows/
 │   ├── vpngw-ci.yml                      # PR/manual CI workflow
-│   └── vpngw-release.yml                 # Tag-driven GitHub Release workflow
+│   └── vpngw-release.yml                 # Reusable isolated release builder
 ├── src/nebius_vpngw/
 │   ├── __main__.py                       # Python module entry point
 │   ├── cli.py                            # CLI orchestrator (nebius-vpngw command)

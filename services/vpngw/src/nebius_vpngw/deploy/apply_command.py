@@ -18,6 +18,10 @@ from .apply_plan import CommandPlan, Progress
 from .replacement import Journal, metadata_only
 
 
+class ReplanReady(Exception):
+    """Approved retirement finished; rebuild and separately approve a fresh plan."""
+
+
 class CommandJournal(Journal):
     schema = "nebius-vpngw.apply-command.v1"
 
@@ -216,6 +220,85 @@ class CommandJournal(Journal):
         if state is Progress.PLANNED:
             transaction["progress"][key] = Progress.STARTED.value
             self.save()
+
+    def retirement(self) -> dict | None:
+        """Read retained settlement intent without changing an owner or checkpoint."""
+        from .operator_guest import read_file
+
+        raw = read_file(self.root / "replanning.json")
+        if raw is None:
+            return None
+        if raw["uid"] != os.getuid() or raw["mode"] != 0o600:
+            raise ValueError("Settlement intent is not protected")
+        record = json.loads(raw["content"])
+        metadata_only(record)
+        if (
+            set(record) != {"schema", "proof", "children"}
+            or record["schema"] != "nebius-vpngw.ordinary-settlement.v1"
+            or set(record["proof"]) != {"action", "predecessor", "desired", "targets", "guests", "route_authority", "owners"}
+            or record["proof"]["action"] != "archive-settled-ordinary-predecessor"
+            or set(record["children"]) != {"credentials", "routes", "attachments", "ssh", "provisioning", "replacement"}
+            or record["proof"]["owners"] != {key: digest(value) for key, value in record["children"].items()}
+            or any(re.fullmatch(r"[a-f0-9]{64}", record["proof"][key]) is None for key in ("predecessor", "desired"))
+        ):
+            raise ValueError("Settlement intent is malformed")
+        return record
+
+    def prepare_retirement(self, proof: dict, children: dict) -> None:
+        from .operator_guest import publish, read_file
+
+        if self._lock is None or digest(self.state) != proof["predecessor"]:
+            raise RuntimeError("Settlement requires its locked predecessor")
+        record = {"schema": "nebius-vpngw.ordinary-settlement.v1", "proof": proof, "children": children}
+        metadata_only(record)
+        previous = self.retirement()
+        if previous == record:
+            return
+        if previous and previous["proof"]["predecessor"] == proof["predecessor"]:
+            raise RuntimeError("Resume the original approved settlement")
+        path = self.root / "replanning.json"
+        publish(path, read_file(path), {"content": json.dumps(record, sort_keys=True), "uid": os.getuid(), "gid": os.getgid(), "mode": 0o600})
+
+    def retirement_completed(self, proof: dict) -> bool:
+        from .operator_guest import read_file
+
+        receipt = read_file(self.root / "settlements" / (digest(proof) + ".json"))
+        return bool(receipt and receipt["uid"] == os.getuid() and receipt["mode"] == 0o600 and json.loads(receipt["content"]) == proof)
+
+    def retire_settled(self, predecessor: dict, proof: dict) -> None:
+        """Archive an owner-verified abandoned command without completing its effects."""
+        if (
+            self._lock is None or self.state != predecessor
+            or self.state["transaction"] is None
+            or self.state["transaction"]["phase"] != "pending"
+            or proof.get("predecessor") != digest(predecessor)
+            or proof.get("action") not in {
+                "archive-settled-ordinary-predecessor",
+                "archive-settled-ha-prehost-predecessor",
+                "archive-unused-command-predecessor",
+                "archive-credential-predecessor",
+                "archive-provisioning-prefix-predecessor",
+                "archive-ha-attachment-predecessor",
+            }
+        ):
+            raise RuntimeError("Settled predecessor changed before retirement")
+        from .operator_guest import publish, read_file
+        from .operator_keys import protected_directory
+
+        metadata_only(proof)
+        self.archive()
+        directory = self.root / "settlements"
+        protected_directory(directory)
+        path = directory / (digest(proof) + ".json")
+        record = {"content": json.dumps(proof, sort_keys=True), "uid": os.getuid(), "gid": os.getgid(), "mode": 0o600}
+        prior = read_file(path)
+        if prior is None:
+            publish(path, None, record)
+        elif prior != record:
+            raise RuntimeError("Settlement evidence differs from its original receipt")
+        self.state["transaction"] = None
+        self.state["bindings"] = {}
+        self.save()
 
     def supersede(self, plan: CommandPlan, *, intents: dict[str, dict], predecessor: str) -> None:
         """Publish an owner-admitted reviewed successor; retain exact old bytes."""

@@ -48,7 +48,7 @@ class VerifierImportTests(unittest.TestCase):
                 timeout=30, check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), "agentic-sdlc/three-tier-results-v3")
+            self.assertEqual(result.stdout.strip(), "agentic-sdlc/three-tier-results-v4")
 
 
 def git(cwd: Path, *arguments: str) -> str:
@@ -273,35 +273,27 @@ class VerifierContractTests(unittest.TestCase):
         self.assertIn("are rejected without aliases or abbreviation", skill)
         self.assertIn("--create-live-test", (root / "agents/openai.yaml").read_text())
 
-    def test_slow_aggregate_suites_have_measured_timeout_headroom(self) -> None:
-        self.assertEqual(verifier.suite_checks.DEFAULT_CAPABILITY_SUITE_TIMEOUT_SECONDS, 120)
-        self.assertEqual(
-            verifier.suite_checks.CAPABILITY_SUITE_TIMEOUT_SECONDS,
-            {"worktree": 900, "execution": 900, "three-tier": 900, "task-waves": 900, "verifier": 600, "hooks": 600, "dispatch": 600},
-        )
+    def observed_suites(self, names, skipped=(), returncode=0):
+        exact = frozenset("fixture.Case." + name for name in names)
+        omitted = frozenset("fixture.Case." + name for name in skipped)
+        return [verifier.suite_checks.SuiteResult(name, returncode, .1, exact - omitted, omitted,
+                    ("fixture.Case.test_example",) if returncode else (), inventory=exact)
+                for name in verifier.suite_checks.suite_catalog(self.ctx.skills_root)]
 
-        completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-        with mock.patch.object(verifier.suite_checks, "run_command", return_value=completed) as runner:
+    def test_healthy_aggregate_suites_use_observation_without_expiry(self) -> None:
+        specs = verifier.suite_checks.suite_catalog(self.ctx.skills_root)
+        self.assertEqual(len(specs), 19)
+        self.assertTrue(all(spec.observation_interval_seconds == 30 for spec in specs.values()))
+        self.assertTrue(all(not hasattr(spec, "timeout") for spec in specs.values()))
+        with mock.patch.object(verifier.suite_checks, "execute_all", return_value=self.observed_suites([])) as runner:
             verifier.check_capability_regressions(self.ctx)
-
-        self.assertEqual(len(runner.call_args_list), 17)
-        for call in runner.call_args_list:
-            command = " ".join(str(value) for value in call.args[0])
-            if any(name in command for name in ("test-worktree-manager.py", "test_workflow_execution.py", "test_workflow_contracts.py", "test_three_tier_target.py", "-s " + str(self.ctx.skills_root / "worktree/scripts"), "-s " + str(self.ctx.skills_root / "sdlc-workflow-test/scripts"))):
-                expected = 900
-            elif any(name in command for name in ("test_verify_agentic_sdlc.py", "test_sdlc_hooks.py", "test_workflow_dispatch.py")):
-                expected = 600
-            else:
-                expected = 120
-            self.assertEqual(call.kwargs["timeout"], expected, command)
+        runner.assert_called_once()
+        self.assertEqual([spec.name for spec in runner.call_args.args[0]], list(specs))
 
     def test_merge_denials_alone_cannot_qualify_delivery_capability(self) -> None:
         hooks = MODULE_PATH.parents[2] / "sdlc-start/assets/hooks/tests/test_sdlc_hooks.py"
         names = re.findall(r"^    def (test_\w+)\(", hooks.read_text(), re.MULTILINE)
-        completed = subprocess.CompletedProcess(
-            [], 0, stdout="\n".join(name + " ... ok" for name in names), stderr="",
-        )
-        with mock.patch.object(verifier.suite_checks, "run_command", return_value=completed):
+        with mock.patch.object(verifier.suite_checks, "execute_all", return_value=self.observed_suites(names)):
             verifier.check_capability_regressions(self.ctx)
         merge = next(c for c in self.ctx.checks if c.capability_id == "merge.authorization")
         self.assertEqual(merge.status, "FAIL")
@@ -340,12 +332,10 @@ class VerifierContractTests(unittest.TestCase):
         for omitted in (None, *names):
             for skipped in (False, True) if omitted else (False,):
                 with self.subTest(omitted=omitted, skipped=skipped):
-                    output = "\n".join(n + " ... ok" for n in all_names if n != omitted)
-                    if skipped:
-                        output += f"\n{omitted} ... skipped 'unavailable'"
-                    completed = subprocess.CompletedProcess([], 0, stdout=output, stderr="")
+                    observed = self.observed_suites(all_names if skipped else all_names - {omitted},
+                                                     [omitted] if skipped else [])
                     ctx = replace(self.ctx, checks=[])
-                    with mock.patch.object(verifier.suite_checks, "run_command", return_value=completed):
+                    with mock.patch.object(verifier.suite_checks, "execute_all", return_value=observed):
                         verifier.check_capability_regressions(ctx)
                     checks = {c.capability_id: c for c in ctx.checks if c.capability_id in required}
                     self.assertEqual(set(checks), required)
@@ -363,17 +353,30 @@ class VerifierContractTests(unittest.TestCase):
         self.assertIn("ambiguous submission", checklist)
 
     def test_failed_suite_reports_exit_and_test_names_without_raw_output(self) -> None:
-        failed = subprocess.CompletedProcess(
-            [], 1, stdout="private diagnostic body\n",
-            stderr="FAIL: test_example (module.Case.test_example)\nAssertionError: private value\n",
-        )
-        with mock.patch.object(verifier.suite_checks, "run_command", return_value=failed):
+        with mock.patch.object(verifier.suite_checks, "execute_all", return_value=self.observed_suites(["test_example"], returncode=1)):
             verifier.check_capability_regressions(self.ctx)
         details = "\n".join(check.detail for check in self.ctx.checks)
         self.assertIn("exit 1", details)
         self.assertIn("test_example", details)
         self.assertNotIn("private diagnostic body", details)
         self.assertNotIn("private value", details)
+
+    def test_completed_group_is_durable_before_later_interruption(self):
+        self.ctx.report_path = self.verification_root / "report.md"
+        self.ctx.in_progress = True
+        row = {"id": "completed", "suite": "execution", "status": "PASS",
+               "inventory": ["fixture.Case.test_ok"], "outcomes": {"fixture.Case.test_ok": "passed"}}
+        def interrupted(specs, env, *, on_result):
+            on_result(row)
+            raise KeyboardInterrupt()
+        with mock.patch.object(verifier.suite_checks, "execute_all", side_effect=interrupted):
+            with self.assertRaises(KeyboardInterrupt):
+                verifier.check_capability_regressions(self.ctx)
+        self.assertEqual(self.ctx.verification_groups["completed"], row)
+        artifacts = list(self.verification_root.glob("verification-*.json"))
+        self.assertEqual(len(artifacts), 1)
+        self.assertEqual(json.loads(artifacts[0].read_text())["groups"], [row])
+        self.assertIn(artifacts[0].name, self.ctx.report_path.read_text())
 
     def test_design_contract_normalizes_whitespace(self) -> None:
         rendered = "\n\n".join(
@@ -439,21 +442,12 @@ class VerifierContractTests(unittest.TestCase):
 
     def test_direct_intake_capability_suite_imports_from_its_own_root(self) -> None:
         ctx = self.source_contract_context()
-        original = verifier.suite_checks.run_command
-        results = []
-        def selected_run(command, **kwargs):
-            if any("sdlc-start/scripts" in str(part) for part in command):
-                result = original(command, **kwargs)
-                results.append(result)
-                return result
-            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-        with mock.patch.object(verifier.suite_checks, "run_command", side_effect=selected_run):
-            verifier.check_capability_regressions(ctx)
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0].returncode, 0, "direct intake suite failed to execute")
-        passed, _skipped = verifier.suite_checks.parse_unittest_results(results[0].stdout + results[0].stderr)
-        self.assertIn("test_public_interface_is_mirrored", passed)
-        self.assertIn("test_valid_specs_emit_current_advisory_snapshot", passed)
+        spec = verifier.suite_checks.suite_catalog(ctx.skills_root)["objective"]
+        result = verifier.suite_checks.execute(spec, dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+        self.assertEqual(result.returncode, 0, "direct intake suite failed to execute")
+        methods = {name.rsplit(".", 1)[-1] for name in result.passed}
+        self.assertIn("test_public_interface_is_mirrored", methods)
+        self.assertIn("test_valid_specs_emit_current_advisory_snapshot", methods)
 
     def test_design_contract_accepts_current_canonical_source(self) -> None:
         ctx = self.source_contract_context()
@@ -574,6 +568,7 @@ class VerifierContractTests(unittest.TestCase):
             Path("sdlc-start/references/objective-refinement.md"),
             Path("sdlc-start/scripts/validate_project_specs.py"),
             Path("sdlc-workflow-test/SKILL.md"),
+            Path("sdlc-workflow-test/references/lightweight-runtime-verification.md"),
             Path("maintain-project-specs/SKILL.md"),
             Path("align/SKILL.md"),
             Path("align-skill/scripts/validate-skill-structure.py"),
@@ -830,7 +825,7 @@ class VerifierContractTests(unittest.TestCase):
         )
         wrapper = self.verification_root / "evidence/profiles/lightweight/result.json"
         value = json.loads(wrapper.read_text())
-        value.update(source_schema="workflow/accepted-objective-v2",
+        value.update(source_schema="workflow/accepted-objective-v3",
                      source_identity=json.loads(source.read_text())["run_id"], source_artifacts=[ref])
         verifier.write_private_json(wrapper, value)
         self.assertIsNotNone(verifier.load_live_results(self.ctx))
@@ -861,6 +856,27 @@ class VerifierContractTests(unittest.TestCase):
     def test_any_deterministic_failure_forces_fail(self) -> None:
         self.ctx.add("Environment checked", "Execution contract", "FAIL", "failed")
         self.assertEqual(verifier.final_status(self.ctx), "FAIL")
+
+    def test_extracted_runtime_contract_is_required_and_ordered(self) -> None:
+        ctx = self.copied_source_contract_context()
+        skill = ctx.skills_root / "sdlc-workflow-test/SKILL.md"
+        reference = ctx.skills_root / "sdlc-workflow-test/references/lightweight-runtime-verification.md"
+        original_skill, original_reference = skill.read_text(), reference.read_text()
+        changes = (
+            (original_skill.replace("references/lightweight-runtime-verification.md", "references/missing.md"), original_reference),
+            (original_skill, ""),
+            (original_skill, original_reference.replace("`sdlc-auto-steering`", "`missing-step`")),
+            (original_skill, original_reference.replace("`sdlc-prepare-execution`, `sdlc-tdd`", "`sdlc-tdd`, `sdlc-prepare-execution`")),
+        )
+        for skill_text, reference_text in changes:
+            with self.subTest(reference=bool(reference_text)):
+                skill.write_text(skill_text)
+                reference.write_text(reference_text)
+                ctx.checks.clear()
+                verifier.check_spec_ownership_contract(ctx)
+                result = next(c for c in ctx.checks if c.capability_id == "spec.ownership-contract")
+                self.assertEqual(result.status, "FAIL")
+                self.assertIn("sdlc-workflow-test", result.detail)
 
     def test_source_phase_contract_rejects_bad_source_prefix(self) -> None:
         ctx = self.copied_source_contract_context()
@@ -1263,7 +1279,7 @@ class VerifierContractTests(unittest.TestCase):
         session_recovery = source.split('"execution.sessions-recovery":', 1)[1].split(
             '"execution.replan":', 1
         )[0]
-        outer_lease = source.split('"interop.outer-lease-v4":', 1)[1].split(
+        outer_lease = source.split('"interop.outer-lease-v5":', 1)[1].split(
             '"interop.shared-execution":', 1
         )[0]
         task_compatibility = source.split(
@@ -1529,7 +1545,7 @@ class VerifierContractTests(unittest.TestCase):
 
     def test_committed_normalized_objective_is_private_workflow_state(self) -> None:
         private = self.selected / "objective.json"
-        private.write_text('{"schema": "workflow/accepted-objective-v2"}\n', encoding="utf-8")
+        private.write_text('{"schema": "workflow/accepted-objective-v3"}\n', encoding="utf-8")
         git(self.project, "add", "-A")
         git(self.project, "commit", "-qm", "invalid private objective")
         self.write_manifest(final_head=git(self.project, "rev-parse", "HEAD"))
@@ -1710,12 +1726,13 @@ class VerifierContractTests(unittest.TestCase):
                 "check_spec_ownership_contract", "check_vertical_slice_contract",
                 "check_execution_plane_contract", "check_repair_loop_contract",
                 "check_skill_discovery", "check_hook_config", "check_direct_objectives",
-                "check_capability_regressions",
             ):
                 stack.enter_context(mock.patch.object(verifier, check))
+            suites = stack.enter_context(mock.patch.object(verifier, "check_capability_regressions"))
             stack.enter_context(redirect_stdout(StringIO()))
             result = verifier.main(["--verification-root", str(self.verification_root)])
         self.assertEqual(result, 1)
+        suites.assert_not_called()
         report = (self.verification_root / "report.md").read_text()
         self.assertIn("Existing fixture has no owned Git profile", report)
         for section in ("PreToolUse safety test results", "Stop continuation test results"):
@@ -1728,6 +1745,29 @@ class VerifierContractTests(unittest.TestCase):
         self.assertFalse((self.verification_root / 'origin.git').exists())
         for relative, content in old_files.items():
             self.assertEqual((self.project / relative).read_text(), content)
+
+    def test_failed_static_prerequisite_skips_fixture_and_suites(self) -> None:
+        ctx = self.source_contract_context()
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(verifier, "setup_context", return_value=ctx))
+            for name in (
+                "check_design", "check_source_phase_contract", "check_spec_ownership_contract",
+                "check_vertical_slice_contract", "check_execution_plane_contract",
+                "check_repair_loop_contract", "check_skill_discovery", "check_hook_config",
+                "check_direct_objectives",
+            ):
+                stack.enter_context(mock.patch.object(verifier, name))
+            stack.enter_context(mock.patch.object(
+                verifier, "check_source_catalog_validation",
+                side_effect=lambda value: value.add("Environment checked", "Catalog", "FAIL", "injected prerequisite"),
+            ))
+            fixture = stack.enter_context(mock.patch.object(verifier, "setup_disposable_project"))
+            suites = stack.enter_context(mock.patch.object(verifier, "check_capability_regressions"))
+            stack.enter_context(redirect_stdout(StringIO()))
+            self.assertEqual(verifier.main(["--verification-root", str(self.verification_root)]), 1)
+        fixture.assert_not_called()
+        suites.assert_not_called()
+        self.assertIn("not launched", (self.verification_root / "report.md").read_text())
 
     def test_dirty_fixture_fails_without_mutation(self) -> None:
         unknown = self.project / "unknown.txt"
@@ -2030,13 +2070,14 @@ class VerifierContractTests(unittest.TestCase):
                     )
                 )
 
-    def test_unittest_result_parser_does_not_count_skips_as_passes(self) -> None:
-        passed, skipped = verifier.suite_checks.parse_unittest_results(
-            "\x1b[32mtest_pass\x1b[0m (Suite.test_pass) ... \x1b[32mok\x1b[0m\n"
-            "test_skip (Suite.test_skip) ... skipped 'POSIX only'\n"
-        )
-        self.assertEqual(passed, {"test_pass"})
-        self.assertEqual(skipped, {"test_skip"})
+    def test_structured_results_do_not_count_skips_as_passes(self) -> None:
+        script = self.root / "test_skip_fixture.py"
+        script.write_text("import unittest\nclass Suite(unittest.TestCase):\n def test_pass(self): pass\n @unittest.skip('platform constraint')\n def test_skip(self): pass\n")
+        spec = verifier.suite_checks.SuiteSpec("skip-fixture", [sys.executable, str(script)], self.root)
+        result = verifier.suite_checks.execute(spec, dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+        self.assertEqual(result.passed, {"test_skip_fixture.Suite.test_pass"})
+        self.assertEqual(result.skipped, {"test_skip_fixture.Suite.test_skip"})
+        self.assertEqual(result.inventory, result.passed | result.skipped)
 
     def test_live_results_schema_lane_paths_match_runtime(self) -> None:
         schema_path = MODULE_PATH.parents[1] / "assets" / "live-results.schema.json"

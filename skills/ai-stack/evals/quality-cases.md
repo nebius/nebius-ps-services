@@ -33,15 +33,14 @@ For canonical positive cases, verify that the result:
   nested stack-selection handoff, so `ai-stack` selects components once;
 - rejects agents when code owns every transition or continuation condition even
   if the iteration count is unknown;
-- keeps one-request behavior classified as a direct model call while choosing
-  Pydantic AI's low-level direct API for `ModelResponse` control or a no-tools
-  single-request `Agent` for typed parsing, validation retries, or typed
-  dependencies; maps intentionally provider-specific direct tasks to their
-  official APIs and portable model-directed agents across supported providers
-  to Pydantic AI `Agent` by default;
-- treats Pydantic AI capabilities or Harness as conditional portable specialist
-  layers and provider-native agent SDKs as separate evaluated runtime escapes,
-  never as nested model adapters;
+- leaves direct requests and deterministic workflows free of unnecessary agent
+  loops, and prefers OpenAI Agents SDK for general agentic workloads unless
+  explicitly overridden or an accepted fixed project choice applies;
+- does not equate the preferred framework with OpenAI model/provider selection;
+  qualifies exact adapters and blocks incompatible required capabilities;
+- requests an explicit override after a preferred-SDK hard-gate failure instead
+  of silently selecting Pydantic AI or another kernel;
+- never nests agent kernels or migrates an existing fixed stack implicitly;
 - maps coding-focused engineering tasks to the Codex SDK and adds Codex
   app-server only for deep client integration;
 - marks every component `Required`, `Conditional`, `Deferred`, or `Rejected`;
@@ -49,14 +48,13 @@ For canonical positive cases, verify that the result:
 - does not treat documentation or vendor benchmarks as target measurement;
 - keeps quality, safety, compatibility, reliability, recovery, rollback,
   observability, cost, and ownership in the decision;
-- uses Pydantic AI model, provider, profile, setting, message, and tool
-  semantics for the portable path, and adds a custom cross-runtime provider
-  contract only when a proven non-Pydantic consumer requires it;
+- uses supported selected-SDK model/provider seams and introduces a custom
+  cross-runtime contract only for proven shared consumers;
 - keeps the runtime facade logical and in-process by default, while canonical
   state, routing governance, tool policy, authorization, budgets, telemetry,
   and evaluation remain application-owned;
-- keeps the platform registry type distinct from Pydantic AI's `AgentSpec` and
-  records how a versioned framework spec is resolved and materialized;
+- binds application definitions and their materialized SDK configuration to
+  release identity, without turning SDK state into authority;
 - treats resume and cancel as authenticated, idempotent, optimistic-concurrency
   mutations rather than capabilities granted by possession of a run ID;
 - separates hard routing eligibility from scoring, routing from fallback, and

@@ -11,7 +11,9 @@ evidence, feature evaluation, or resolved steering shows docs need to match
 implemented behavior. Multi-layer behavior docs must be backed by evaluated
 end-to-end slice evidence when applicable. After promotion, document review is
 read-only: record a no-op or route `DOCUMENTATION_DRIFT` through classification
-to a corrective run from the promoted commit.
+to a fresh corrective execution before automatic release, or a fresh objective
+after terminal release. Preserve completed execution and require fresh
+documentation, alignment, promotion and UAT for the correction.
 Returns to `sdlc-start` for the general `align` quality gate before commitment.
 
 ## Main Boundaries

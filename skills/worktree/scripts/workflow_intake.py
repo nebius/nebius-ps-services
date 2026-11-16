@@ -117,9 +117,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--owner', choices=('implement', 'agentic-sdlc'), required=True)
     sub = parser.add_subparsers(dest='action', required=True)
-    for action in ('accept', 'continue', 'observe'):
+    for action in ('accept', 'continue', 'observe', 'status'):
         command = sub.add_parser(action, allow_abbrev=False)
         command.add_argument('--project-root', type=Path, required=True)
+        if action in {'accept', 'continue'}:
+            command.add_argument('--input-dependencies', type=Path)
         if action == 'continue':
             command.add_argument('--takeover', type=Path)
         if action == 'accept':
@@ -131,33 +133,65 @@ def main(argv=None):
     command = sub.add_parser('admit-program', allow_abbrev=False)
     command.add_argument('--run-dir', type=Path, required=True)
     command.add_argument('--candidate', type=Path, required=True)
-    for action in ('qualify', 'attest-delivery', 'submit-delivery', 'reconcile-delivery', 'phase-exit'):
+    command = sub.add_parser('aggregate-correct', allow_abbrev=False)
+    command.add_argument('--run-dir', type=Path, required=True)
+    command.add_argument('--execution', required=True)
+    command = sub.add_parser('aggregate-record-gates', allow_abbrev=False)
+    command.add_argument('--run-dir', type=Path, required=True)
+    command.add_argument('--candidate', type=Path, required=True)
+    for action in ('uat-readiness', 'uat-recover-cleanup', 'admit-phase', 'admit-delivery', 'qualify', 'attest-delivery', 'submit-delivery', 'reconcile-delivery', 'phase-exit'):
         command = sub.add_parser(action, allow_abbrev=False)
         command.add_argument('--run-dir', type=Path, required=True)
-        command.add_argument('--execution', required=True)
-        if action in {'qualify', 'attest-delivery', 'phase-exit'}:
+        if action != 'uat-recover-cleanup':
+            command.add_argument('--execution', required=True)
+        if action == 'qualify':
+            command.add_argument('--stage', choices=('promoted', 'aggregate'), default='promoted')
+        if action in {'uat-readiness', 'uat-recover-cleanup', 'admit-phase', 'qualify', 'attest-delivery', 'phase-exit'}:
             command.add_argument('--candidate', type=Path, required=True)
-    for action in ('admit-inputs', 'refinement-ready', 'settle-objective', 'complete', 'cancel-complete', 'retire-fenced-waves', 'resume-replanned'):
+    for action in ('admit-inputs', 'refinement-ready', 'settle-objective', 'complete', 'cancel-complete', 'retire-fenced-waves', 'resume-replanned', 'aggregate-prepare', 'aggregate-validate', 'aggregate-finish'):
         command = sub.add_parser(action, allow_abbrev=False)
         command.add_argument('--run-dir', type=Path, required=True)
         if action == 'settle-objective':
             command.add_argument('--claim', type=Path, required=True)
     args = parser.parse_args(argv)
+    authorized_run = None
     try:
         home = agent_home()
         session = native_session_id()
         if hasattr(args, 'run_dir'):
             authorize_coordinator(args.run_dir, session, owner=args.owner)
-        if args.action == 'qualify':
+            authorized_run = args.run_dir
+        if args.action == 'status':
+            from workflow_automatic import status
+            value = status(args.project_root.absolute(), home)
+        elif args.action == 'aggregate-correct':
+            from workflow_automatic import begin_correction
+            value = begin_correction(args.run_dir, session, args.execution)
+        elif args.action == 'aggregate-record-gates':
+            from workflow_aggregation_gates import record
+            value = record(args.run_dir, session, read(args.candidate))
+        elif args.action == 'uat-readiness':
+            from workflow_uat import declare_readiness
+            value = declare_readiness(args.run_dir, read(args.candidate))
+        elif args.action == 'uat-recover-cleanup':
+            from workflow_qualification import recover_cleanup
+            value = recover_cleanup(args.run_dir, read(args.candidate))
+        elif args.action == 'admit-phase':
+            from workflow_delivery_admission import admit
+            value = admit(args.run_dir, args.execution, checks=read(args.candidate)['checks'])
+        elif args.action == 'admit-delivery':
+            from workflow_delivery_admission import admit
+            value = admit(args.run_dir, args.execution)
+        elif args.action == 'qualify':
             from workflow_qualification import qualify
-            value = qualify(args.run_dir, args.execution, read(args.candidate))
+            value = qualify(args.run_dir, args.execution, read(args.candidate), stage=args.stage)
         elif args.action in {'attest-delivery', 'submit-delivery', 'reconcile-delivery', 'phase-exit'}:
             import workflow_delivery
             if args.action == 'attest-delivery':
                 candidate = read(args.candidate)
-                value = workflow_delivery.attest(args.run_dir, args.execution, candidate['review'], candidate['qualification'])
+                value = workflow_delivery.attest(args.run_dir, args.execution, candidate['review'], candidate['admission'])
             elif args.action == 'phase-exit':
-                value = workflow_delivery.phase_exit(args.run_dir, args.execution, read(args.candidate)['qualifications'])
+                value = workflow_delivery.phase_exit(args.run_dir, args.execution, read(args.candidate)['admissions'])
             else:
                 value = getattr(workflow_delivery, 'submit' if args.action == 'submit-delivery' else 'reconcile')(args.run_dir, args.execution)
         elif args.action == 'admit-inputs':
@@ -166,6 +200,11 @@ def main(argv=None):
         elif args.action == 'admit-program':
             from workflow_program import admit
             value = admit(args.run_dir, read(args.candidate))
+        elif args.action.startswith('aggregate-'):
+            from workflow_automatic import prepare_aggregation, validate_aggregation, finish_aggregation
+            action = {'aggregate-prepare': prepare_aggregation, 'aggregate-validate': validate_aggregation,
+                      'aggregate-finish': finish_aggregation}[args.action]
+            value = action(args.run_dir, session)
         elif args.action == 'complete':
             value = complete_run(args.run_dir, session)
         elif args.action in {'cancel-complete', 'retire-fenced-waves', 'resume-replanned'}:
@@ -175,17 +214,36 @@ def main(argv=None):
             from workflow_refinement import ready, settle
             value = ready(args.run_dir) if args.action == 'refinement-ready' else settle(args.run_dir, read(args.claim))
         elif args.action == 'accept':
-            value = accept(args.project_root, home, args.owner, session, read(args.objective), revise=args.revise)
+            value = accept(args.project_root, home, args.owner, session, read(args.objective), revise=args.revise,
+                           input_dependencies=read(args.input_dependencies) if args.input_dependencies else None)
         elif args.action == 'continue':
-            value = continue_run(args.project_root, home, args.owner, session, takeover=args.takeover)
+            value = continue_run(args.project_root, home, args.owner, session, takeover=args.takeover,
+                                 input_dependencies=read(args.input_dependencies) if args.input_dependencies else None)
         elif args.action == 'fence':
             value = fence(args.run_dir, session, args.reason)
         else:
             binding = observe_binding(home, args.owner, session, args.project_root)
             value = {'status': 'UNBOUND'} if binding is None else result(*binding, 'BOUND')
     except (WorkflowError, OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
-        print(json.dumps({'status': 'blocked', 'code': getattr(error, 'code', 'STATE_INVALID'), 'error': str(error)}))
+        value = {'status': 'blocked', 'code': getattr(error, 'code', 'STATE_INVALID'), 'error': str(error)}
+        if authorized_run is not None:
+            from workflow_delivery_guidance import attach
+            value = attach(authorized_run, value, [str(error)])
+        print(json.dumps(value))
         return 2
+    # Aggregation observes its own finally boundary, including partial effects.
+    # A second CLI observation repeats a full snapshot even when no event is added.
+    observed_by_owner = {'aggregate-prepare', 'aggregate-validate', 'aggregate-finish', 'aggregate-correct'}
+    if (args.owner in {'agentic-sdlc', 'implement'} and hasattr(args, 'run_dir')
+            and args.action not in {'status', 'observe'} | observed_by_owner):
+        try:
+            from workflow_statistics import safe_record
+            safe_record(args.run_dir, args.action)
+        except Exception:
+            pass  # Preserve the successful product response.
+    if authorized_run is not None:
+        from workflow_delivery_guidance import attach
+        value = attach(authorized_run, value, value.get('reasons', ()))
     print(json.dumps(value, indent=2, sort_keys=True))
     return 0
 

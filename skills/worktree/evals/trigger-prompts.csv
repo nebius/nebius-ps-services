@@ -24,3 +24,10 @@ worktree-lease-consumption,false,Observe an existing workflow assignment runtime
 worktree-explicit-source-integration,true,$worktree integrate example-task from the recorded primary checkout after its managed SDLC lease was released.
 worktree-completion-cannot-integrate,false,Mark the SDLC run complete by silently integrating its managed child without a fresh user invocation.
 worktree-positive-exact-recovery,true,Use $worktree integrate to reconcile an interrupted candidate commit while preserving its recorded tree and merge parents.
+automatic-coordinator,false,The automatic Implement outer is aggregation-ready; use its private coordinator lifecycle for delivery.
+worktree-reporting-only,false,Show Implement component statistics without creating or integrating a worktree.
+manual-dirty-source,true,$worktree add docs-update — report any dirty-original blocker before creating a worktree.
+automatic-scoped-admission,false,$implement Start the clean project while a sibling has unrelated uncommitted edits.
+worktree-uat-route,false,Run UAT against my existing staging target after the application is ready.
+worktree-private-recovery-observation,false,Observe an existing SDLC worker's counted validation repair and exclusive runtime lease without creating or integrating a worktree.
+healthy-long-execution,true,$worktree add Prepare the exact isolated checkout for a long-running task.

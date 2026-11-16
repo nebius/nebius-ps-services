@@ -128,6 +128,7 @@ from .vm_ha_controller import (
     HAState,
     LocalReadiness,
     RecoverableController,
+    RepairAttempt,
     RouteReconciliationContext,
     TransferIntent,
     VMHAController,
@@ -1012,37 +1013,27 @@ class VMHASnapshotAdapter:
             self._retire_prior_generation_adoption_state(
                 adoption=adoption, operation_id=apply_operation_id
             )
-        if transfer_intent is TransferIntent.AUTOMATIC_FAILOVER and transfer_effect_started:
+        transfer_completion_recorded = False
+        if transfer_effect_started:
             lineage_path = self.state_dir / VM_HA_TRANSFER_LINEAGE_PATH.name
-            if adoption_authorized:
+            if adoption_authorized and transfer_intent is TransferIntent.AUTOMATIC_FAILOVER:
                 _durably_unlink(lineage_path)
                 transfer_intent = None
                 transfer_effect_started = False
             else:
-                receipt = _read_promotion_receipt(
-                    promotion_receipt_path,
-                    config=self.config,
-                )
-                lineage = _read_transfer_lineage(lineage_path, config=self.config)
-                if (
-                    receipt is not None
-                    and _promotion_receipt_matches_current_owner(
-                        receipt,
+                # Writer inhibition defers cleanup; it never admits a foreign
+                # terminal receipt as valid evidence for the current lineage.
+                _read_promotion_receipt(promotion_receipt_path, config=self.config)
+                if apply_operation_id is None and transfer_inhibition_operation_id is None:
+                    transfer_completion_recorded = _recover_committed_transfer(
+                        state_dir=self.state_dir,
+                        config=self.config,
                         cloud=cloud,
                         node_id=self.local_node_id,
                     )
-                    and lineage is not None
-                    and lineage.get("candidate_node_id") == self.local_node_id
-                    and float(lineage.get("started_at") or 0.0)
-                    >= float(receipt.get("committed_at") or 0.0)
-                ):
-                    # A controller restart behind apply fencing must not reinterpret
-                    # the already-committed owner as a fresh automatic takeover. The
-                    # unchanged ownership epoch distinguishes this from a later
-                    # legitimate failover back to the same configured-passive node.
-                    _durably_unlink(lineage_path)
-                    transfer_intent = None
-                    transfer_effect_started = False
+                    if transfer_completion_recorded:
+                        transfer_intent = None
+                        transfer_effect_started = False
         snapshot = ControllerSnapshot(
             now=self.clock(),
             boot_id=self.boot_id(),
@@ -1069,6 +1060,7 @@ class VMHASnapshotAdapter:
             transfer_intent=transfer_intent,
             transfer_effect_started=transfer_effect_started,
             apply_owner_adoption=adoption_authorized,
+            transfer_completion_recorded=transfer_completion_recorded,
             transfer_inhibited=transfer_inhibition_operation_id is not None,
             standby_replacement_inhibited=(standby_replacement_inhibition_operation_id is not None),
             wall_time=time.time(),
@@ -1637,6 +1629,104 @@ def _durably_unlink(path: Path) -> None:
         os.close(directory_fd)
 
 
+def _finish_committed_transfer(
+    *,
+    receipt: Mapping[str, Any],
+    lineage: Mapping[str, Any],
+    lineage_path: Path,
+    state_dir: Path,
+    updated_at: float,
+) -> None:
+    """Finish one durable transfer under its caller's existing rearm lock."""
+    restoration_store = StandbyRestorationStore(state_dir)
+    try:
+        restoration_store.commit(receipt=receipt, updated_at=updated_at)
+    except StandbyRestorationError:
+        if lineage["intent"] != TransferIntent.AUTOMATIC_FAILOVER.value:
+            raise
+        print("[VM-HA-RESTORATION] automatic-commit-rejected", flush=True)
+        restoration_store.discard_unusable_authorization()
+        print("[VM-HA-RESTORATION] automatic-authorization-discarded", flush=True)
+    _durably_unlink(lineage_path)
+
+
+def _recover_committed_transfer(
+    *,
+    state_dir: Path,
+    config: Mapping[str, Any],
+    cloud: CloudObservation,
+    node_id: str,
+) -> bool:
+    """Recognize terminal identity even while its bookkeeping lock is busy.
+
+    This recovers an existing receipt, never publishes a new promotion decision.
+    The former owner may already be rearmed, but current ownership must be exact.
+    """
+    from .vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
+
+    lineage_path = state_dir / VM_HA_TRANSFER_LINEAGE_PATH.name
+    receipt_path = state_dir / VM_HA_PROMOTION_RECEIPT_PATH.name
+    lineage = _read_transfer_lineage(lineage_path, config=config)
+    receipt = _read_promotion_receipt(receipt_path, config=config)
+    if (
+        lineage is None
+        or receipt is None
+        or not _promotion_receipt_matches_current_owner(receipt, cloud=cloud, node_id=node_id)
+    ):
+        return False
+    if (
+        any(
+            receipt[key] != lineage[key]
+            for key in (
+                "intent",
+                "cluster_id",
+                "former_owner_node_id",
+                "allocation_id",
+                "generation_id",
+                "digests",
+            )
+        )
+        or receipt["owner_node_id"] != lineage["candidate_node_id"]
+    ):
+        return False
+    expected = promotion_receipt_id_v1(
+        allocation_id=lineage["allocation_id"],
+        first_operation_id=lineage["first_operation_id"],
+        generation_id=lineage["generation_id"],
+        intent=lineage["intent"],
+        owner_node_id=lineage["candidate_node_id"],
+        ownership_epoch=cloud.ownership_epoch,
+        route_operation_id=receipt["route_operation_id"],
+    )
+    if receipt["receipt_id"] != expected:
+        return False
+    descriptor = _acquire_rearm_lock(state_dir / REARM_LOCK_PATH.name, timeout_seconds=0.0)
+    if descriptor is None:
+        return True
+    try:
+        if (
+            _read_transfer_lineage(lineage_path, config=config) != lineage
+            or _read_promotion_receipt(receipt_path, config=config) != receipt
+        ):
+            raise ValueError("VM-HA completion evidence changed under its writer lock")
+        try:
+            _finish_committed_transfer(
+                receipt=receipt,
+                lineage=lineage,
+                lineage_path=lineage_path,
+                state_dir=state_dir,
+                updated_at=time.time(),
+            )
+        except (StandbyRestorationError, OSError):
+            # The exact terminal receipt already establishes this owner. A
+            # bookkeeping outage must not invalidate it or invent permission
+            # to restart the former owner. Retain evidence for the next retry.
+            print("[VM-HA-RESTORATION] committed-transfer-cleanup-pending", flush=True)
+    finally:
+        os.close(descriptor)
+    return True
+
+
 def _commit_promotion_receipt(
     *,
     status: Mapping[str, Any],
@@ -1755,6 +1845,22 @@ def _commit_promotion_receipt(
             and current.get("generation_id") == authority["generation_id"]
         ):
             raise ValueError("existing VM-HA promotion receipt is invalid or foreign")
+        if current["receipt_id"] == receipt_id:
+            time_fields = {"committed_at", "common_cutover_seconds"}
+            if any(
+                current[key] != value for key, value in receipt.items() if key not in time_fields
+            ):
+                raise ValueError("existing VM-HA promotion receipt identity changed")
+            if any(
+                type(current[key]) not in {int, float}
+                or not math.isfinite(current[key])
+                or current[key] < 0
+                for key in time_fields
+            ):
+                raise ValueError("existing VM-HA promotion receipt timestamps are invalid")
+            # Publication may have succeeded before restoration commit crashed.
+            # Retain that exact durable decision even if the wall clock moved.
+            receipt = current
     if adoption is not None:
         restoration_store = StandbyRestorationStore(receipt_path.parent)
         restoration = restoration_store.load()
@@ -1772,27 +1878,13 @@ def _commit_promotion_receipt(
     if not receipt_path.exists() or current.get("receipt_id") != receipt_id:
         _atomic_write_json(receipt_path, receipt)
     if lineage is not None:
-        # The receipt is terminal transfer authority. Commit the exact
-        # restoration authorization before retiring lineage so a crash cannot
-        # leave a promoted owner with no durable way to restart its peer.
-        restoration_store = StandbyRestorationStore(receipt_path.parent)
-        try:
-            restoration_store.commit(
-                receipt=receipt,
-                updated_at=committed_at,
-            )
-        except StandbyRestorationError:
-            if lineage["intent"] != TransferIntent.AUTOMATIC_FAILOVER.value:
-                raise
-            # Automatic owner-loss promotion is availability-authoritative.
-            # Unusable restoration evidence disables only the optional
-            # standby restart; it must not invalidate an otherwise fenced,
-            # terminal promotion.
-            print("[VM-HA-RESTORATION] automatic-commit-rejected", flush=True)
-            restoration_store.discard_unusable_authorization()
-            print("[VM-HA-RESTORATION] automatic-authorization-discarded", flush=True)
-    if lineage is not None:
-        _durably_unlink(lineage_path)
+        _finish_committed_transfer(
+            receipt=receipt,
+            lineage=lineage,
+            lineage_path=lineage_path,
+            state_dir=receipt_path.parent,
+            updated_at=committed_at,
+        )
     if adoption is not None and adoption_path is not None:
         _durably_unlink(adoption_path)
     return receipt
@@ -2029,6 +2121,7 @@ class VMHAControllerRuntime:
         self.snapshots = snapshots
         self.status_path = status_path
         self.guard = guard
+        self.repair_fence: Callable[[RepairAttempt], object] = lambda _repair: self.guard()
         self.tunnel_step: Callable[[], None] = lambda: None
         self.tunnel_runtime: Any = None
         policy = VMHAController(
@@ -2455,11 +2548,104 @@ class VMHAControllerRuntime:
         _atomic_write_json(self.status_path, payload)
         return payload
 
-    def step(self) -> dict[str, Any]:
+    def _unfinished_active_repair(self) -> RepairAttempt | None:
+        repair = self.controller.checkpoints.load().repair_attempt
+        if (
+            repair is None
+            or repair.repair_mode is not DataPlaneMode.ACTIVE
+            or repair.healthy_observations >= 2
+            or repair.boot_id != self.snapshots.boot_id()
+        ):
+            return None
         try:
-            self.tunnel_step()
-            return self._write_status(self.controller.step())
+            guard = json.loads(
+                (self.status_path.parent / VM_HA_GUARD_PATH.name).read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            guard = None
+        # A verified local fence ends this timing obligation, not the consumed
+        # repair attempt. Unknown guard evidence must not extend its allowance.
+        if (
+            isinstance(guard, dict)
+            and guard.get("guard_boot_id") == repair.boot_id
+            and guard.get("data_plane_mode") in {"blocked", "passive", "originating"}
+        ):
+            from .local_commands import CURRENT, CommandBudget
+
+            # The guard revokes authority before the kernel write. Corroborate
+            # it with fresh physical state; never treat that intent as a fence.
+            # A failed probe leaves the original obligation intact and consumes
+            # at most the 50 ms left outside the emergency fence's 950 ms bound.
+            inherited = CURRENT.get()
+            deadline = self.snapshots.clock() + 0.05
+            if inherited is not None:
+                deadline = min(deadline, inherited.deadline)
+            budget = (
+                CommandBudget(deadline)
+                if inherited is None
+                else replace(inherited, deadline=deadline, effect_deadline=deadline)
+            )
+            token = CURRENT.set(budget)
+            try:
+                if self.snapshots.clock() < deadline:
+                    mode = self.snapshots.providers.data_plane()
+                    if (
+                        mode
+                        in {DataPlaneMode.BLOCKED, DataPlaneMode.PASSIVE, DataPlaneMode.ORIGINATING}
+                        and self.snapshots.clock() < deadline
+                    ):
+                        return None
+            except Exception:
+                pass
+            finally:
+                CURRENT.reset(token)
+        return repair
+
+    @contextmanager
+    def _repair_verification_budget(self, repair: RepairAttempt | None) -> Iterator[None]:
+        if repair is None:
+            yield
+            return
+        from ..deploy.vm_ha_cloud import vm_ha_observation_budget
+        from .local_commands import CURRENT, CommandBudget
+
+        # Repair commands and their subsequent verification share the original
+        # deadline. The last second remains reserved for the emergency fence.
+        deadline = repair.deadline_at - 1.0
+        inherited = CURRENT.get()
+        budget = (
+            CommandBudget(deadline)
+            if inherited is None
+            else replace(inherited, deadline=min(deadline, inherited.deadline))
+        )
+        token = CURRENT.set(budget)
+        try:
+            with vm_ha_observation_budget(
+                seconds=budget.deadline - self.snapshots.clock(), clock=self.snapshots.clock
+            ):
+                yield
+        finally:
+            CURRENT.reset(token)
+
+    def step(self) -> dict[str, Any]:
+        repair = None
+        try:
+            repair = self._unfinished_active_repair()
+            with self._repair_verification_budget(repair):
+                # Component repair owns this remaining allowance until both
+                # fresh health confirmations complete. Tunnel selection reads
+                # another full snapshot without advancing that verification;
+                # defer it rather than exhaust the original repair deadline.
+                if repair is None:
+                    self.tunnel_step()
+                result = self.controller.step()
+            return self._write_status(result)
         except Exception as error:
+            if repair is not None:
+                # This physical fence bypasses the routing lock and runs after
+                # the expired observation context has been released. Ordinary
+                # teardown and best-effort status cannot delay it.
+                self.repair_fence(repair)
             self.guard()
             try:
                 self.snapshots.observe()
@@ -2592,6 +2778,26 @@ class DefaultVMHAControllerRuntime:
                         raise ValueError("VM-HA health identity is not a record")
                     if path == self.guard_path:
                         value.pop("installed_at", None)
+                    elif path.name == VM_HA_CHECKPOINT_PATH.name:
+                        checkpoint = controller_checkpoint_from_dict(value)
+                        repair = checkpoint.repair_attempt
+                        if (
+                            checkpoint.pending_action is None
+                            and repair is not None
+                            and repair.healthy_since is not None
+                            and repair.healthy_observations == 2
+                            and (checkpoint.state, repair.repair_mode)
+                            in {
+                                (HAState.NORMAL, DataPlaneMode.PASSIVE),
+                                (HAState.ACTIVE, DataPlaneMode.ACTIVE),
+                            }
+                        ):
+                            # Confirmed recovery retains its consumed budget for
+                            # sixty healthy seconds. Retiring only that history
+                            # must not invalidate an independently fresh sample.
+                            # The durable record and all effect/ownership guards
+                            # remain unchanged; incomplete repairs stay exact.
+                            value["repair_attempt"] = None
                     elif path.name == "standby-auto-healing-policy.json":
                         value.pop("updated_at", None)
                 encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
@@ -2735,16 +2941,14 @@ class DefaultVMHAControllerRuntime:
             raise
         finally:
             self.publisher.progress("idle")
+        snapshot = getattr(self.controller.snapshots, "last_snapshot", None)
+        recovered_completion = bool(
+            isinstance(snapshot, ControllerSnapshot) and snapshot.transfer_completion_recorded
+        )
         if status.get("promotion_ready") is True:
-            _atomic_write_json(
-                self.guard_path,
-                {
-                    "schema": _STATUS_SCHEMA,
-                    "guard_boot_id": self.boot_id,
-                    "data_plane_mode": "active",
-                    "installed_at": self.clock(),
-                },
-            )
+            # The admitted data-plane effect owns the current-boot guard.
+            # A status publication must preserve its exact identity and digests,
+            # which later component recovery revalidates before touching the kernel.
             request_reconcile = getattr(
                 getattr(self.ports, "data_plane", None), "request_agent_reconcile", None
             )
@@ -2783,6 +2987,7 @@ class DefaultVMHAControllerRuntime:
                             self.config is not None
                             and self.transfer_lineage_path is not None
                             and self.promotion_receipt_path is not None
+                            and not recovered_completion
                         ):
                             _commit_promotion_receipt(
                                 status=status,
@@ -2808,11 +3013,17 @@ class DefaultVMHAControllerRuntime:
         else:
             self.active_reconcile_requested = False
         if self.promotion_receipt_path is not None:
-            _advance_standby_restoration_under_writer_lock(
-                status=status,
-                state_dir=self.promotion_receipt_path.parent,
-                clock=self.clock,
-            )
+            try:
+                _advance_standby_restoration_under_writer_lock(
+                    status=status,
+                    state_dir=self.promotion_receipt_path.parent,
+                    clock=self.clock,
+                )
+            except (StandbyRestorationError, OSError):
+                # Only this observation's exact committed-owner proof permits
+                # deferral. Invalid restoration never becomes Start authority.
+                if not recovered_completion:
+                    raise
         return status
 
     def close(self, *, restore_guard: bool = True) -> None:
@@ -3003,6 +3214,7 @@ def build_default_vm_ha_controller_runtime(
         controller.controller.before_observe = lambda checkpoint: ports.cloud.settle_pending_action(
             checkpoint.pending_action
         )
+        controller.repair_fence = lambda repair: ports.fence_repair_verification(repair)
         from .vm_ha.tunnel_runtime import ControllerTunnelRuntime
 
         tunnel_runtime = ControllerTunnelRuntime(config_path, state_dir, controller, ports, clock)

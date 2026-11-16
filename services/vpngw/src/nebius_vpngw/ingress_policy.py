@@ -28,7 +28,11 @@ EXECUTABLE = Path("/usr/local/lib/nebius-vpngw-ingress.py")
 
 
 class IngressPolicyError(ValueError):
-    """Safe configuration diagnostic; contains no input values."""
+    """Configuration diagnostic with structured field metadata for safe rendering."""
+
+    def __init__(self, message: str, *, fields: tuple[str, ...] = ()):
+        self.fields = fields
+        super().__init__(message)
 
 
 class IngressPolicyDrift(RuntimeError):

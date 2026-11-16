@@ -161,20 +161,27 @@ receipt or add new closure candidates from mere relatedness.
 Before protected merge dispatch, merge-pr refreshes the final head, issue scope
 and intended closing set. Route missing or stale managed publication material
 through create-pr's existing preparation owner; do not start another coordinator
-or relax the protected merge checks. If already merged, perform read-only
-verification only. Frozen evidence cannot guarantee against a later manual PR
-edit or merge outside this workflow; GitHub uses the references present at merge.
+or relax the protected merge checks. If already merged, verify the merged result
+and issue state before considering the separately authorized lifecycle closure
+fallback. Frozen evidence cannot guarantee against a later manual PR edit or
+merge outside this workflow; GitHub uses the references present at merge.
 
 GitHub performs closure on default-branch merge, including manual merges after
-the agent exits. No watcher or additional Action is installed. When merge-pr
+the agent exits. This local Implement route installs no watcher. Enrolled
+repositories use their existing controller completion owner. When merge-pr
 observes the authoritative merge, reread each intended issue's full identity,
 state and reason. Distinguish already closed, observed closed, still open and
 unverified; do not attribute a prior/unrelated closure to this PR without event
 evidence. Use bounded existing observation budgets; no indefinite closure poll.
 Report issue outcomes separately from merge, destination and exact-result CI.
 Post-merge CI failure neither reverses a merge nor automatically reopens issues.
-Disabled/unavailable closure stays pending; do not silently substitute an issue
-write or permission change. Native closure needs no final agent comment.
+Disabled/unavailable native closure stays pending unless explicit lifecycle
+authority permits the verified fallback in
+[the shared PR lifecycle](../../review-pr/references/pr-lifecycle.md). Keep its
+incoming-PR authority record separate from this Implement receipt. Recheck current
+default coverage and later human actions before comment/close/readback; never
+change permissions or silently infer authority. Native closure needs no final
+agent comment.
 
 ## Vendor references
 

@@ -45,6 +45,7 @@ def build_binary() -> None:
     from .handoff_bootstrap import SOURCES as HANDOFF_SOURCES
     from .ingress_policy import INGRESS_SOURCES
     from .ordinary_routes import OWNERSHIP_SOURCES
+    from .repair_bootstrap import SOURCES as REPAIR_SOURCES
     from .replay_window import REPLAY_WINDOW_SOURCES
 
     for source_name in dict.fromkeys(
@@ -53,6 +54,7 @@ def build_binary() -> None:
             *REPLAY_WINDOW_SOURCES,
             *INGRESS_SOURCES,
             *(relative for _name, relative in HANDOFF_SOURCES),
+            *(relative for _name, relative in REPAIR_SOURCES),
             "ordinary_bootstrap.py",
             "boot_policy.py",
             "packet_health.py",

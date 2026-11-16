@@ -17,15 +17,15 @@ from workflow_state import git_environment, WorkflowError, digest, directory, lo
 from workflow_security import contains_sensitive
 
 
-OBJECTIVE_SCHEMA = "workflow/accepted-objective-v2"
-RUN_SCHEMA = "workflow/run-v2"
+OBJECTIVE_SCHEMA = "workflow/accepted-objective-v3"
+RUN_SCHEMA = "workflow/run-v4"
 BINDING_SCHEMA = "workflow/session-binding-v1"
 ROOTS = {"implement": "implement", "agentic-sdlc": "sdlc-runs"}
 TERMINAL = {"done", "cancelled"}
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 RUN_ID = re.compile(r"run-[a-z0-9][a-z0-9-]{0,79}\Z")
 TEXT_FIELDS = {"outcome", "scope", "constraints", "acceptance_criteria", "clarifications"}
-FIELDS = TEXT_FIELDS | {"provenance", "inputs", "completion", "issue_resolution"}
+FIELDS = TEXT_FIELDS | {"provenance", "inputs", "completion", "issue_resolution", "uat"}
 
 
 def now():
@@ -63,6 +63,8 @@ def normalize(value: object) -> dict:
             or not SHA.fullmatch(str(provenance["source_sha256"]))):
         raise WorkflowError("OBJECTIVE_INVALID", "provenance requires a source kind and digest, never raw turns")
     result["provenance"] = dict(provenance)
+    from workflow_uat import normalize as normalize_uat
+    result["uat"] = normalize_uat(value.get("uat"))
     inputs = value.get("inputs")
     if inputs is not None:
         if (not isinstance(inputs, dict) or set(inputs) != {"manifest", "manifest_sha256", "program_sha256"}
@@ -117,15 +119,21 @@ def project_context(project: Path, home: Path, owner: str):
         pass
     repo = Path(_git(project, "rev-parse", "--show-toplevel"))
     common = Path(_git(project, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    from workflow_automatic import selected
+    from workflow_projects import project_id
+    relative = project.relative_to(repo).as_posix()
+    project, logical = selected(project, common, owner)
+    repo = Path(_git(project, "rev-parse", "--show-toplevel"))
     branch = _git(project, "symbolic-ref", "--short", "HEAD")
     head = _git(project, "rev-parse", "--verify", "HEAD^{commit}")
     home = home.expanduser().absolute()
     if home.is_relative_to(repo) or repo.is_relative_to(home):
         raise WorkflowError("UNSAFE_STATE", "agent state must be outside the project Git tree")
-    identity = hashlib.sha256((str(common) + "\0" + str(project)).encode()).hexdigest()[:24]
+    identity = project_id(common, relative)
     root = home / ROOTS[owner] / identity
-    context = {"schema": "workflow/project-v1", "owner": owner, "project_id": identity,
-               "project_root": str(project), "git_root": str(repo), "git_common_dir": str(common)}
+    context = {"schema": "workflow/project-v2", "owner": owner, "project_id": identity,
+               "project_root": str(project), "logical_project_root": str(logical),
+               "git_root": str(repo), "git_common_dir": str(common)}
     return root, context, branch, head
 
 
@@ -182,8 +190,9 @@ def observe_binding(home: Path, owner: str, session: str, project: Path | None =
     if not run_dir.is_absolute() or run_dir.parent.parent != root:
         raise WorkflowError("BINDING_INVALID", "session binding escapes its owner root")
     run, objective = validate_run(run_dir, owner=owner)
+    from workflow_automatic import matches
     if (value.get("project_root") != run.get("project_root")
-            or project is not None and str(project.absolute()) != run["project_root"]
+            or project is not None and not matches(run, project)
             or value.get("objective_id") != objective.get("objective_id")
             or run.get("coordinator_session_sha256") != session_hash(session)):
         raise WorkflowError("BINDING_INVALID", "session does not own this project run")
@@ -223,8 +232,12 @@ def _revision(run_dir, objective, value):
 
 def _acquire_intake_lease(run_dir, run):
     """Reserve a managed SDLC source while it is still clean, before authoring."""
-    if run["owner"] != "agentic-sdlc" or run["status"] in TERMINAL:
+    if (run["owner"] != "agentic-sdlc" and not run.get("automatic_outer")) or run["status"] in TERMINAL:
         return
+    if run.get("shared_admission"):
+        from workflow_projects import get
+        if get(run_dir)["state"] == "requested":
+            return
     from workflow_interop import acquire, inspect_anchor, load, ExecutionInteropError
     project = Path(run["project_root"])
     try:
@@ -238,7 +251,14 @@ def _acquire_intake_lease(run_dir, run):
         raise WorkflowError("OWNERSHIP_INVALID", str(error)) from error
 
 
-def accept(project: Path, home: Path, owner: str, session: str, value: dict, *, revise: bool = False):
+def accept(project: Path, home: Path, owner: str, session: str, value: dict, *, revise: bool = False,
+           input_dependencies: dict | None = None):
+    try:
+        from workflow_statistics import safe_clock
+        statistics_started = safe_clock()
+    except Exception:
+        statistics_started = None
+    from workflow_automatic import eligible, ensure
     value = normalize(value)
     if "issue_resolution" in value and owner != "implement":
         raise WorkflowError("OBJECTIVE_INVALID", "issue resolution is owned by Implement")
@@ -247,14 +267,24 @@ def accept(project: Path, home: Path, owner: str, session: str, value: dict, *, 
         if (root / "workspace.json").exists():
             raise WorkflowError("WORKFLOW_UPGRADE_REQUIRED", "managed prompt state is unsupported and remains untouched")
         project_file = root / "project.json"
-        if project_file.exists() and read(project_file) != context:
-            raise WorkflowError("OWNERSHIP_INVALID", "project execution identity changed")
+        if project_file.exists():
+            prior = read(project_file)
+            # A fresh objective may select another physical checkout after the
+            # previous run ends. Per-run paths remain immutable below.
+            if any(prior.get(key) != context[key] for key in
+                   ("schema", "owner", "project_id", "git_common_dir")):
+                raise WorkflowError("OWNERSHIP_INVALID", "logical project identity changed")
         bound = observe_binding(home, owner, session, project)
         if bound:
             run_dir, run, objective = bound
             read(run_dir / objective["revisions"][-1]["snapshot"])
             intent = {key: value[key] for key in value if key != "provenance"}
             if digest(intent) == objective["revisions"][-1]["intent_sha256"]:
+                if input_dependencies is not None:
+                    from workflow_inputs import declare
+                    declare(run_dir, input_dependencies)
+                run = ensure(run_dir, run, home)
+                _bind(home, owner, session, run_dir, run, objective)
                 _acquire_intake_lease(run_dir, run)
                 return result(run_dir, run, objective, "ALREADY_COMPLETE" if run["status"] in TERMINAL else "CONTINUE")
             if run["status"] not in TERMINAL:
@@ -265,6 +295,14 @@ def accept(project: Path, home: Path, owner: str, session: str, value: dict, *, 
                 run.update(fence="steering", status="replan_required", updated_at=now())
                 write(run_dir / "run.json", run)
                 _revision(run_dir, objective, value)
+                if input_dependencies is not None:
+                    from workflow_inputs import declare
+                    declare(run_dir, input_dependencies)
+                try:
+                    from workflow_statistics import safe_record
+                    safe_record(run_dir, "objective-revision")
+                except Exception:
+                    pass  # Reporting cannot change the accepted owner outcome.
                 return result(run_dir, run, objective, "REPLAN_REQUIRED")
         active = root / "active-run.json"
         if active.exists():
@@ -276,33 +314,37 @@ def accept(project: Path, home: Path, owner: str, session: str, value: dict, *, 
             if other["status"] not in TERMINAL:
                 raise WorkflowError("CONTINUE_REQUIRED", "an objective is active; explicitly continue this project")
         run_dir = root / ("run-" + uuid.uuid4().hex)
-        promotion = None
-        if owner == 'agentic-sdlc':
+        automatic = eligible(Path(context["project_root"]))
+        if owner == 'agentic-sdlc' and not automatic:
             from workflow_interop import inspect_anchor
-            from git_promotion import ensure_promotion_branch, GitPromotionError
             anchor = inspect_anchor(project)
-            if anchor.get('status') == 'unmanaged':
-                try:
-                    promotion = ensure_promotion_branch(project, lifecycle_id=run_dir.name, task_slug='sdlc')
-                except GitPromotionError as error:
-                    raise WorkflowError('POLICY_BLOCK', str(error)) from error
-                branch, head = promotion['promotion_branch'], promotion['promotion_initial_head']
-            elif anchor.get('status') != 'managed':
+            if anchor.get('status') not in {'managed', 'unmanaged'}:
                 raise WorkflowError('OWNERSHIP_INVALID', 'SDLC requires a source or ordinary managed checkout')
         write(project_file, context)
-        if promotion is not None:
-            write(run_dir / 'git-promotion.json', promotion)
         run = {**context, "schema": RUN_SCHEMA, "run_id": run_dir.name,
                "coordinator_session_sha256": session_hash(session), "status": "accepted",
                "fence": None, "source_branch": branch, "source_head": head,
+               "automatic_outer": automatic, "shared_admission": True,
                "created_at": now(), "updated_at": now()}
         objective = {"schema": OBJECTIVE_SCHEMA, "owner": owner, "run_id": run_dir.name,
                      "objective_id": "objective-" + uuid.uuid4().hex, "revisions": []}
         _revision(run_dir, objective, value)
         write(run_dir / "run.json", run)
+        from workflow_projects import reserve
+        reserve(run_dir, run, home, session_hash(session))
         write(active, {"schema": "workflow/active-run-v1", "run_id": run_dir.name})
         _bind(home, owner, session, run_dir, run, objective)
+        if input_dependencies is not None:
+            from workflow_inputs import declare
+            declare(run_dir, input_dependencies)
+        run = ensure(run_dir, run, home)
+        _bind(home, owner, session, run_dir, run, objective)
         _acquire_intake_lease(run_dir, run)
+        try:
+            from workflow_statistics import safe_record
+            safe_record(run_dir, "accepted", started=statistics_started)
+        except Exception:
+            pass  # Reporting cannot change the accepted owner outcome.
         return result(run_dir, run, objective, "ACCEPTED")
 
 
@@ -317,16 +359,25 @@ def _writers_quiescent(run_dir):
             raise WorkflowError("WRITERS_ACTIVE", "terminate and admit outstanding workers before changing ownership")
 
 
-def continue_run(project: Path, home: Path, owner: str, session: str, *, takeover: Path | None = None):
+def continue_run(project: Path, home: Path, owner: str, session: str, *, takeover: Path | None = None,
+                 input_dependencies: dict | None = None):
+    from workflow_automatic import ensure, matches
     root, _context, _branch, _head = project_context(project, home, owner)
     with lock(root):
+        if not (root / "active-run.json").exists():
+            from workflow_projects import records, TERMINAL as PROJECT_TERMINAL
+            for row in records(Path(_context["git_common_dir"])):
+                if (row["logical_project_root"] == str(project.absolute())
+                        and row["state"] not in PROJECT_TERMINAL and row["owner"] != owner):
+                    command = "implement" if row["owner"] == "implement" else "sdlc-start"
+                    raise WorkflowError("OWNER_CONFLICT", f"continue this project with ${command} continue {project}")
         pointer = read(root / "active-run.json")
         name = str(pointer.get("run_id", ""))
         if not RUN_ID.fullmatch(name):
             raise WorkflowError("WORKFLOW_UPGRADE_REQUIRED", "unsupported active run; old history was preserved")
         run_dir = root / name
         run, objective = validate_run(run_dir, owner=owner)
-        if run["project_root"] != str(project.absolute()):
+        if not matches(run, project):
             raise WorkflowError("OWNERSHIP_INVALID", "project selection disagrees with active run")
         if run["coordinator_session_sha256"] != session_hash(session):
             from workflow_validation import require_quiescent
@@ -344,13 +395,20 @@ def continue_run(project: Path, home: Path, owner: str, session: str, *, takeove
         if owner == "agentic-sdlc" and run["status"] not in TERMINAL and checkpoint.exists():
             current = read(checkpoint)
             iteration = int(current.get("iteration_count", current.get("iteration", 0)))
-            limit = int(current.get("max_iterations", 200))
-            if limit > 0 and iteration - int(run.get("continuation_window_start", 0)) >= limit:
-                run["continuation_window_start"] = iteration
-                run["continuation_windows"] = int(run.get("continuation_windows", 1)) + 1
+            limit = int(current.get("checkpoint_interval_iterations", 200))
+            if limit > 0 and iteration - int(run.get("observation_checkpoint_start", 0)) >= limit:
+                run["observation_checkpoint_start"] = iteration
+                run["observation_checkpoints"] = int(run.get("observation_checkpoints", 1)) + 1
                 write(run_dir / "run.json", run)
+        if input_dependencies is not None:
+            from workflow_inputs import declare
+            declare(run_dir, input_dependencies)
+        run = ensure(run_dir, run, home)
         _bind(home, owner, session, run_dir, run, objective)
         _acquire_intake_lease(run_dir, run)
+        if owner == "agentic-sdlc" and run["status"] not in TERMINAL:
+            from workflow_corrections import pause
+            pause(run_dir, False, session)
         return result(run_dir, run, objective, "ALREADY_COMPLETE" if run["status"] in TERMINAL else "CONTINUE")
 
 
@@ -370,6 +428,11 @@ def fence(run_dir: Path, session: str, reason: str):
 
 def check_dispatch(run_dir: Path, *, allow_complete: bool = False):
     run, objective = validate_run(run_dir)
+    if run.get("shared_admission") and run["status"] not in TERMINAL:
+        from workflow_projects import get
+        entry = get(run_dir)
+        if entry is None or entry["state"] != "allocated":
+            raise WorkflowError("CAPACITY_WAIT", "objective is waiting or aggregation has fenced child writers")
     if run.get("fence") is not None or run["status"] in TERMINAL and not allow_complete:
         raise WorkflowError("EXECUTION_FENCED", "dispatch and promotion are fenced pending reconciliation")
     return run, objective
@@ -378,11 +441,18 @@ def check_dispatch(run_dir: Path, *, allow_complete: bool = False):
 def result(run_dir, run, objective, status):
     latest = objective["revisions"][-1]
     value = read(run_dir / latest["snapshot"])
-    return {"status": status, "owner": run["owner"], "project_root": run["project_root"],
+    if run.get("shared_admission"):
+        from workflow_projects import get
+        entry = get(run_dir)
+        if entry is not None and entry["state"] == "requested":
+            status = "CAPACITY_WAIT"
+    return {"status": status, "owner": run["owner"], "project_root": run.get("logical_project_root", run["project_root"]) if run["status"] in TERMINAL else run["project_root"],
+            "logical_project_root": run.get("logical_project_root", run["project_root"]),
             "project_id": run["project_id"], "run_dir": str(run_dir), "run_id": run_dir.name,
             "objective_id": objective["objective_id"], "revision": latest["revision"],
             "objective_sha256": latest["sha256"], "intent_sha256": latest["intent_sha256"],
-            "outcome": value["outcome"], "fence": run["fence"]}
+            "outcome": value["outcome"], "fence": run["fence"],
+            "uat_policy": value["uat"], "uat": __import__("workflow_uat").outcome(run_dir)}
 
 
 def authorize_coordinator(run_dir: Path, session: str, *, owner: str | None = None):
@@ -403,7 +473,10 @@ def complete_run(run_dir: Path, session: str):
         require_complete(run_dir)
         from workflow_interop import load, _reconcile
         outer = load(run_dir)
-        if outer is not None and outer.get("mode") == "managed":
+        if run.get("automatic_outer"):
+            from workflow_automatic import verify_delivery
+            verify_delivery(run_dir)
+        elif outer is not None and outer.get("mode") == "managed":
             observed = _reconcile(run_dir, Path(run["project_root"]), outer)
             if observed.get("state") != "released":
                 raise WorkflowError("COMPLETION_BLOCKED", "release the managed outer lease after final evidence before completion")
@@ -413,10 +486,37 @@ def complete_run(run_dir: Path, session: str):
                     require_completed_source_integration(run_dir, Path(run["project_root"]))
                 except ExecutionInteropError as error:
                     raise WorkflowError("COMPLETION_BLOCKED", str(error)) from error
+        from workflow_uat import handoff, require_delivery
+        from workflow_task_acceptance import repository
+        repo = repository(run_dir)
+        candidate = (read(run_dir / "aggregation/delivery.json")["head"] if run.get("automatic_outer")
+                     else records[0]["promoted_head"] if len(records) == 1 and records[0].get("delivered_checkout")
+                     else _git(Path(run["project_root"]), "rev-parse", "HEAD"))
+        if not any(record.get("promoted_head") == candidate for record in records) and not run.get("automatic_outer"):
+            raise WorkflowError("COMPLETION_BLOCKED", "final candidate differs from delivered execution evidence")
+        require_delivery(run_dir, candidate)
+        handoff(run_dir, candidate, repository=repo)
         from workflow_issue_resolution import write_completion
         write_completion(run_dir, records)
+        if run.get("shared_admission") and not run.get("automatic_outer"):
+            from workflow_projects import get, update, release
+            entry = get(run_dir)
+            if entry["state"] == "allocated":
+                update(run_dir, expected="allocated", state="aggregation-ready")
+                entry = get(run_dir)
+            if entry["state"] == "aggregation-ready":
+                update(run_dir, expected="aggregation-ready", state="delivered")
+                entry = get(run_dir)
+            if entry["state"] == "delivered":
+                update(run_dir, expected="delivered", state="cleaned")
+            release(run_dir)
         run.update(status="done", updated_at=now())
         write(run_dir / "run.json", run)
+        try:
+            from workflow_statistics import safe_record
+            safe_record(run_dir, "complete")
+        except Exception:
+            pass  # Reporting cannot change the accepted owner outcome.
         home = run_dir.parent.parent.parent
         _bind(home, run["owner"], session, run_dir, run, objective)
         return result(run_dir, run, objective, "COMPLETE")

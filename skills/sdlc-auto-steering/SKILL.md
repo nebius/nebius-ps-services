@@ -80,13 +80,13 @@ changing committed product-truth documents directly.
 
 ## Required Reads
 
-- `../worktree/references/document-delivery.md` for source coverage, phase/slice
-  identities, shared-skill caller contracts and protected completion policy.
-
-- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
-  assignment/ownership and evidence to the current immutable execution basis.
-  Before preparation, bind evidence to the accepted objective and applicable
-  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+- `../worktree/references/workflow-invariants.md` for shared ownership,
+  evidence, failure and conditional-read rules.
+- Read `../worktree/references/workflow-contract.md` before this phase performs
+  execution planning, reconciliation or any execution lifecycle operation.
+- Read `../worktree/references/document-delivery.md` when accepted inputs include
+  a source manifest/program, this phase handles SLICE/source coverage or phase
+  barriers, or it handles delivery admission, phase exit or protected completion.
 
 - `docs/requirements.md`.
 - `docs/design.md` when present.
@@ -112,6 +112,23 @@ changing committed product-truth documents directly.
   `sdlc-start`; this skill does not bypass checkpoint ownership.
 
 ## Process
+
+Use private `workflow_transition.py steering-inputs --run-dir PATH --execution ID`
+with `--plan PATH` when applicable. Review the returned bounded input inventory,
+resolve the ledger and execute its complete `ready_command` argv. Only the bound
+coordinator may issue the receipt. Use the returned `working_directory`, which
+is the selected project from the authorized run and remains inside its owned Git
+scope. Planning, preparation and new worker admission
+require its current immutable copy. Objective/spec/context/plan/decision evidence
+changes invalidate readiness; timestamps, checkpoints and steering outputs are
+excluded from input freshness. Resolved historical dispositions remain preserved.
+Clock exclusion applies only to immediate scalar metadata of recognized owner
+records and steering entries, plus leading Markdown metadata. Nested fields,
+schema definitions, examples and unknown JSON records remain decision evidence,
+even when named `updated_at` or `timestamp`.
+Before first preparation or a replacement plan, supply that exact `--plan`; the
+issued immutable receipt also owns the selected plan pointer used by hooks and
+checks that omit it. Reissue after planning and validation sidecars are complete.
 
 - Reload active state and existing steering before classifying anything.
 - Append each pending accepted objective revision to the steering inbox exactly

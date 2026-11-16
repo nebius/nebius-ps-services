@@ -19,6 +19,7 @@ import yaml
 
 from nebius_vpngw.agent.vm_ha.runtime import (
     RenewableNebiusSDK,
+    _live_peer_binding_from_mtls,
     begin_runtime_identity_preflight,
     build_identity_bound_sdk,
     record_runtime_identity_migration_required,
@@ -173,6 +174,10 @@ class RearmCloudPort(Protocol):
     def finalize_accepted_start(self, operation: AcceptedCloudOperation) -> None: ...
 
 
+class RearmCloudObservationUnavailable(RuntimeError):
+    """An exact provider read failed without granting rearm mutation authority."""
+
+
 class SDKRearmCloudPort:
     """Expose only read/start capabilities from the shared SDK adapter."""
 
@@ -192,7 +197,10 @@ class SDKRearmCloudPort:
     def observe_instance(self, instance_id: str) -> ComputeObservation:
         from .vm_ha.attachment_continuity import observe_epoch
 
-        instance = self.calls.get_instance(instance_id)
+        try:
+            instance = self.calls.get_instance(instance_id)
+        except Exception as error:
+            raise RearmCloudObservationUnavailable("rearm-cloud-observation-unavailable") from error
         observation = compute_observation(instance_id, instance)
         if self.binding is not None and self.state_dir is not None:
             observation = replace(
@@ -206,7 +214,11 @@ class SDKRearmCloudPort:
         return observation
 
     def observe_allocation(self, allocation_id: str) -> AllocationObservation:
-        return allocation_observation(allocation_id, self.calls.get_allocation(allocation_id))
+        try:
+            allocation = self.calls.get_allocation(allocation_id)
+        except Exception as error:
+            raise RearmCloudObservationUnavailable("rearm-cloud-observation-unavailable") from error
+        return allocation_observation(allocation_id, allocation)
 
     def start_instance(self, instance_id: str, operation_id: str) -> None:
         self.calls.start_instance(instance_id, operation_id)
@@ -480,6 +492,7 @@ class RearmRuntime:
         enabled_path: Path = ENABLED_PATH,
         clock: Callable[[], float] = time.time,
         auto_healing_inhibition_provider: Callable[[], str | None] | None = None,
+        peer_binding_provider: Callable[[], VMHARuntimeNodeBinding] | None = None,
     ) -> None:
         self.binding = binding
         self.local = local
@@ -489,6 +502,7 @@ class RearmRuntime:
         self.enabled_path = enabled_path
         self.clock = clock
         self.auto_healing_inhibition_provider = auto_healing_inhibition_provider
+        self.peer_binding_provider = peer_binding_provider
 
     def _status(
         self,
@@ -749,6 +763,19 @@ class RearmRuntime:
             inhibition = self._inhibition_reason()
             if inhibition is not None:
                 return self._status("inhibited", inhibition)
+            if self.peer_binding_provider is not None:
+                try:
+                    peer = self.peer_binding_provider()
+                    if not peer.compute_id or peer.model_dump(exclude={"compute_id"}) != (
+                        self.peer.model_dump(exclude={"compute_id"})
+                    ):
+                        raise ValueError("replacement changed immutable peer identity")
+                    if peer.compute_id != self.peer.compute_id:
+                        if self.cloud.accepted_operation() is not None:
+                            return self._status("blocked", "rearm-peer-change-operation-pending")
+                        self.peer = peer
+                except Exception:
+                    return self._status("blocked", "rearm-peer-binding-unavailable")
             try:
                 receipt = _promotion_receipt(
                     self.state_dir / PROMOTION_RECEIPT_PATH.name,
@@ -762,6 +789,10 @@ class RearmRuntime:
                 return self._status("idle", "promotion-receipt-unavailable")
             try:
                 _owner, target = self._stable_owner_observation(receipt)
+            except RearmCloudObservationUnavailable:
+                return self._status(
+                    "blocked", "rearm-cloud-observation-unavailable", receipt=receipt
+                )
             except RuntimeError:
                 return self._status("blocked", "ownership-or-alias-drift", receipt=receipt)
             checkpoint_path = self.state_dir / REARM_CHECKPOINT_PATH.name
@@ -816,6 +847,13 @@ class RearmRuntime:
                     )
                 try:
                     _owner, target = self._stable_owner_observation(receipt)
+                except RearmCloudObservationUnavailable:
+                    return self._status(
+                        "blocked",
+                        "rearm-cloud-observation-unavailable",
+                        receipt=receipt,
+                        checkpoint=checkpoint,
+                    )
                 except RuntimeError:
                     return self._status(
                         "blocked",
@@ -1193,7 +1231,15 @@ class RearmRuntime:
                     receipt=receipt,
                     checkpoint=blocked,
                 )
-            _owner, target = self._stable_owner_observation(receipt)
+            try:
+                _owner, target = self._stable_owner_observation(receipt)
+            except RearmCloudObservationUnavailable:
+                return self._status(
+                    "blocked",
+                    "rearm-cloud-observation-unavailable",
+                    receipt=receipt,
+                    checkpoint=starting,
+                )
             if target.state is InstanceCloudState.RUNNING:
                 if restoration is not None:
                     restoration_store.mark_running(
@@ -1307,6 +1353,15 @@ def build_default_rearm_runtime(
     try:
         journal = VMHACloudOperationJournal(state_dir / REARM_OPERATION_PATH.name)
         cloud = SDKRearmCloudPort(sdk.client, journal=journal, binding=binding, state_dir=state_dir)
+
+        def live_peer_binding() -> VMHARuntimeNodeBinding:
+            return _live_peer_binding_from_mtls(
+                snapshot=ManagedMTLSStore(state_dir / "mtls", create=False).snapshot(),
+                binding=binding,
+                local=local,
+                peer=peer,
+            )
+
         runtime = RearmRuntime(
             binding=binding,
             local=local,
@@ -1314,6 +1369,7 @@ def build_default_rearm_runtime(
             cloud=cloud,
             state_dir=state_dir,
             clock=clock,
+            peer_binding_provider=live_peer_binding,
         )
         return DefaultRearmRuntime(runtime, sdk)
     except Exception:

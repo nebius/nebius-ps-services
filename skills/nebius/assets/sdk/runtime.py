@@ -66,7 +66,9 @@ def request_options(timeout: float = 30.0, *, retries: int = 3) -> dict[str, Any
     }
 
 
-def rpc(method: Callable, request: Any, *, timeout: float = 30.0, retries: int = 3) -> Any:
+def rpc(
+    method: Callable, request: Any, *, timeout: float = 30.0, retries: int = 3
+) -> Any:
     """Bound one SDK request, including auth; never expose provider error text."""
     options = request_options(timeout, retries=retries)
     try:
@@ -92,15 +94,21 @@ def init_nebius_sdk(
     """
     if not parent_id or not parent_id.strip():
         raise ValueError("an explicit parent_id is required")
-    if credentials_file is not None and (profile is not None or config_file is not None):
+    if credentials_file is not None and (
+        profile is not None or config_file is not None
+    ):
         raise ValueError("choose credentials_file or profile/config_file")
     if workload_identity is not None:
-        if any(v is not None for v in (profile, config_file, credentials_file, endpoint)):
+        if any(
+            v is not None for v in (profile, config_file, credentials_file, endpoint)
+        ):
             raise ValueError(
                 "workload_identity cannot be combined with another authentication selector"
             )
         if set(workload_identity) != {"service_account_id", "token_file"}:
-            raise ValueError("workload_identity requires service_account_id and token_file")
+            raise ValueError(
+                "workload_identity requires service_account_id and token_file"
+            )
         from sdk.workload_identity import workload_identity_sdk
 
         return workload_identity_sdk(parent_id=parent_id, **workload_identity)
@@ -222,14 +230,35 @@ class MutationResult:
     resource_id: str
 
 
-def submit(method: Callable, request: Any, *, timeout: float = 300.0) -> MutationResult:
-    """Submit once, wait for terminal success, retain IDs on failure. Never retry writes."""
+def submit(
+    method: Callable,
+    request: Any,
+    *,
+    timeout: float = 300.0,
+    idempotency_key: str | None = None,
+    on_accepted: Callable[[MutationResult], None] | None = None,
+) -> MutationResult:
+    """Submit once and persist acceptance before waiting when a callback is supplied.
+
+    Durable callers persist intent and a stable key BEFORE calling this function.
+    The callback must durably save the receipt; its failure prevents waiting and
+    retains identifiers in CloudError. This does not authorize write retries.
+    """
     deadline = time.monotonic() + positive_seconds(timeout)
     operation_id = resource_id = ""
     op = None
     try:
-        op = rpc(method, request, timeout=min(30.0, timeout), retries=1)
+        options = request_options(min(30.0, timeout), retries=1)
+        if idempotency_key is not None:
+            if not isinstance(idempotency_key, str) or not idempotency_key.strip():
+                raise ValueError("nonempty persisted idempotency key required")
+            options["metadata"] = [("x-idempotency-key", idempotency_key)]
+        op = method(request, **options).wait()
         operation_id, resource_id = op.id, op.resource_id
+        if not operation_id:
+            raise CloudError("OPERATION_IDENTITY_MISSING")
+        if on_accepted is not None:
+            on_accepted(MutationResult(operation_id, resource_id))
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise CloudError("DEADLINE_EXCEEDED")

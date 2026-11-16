@@ -139,7 +139,7 @@ from worktree_state import (  # noqa: E402 — verified bootstrap precedes runti
 from agent_runtime import agent_home  # noqa: E402
 
 
-LEASE_SCHEMA = 4
+LEASE_SCHEMA = 5
 RESERVATION_SCHEMA = 4
 PREPARATION_SCHEMA = 1
 LEASE_KIND = "coordinator"
@@ -147,7 +147,7 @@ LEASE_REMOVAL_SCHEMA = 1
 LEASE_REMOVAL_KIND = "coordinator-removal"
 PREPARATION_KIND = "integration-commit-preparation"
 OWNER_KINDS = {"implement", "agentic-sdlc"}
-LEASE_RECORD_STATES = {"active", "released"}
+LEASE_RECORD_STATES = {"active", "aggregation-ready", "released"}
 RESOURCE_STATES = {"planned", "present", "absent"}
 RESOURCE_KINDS = {"integration", "worker"}
 INTEGRATION_STATES = {"planned", "present", "committing", "ready"}
@@ -320,7 +320,8 @@ def preparation_path(primary: Path, name: str) -> Path:
 
 def _commit_transaction_root(primary: Path) -> Path:
     try:
-        completed = subprocess.run(
+        from worktree_operation import run
+        completed = run(
             ["git", "-C", str(primary), "rev-parse", "--git-common-dir"],
             check=False,
             text=True,
@@ -395,7 +396,7 @@ def commit_repository_lock(primary: Path) -> Iterator[None]:
         ):
             raise InteropError(f"shared commit lock must be a regular file: {path}")
         os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        __import__("worktree_operation").acquire_lock(descriptor)
         yield
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -423,7 +424,7 @@ def interop_lock(primary: Path) -> Iterator[None]:
             ):
                 raise InteropError(f"interop lock must be a regular file: {path}")
             os.fchmod(descriptor, 0o600)
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            __import__("worktree_operation").acquire_lock(descriptor)
             yield
         finally:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -447,7 +448,7 @@ def lifecycle_creation_lock(primary: Path) -> Iterator[None]:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise InteropError(f"lifecycle lock must be a regular file: {path}")
         os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        __import__("worktree_operation").acquire_lock(descriptor)
         yield
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -479,7 +480,7 @@ def integration_transition_lock(primary: Path, name: str) -> Iterator[None]:
                 f"integration transition lock must be a regular file: {path}"
             )
         os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        __import__("worktree_operation").acquire_lock(descriptor)
         yield
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -539,7 +540,7 @@ def validate_lease(value: dict[str, object], name: str) -> dict[str, object]:
         "token",
         "resources",
     }
-    if value.get("schema") in {1, 2, 3}:
+    if value.get("schema") in {1, 2, 3, 4}:
         raise InteropError(
             "WORKFLOW_UPGRADE_REQUIRED: unfinished legacy lease schema is unsupported"
         )
@@ -708,8 +709,8 @@ def lifecycle_lease(
     if lease["state"] != manifest.lease_state:
         if not (
             allow_external_transition
-            and manifest.lease_state == "active"
-            and lease["state"] == "released"
+            and manifest.lease_state in {"active", "aggregation-ready"}
+            and lease["state"] in {"active", "aggregation-ready", "released"}
         ):
             raise InteropError("task lease disagrees with its ownership manifest")
     return lease
@@ -878,7 +879,7 @@ def begin_integration_preparation(
 
     with interop_lock(primary):
         lease = lifecycle_lease(primary, name)
-        if lease is not None and lease["state"] == "active":
+        if lease is not None and lease["state"] != "released":
             raise InteropError(
                 "a nested coordinator still owns the outer worktree; commit preparation is blocked"
             )
@@ -1110,7 +1111,7 @@ def active_reservations(primary: Path) -> list[dict[str, object]]:
 
 def assert_idle(primary: Path, name: str) -> None:
     lease = lifecycle_lease(primary, name)
-    if lease is not None and lease["state"] == "active":
+    if lease is not None and lease["state"] != "released":
         raise InteropError(
             f"{lease['owner_kind']} still owns the outer worktree; repeat its managed "
             "run until final cleanup and final gates release the lease"
@@ -1169,7 +1170,7 @@ def acquire_task_lease_unlocked(
         "initial_head": initial_head,
     }
     existing = load_lease(primary, name)
-    if manifest.lease_state in {"active", "released"} and existing is None:
+    if manifest.lease_state in {"active", "aggregation-ready", "released"} and existing is None:
         raise InteropError("participating task lease is missing")
     if existing is not None:
         if manifest.lease_state == "active" and (
@@ -1177,7 +1178,7 @@ def acquire_task_lease_unlocked(
             or manifest.lease_token != existing["token"]
         ):
             raise InteropError("task lease disagrees with its ownership manifest")
-        if existing["state"] == "released":
+        if existing["state"] != "active":
             raise InteropError(
                 "the outer worktree has a terminal released lease receipt; "
                 "remove it before starting another nested coordinator"
@@ -1439,6 +1440,12 @@ def validate_released_resources(
 
     if lease["state"] != "released":
         raise InteropError("active task lease cannot be removed")
+    return validate_absent_resources(lease, registered_worktrees=registered_worktrees,
+                                     existing_branches=existing_branches)
+
+
+def validate_absent_resources(lease, *, registered_worktrees, existing_branches):
+    """Prove resource absence without changing or impersonating a lease state."""
     retained = [
         f"{resource['path']} ({resource['branch']})"
         for resource in lease["resources"]
@@ -1514,13 +1521,15 @@ def begin_integration(
     integration_branch: str,
     integration_worktree: Path,
     preparation_token: str | None = None,
+    automatic_run: Path | None = None,
 ) -> dict[str, object]:
     with interop_lock(primary):
         lease = lifecycle_lease(primary, name)
-        if lease is not None and lease["state"] == "active":
-            raise InteropError(
-                "a nested coordinator still owns the outer worktree; integration is blocked"
-            )
+        if automatic_run is not None:
+            from workflow_automatic import validate_capability
+            validate_capability(automatic_run, primary, name, lease)
+        elif lease is not None and lease["state"] != "released":
+            raise InteropError("a nested coordinator still owns the outer worktree; integration is blocked")
         preparation = load_preparation(primary, name)
         if preparation is None and preparation_token is not None:
             raise InteropError("integration preparation no longer exists")

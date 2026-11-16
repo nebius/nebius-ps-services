@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -458,7 +459,7 @@ def converge(
             return result
         if not api._confirm_vm_ha_apply_plan(result):
             return api._vm_ha_operator_declined(result)
-    with api.VMHAApplyLock(project_id=inspection.project_id, gateway_name=inspection.gateway_name):
+    with contextlib.nullcontext():  # The outer apply invocation owns the canonical lock.
         current = api._inspect_vm_ha_prerequisite_status(config_path, region=region)
         if (
             identity(
@@ -487,6 +488,9 @@ def converge(
                     or rotation_identity(rotation) != intent["rotation"]
                 ):
                     raise RuntimeError("HA rotation prerequisite changed before execution")
+        from .ha_convergence import mark_effects_started
+
+        mark_effects_started()
         record = journal.begin(intent)
         command = CommandJournal(inspection.project_id, inspection.gateway_name)
         checkpoint = command.snapshot()

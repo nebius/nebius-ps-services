@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -213,9 +214,115 @@ def test_preflight_sanitizes_sdk_failure_and_closes_client(tmp_path: Path) -> No
             sdk_factory=lambda **_kwargs: sdk,
         )
 
-    assert captured.value.reason == "authentication-failed"
+    assert captured.value.reason == "identity-unverified"
     assert secret not in str(captured.value)
     assert sdk.closed
+
+
+@pytest.mark.parametrize("factory_failure", [False, True])
+@pytest.mark.parametrize(
+    ("failure", "reason"),
+    [
+        (TimeoutError("PRIVATE_DETAIL"), "provider-timeout"),
+        (ConnectionError("PRIVATE_DETAIL"), "provider-unavailable"),
+        (socket.gaierror("PRIVATE_DETAIL"), "dns-unavailable"),
+        (RuntimeError("PRIVATE_DETAIL"), "identity-unverified"),
+    ],
+)
+def test_identity_probe_classifies_unavailable_evidence_without_changing_credentials(
+    tmp_path: Path, failure: Exception, reason: str, factory_failure: bool
+) -> None:
+    path = _private_file(tmp_path / "credential.json", _credential_payload())
+    original = path.read_bytes()
+    sdk = _SDK(failure=failure)
+
+    def factory(**_kwargs: object) -> _SDK:
+        if factory_failure:
+            raise failure
+        return sdk
+
+    with pytest.raises(VMHACredentialIdentityError) as caught:
+        preflight_vm_ha_credentials(
+            ("node-a", "node-b"),
+            source_path=path,
+            project_id="project-a",
+            reader_factory=_reader,
+            sdk_factory=factory,
+        )
+    assert caught.value.reason == reason
+    assert "PRIVATE_DETAIL" not in str(caught.value)
+    assert path.read_bytes() == original
+    assert sdk.closed is not factory_failure
+
+
+@pytest.mark.parametrize(
+    ("code", "reason"),
+    [
+        ("UNAUTHENTICATED", "authentication-failed"),
+        ("PERMISSION_DENIED", "authorization-failed"),
+        ("DEADLINE_EXCEEDED", "provider-timeout"),
+        ("UNAVAILABLE", "provider-unavailable"),
+    ],
+)
+def test_identity_probe_preserves_typed_provider_failure_category(
+    tmp_path: Path, code: str, reason: str
+) -> None:
+    from grpc import StatusCode
+    from nebius.aio.service_error import RequestError
+
+    path = _private_file(tmp_path / "credential.json", _credential_payload())
+    cause = RequestError(SimpleNamespace(code=StatusCode[code]))  # type: ignore[arg-type]
+    wrapped = RuntimeError("PRIVATE_DETAIL")
+    wrapped.__cause__ = cause
+    sdk = _SDK(failure=wrapped)
+    with pytest.raises(VMHACredentialIdentityError) as caught:
+        preflight_vm_ha_credentials(
+            ("node-a", "node-b"),
+            source_path=path,
+            project_id="project-a",
+            reader_factory=_reader,
+            sdk_factory=lambda **_kwargs: sdk,
+        )
+    assert caught.value.reason == reason
+    assert "PRIVATE_DETAIL" not in str(caught.value)
+    assert sdk.closed
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "authorization-failed",
+        "provider-timeout",
+        "provider-unavailable",
+        "dns-unavailable",
+        "identity-unverified",
+    ],
+)
+def test_identity_recovery_agrees_for_exception_and_ha_result(tmp_path: Path, reason: str) -> None:
+    import shlex
+
+    from nebius_vpngw.deploy.recovery import Invocation, advice
+
+    config = tmp_path / "gateway's HA config.yaml"
+    invocation = Invocation("apply", config, project="project-a", region="region-a")
+    direct = advice(invocation, VMHACredentialIdentityError(reason))
+    projected = advice(invocation, codes=("runtime-credential-" + reason,))
+    assert direct.mapping() == projected.mapping()
+    assert direct.reason_code == "runtime-credential-" + reason
+    assert shlex.split(direct.repair_command) == [
+        "nebius-vpngw",
+        "apply",
+        "--local-config-file",
+        str(config),
+        "--project-id",
+        "project-a",
+        "--region",
+        "region-a",
+        "--repair",
+    ]
+    assert direct.repair_prerequisite
+    if reason != "authorization-failed":
+        assert "invalid" not in direct.reason
 
 
 def test_preflight_rejects_authenticated_project_mismatch(tmp_path: Path) -> None:

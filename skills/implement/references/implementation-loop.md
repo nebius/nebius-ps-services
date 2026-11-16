@@ -1,11 +1,25 @@
 # Run-owned implementation execution
 
+For explicit continuation, invoke shared
+`workflow_intake.py --owner implement continue --project-root <project>` first,
+including for a delivered run. This binds the fresh native session and validates
+the terminal objective. Status/observe alone cannot satisfy continuation. An
+`ALREADY_COMPLETE` result ends the turn without preparing or dispatching work.
+
 Native permission must cover Git metadata and run-owned private state before
 execution. Default Codex `workspace-write` protects `.git` even in a writable
 workspace. Use an operator-authorized scoped permission profile or report
 `ENVIRONMENT_BLOCKER`; never change or bypass controls from the product workflow.
 
-After accepting a new objective, run the shared private transition
+After accepting a new objective, collect and record architecture through the
+[shared statistics owner](../../worktree/references/statistics.md), before bootstrap.
+Missing initial capture remains an explicit gap; never backdate later inventory.
+Resolve the accepted worker, wave-task and retained-worktree ceilings before
+allocation. For requested overrides, invoke shared `configure-policy` now,
+using the [wave policy contract](../../worktree/references/worker-waves.md).
+Absent an override, defaults are 4/8/16. The first allocation freezes defaults
+if no policy exists; later configuration must match that frozen policy exactly.
+Then run the shared private transition
 `prepare-specs --run-dir <run> --project-root <project> --execution FEAT-001`.
 It allocates the run's sole integration checkout from the accepted committed
 source, with no plan, execution basis, waves or workers. Initial canonical
@@ -26,7 +40,7 @@ unrelated integration changes, unjournaled commits or changed bootstrap
 objectives retain evidence and fail closed. Fenced/cancelled runs cannot prepare
 or dispatch; retain their recorded resources for explicit reconciliation.
 
-Use one integration checkout per run, internal FEAT-001 execution identity,
+Use one active integration checkout per run, initially FEAT-001 execution identity,
 fresh task worktrees and shared Worktree Git transactions. Lock plans under the
 private run plans directory with heading `# FEAT-001 Plan vN`, a sibling `.lock`,
 and contiguous TASK-NNN sections. Each task declares Requirements (or none),
@@ -62,7 +76,7 @@ retain the same wave base. Integration waits for the full wave, merges in stable
 task order, runs combined validation and removes exact clean worker resources.
 
 Use the shared [wave policy and acceptance contract](../../worktree/references/worker-waves.md).
-Freeze W/B/P independently (defaults 4/8/16) before allocation, and lock the
+Preserve W/B/P frozen before the first allocation (defaults 4/8/16), and lock the
 executable validation sidecar with the plan. Refresh total native workflow capacity
 through `observe-capacity` before arm/refill. Zero waits; unknown permits one total
 worker. Record actual native intervals to substantiate overlap.
@@ -85,11 +99,17 @@ An unknown/default source receives a verified feature branch/checkout as the
 local deliverable. Dirty source content remains untouched. A source drift
 blocker retains the exact verified integration for later reconciliation.
 
-For a managed outer checkout, invoke the shared `release-outer-lease` transition
-after final alignment, acceptance validation and documentation evidence. Then
-complete the run through intake `complete`; it independently checks the actual
-outer lease release. Return the ordinary explicit Worktree integration handoff.
-Local workflow completion never performs the outer owner's integration.
+For an automatic outer, follow [automatic aggregation](../../worktree/references/automatic-projects.md):
+prepare the current-source candidate, run its frozen acceptance, finish delivery
+and cleanup, then complete the run. Do not release the lease before aggregation.
+For a manually managed outer, release after final gates and retain the explicit
+Worktree integration handoff. These owners are distinguished by run.automatic_outer.
+
+Pending automatic delivery must finish with the shared evidence-backed message
+and `$implement continue "<original-project-folder>"`. Follow
+[automatic projects](../../worktree/references/automatic-projects.md#required-final-delivery-message)
+for promotion, finalization and recovery wording. Completed delivery has no
+continuation command.
 
 ## Issue plan delivery
 

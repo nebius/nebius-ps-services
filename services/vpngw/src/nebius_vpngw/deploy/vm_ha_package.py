@@ -7,13 +7,12 @@ import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from email.parser import BytesParser
 from pathlib import Path
 from typing import Any
 
-from packaging.utils import parse_wheel_filename
 from paramiko import AuthenticationException, SSHException  # type: ignore[import-untyped]
 
+from .. import dependency_scope
 from ..config_loader import InstanceResolvedConfig
 from ..ordinary_operations import digest
 from . import ordinary_apply
@@ -231,6 +230,7 @@ def inspect_plan(
     resume_parent: str | None = None,
     resume_manifest: dict | None = None,
     reservation: dict | None = None,
+    corrective_predecessor: dict | None = None,
 ) -> VMHAPackagePlan:
     if wheel is None:
         wheel = ssh._build_wheel(allow_installed_fallback=False)
@@ -277,14 +277,47 @@ def inspect_plan(
                 tempfile.TemporaryDirectory(prefix="vpngw-ha-dependency-plan-"),
                 reservation=reservation,
             )
-    full_observation = ordinary_apply.remote(
-        ssh, target, instance, local, {"action": "inspect-package", "manifest": manifest}
-    )["observation"]
+    unreserved_corrective = False
+    if corrective_predecessor is not None:
+        from .ordinary_handoff import corrective_action
+
+        observed_corrective = corrective_action(
+            ssh,
+            target,
+            instance,
+            local,
+            {"action": "corrective-inspect", "operation": corrective_predecessor["operation"]},
+        )
+        unreserved_corrective = observed_corrective["reservation"] is None
+        if not unreserved_corrective and (
+            observed_corrective["reservation"]["key"]["operation"]
+            != corrective_predecessor["operation"]
+            or observed_corrective["reservation"]["key"]["children"]
+            != corrective_predecessor["children"]
+        ):
+            raise VMHAAgentPackageError("Corrective package reservation changed")
+    def inspect_packages() -> dict:
+        if unreserved_corrective:
+            assert corrective_predecessor is not None
+            return corrective_action(
+                ssh,
+                target,
+                instance,
+                local,
+                {**corrective_predecessor, "action": "corrective-plan", "manifest": manifest},
+            )
+        return ordinary_apply.remote(
+            ssh, target, instance, local, {"action": "inspect-package", "manifest": manifest}
+        )
+
+    inspection = inspect_packages()
+    full_observation = inspection["observation"]
+    inventory = inspection["dependency_inventory"]
     observed = package_predecessor(full_observation)
     if resume_manifest is not None and manifest["runtime_plan"] != observed["runtime_plan"]:
         raise VMHAAgentPackageError("Interrupted HA package authority changed native closure")
     manifest["runtime_plan"] = observed["runtime_plan"]
-    pending = full_observation.get("runtime_pending")
+    pending = None if unreserved_corrective else full_observation.get("runtime_pending")
     if pending is not None:
         saved = pending["manifest"]
         if resume_manifest is not None:
@@ -308,38 +341,26 @@ def inspect_plan(
         dependencies = []
         if pending is None and resume_manifest is None:
             dependencies = ordinary_apply.resolve_dependencies(
-                manifest, observed, Path(temporary.name)
+                manifest, {**observed, **inventory}, Path(temporary.name)
             )
             manifest["dependency_wheels"] = {
                 path.name: ordinary_apply.sha(path.read_bytes()) for path in dependencies
             }
-            expected = dict(observed["dependencies"])
-            expected["nebius-vpngw"] = manifest["version"]
-            for path in dependencies:
-                name, version, _build, _tags = parse_wheel_filename(path.name)
-                expected[str(name)] = str(version)
-            manifest["expected_dependencies"] = expected
-            expected_requirements = dict(observed["requirements"])
-            expected_requirements["nebius-vpngw"] = manifest["requirements"]
-            for path in dependencies:
-                name, _version, _build, _tags = parse_wheel_filename(path.name)
-                with zipfile.ZipFile(path) as archive:
-                    metadata = next(
-                        item for item in archive.namelist() if item.endswith(".dist-info/METADATA")
-                    )
-                    expected_requirements[str(name)] = (
-                        BytesParser().parsebytes(archive.read(metadata)).get_all("Requires-Dist")
-                        or []
-                    )
-            manifest["expected_requirements"] = expected_requirements
+            ordinary_apply.prepare_dependency_manifest(manifest, inventory, dependencies)
         elif pending is None:
             dependencies = ordinary_apply.restore_dependencies(
                 manifest, observed, Path(temporary.name)
             )
+        if resume_manifest is None:
+            full_observation = ordinary_apply.refresh_dependency_observation(
+                full_observation, inspect_packages()["observation"], inventory, manifest
+            )
+            observed = package_predecessor(full_observation)
         effects = ["stage and verify approved daemon package and startup policy"]
         if (
             observed["files"] != manifest["files"]
             or observed["package_version"] != manifest["version"]
+            or dependency_scope.product_metadata_changed(manifest, observed)
         ):
             effects.append("install exact HA agent wheel")
         if dependencies:

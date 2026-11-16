@@ -49,6 +49,142 @@ def _parent(command: CommandJournal, plan: dict, key: str) -> dict:
     return transaction
 
 
+def _effects(sdk, journal, command, plan, approved_bootstrap, key):
+    recipes = requests_from_plan(plan)
+    parent = _parent(command, plan, key)
+
+    def resolve(recipe: Request) -> Any:
+        value = None
+        if recipe.guest is not None:
+            value = approved_bootstrap(recipe.guest)
+        return recipe.resolve(journal.state["bindings"], bootstrap=value)
+
+    def restore(record: dict) -> Any:
+        recipe = next((item for item in recipes if item.key == record["label"]), None)
+        if recipe is None:
+            raise RuntimeError("Cloud request has no approved provisioning recipe")
+        request = resolve(recipe)
+        journal.stage(recipe, request)
+        return request
+
+    cloud = Cloud(sdk, journal, operation_scope=parent["execution_id"], restore_request=restore)
+
+    def admit(*, uncertain: bool = False) -> None:
+        _parent(command, plan, key)
+        by_label = {value["label"]: value for value in cloud.records.values()}
+        allocation_owners: dict[str, tuple[str, str]] = {}
+        uncertain_compute = False
+        for recipe in recipes:
+            record = by_label.get(recipe.key)
+            if recipe.type != "CreateInstanceRequest" or record is None:
+                continue
+            if record["status"] in {"intent", "accepted"}:
+                uncertain_compute = True
+            if record["status"] != "settled":
+                continue
+            request = resolve(recipe)
+            for nic in request.spec.network_interfaces:
+                for address in (nic.ip_address, nic.public_ip_address):
+                    if address.allocation_id:
+                        owner = (record["resource_id"], nic.name)
+                        previous = allocation_owners.setdefault(address.allocation_id, owner)
+                        if previous != owner:
+                            raise RuntimeError("Provisioning allocation has multiple owners")
+
+        def allocation_admission(resource: Any) -> bool:
+            """Return whether its assignment is a projected Compute effect."""
+            owner = allocation_owners.get(resource.metadata.id)
+            state = getattr(resource.status.state, "name", "")
+            assignment = resource.status.assignment.network_interface
+            if owner is not None:
+                if (
+                    state != "ASSIGNED"
+                    or (
+                        getattr(assignment, "instance_id", None),
+                        getattr(assignment, "name", None),
+                    )
+                    != owner
+                ):
+                    raise RuntimeError("Provisioned allocation has a different Compute owner")
+                return True
+            if uncertain and uncertain_compute:
+                return True  # Only exact operation settlement is admitted next.
+            if state != "ALLOCATED" or resource.status.assignment.__pb2_message__.ByteSize():
+                raise RuntimeError("Provisioning allocation is not proven unassigned")
+            return False
+
+        updates = {}
+        creations = []
+        for recipe in recipes:
+            record = by_label.get(recipe.key)
+            if record is None:
+                continue
+            request = resolve(recipe)
+            _, _, method, kind = request_types()[recipe.type]
+            if method == "update":
+                updates[request.metadata.id] = (record, request)
+            else:
+                creations.append((kind, record, request))
+                if record["status"] == "settled":
+                    resource = read(sdk, kind, record["resource_id"])
+                    if not matches(resource, request):
+                        raise RuntimeError("Created resource differs from its approved request")
+                    if kind == "allocation":
+                        allocation_admission(resource)
+        for identifier, expected in plan["observed"].items():
+            resource = read(sdk, expected["kind"], identifier)
+            update = updates.get(identifier)
+            if update is not None:
+                record, request = update
+                if record["status"] == "settled":
+                    if not matches(resource, request):
+                        raise RuntimeError("Updated resource differs from its approved request")
+                    continue
+                if (
+                    uncertain
+                    and record["status"] in {"intent", "accepted"}
+                    and matches(resource, request)
+                ):
+                    # Exact visible state permits settling the original
+                    # operation; it never substitutes for its receipt.
+                    continue
+            actual_snapshot = snapshot(expected["kind"], resource)
+            if expected["kind"] == "allocation" and allocation_admission(resource):
+                actual_snapshot["status_sha256"] = expected["status_sha256"]
+            if actual_snapshot != expected:
+                raise RuntimeError("Provisioning predecessor changed after approval")
+        for scope in plan["inventories"]:
+            parent_id = scope["parent"]
+            if parent_id.startswith("@"):
+                binding = journal.state["bindings"].get(parent_id[1:])
+                if binding is None:
+                    continue  # The earlier table has not acquired a verified creation receipt.
+                parent_id = binding["resource_id"]
+            expected_ids = set(scope["ids"])
+            unsettled = False
+            for kind, record, request in creations:
+                if kind != scope["kind"]:
+                    continue
+                resource_parent = (
+                    request.spec.network_id if kind == "subnet" else request.metadata.parent_id
+                )
+                if resource_parent != parent_id:
+                    continue
+                if record["status"] == "settled":
+                    expected_ids.add(record["resource_id"])
+                elif record["status"] in {"intent", "accepted"}:
+                    unsettled = True
+            if uncertain and unsettled:
+                # Only settle the exact previously dispatched request.
+                # No next effect is admitted until this inventory matches.
+                continue
+            actual = {resource.metadata.id for resource in inventory(sdk, scope["kind"], parent_id)}
+            if actual != expected_ids:
+                raise RuntimeError("Provisioning inventory changed outside approved effects")
+
+    return resolve, admit, cloud
+
+
 def execute(
     sdk: Any,
     journal: ProvisioningJournal,
@@ -84,136 +220,7 @@ def execute(
             raise RuntimeError("Completed provisioning has no terminal child receipt")
         journal.begin(plan, approval=parent["approval"], execution_id=parent["execution_id"])
 
-        def resolve(recipe: Request) -> Any:
-            value = None
-            if recipe.guest is not None:
-                value = approved_bootstrap(recipe.guest)
-            return recipe.resolve(journal.state["bindings"], bootstrap=value)
-
-        def restore(record: dict) -> Any:
-            recipe = next((item for item in recipes if item.key == record["label"]), None)
-            if recipe is None:
-                raise RuntimeError("Cloud request has no approved provisioning recipe")
-            request = resolve(recipe)
-            journal.stage(recipe, request)
-            return request
-
-        cloud = Cloud(sdk, journal, operation_scope=parent["execution_id"], restore_request=restore)
-
-        def admit(*, uncertain: bool = False) -> None:
-            _parent(command, plan, key)
-            by_label = {value["label"]: value for value in cloud.records.values()}
-            allocation_owners: dict[str, tuple[str, str]] = {}
-            uncertain_compute = False
-            for recipe in recipes:
-                record = by_label.get(recipe.key)
-                if recipe.type != "CreateInstanceRequest" or record is None:
-                    continue
-                if record["status"] in {"intent", "accepted"}:
-                    uncertain_compute = True
-                if record["status"] != "settled":
-                    continue
-                request = resolve(recipe)
-                for nic in request.spec.network_interfaces:
-                    for address in (nic.ip_address, nic.public_ip_address):
-                        if address.allocation_id:
-                            owner = (record["resource_id"], nic.name)
-                            previous = allocation_owners.setdefault(address.allocation_id, owner)
-                            if previous != owner:
-                                raise RuntimeError("Provisioning allocation has multiple owners")
-
-            def allocation_admission(resource: Any) -> bool:
-                """Return whether its assignment is a projected Compute effect."""
-                owner = allocation_owners.get(resource.metadata.id)
-                state = getattr(resource.status.state, "name", "")
-                assignment = resource.status.assignment.network_interface
-                if owner is not None:
-                    if (
-                        state != "ASSIGNED"
-                        or (
-                            getattr(assignment, "instance_id", None),
-                            getattr(assignment, "name", None),
-                        )
-                        != owner
-                    ):
-                        raise RuntimeError("Provisioned allocation has a different Compute owner")
-                    return True
-                if uncertain and uncertain_compute:
-                    return True  # Only exact operation settlement is admitted next.
-                if state != "ALLOCATED" or resource.status.assignment.__pb2_message__.ByteSize():
-                    raise RuntimeError("Provisioning allocation is not proven unassigned")
-                return False
-
-            updates = {}
-            creations = []
-            for recipe in recipes:
-                record = by_label.get(recipe.key)
-                if record is None:
-                    continue
-                request = resolve(recipe)
-                _, _, method, kind = request_types()[recipe.type]
-                if method == "update":
-                    updates[request.metadata.id] = (record, request)
-                else:
-                    creations.append((kind, record, request))
-                    if record["status"] == "settled":
-                        resource = read(sdk, kind, record["resource_id"])
-                        if not matches(resource, request):
-                            raise RuntimeError("Created resource differs from its approved request")
-                        if kind == "allocation":
-                            allocation_admission(resource)
-            for identifier, expected in plan["observed"].items():
-                resource = read(sdk, expected["kind"], identifier)
-                update = updates.get(identifier)
-                if update is not None:
-                    record, request = update
-                    if record["status"] == "settled":
-                        if not matches(resource, request):
-                            raise RuntimeError("Updated resource differs from its approved request")
-                        continue
-                    if (
-                        uncertain
-                        and record["status"] in {"intent", "accepted"}
-                        and matches(resource, request)
-                    ):
-                        # Exact visible state permits settling the original
-                        # operation; it never substitutes for its receipt.
-                        continue
-                actual_snapshot = snapshot(expected["kind"], resource)
-                if expected["kind"] == "allocation" and allocation_admission(resource):
-                    actual_snapshot["status_sha256"] = expected["status_sha256"]
-                if actual_snapshot != expected:
-                    raise RuntimeError("Provisioning predecessor changed after approval")
-            for scope in plan["inventories"]:
-                parent_id = scope["parent"]
-                if parent_id.startswith("@"):
-                    binding = journal.state["bindings"].get(parent_id[1:])
-                    if binding is None:
-                        continue  # The earlier table has not acquired a verified creation receipt.
-                    parent_id = binding["resource_id"]
-                expected_ids = set(scope["ids"])
-                unsettled = False
-                for kind, record, request in creations:
-                    if kind != scope["kind"]:
-                        continue
-                    resource_parent = (
-                        request.spec.network_id if kind == "subnet" else request.metadata.parent_id
-                    )
-                    if resource_parent != parent_id:
-                        continue
-                    if record["status"] == "settled":
-                        expected_ids.add(record["resource_id"])
-                    elif record["status"] in {"intent", "accepted"}:
-                        unsettled = True
-                if uncertain and unsettled:
-                    # Only settle the exact previously dispatched request.
-                    # No next effect is admitted until this inventory matches.
-                    continue
-                actual = {
-                    resource.metadata.id for resource in inventory(sdk, scope["kind"], parent_id)
-                }
-                if actual != expected_ids:
-                    raise RuntimeError("Provisioning inventory changed outside approved effects")
+        resolve, admit, cloud = _effects(sdk, journal, command, plan, approved_bootstrap, key)
 
         admit(uncertain=True)
         cloud.settle()
@@ -228,3 +235,54 @@ def execute(
             journal.verified(recipe, request)
         admit()
         return journal.complete()
+
+
+def settle_submitted(
+    sdk: Any,
+    journal: ProvisioningJournal,
+    command: CommandJournal,
+    *,
+    key: str = "provisioning",
+) -> None:
+    """Settle the submitted pre-Compute prefix without running its remainder.
+
+    The coordinating caller holds all participating owner locks and separate
+    settlement approval. Creation receipts remain pending until a fresh command
+    explicitly reuses them; this does not fabricate completion of the old plan.
+    """
+    from .recovery import ReplanRejected
+
+    if journal._lock is None:
+        raise ReplanRejected("Provisioning settlement requires its active owner")
+    state = journal.snapshot()
+    transaction = journal.state["transaction"]
+    if state != journal.state or transaction is None:
+        raise ReplanRejected("Provisioning settlement lost its original child")
+    plan = transaction["plan"]
+    parent = _parent(command, plan, key)
+    if (
+        transaction["approval"] != parent["approval"]
+        or transaction["execution_id"] != parent["execution_id"]
+        or transaction["phase"] != "pending"
+    ):
+        raise ReplanRejected("Provisioning settlement has a different command owner")
+    recipes = requests_from_plan(plan)
+    submitted = {record["label"] for record in transaction["operations"].values()}
+    if any(recipe.guest is not None and recipe.key in submitted for recipe in recipes):
+        raise ReplanRejected(
+            "Submitted Compute creation requires its bootstrap and guest owner",
+            code="predecessor-not-settled",
+        )
+
+    def no_bootstrap(_guest):
+        raise ReplanRejected("Pre-Compute settlement cannot resolve a bootstrap")
+
+    resolve, admit, cloud = _effects(sdk, journal, command, plan, no_bootstrap, key)
+    admit(uncertain=True)
+    cloud.settle()
+    admit()
+    for recipe in recipes:
+        if recipe.key not in submitted:
+            break
+        journal.verified(recipe, resolve(recipe))
+    admit()

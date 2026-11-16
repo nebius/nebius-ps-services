@@ -40,6 +40,56 @@ def png_bytes(red: int) -> bytes:
 
 
 class ThreeTierLifecycleTests(unittest.TestCase):
+    def test_aggregate_observer_rejects_each_shared_capacity_overflow(self):
+        from contextlib import nullcontext
+        scripts = Path(__file__).resolve().parents[2]
+        with lifecycle.three_tier_target.workflow_imports(scripts):
+            import workflow_automatic
+            import workflow_objectives
+            import workflow_state
+        sys.path.insert(0, str(scripts / "implement-test/scripts"))
+        try:
+            import public_workflow_trial
+        finally:
+            sys.path.remove(str(scripts / "implement-test/scripts"))
+        root = Path(self.temporary.name)
+        app = root / "private/codex-home/agentic-sdlc/project/run-app"
+        peer = root / "private/codex-home/implement/project/run-peer"
+        peer.mkdir(parents=True)
+        evidence = root / "evidence/companion"
+        state = {"project_root": str(root / "repo"), "run_root": str(root),
+                 "private_root": str(root / "private"), "verification_id": "trial",
+                 "companion_project_root": str(root / "repo/project-b"),
+                 "git": {"baseline_sha": "a" * 40}}
+        valid = {"shared_admitted": [str(app), str(peer), "c", "d"],
+                 "shared_workers": 4, "shared_worktrees": 16}
+        documents = {
+            evidence / "finished.json": {"verification_id": "trial", "status": "PASS", "cleanup_verified": True},
+            evidence / "initial-invocation.json": {"samples": [valid]},
+        }
+        run = {"status": "done", "git_common_dir": str(root / "repo/.git"),
+               "logical_project_root": state["companion_project_root"]}
+        with mock.patch.object(lifecycle, "agent_name", return_value="codex"), mock.patch.object(
+            lifecycle.three_tier_target, "_registration", return_value=(None, None, None, None, app)
+        ), mock.patch.object(lifecycle.three_tier_target, "workflow_imports", return_value=nullcontext()), mock.patch.object(
+            workflow_objectives, "validate_run", return_value=(run, {"revisions": [{"sha256": "b" * 64}]})
+        ), mock.patch.object(workflow_automatic, "verify_delivery", return_value={}), mock.patch.object(
+            workflow_state, "read", side_effect=documents.__getitem__
+        ), mock.patch.object(public_workflow_trial, "validate_receipt"), mock.patch.object(
+            lifecycle.owned_git_origin, "validate", side_effect=RuntimeError("capacity accepted")
+        ) as next_gate:
+            for field, invalid in (("shared_admitted", valid["shared_admitted"] + ["e"]),
+                                   ("shared_workers", 5), ("shared_worktrees", 17),
+                                   ("shared_worktrees", None), ("shared_worktrees", True)):
+                documents[evidence / "initial-invocation.json"]["samples"] = [{**valid, field: invalid}]
+                with self.subTest(field=field, value=invalid), self.assertRaisesRegex(lifecycle.LifecycleError, "capacity proof"):
+                    lifecycle.observe_aggregate(state)
+            next_gate.assert_not_called()
+            documents[evidence / "initial-invocation.json"]["samples"] = [valid]
+            with self.assertRaisesRegex(RuntimeError, "capacity accepted"):
+                lifecycle.observe_aggregate(state)
+            next_gate.assert_called_once()
+
     def test_fixed_runner_captures_real_unittest_outcomes_without_product_output(self):
         owner = lifecycle.three_tier_tests
         for failing in (False, True):
@@ -79,8 +129,8 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         state = self.prepare()
         self.write_valid_results(state)
         owner = lifecycle.three_tier_tests
-        target = owner.read_receipt(state, state["test_runs"][0])["target"]
-        state["test_runs"] = []
+        target = owner.read_receipt(state, state["aggregate_test_runs"][0])["target"]
+        state["aggregate_test_runs"] = []
         state["browser_stages"] = []
         lifecycle.update_state(self.root, state)
         counts = dict.fromkeys(owner.COUNTERS, 0)
@@ -91,10 +141,10 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         ) as command:
             first = lifecycle.run_test_class(self.root, "unit", "tests.test_unit")
             second = lifecycle.run_test_class(self.root, "unit", "tests.test_unit")
-            self.assertEqual(first["test_runs"], second["test_runs"])
+            self.assertEqual(first["aggregate_test_runs"], second["aggregate_test_runs"])
             command.assert_called_once()
             self.assertEqual(command.call_args.args[0][-4:], ["python", "-c", owner.RUNNER, "tests.test_unit"])
-            self.assertEqual(owner.read_receipt(first, first["test_runs"][0])["counts"]["tests"], 3)
+            self.assertEqual(owner.read_receipt(first, first["aggregate_test_runs"][0])["counts"]["tests"], 3)
             with self.assertRaises(lifecycle.LifecycleError):
                 lifecycle.run_test_class(self.root, "unit", "tests.other")
 
@@ -102,8 +152,8 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         state = self.prepare()
         self.write_valid_results(state)
         owner = lifecycle.three_tier_tests
-        target = owner.read_receipt(state, state["test_runs"][0])["target"]
-        state["test_runs"] = []
+        target = owner.read_receipt(state, state["aggregate_test_runs"][0])["target"]
+        state["aggregate_test_runs"] = []
         state["browser_stages"] = []
         lifecycle.update_state(self.root, state)
         with mock.patch.object(lifecycle, "browser_target", return_value=target), mock.patch.object(
@@ -114,8 +164,8 @@ class ThreeTierLifecycleTests(unittest.TestCase):
                     lifecycle.run_test_class(self.root, "unit", "tests.test_unit")
             command.assert_called_once()
         _, saved = lifecycle.load_active(self.root)
-        self.assertEqual(saved["test_runs"][0]["outcome"], "FAIL")
-        receipt = (Path(saved["run_root"]) / saved["test_runs"][0]["path"]).read_text()
+        self.assertEqual(saved["aggregate_test_runs"][0]["outcome"], "FAIL")
+        receipt = (Path(saved["run_root"]) / saved["aggregate_test_runs"][0]["path"]).read_text()
         self.assertNotIn("private output", receipt)
         self.assertNotIn("private error", receipt)
 
@@ -123,8 +173,8 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         state = self.prepare()
         self.write_valid_results(state)
         owner = lifecycle.three_tier_tests
-        target = owner.read_receipt(state, state["test_runs"][0])["target"]
-        state["test_runs"] = []
+        target = owner.read_receipt(state, state["aggregate_test_runs"][0])["target"]
+        state["aggregate_test_runs"] = []
         state["browser_stages"] = []
         lifecycle.update_state(self.root, state)
         counts = dict.fromkeys(owner.COUNTERS, 0)
@@ -134,7 +184,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         ), self.assertRaises(lifecycle.LifecycleError):
             lifecycle.run_test_class(self.root, "unit", "tests.test_unit")
         _, saved = lifecycle.load_active(self.root)
-        self.assertEqual(saved["test_runs"][0]["outcome"], "FAIL")
+        self.assertEqual(saved["aggregate_test_runs"][0]["outcome"], "FAIL")
 
     def test_owned_test_counts_reject_failure_skips_and_empty_execution(self) -> None:
         owner = lifecycle.three_tier_tests
@@ -152,7 +202,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
     def test_semantic_test_evidence_rejects_wrong_class_revision_and_image(self) -> None:
         state = self.prepare()
         self.write_valid_results(state)
-        binding = state["test_runs"][0]
+        binding = state["aggregate_test_runs"][0]
         path = Path(state["run_root"]) / binding["path"]
         original = json.loads(path.read_text())
         variants = [{**original, "test_class": "api"}, {**original, "verification_id": "foreign"},
@@ -168,7 +218,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
     def test_partial_summary_does_not_repeat_unverified_test_pass(self) -> None:
         state = self.prepare()
         self.write_valid_results(state)
-        path = Path(state["run_root"]) / state["test_runs"][0]["path"]
+        path = Path(state["run_root"]) / state["aggregate_test_runs"][0]["path"]
         path.write_text("FAILED unit")
         summary = lifecycle.summarize_semantic_results(state)
         self.assertEqual(summary["tests"]["unit"]["status"], "PARTIAL")
@@ -317,11 +367,20 @@ class ThreeTierLifecycleTests(unittest.TestCase):
     def write_valid_results(self, state: dict[str, object]) -> None:
         run_root = Path(state["run_root"])
         project = Path(state["project_root"])
-        fixture = project / "test-implementation.txt"
+        fixture = Path(state["selected_project_root"]) / "test-implementation.txt"
         fixture.write_text((fixture.read_text() if fixture.exists() else "") + "fixture commit\n")
         lifecycle.owned_git_origin._git(project, "add", "-A")
         lifecycle.owned_git_origin._git(project, "commit", "-m", "semantic test fixture")
         promoted = lifecycle.owned_git_origin._git(project, "rev-parse", "HEAD")
+        git = lifecycle.owned_git_origin._git
+        peer = Path(state["companion_project_root"]) / "test-companion.txt"
+        peer.write_text("companion fixture\n")
+        git(project, "add", "-A")
+        git(project, "commit", "-m", "semantic aggregate fixture")
+        aggregate = git(project, "rev-parse", "HEAD")
+        self.assertNotEqual(promoted, aggregate)
+        self.assertEqual(git(project, "rev-parse", promoted + ":project-a"),
+                         git(project, "rev-parse", aggregate + ":project-a"))
         evidence_paths = []
         for test_name in (
             "unit",
@@ -350,6 +409,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             "git": {
                 "baseline_sha": state["git"]["baseline_sha"],
                 "promoted_sha": promoted,
+                "aggregate_sha": aggregate,
                 "clean": True,
             },
             "layers": {"frontend": "PASS", "web": "PASS", "database": "PASS"},
@@ -377,7 +437,28 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         state["git"] = {
             "baseline_sha": value["git"]["baseline_sha"],
             "promoted_sha": value["git"]["promoted_sha"],
+            "aggregate_sha": aggregate,
         }
+        state["inner_delivery"] = {"path": str(run_root / "synthetic-outer/project-a"), "head": promoted}
+        aggregate_target = {"path": state["selected_project_root"], "head": aggregate}
+        aggregate_observation = {
+            "application": {"status": "COMPLETE", "delivered_head": promoted, "cleanup": "verified"},
+            "companion": {"status": "COMPLETE", "delivered_head": aggregate, "cleanup": "verified"},
+            "aggregate_sha": aggregate,
+            "application_tree": git(project, "rev-parse", aggregate + ":project-a"),
+            "shared_worker_limit": 4, "native_receipts": {"synthetic-fixture": "a" * 64},
+            "companion_probe": {"script_sha256": "b" * 64, "cases": 3, "outcome": "passed"},
+        }
+        state["multi_project"] = json.loads(json.dumps(aggregate_observation))
+
+        def observe_fixture(observed):
+            if (observed["verification_id"] != state["verification_id"]
+                    or git(project, "rev-parse", "HEAD") != aggregate
+                    or git(project, "status", "--porcelain")):
+                raise lifecycle.LifecycleError("Synthetic aggregate fixture changed.")
+            return json.loads(json.dumps(aggregate_observation))
+
+        self.enterContext(mock.patch.object(lifecycle, "observe_aggregate", side_effect=observe_fixture))
         self.write_startup_fixture(state)
         state["endpoints"] = {
             "web": "http://127.0.0.1:49152/",
@@ -431,12 +512,14 @@ class ThreeTierLifecycleTests(unittest.TestCase):
                 }
             )
         self.write_browser_receipts(state, screenshots)
-        self.write_test_receipts(state, value)
+        self.write_test_receipts(state, value, aggregate=False)
+        self.write_build_receipt(state, aggregate_target)
+        self.write_test_receipts(state, value, aggregate=True)
         observation = {
             "schema": lifecycle.three_tier_runtime.OBSERVATION_SCHEMA,
             "verification_id": state["verification_id"],
             "mode": "acceptance",
-            "target": {"path": state["project_root"], "head": promoted},
+            "target": aggregate_target,
             "worker_task": None,
             "assignment_digest": None,
             "observed_at": lifecycle.utc_now(),
@@ -472,15 +555,18 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         )
         (run_root / "evidence" / "three-tier-results.json").chmod(0o600)
 
-    def write_test_receipts(self, state, results):
+    def write_test_receipts(self, state, results, *, aggregate=False):
         """Synthetic owner receipts for offline tests, never runtime proof."""
         owner = lifecycle.three_tier_tests
-        state["test_runs"] = []
-        target = {"path": state["project_root"], "head": state["git"]["promoted_sha"],
+        key = "aggregate_test_runs" if aggregate else "test_runs"
+        state[key] = []
+        identity = ({"path": state["selected_project_root"], "head": state["git"]["aggregate_sha"]}
+                    if aggregate else dict(state["inner_delivery"]))
+        target = {**identity,
                   "deployment": {"build": state["runtime_build"],
                                  "image_id": "sha256:" + "a" * 64, "web_container": "web-id"}}
         for index, name in enumerate(owner.TEST_CLASSES):
-            relative = f"evidence/tests/{index:032x}.json"
+            relative = f"evidence/tests/{index + (256 if aggregate else 0):032x}.json"
             path = Path(state["run_root"]) / relative
             counts = dict.fromkeys(owner.COUNTERS, 0)
             counts["tests"] = 1
@@ -488,7 +574,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
                 "verification_id": state["verification_id"], "test_class": name,
                 "label": "tests.test_" + name, "runner_sha256": owner.RUNNER_SHA256,
                 "target": target, "exit_code": 0, "counts": counts, "outcome": "PASS"})
-            state["test_runs"].append({"test_class": name, "path": relative,
+            state[key].append({"test_class": name, "path": relative,
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "outcome": "PASS"})
             results["tests"][name]["evidence"] = [relative]
         results["tests"]["gui"].update(assertions=2, evidence=[
@@ -501,7 +587,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         state["browser_instance"] = {**browser.initial_state(state["verification_id"]), "status": "CLOSED"}
         state["browser_stages"] = []
         state["environment"]["headless_browser"] = "PASS"
-        target = {"path": state["project_root"], "head": state["git"]["promoted_sha"]}
+        target = dict(state["inner_delivery"])
         binding = self.write_build_receipt(state, target)
         target["deployment"] = {"build": binding, "image_id": "sha256:" + "a" * 64, "web_container": "web-id"}
         all_screenshots = []
@@ -540,12 +626,14 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         state["browser_restart"] = {"after_attempt": f"{2:032x}", "target": target, "volumes": state["resources"]["volumes"]}
 
     def write_build_receipt(self, state, target):
-        relative = "evidence/runtime/build-test.json"
+        identity = {key: target[key] for key in ("path", "head")}
+        fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        relative = f"evidence/runtime/build-test-{fingerprint}.json"
         artifact = Path(state["run_root"]) / relative
         artifact.parent.mkdir(exist_ok=True)
         lifecycle.private_json(artifact, {
             "schema": "agentic-sdlc/runtime-build-v1", "verification_id": state["verification_id"],
-            "target": dict(target), "image_id": "sha256:" + "a" * 64,
+            "target": identity, "image_id": "sha256:" + "a" * 64,
             "compose_sha256": "b" * 64, "observed_at": lifecycle.utc_now(),
         })
         binding = {"path": relative, "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()}
@@ -653,6 +741,39 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             ),
         ):
             with self.assertRaisesRegex(lifecycle.LifecycleError, "deployment"):
+                lifecycle.run_browser_stage(self.root, "evaluate")
+            launch.assert_not_called()
+
+    def test_repeated_evaluation_requires_new_candidate_and_unused_counted_cursor(self):
+        state = self.prepare()
+        state["browser_stages"] = [{"stage": stage, "outcome": "PASS",
+            "path": f"evidence/{stage}.json", "sha256": "a" * 64}
+            for stage in ("capability-discovery", "evaluate")]
+        state["endpoints"] = {"web": "http://127.0.0.1:49152/",
+                              "api": "http://127.0.0.1:49152/api/v1/tasks",
+                              "health": "http://127.0.0.1:49152/healthz"}
+        lifecycle.update_state(self.root, state)
+        target = {"head": "b" * 40, "phase": "sdlc-evaluate"}
+        previous = {"stage": "evaluate", "outcome": "PASS", "target": {"head": "a" * 40}}
+        binding = {"cursor_id": "c" * 64}
+        with (mock.patch.object(lifecycle, "browser_target", return_value=target),
+              mock.patch.object(lifecycle.three_tier_browser, "validate_receipts", return_value=[previous]),
+              mock.patch.object(lifecycle.three_tier_target, "browser_revalidation", return_value=binding) as authority,
+              mock.patch.object(lifecycle.three_tier_browser, "run_stage") as launch):
+            lifecycle.run_browser_stage(self.root, "evaluate")
+            self.assertEqual(launch.call_args.kwargs["revalidation"], binding)
+            launch.reset_mock()
+            authority.side_effect = lifecycle.three_tier_target.TargetError("missing counted gate")
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "missing counted gate"):
+                lifecycle.run_browser_stage(self.root, "evaluate")
+            launch.assert_not_called()
+            authority.side_effect = None
+            previous["revalidation"] = binding
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "cursor cannot authorize"):
+                lifecycle.run_browser_stage(self.root, "evaluate")
+            launch.assert_not_called()
+            target["head"] = previous["target"]["head"]
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "distinct clean candidate"):
                 lifecycle.run_browser_stage(self.root, "evaluate")
             launch.assert_not_called()
 
@@ -878,6 +999,9 @@ class ThreeTierLifecycleTests(unittest.TestCase):
     def test_aggregate_profile_resolves_its_owned_lifecycle_and_independent_identity(self):
         import verify_agentic_sdlc as verifier
 
+        # Real statistics admission is exercised by test_three_tier_statistics.
+        self.enterContext(mock.patch("three_tier_statistics.require_complete", return_value={"status": "PASS"}))
+
         state = self.prepare()
         self.write_valid_results(state)
         state["cleanup"]["status"] = "KEPT"
@@ -1002,6 +1126,8 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         self.assertEqual(list(lifecycle.paths(self.root)["runs"].iterdir()), [Path(state["run_root"])])
 
     def test_validate_results_is_read_only_and_rejects_failed_validations(self):
+        # Isolate this synthetic application's validation and concurrency lane.
+        self.enterContext(mock.patch("three_tier_statistics.require_complete", return_value={"status": "PASS"}))
         state = self.prepare()
         self.write_valid_results(state)
         lifecycle.record_validation(self.root, "product acceptance", "PASS", "Executed fixture acceptance.")
@@ -1635,14 +1761,17 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         updated = lifecycle.record_git(self.root, baseline_sha, None)
         self.assertEqual(
             updated["git"],
-            {"baseline_sha": baseline_sha, "promoted_sha": None},
+            {"baseline_sha": baseline_sha, "promoted_sha": None, "aggregate_sha": None},
         )
 
     def test_prepare_public_images_uses_private_config_and_fixed_images(self) -> None:
+        import three_tier_task_acceptance
         state = self.prepare()
         inspect_missing = mock.Mock(returncode=1, stdout="", stderr="missing")
+        prepared = {"path": str(Path(state["private_root"]) / "task-acceptance-profile.json"), "sha256": "a" * 64, "image": "sha256:" + "b" * 64}
         pull_ok = mock.Mock(returncode=0, stdout="pulled", stderr="")
         with (
+            mock.patch.object(three_tier_task_acceptance, "prepare", return_value=prepared) as task_image,
             mock.patch.object(
                 lifecycle, "require_command", return_value="desktop-linux"
             ),
@@ -1653,6 +1782,8 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             ) as run,
         ):
             updated = lifecycle.prepare_public_images(self.root)
+        task_image.assert_called_once()
+        self.assertEqual(updated["environment"]["task_acceptance_profile"], prepared)
         config = Path(state["private_root"]) / "docker-config" / "config.json"
         self.assertEqual(json.loads(config.read_text(encoding="utf-8")), {})
         if sys.platform != "win32":
@@ -1763,6 +1894,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         with (
             mock.patch.object(lifecycle, "assert_resource_owned"),
             mock.patch.object(lifecycle, "assert_port_isolation"),
+            mock.patch("three_tier_statistics.require_complete", return_value={"status": "PASS", "evidence": "synthetic reporting lane"}),
         ):
             finished = lifecycle.finish(self.root, "PASS", keep=True)
         self.assertEqual(finished["status"], "KEPT")
@@ -1867,7 +1999,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         self.write_valid_results(state)
         results_path = Path(state["evidence_root"]) / "three-tier-results.json"
         results = json.loads(results_path.read_text(encoding="utf-8"))
-        results["git"] = {"baseline_sha": None, "promoted_sha": None, "clean": True}
+        results["git"] = {"baseline_sha": None, "promoted_sha": None, "aggregate_sha": None, "clean": True}
         results["layers"] = {
             "frontend": "NOT_RUN",
             "web": "NOT_RUN",
@@ -1891,7 +2023,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         }
         results_path.write_text(json.dumps(results), encoding="utf-8")
         _, current = lifecycle.load_active(self.root)
-        current["git"] = {"baseline_sha": None, "promoted_sha": None}
+        current["git"] = {"baseline_sha": None, "promoted_sha": None, "aggregate_sha": None}
         lifecycle.update_state(self.root, current)
         finished = lifecycle.finish(self.root, "PARTIAL", keep=True)
         self.assertIsNotNone(finished["semantic_summary"])
@@ -1982,8 +2114,8 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         state = self.prepare()
         self.write_valid_results(state)
         run_root = Path(state["run_root"])
-        (run_root / state["test_runs"][1]["path"]).write_bytes(
-            (run_root / state["test_runs"][0]["path"]).read_bytes())
+        (run_root / state["aggregate_test_runs"][1]["path"]).write_bytes(
+            (run_root / state["aggregate_test_runs"][0]["path"]).read_bytes())
         with self.assertRaisesRegex(
             lifecycle.SemanticEvidenceError, "receipt changed"
         ):
@@ -2082,6 +2214,21 @@ class ThreeTierLifecycleTests(unittest.TestCase):
                     "PASS",
                     "Must not be persisted.",
                 )
+
+    def test_statistics_retention_failure_preserves_owned_tree_and_result(self):
+        state = self.prepare()
+        state.update(status="READY_FOR_CLEANUP", result="PARTIAL")
+        lifecycle.update_state(self.root, state)
+        with mock.patch("three_tier_statistics.archive", return_value={"retention_pending": True}):
+            with self.assertRaisesRegex(lifecycle.LifecycleError, "Statistics retention is pending"):
+                lifecycle.destroy(self.root)
+        _, retained = lifecycle.load_active(self.root)
+        self.assertEqual(retained["result"], "PARTIAL")
+        self.assertTrue(Path(state["run_root"]).is_dir())
+        with mock.patch("three_tier_statistics.archive", return_value={"retention_pending": False}):
+            status, archived = lifecycle.destroy(self.root)
+        self.assertEqual(status, "DESTROYED")
+        self.assertEqual(archived["result"], "PARTIAL")
 
     def test_destroy_leaves_open_tab_and_removes_every_resource(self) -> None:
         state = self.prepare()
@@ -2456,7 +2603,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
                 "web",
                 "db",
             ],
-            timeout=1800,
+            timeout=None,
         )
 
     def test_owned_compose_action_rejects_scale_override(self) -> None:
@@ -2522,7 +2669,7 @@ class OwnedComposeStartupTests(unittest.TestCase):
                 command.assert_called_once_with(
                     ["docker", "compose", "--project-name", "owned-fixture",
                      "--project-directory", "/tmp/owned-fixture", *arguments],
-                    timeout=1800,
+                    timeout=None,
                 )
 
 
@@ -2532,7 +2679,8 @@ class ClassifierPhaseIdentityTests(unittest.TestCase):
         self.current = {"current_execution": None}
         directory = self.enterContext(tempfile.TemporaryDirectory())
         self.run_dir = Path(directory).resolve()
-        registration = (None, None, None, None, self.run_dir, self.current, None)
+        registration = (None, {"project_root": str(self.run_dir / "source/project-a")},
+                        None, None, self.run_dir, self.current, None)
         self.enterContext(mock.patch.object(lifecycle.three_tier_target, "_registration", return_value=registration))
         self.enterContext(mock.patch.object(lifecycle.three_tier_target, "current_objective", return_value="a" * 64))
         self.target = self.enterContext(mock.patch.object(lifecycle, "execution_target", return_value={"basis_sha256": "b" * 64}))

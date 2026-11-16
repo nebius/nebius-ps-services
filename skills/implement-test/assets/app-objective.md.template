@@ -2,7 +2,8 @@
 
 ## Ask
 
-This is a disposable verifier-owned local project. Migrate the seeded
+This is project-a in a disposable verifier-owned monorepo. A separate native
+Implement session works on sibling project-b in the same agent home. Migrate the seeded
 single-process task board into a three-tier application and complete the whole
 request through Implement.
 
@@ -10,12 +11,27 @@ Generation: `{{GENERATION_ID}}`
 Compose project: `{{COMPOSE_PROJECT}}`
 Web bind: Docker-assigned port on `127.0.0.1`
 
+Before prepare-specs, collect and record the known existing and planned architecture
+through the shared statistics inventory owner, even before task decomposition.
+Also configure this run's requested worker limit of two through the shared
+configure-policy owner before prepare-specs allocates the integration checkout.
+Use its derived wave-task/worktree defaults of four/eight unless this objective
+specifies another ceiling. Do not allocate first and then replace frozen defaults.
+Name the frontend, API and persistence layers and their components from this
+objective and inspected source. Add stable primary/touched components to tasks.
+Refresh the inventory after planning/specification changes; preserve immutable
+initial and terminal reporting and show each new milestone summary once.
+
 Requirements:
 
 1. Define exactly three Compose services named `frontend`, `api`, and `db`.
    Build a browser frontend under `app/frontend/` that lists, creates, and
    updates tasks through the API. `GET /` must return HTTP 200 HTML containing
-   the visible title or heading `Task board` in the initial response.
+   a visible heading named `Task board` in the initial response. The UI must
+   expose a textbox labelled `Task title`, an `Add task` button, and one row
+   with `data-task-id` equal to the API integer ID for each task. Each row
+   includes the title and a checkbox labelled `Complete task`. Creating and
+   checking a task persists through reload and API restart.
 2. Build an HTTP API under `app/api/` with create, list, update, and health
    endpoints.
 3. Persist tasks in PostgreSQL with schema/bootstrap content under
@@ -33,12 +49,19 @@ Requirements:
    `org.openai.implement-test.compose-project={{COMPOSE_PROJECT}}`.
    These two exact build labels are the verifier's image-ownership proof.
 7. Keep frontend, API, and database write claims disjoint in the first logical
-   wave. Make integration/runtime depend on all three. Set the configured worker
+   wave. Use stable task order: `TASK-001` database, `TASK-002` API,
+   `TASK-003` frontend, and `TASK-004` integration/runtime. Start the database
+   and API together; refill the released database slot with frontend while the
+   API peer remains active. Do not add sleeps, busywork or artificial delays to
+   create overlap; actual native observations must prove it.
+   Make integration/runtime depend on all three. Set the configured worker
    limit to two for this trial; use at most the independently observed native
    capacity. Observe a slot refill while a peer remains active. Unknown capacity
    uses serial fallback and must be reported as a runtime limitation.
 8. Use one reviewed direct-child commit per worker, stable-order integration,
-   verified fast-forward promotion, combined validation, and final alignment.
+   inner promotion, combined validation, final alignment and automatic aggregation
+   into the current original branch. Keep all write claims relative to the Git
+   root, prefixed project-a/. Do not touch project-b.
 9. Finish with a clean named branch, passing tests, and no temporary Implement
    worker refs/worktrees. End the initial invocation after local delivery and
    cleanup. The verifier owns the later fresh-session public continuation and
@@ -68,6 +91,15 @@ Requirements:
     contain exactly `context`, `dockerfile`, and `labels`; do not use includes,
     extends, label files, external build inputs, cache options, entitlements,
     privileged build settings, or custom resource names.
+13. Native sessions use a private `077` umask: source files may be `0600` and
+    directories `0700`. Image builds must explicitly give each runtime user
+    read access to copied code, configuration and static assets, and traversal
+    access to their directories. Normalize permissions or ownership inside the
+    image, for example with `COPY --chmod`/`--chown` or bounded build-time
+    permission commands. Preserve the private host files and native umask;
+    do not switch to root merely to bypass unreadable application files.
+    Add offline checks of the chosen Dockerfile permission setup, then leave
+    actual image startup and HTTP verification to the verifier.
 
 ## Outcome
 
@@ -86,9 +118,10 @@ post-completion replay nor runtime launch.
 
 ## Constraints
 
-- Do not push, publish, add or use a remote, read user credentials, or touch
-  files outside this repository and the isolated Implement private
-  state.
+- Do not push, publish, add or use a remote, or read user credentials. Write only
+  inside this repository, its verifier-owned sibling `project-worktrees` parent,
+  and the isolated Implement private state. Read installed skill instructions
+  and runtime helpers as needed.
 - Do not use host networking, host PID/IPC, privileged mode, added
   capabilities, devices, bind mounts, external networks, or external volumes.
 - Do not run Docker, Docker Compose, containers, or live services.
@@ -102,14 +135,28 @@ applicable task's Goal, Validation and Done criteria. Inspect the serialized
 assignments before arming them. Requirement IDs or a reference to this objective
 are insufficient. Do not dispatch an incomplete assignment.
 
-- Frontend: own only `app/frontend`; serve and expose container port `80`;
-  `GET /` returns HTTP 200 HTML with `Task board` in the initial title or heading;
+- All three tier assignments: the seeded repository has no `app/` directory;
+  each tier creates its own claimed path from the same frozen wave base. Check
+  directory existence before path-scoped discovery, using a successful
+  conditional for an expected absent directory. Do not treat an anticipated
+  missing path as a command failure or bypass stop/recovery for an actual error.
+- Every task that authors credential mocks: use the exact `not-a-secret`
+  placeholder for synthetic credential values in offline tests, including
+  patched environments and expected-call assertions. Keep real credentials out
+  of source and evidence. Runtime PostgreSQL still uses requirement 10's
+  declared disposable settings; do not replace them with the mock value.
+- Frontend: own only `project-a/app/frontend`; serve and expose container port `80`;
+  `GET /` returns HTTP 200 HTML with a `Task board` heading; provide a textbox
+  labelled `Task title`, an `Add task` button, and task rows with `data-task-id`
+  equal to each API integer ID, title text, and a `Complete task` checkbox.
+  Create/update state persists through reload and API restart;
   proxy `/api` to `api:8000` preserving the complete path; use `GET /api/tasks` for the task array,
   `POST /api/tasks` with `{"title":"..."}` for the created task object, and
   `PATCH /api/tasks/{id}` with `{"completed":true}` for the updated task object.
   Task objects contain integer `id`, text `title` and boolean `completed`;
-  never run Docker.
-- API: own only `app/api`; listen on `8000`; implement health and task
+  repeat requirement 13 in full for frontend assets, configuration and the
+  serving process; never run Docker.
+- API: own only `project-a/app/api`; listen on `8000`; implement health and task
   endpoints at the backend's own `/api/tasks` paths (the proxy preserves paths):
   `GET /api/tasks` (task array),
   `POST /api/tasks` (accept `{"title":"..."}`, return the created task object),
@@ -118,13 +165,14 @@ are insufficient. Do not dispatch an incomplete assignment.
   `title` and boolean `completed`. Connect to PostgreSQL service `db` using database,
   user and disposable password `task_test`; create the `tasks` table idempotently
   with integer `id`, text `title` and boolean `completed`, without a host mount;
-  never run Docker.
-- Database: own only `app/database`; define the matching `tasks` schema with
+  repeat requirement 13 in full for API code, configuration and its runtime
+  user; never run Docker.
+- Database: own only `project-a/app/database`; define the matching `tasks` schema with
   integer `id`, text `title` and boolean `completed`; use the `task_test` database
   and user; require no host mount at runtime; never run Docker.
-- Integration: depend directly on all three tier tasks; own `compose.yaml`,
-  repository tests and shared runtime docs. Repeat requirements 5, 6, 10, 11 and
-  12 in full, including their exact fixed values, in this task's fields. Include
+- Integration: depend directly on all three tier tasks; own `project-a/compose.yaml`,
+  project-a tests and shared runtime docs. Repeat requirements 5, 6, 10, 11 and
+  12 and 13 in full, including their exact fixed values, in this task's fields. Include
   the three service names, frontend port `80`, API port `8000`, `/api` proxy,
   complete path preservation to backend `/api/tasks`, initial frontend HTTP 200
   HTML containing `Task board`,
@@ -144,6 +192,8 @@ are insufficient. Do not dispatch an incomplete assignment.
 - [ ] The first logical wave has disjoint frontend, API, and database tasks.
 - [ ] A dependent integration/runtime task owns Compose and end-to-end wiring.
 - [ ] The strict Compose model and project tests pass without starting Docker.
+- [ ] Image permission checks cover private source modes and the actual runtime
+  users without changing host permissions or the native private umask.
 - [ ] Worker isolation, reviewed commits, ordered integration, ff-only
   promotion, cleanup, and final alignment evidence are complete.
 - [ ] The final branch is clean; the verifier separately checks that unchanged

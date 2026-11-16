@@ -94,6 +94,31 @@ def test_unknown_cause_and_cyclic_chain_are_safe():
     )
 
 
+@pytest.mark.parametrize("predicate", [
+    "desired-state-changed", "artifact-changed", "checkpoint-binding-changed",
+    "approval-state-changed", "command-execution-changed", "package-parent-changed",
+    "durable-intent-changed",
+])
+def test_known_preparation_failure_survives_convergence_facade(monkeypatch, predicate):
+    from nebius_vpngw.deploy.apply_diagnostics import PreparationBlocked
+
+    report = cli._VMHAApplyPlanReport(
+        kind="apply-convergence", digest="d" * 64, engine_digest="e" * 64,
+        effects=("typed-effect",), has_destructive_changes=False, managed_ssh_action=None,
+    )
+
+    def failed(**kwargs):
+        raise PreparationBlocked(predicate)
+
+    monkeypatch.setattr(cli, "_apply_impl", failed)
+    with pytest.raises(cli._VMHAApplyConvergenceFailed) as raised:
+        cli._execute_vm_ha_apply_convergence(Path("test.yaml"), report)
+    assert raised.value.reason == "apply-preparation-blocked"
+    assert raised.value.diagnostics == ("phase-prepare-transaction", "predicate-" + predicate)
+    assert raised.value.next_action == PreparationBlocked.ACTIONS[predicate]
+    assert "cause-unclassified" not in raised.value.diagnostics
+
+
 @pytest.mark.parametrize("wrapped", [False, True, "package"])
 def test_authority_pending_survives_vm_ha_adapter(monkeypatch, wrapped):
     from nebius_vpngw.deploy.authority_observation import AuthorityUnavailable
@@ -122,7 +147,7 @@ def test_authority_pending_survives_vm_ha_adapter(monkeypatch, wrapped):
         cli._execute_vm_ha_apply_convergence(Path("test.yaml"), report)
     assert caught.value.pending
     assert caught.value.reason == "waiting-for-authority"
-    assert "same vm-ha command" in caught.value.next_action
+    assert "same apply command" in caught.value.next_action
 
 
 @pytest.mark.parametrize(

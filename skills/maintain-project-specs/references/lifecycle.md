@@ -111,6 +111,13 @@ Stop decisions. Their root coordinators use the canonical parser, paired
 publisher, and exact receipt for project truth without treating that receipt
 as workflow authority.
 
+Publication ownership is scoped to the selected project within the Git common
+directory. A sibling registration does not bind an unregistered project's
+receipt: absent objective and basis inputs leave workflow identity absent.
+The no-op project guard preserves explicit identity inputs. A registered owner
+still validates its native coordinator, objective, basis and authoritative
+checkout.
+
 Already-effective repository instructions remain authoritative subject to
 higher-priority policy and explicit user revisions of user-owned rules. Route
 an explicit restrictive-instruction repair request to project-agent-instructions

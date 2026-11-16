@@ -3,6 +3,7 @@
 import fcntl
 import json
 
+import pytest
 from tests.unit.test_vm_ha_runtime_ports import _repair_action
 
 from nebius_vpngw.agent.main import VMHAEffectAdapter
@@ -33,6 +34,10 @@ def test_contended_repair_writes_no_receipt_and_retries_same_action(tmp_path):
         json.dumps({"schema": "nebius-vpngw/vm-ha-data-plane-v1", "mode": "active"})
     )
     runtime.ipsec_configuration_provider = lambda: ("expected",)
+    kernel_preparations = []
+    runtime.ipsec_reload_preparer = lambda action, deadline: kernel_preparations.append(
+        (action, deadline)
+    )
     action = _repair_action(deadline=15.0, reasons=("daemon-failed:strongswan",))
     receipt = tmp_path / "receipt.json"
     events = []
@@ -44,10 +49,12 @@ def test_contended_repair_writes_no_receipt_and_retries_same_action(tmp_path):
         adapter.apply(action)
         assert not receipt.exists()
         assert not calls
+        assert not kernel_preparations
     adapter.apply(action)
     assert json.loads(receipt.read_text())["operation_id"] == action.operation_id
     assert sum("restart" in call for call in calls) == 1
     assert action.repair_deadline_at == 15.0
+    assert kernel_preparations == [(action, 14.0)]
 
 
 def test_deferred_disposition_is_not_success_or_failure(tmp_path):
@@ -162,5 +169,94 @@ def test_native_handler_shares_repair_deadline_with_cloud_requests(tmp_path, mon
         with pytest.raises(TimeoutError):
             ports.handlers()[action.kind](action)
         assert len(observed) == 1
+    finally:
+        ports.close()
+
+
+@pytest.mark.parametrize("expiry", ["attempted", "deferred", "raised", "admission"])
+def test_repair_deadline_preserves_only_a_returned_attempt_receipt(tmp_path, expiry):
+    from dataclasses import replace
+
+    from tests.unit.test_vm_ha_controller import _owned_cloud
+    from tests.unit.test_vm_ha_runtime_ports import (
+        FakeDataPlane,
+        FakeRouteBackend,
+        FakeSDK,
+        MemoryReplayStore,
+        _fake_credential_bundle,
+        _runtime_config,
+    )
+
+    from nebius_vpngw.agent.local_commands import CURRENT
+    from nebius_vpngw.agent.vm_ha.models import DigestSet
+    from nebius_vpngw.agent.vm_ha.runtime import build_runtime_ports
+    from nebius_vpngw.agent.vm_ha_controller import DataPlaneMode
+
+    now, calls, failures = [10.0], [], []
+    ports = build_runtime_ports(
+        _runtime_config(tmp_path),
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **_: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        route_backend_factory=lambda _: FakeRouteBackend(),
+        data_plane_factory=FakeDataPlane,
+    )
+    ports.peer_runtime.clock = lambda: now[0]
+    cloud = replace(
+        _owned_cloud(),
+        allocation_id=ports.binding.shared_allocation_id,
+        observed_owner_node_id=ports.local.node_id,
+        former_owner_node_id=ports.peer.node_id,
+        ownership_epoch="7",
+    )
+
+    def observe():
+        if expiry == "admission":
+            now[0] = 14.0
+            raise TimeoutError("authority expired before effects")
+        return cloud
+
+    def repair(action):
+        calls.append(action)
+        assert CURRENT.get().deadline == 14.0
+        now[0] = 14.0
+        if expiry == "raised":
+            raise TimeoutError("repair did not return a terminal disposition")
+        return RepairDisposition.ATTEMPTED if expiry == "attempted" else RepairDisposition.DEFERRED
+
+    ports.cloud.observe = observe
+    ports.data_plane.current = DataPlaneMode.ACTIVE
+    ports.data_plane.repair_local = repair
+    action = replace(
+        _repair_action(deadline=15.0, reasons=("daemon-failed:strongswan",)),
+        target_node_id=ports.local.node_id,
+        digests=DigestSet(
+            ports.binding.configuration_digest,
+            ports.binding.static_routes_digest,
+            ports.binding.bgp_policy_digest,
+        ),
+    )
+    adapter = VMHAEffectAdapter(
+        ports.handlers(),
+        receipt_path=tmp_path / "receipt.json",
+        effect_failed=failures.append,
+        event_sink=lambda _: None,
+    )
+    inherited = CURRENT.get()
+    try:
+        if expiry == "attempted":
+            adapter.apply(action)
+            assert (
+                json.loads(adapter.receipt_path.read_text())["operation_id"] == action.operation_id
+            )
+            assert not failures
+        else:
+            with pytest.raises(TimeoutError):
+                adapter.apply(action)
+            assert not adapter.receipt_path.exists()
+            assert failures == [action]
+        assert calls == ([] if expiry == "admission" else [action])
+        assert CURRENT.get() is inherited
     finally:
         ports.close()

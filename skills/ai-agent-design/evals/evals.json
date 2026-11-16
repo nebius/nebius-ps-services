@@ -183,6 +183,42 @@
         "Manual completion of a product-owned step marks the affected trial and dependent evidence as intervened. A clean rerun starts before the first divergence/intervention with prior writers quiescent or effectively fenced, observes the product transition, and checks authoritative postconditions.",
         "The output uses synthetic public-safe evaluation cases, preserves historical failed/intervened evidence, and neither claims a verified product fix nor grants live-operation authority."
       ]
+    },
+    {
+      "id": 13,
+      "prompt": "Design resource safety for an agent that parses large compressed tool results and runs long commands. Final previews are tiny; host visibility can disappear. Workers can replan and repeatedly replace children. Keep the design provider-neutral.",
+      "expected_output": "Bound intermediate allocation, monitor trustworthy capacity, and reserve lifetime child budgets.",
+      "files": [],
+      "assertions": [
+        "Bounds compressed/decoded/parsed/captured intermediate work before allocation, independently of preview size.",
+        "Defines unknown measurement and pressure behavior during tools and streams, preserving exact owned cleanup.",
+        "Uses lifetime graph limits and disjoint child reservations; replacement cannot recycle spent or uncertain budgets.",
+        "Does not hardcode product-specific thresholds or require a distributed platform for a small app."
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "Design recovery for one tool that internally launches helpers. An acknowledgment is lost and a retry has a new transport key. The parent appears idle but can still submit work. Task authority then expires while cleanup is pending.",
+      "expected_output": "Preserve semantic effect identity, close parent admission before settlement, and retain narrow cleanup authority.",
+      "files": [],
+      "assertions": [
+        "Separates semantic phase identity from transport retry keys and reconciles the existing operation.",
+        "Requires a closed submission gate and independently quiescent descendants before settlement.",
+        "Preserves narrowly scoped cleanup after expiry without renewing task authority or deleting pre-existing grants.",
+        "Reports verified outcome and incomplete cleanup separately."
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "An agent restores an old backup containing summaries of documents that were later revoked. Evidence comes from two independent owners whose versions may be incompatible. An action approver is not entitled to view the underlying documents. Design the boundaries.",
+      "expected_output": "Use current-denial restore barriers, dependency-aware evidence and purpose-scoped authority.",
+      "files": [],
+      "assertions": [
+        "Blocks serving restored material until current revocations and source entitlements are reconciled.",
+        "Separates logical denial, physical deletion and backup retention; unknown completeness quarantines affected scope.",
+        "Does not claim an atomic global snapshot across independent evidence owners.",
+        "Separates action approval, access provisioning and disclosure rights."
+      ]
     }
   ]
 }

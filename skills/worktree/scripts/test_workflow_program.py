@@ -109,7 +109,7 @@ class SourceTests(unittest.TestCase):
 
     def program(self):
         return {
-            "schema": "workflow/program-v1",
+            "schema": "workflow/program-v2", "uat_criteria": [],
             "phases": [
                 {"id": "Phase0", "depends_on": [], "exit_criteria": [self.ids[0]]},
                 {"id": "W01", "depends_on": ["Phase0"], "exit_criteria": self.ids[1:]},
@@ -124,6 +124,7 @@ class SourceTests(unittest.TestCase):
                     "criteria": self.ids[1:],
                     "regression_criteria": [self.ids[0]],
                     "change_kind": "runtime",
+                    "implementation_coverage": {c: ["core-check"] for c in self.ids},
                 }
             ],
         }
@@ -154,6 +155,7 @@ class SourceTests(unittest.TestCase):
     def test_phase_only_exit_without_a_runner_route_is_rejected(self):
         value = self.program()
         value["slices"][0]["criteria"] = self.ids[1:-1]
+        value["slices"][0]["implementation_coverage"].pop(self.ids[-1])
         with self.assertRaisesRegex(WorkflowError, "phase exit criteria"):
             validate_definition(value, self.coverage)
 
@@ -277,14 +279,14 @@ class DeliveredProgramTests(unittest.TestCase):
             original = {"slices": [{"id": "SLICE-001", "criteria": ["AC1"]}]}
             prior_digest = digest(original)
             write(run / "program" / (prior_digest + ".json"), original)
-            completed = {"execution_id": "SLICE-001", "review": {"qualification": {}}}
+            completed = {"execution_id": "SLICE-001", "review": {"admission": {}}}
             write(run / "delivery/SLICE-001/completion.json", completed)
             with (
                 mock.patch(
                     "workflow_delivery.verify_completion", return_value=completed
                 ),
                 mock.patch(
-                    "workflow_qualification.verify_receipt",
+                    "workflow_delivery_admission.verify_receipt",
                     return_value={"inputs": {"program_sha256": prior_digest}},
                 ),
             ):
@@ -315,9 +317,10 @@ class DeliveredProgramTests(unittest.TestCase):
             run = Path(temporary).resolve()
             write(
                 run / "delivery/SLICE-001/completion.json",
-                {"review": {"qualification": {}}},
+                {"review": {"admission": {}}},
             )
             definition = {
+                "uat_criteria": [],
                 "phases": [],
                 "slices": [
                     {
@@ -340,7 +343,7 @@ class DeliveredProgramTests(unittest.TestCase):
                 mock.patch.object(program, "verify_inputs", return_value=inputs),
                 mock.patch("workflow_impact.spec_checkout", return_value=run),
                 mock.patch.object(program, "_delivery"),
-                mock.patch("workflow_qualification.verify_receipt") as receipt,
+                mock.patch("workflow_delivery_admission.verify_receipt") as receipt,
             ):
                 receipt.return_value = {
                     "criteria": {"AC1": {}},

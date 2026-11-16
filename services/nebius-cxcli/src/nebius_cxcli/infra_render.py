@@ -149,7 +149,12 @@ def _terraform_versions_block() -> str:
     )
 
 
-def _terraform_providers_block() -> str:
+def _terraform_providers_block(*, preconfigured_static: bool = False) -> str:
+    if preconfigured_static:
+        return ('provider "nebius" {\n'
+                f"  module_name = var.{_PROVIDER_VAR_MODULE_NAME}\n"
+                f"  parent_id   = var.{_PROVIDER_VAR_PARENT_ID}\n"
+                "}\n")
     return (
         'provider "nebius" {\n'
         f"  module_name = var.{_PROVIDER_VAR_MODULE_NAME}\n"
@@ -1413,6 +1418,11 @@ def render_terraform_artifacts(
     source_profile: SourceProfile = SourceProfile.PORTABLE,
 ) -> list[Path]:
     """Render deterministic Terraform root-module artifacts for one validated config."""
+    from . import preconfigured_auth
+
+    static = preconfigured_auth.enabled()
+    if static:
+        preconfigured_auth.admit_cpu_vm_config(config)
     written: list[Path] = []
 
     backend_settings = backend_settings_from_config(config)
@@ -1448,7 +1458,7 @@ def render_terraform_artifacts(
     written.append(versions_tf_path)
 
     providers_tf_path = paths.infra_dir / "providers.tf"
-    _write_text(providers_tf_path, _terraform_providers_block())
+    _write_text(providers_tf_path, _terraform_providers_block(preconfigured_static=static))
     written.append(providers_tf_path)
 
     variables_tf_path = paths.infra_dir / "variables.tf"

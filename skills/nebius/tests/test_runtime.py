@@ -156,6 +156,42 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(caught.exception.outcome, "reconcile-required")
         self.assertNotIn("secret-sentinel", str(caught.exception))
 
+    def test_receipt_is_persisted_before_wait_with_stable_key(self):
+        events = []
+        op = NS(
+            id="op",
+            resource_id="vm",
+            done=lambda: True,
+            successful=lambda: True,
+            sync_wait=lambda **_: events.append("wait"),
+        )
+        method = Mock(return_value=response(op))
+        result = runtime.submit(
+            method,
+            NS(),
+            idempotency_key="persisted-key",
+            on_accepted=lambda receipt: events.append(receipt.resource_id),
+        )
+        self.assertEqual(events, ["vm", "wait"])
+        self.assertEqual(result.operation_id, "op")
+        self.assertEqual(
+            method.call_args.kwargs["metadata"],
+            [("x-idempotency-key", "persisted-key")],
+        )
+
+    def test_receipt_failure_retains_ids_and_never_waits(self):
+        op = NS(id="op", resource_id="vm", sync_wait=Mock())
+        with self.assertRaises(runtime.CloudError) as caught:
+            runtime.submit(
+                Mock(return_value=response(op)),
+                NS(),
+                idempotency_key="persisted-key",
+                on_accepted=Mock(side_effect=OSError("private path")),
+            )
+        op.sync_wait.assert_not_called()
+        self.assertEqual(caught.exception.resource_id, "vm")
+        self.assertNotIn("private path", str(caught.exception))
+
     def test_operation_success_is_distinct_from_ready(self):
         op = NS(
             id="operation-a",

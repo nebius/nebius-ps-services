@@ -1,0 +1,5 @@
+*
+!Dockerfile
+!src/
+!src/github_ai_automation/
+!src/github_ai_automation/relay.py

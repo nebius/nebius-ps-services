@@ -9,3 +9,6 @@ sdlc-uat-tests-codex-portability,true,"As the verified active Agentic SDLC coord
 sdlc-uat-tests-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-uat-tests for its assigned phase. Run product-level acceptance tests for the promoted SDLC delivery slice and its inherited regression obligations."
 sdlc-uat-tests-quoted-command,false,"Treat ""/skills:sdlc-uat-tests"" as sample text in this punctuation exercise; count its punctuation characters only."
 sdlc-uat-nonruntime,true,Qualify this promoted documentation-only slice using its accepted reviewed live-test-not-applicable disposition.
+sdlc-uat-aggregate-target,true,"As the active SDLC coordinator, rerun each required frozen qualification against the exact aggregate candidate and preserve inner UAT separately."
+sdlc-uat-relabel-inner,false,Reuse inner UAT as if it executed against the new aggregate candidate without running its required harness.
+sdlc-uat-pending,true,"As the active SDLC coordinator, load sdlc-uat-tests to record pending UAT because its accepted whole-objective scope is incomplete."

@@ -1,6 +1,6 @@
 ---
 name: sdlc-uat-tests
-description: "Use only as part of the Agentic SDLC workflow; qualify the promoted delivery slice and inherited product regression obligations before PR creation, using a confirmed safe live target when applicable."
+description: "Use only as part of the Agentic SDLC workflow; run explicitly requested UAT at a meaningful ready objective or milestone scope; retain honest pending outcomes without blocking eligible implementation or delivery."
 user-invocable: false
 ---
 
@@ -43,119 +43,108 @@ public command menu but remains available to the verified coordinator.
 
 ## Purpose
 
-Validate the promoted delivery slice against every mandatory acceptance criterion and inherited product regression obligation before its PR is created. Keep future slices pending; a passing slice does not complete its parent features or phases.
+Load `../worktree/references/workflow-invariants.md` for the shared ownership and
+evidence rules, then `../worktree/references/optional-uat.md` for UAT policy.
+
+Run only requested UAT against a meaningful ready scope. No UAT is requested by
+default. The default timing for a request is after implementation of the whole
+accepted objective/release; an explicitly selected coherent milestone may run
+sooner. Missing optional infrastructure does not block implementation or eligible
+PR/merge. Automated evidence does not claim human business acceptance.
 
 ## When To Use
 
-- The current delivery slice is sealed and promoted.
-- Cross-feature user journeys need acceptance evidence.
-- The SDLC loop reaches UAT before PR creation.
+- The accepted objective explicitly requests UAT.
+- Its capabilities and dependencies form the agreed testable scope.
+- The selected project/runtime harness can execute authorized scenarios.
 
 ## When Not To Use
 
-- Do not use for a single feature evaluation; use `sdlc-evaluate`.
-- Do not create PRs or merge.
-- Do not approve UAT without evidence.
+- Do not infer a UAT request from a provided environment or an implementation task.
+- Do not run after every task, wave or slice by default.
+- Do not use task tests as whole-product UAT or create/merge PRs here.
 
 ## Inputs
 
-- The frozen slice criteria, inherited regression obligations and source mappings.
-- The canonical requirements and designs relevant to those obligations.
-- The current slice and dependency evidence.
-- Current branch.
-- Product startup instructions.
-- Live Experiment Environment section from `docs/requirements.md`, when present.
+- The accepted UAT policy, candidate and explicitly requested objective/milestone.
 
 ## Required Reads
 
-- `../worktree/references/document-delivery.md` for source coverage, phase/slice
-  identities, shared-skill caller contracts and protected completion policy.
-
-- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
-  assignment/ownership and evidence to the current immutable execution basis.
-  Before preparation, bind evidence to the accepted objective and applicable
-  spec receipts. Stale evidence cannot authorize dispatch or promotion.
-
-- `docs/requirements.md`.
-- Live Experiment Environment section in `docs/requirements.md`.
-- `docs/design.md`.
-- Feature evidence.
-- Current source tree.
-- Existing UAT or E2E tests.
-- Environment instructions.
+Read `../worktree/references/optional-uat.md` before scheduling. Read
+`../worktree/references/document-delivery.md` for program/source coverage or
+protected delivery-policy evaluation, and `../worktree/references/workflow-contract.md`
+before execution reconciliation or lifecycle operations. Restore the accepted `uat` policy and exact execution basis. Read the
+canonical requirements/design, accepted criteria, product startup instructions,
+existing harnesses and authorized environment/reset procedures. Keep all secrets
+in their intended protected runtime store, outside evidence and task state.
 
 ## Writes
 
-- `evidence/uat/uat-report.md`.
-- GUI screenshots, TUI transcripts, or API/service logs.
-- Final pass/fail result.
+Write the private UAT report, readiness declaration, actual producer receipts and
+late-testing handoff. Include artifact/environment/trial identities only when
+observed. Preserve every previous attempted trial and unresolved cleanup owner.
 
 ## Process
 
-- Use `assets/templates/uat-report.md.template` for the report.
-- Build a UAT matrix from every frozen slice and inherited regression criterion.
-  Distinguish scoped package checks from complete source acceptance scenarios.
-- Select GUI, TUI, API, service, or mixed harness.
-- Default web GUI rows to `sdlc-gui-test` with `harness: playwright-test`,
-  `headless: true`, a fresh owned Chrome process/context and repeatable
-  assertions. Optional headless isolated Playwright MCP exploration is separate.
-  Record actual browser version, target SHA, trace, screenshots and cleanup.
-  No native desktop capture, monitor selection or unlocked-screen gate applies.
-- Honor explicitly required native desktop behavior as a separate contract;
-  do not silently substitute web evidence for it.
-- Use the Live Experiment Environment only when it is marked provided, has
-  explicit non-production or disposable confirmation, and the UAT actions fit
-  the recorded allowed operations and reset process. If unavailable or unsafe,
-  classify the blocker instead of improvising against production.
-- For an accepted non-runtime slice, use the reviewed live-test-not-applicable
-  path and its committed qualification harness; do not require a live cluster.
-  Runtime, deployment, security and data slices require applicable live evidence.
-- Run end-to-end user journeys and negative criteria.
-- For data-backed GUI journeys, use an independent API, database, or service
-  oracle when required by the acceptance plan; screenshots alone are not PASS
-  evidence.
-- Validate cross-feature interactions.
-- Execute the frozen repository qualification harness through private `qualify`;
-  use its owner-produced receipt for PR/merge admission. Reports alone are not
-  passing evidence. Record independent artifact/configuration and trial/reset
-  observations for all harness types, then classify failures.
+1. If UAT was not requested, record `not_requested` and return to eligible delivery.
+2. Check software/dependency readiness for the accepted objective or explicit
+   milestone before costly setup. An incomplete scope remains `pending`.
+3. Use an existing confirmed nonproduction target directly through its project
+   harness. Do not call the Nebius provisioning skill merely because an environment
+   exists. Only explicitly selected `$test-software-in-container` or
+   `$test-live-on-nebius` campaigns may use those owners. Nebius may create its
+   target after software readiness; no pre-existing live target is necessary.
+4. Check environment, access, data, scenarios and smoke readiness on the exact
+   candidate. Record missing prerequisites, keep a late-test handoff and continue
+   implementation/eligible publication. Do not spend repair attempts waiting for
+   optional infrastructure or keep Stop in a retry loop. For unchanged missing
+   prerequisites, reuse the pending handoff; retry setup/research only after a
+   relevant input, availability or authority change is observed.
+5. Run the frozen harness with private `qualify --execution OBJECTIVE`, using
+   `--stage aggregate` for the final automatic aggregate. Preserve worker fences.
+   The qualification plan, source/tree, artifacts, trial/reset observations and
+   actual assertions must match. A changed candidate needs new evidence.
+6. Web GUI scenarios use headless Playwright, an owned fresh context, repeatable
+   assertions, actual browser version and independent API/database/service oracles
+   where required. Screenshots alone are not PASS. Required native desktop
+   behavior remains a separate explicitly selected contract.
+7. Run exact owner cleanup on success and failure. The pinned cleanup action
+   verifies owned resources absent and writers quiescent; borrowed environments
+   remain intact. Preserve unproven cleanup and route recovery to that owner.
+8. Report UAT independently of delivery admission. Only complete executed evidence
+   is `passed`; pending/incomplete never become PASS or N/A. Later verification
+   validates frozen evidence without requiring a cleaned environment to persist.
 
 ## Idempotency
 
-- Rerunning UAT refreshes the report.
-- Use clean or isolated test data.
-- Do not duplicate external resources.
-- Preserve previous UAT evidence in history when useful.
+Do not duplicate resources, reset budgets or overwrite failed trials. Each trial
+has its own identity and repeatable data. After terminal completion, later user
+testing starts a new campaign from the retained candidate handoff.
 
 ## Failure Handling
 
-- Product behavior failure maps to `EVALUATION_DEFECT`.
-- Cross-feature design issue maps to `DESIGN_DEFECT`.
-- Missing acceptance coverage maps to `SPEC_GAP`.
-- Environment problem maps to `ENVIRONMENT_DEFECT`.
-- Unsafe or unconfirmed live environment use maps to `POLICY_BLOCK`.
-- Human-owned access or approval gaps map to `HUMAN_INPUT_REQUIRED`.
+Missing optional prerequisites are `pending`, not defects. Actual assertion
+failures retain their failure classification and existing bounded remediation;
+block affected publication until repaired while independent implementation may
+continue. Incomplete execution with proven cleanup may remain eligible; unresolved
+writers/cleanup remain owner obligations. A narrower later PASS cannot clear a
+larger failed scope. Never reinterpret interventions as clean product evidence.
 
 ## Must Not
 
-- Create PRs.
-- Merge.
-- Ignore failed negative criteria.
-- Modify requirements or design directly.
-- Use a production or unconfirmed environment for live experiments.
-- Exceed the allowed actions recorded in `docs/requirements.md`.
-- Store credentials, private endpoints, customer data, or raw logs in UAT evidence.
+Create PRs, merge, fabricate runtime evidence, ignore failed negative criteria,
+mutate canonical specifications, use an unconfirmed/production target without
+exact action authority, or exceed accepted operations. Do not launch either
+explicit-only testing skill through implicit routing.
 
 ## Completion Criteria
 
-- A complete UAT report for the current slice exists.
-- Every mandatory slice criterion and inherited regression obligation passes;
-  missing, skipped, stale or intervened evidence blocks delivery.
-- Cross-feature flows pass.
-- Product is ready for publication-only `create-pr` only on pass and only for
-  the clean exact promoted SHA tested by UAT.
-- Every constrained GUI row records the actual harness, browser, ordered
-  actions, checkpoints, independent oracle, and cleanup/retention result.
+- The report states `not_requested`, `pending`, `running`, `passed`, `failed` or
+  `incomplete`, with exact scope/candidate and concise reasons.
+- PASS has complete producer-owned assertions, observation and cleanup evidence.
+- Missing prerequisites leave a durable handoff and allow eligible delivery.
+- Publication uses separate implementation admission; required development checks,
+  CI, review, authority and genuine correctness dependencies remain enforced.
 
 ## SDLC Invariants
 

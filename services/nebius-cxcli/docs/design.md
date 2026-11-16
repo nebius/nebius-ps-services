@@ -14048,9 +14048,9 @@ The component source model itself is Terraform-module + Helm-chart based, but th
 
 - Installed wheels rely on package metadata for the published version.
 - Source/editable checkouts prefer live SCM state over a generated `_version.py` cache: they use `setuptools-scm` when available and fall back to `git describe` when it is not, so local runtime behavior still tracks the current repo state even in minimal release-shell environments.
-- `publish-release.sh --prep X.Y.Z` fails before editing `CHANGELOG.md` if the target tag already exists locally or on `origin`, so duplicate release-prep runs stop before producing a redundant changelog commit.
-- `publish-release.sh --prep X.Y.Z` is otherwise idempotent while the target tag remains unreleased: once `Unreleased` is empty, reruns leave `CHANGELOG.md` and `HEAD` unchanged.
-- `publish-release.sh --publish X.Y.Z` creates the service tag locally, verifies that the tagged source checkout resolves `nebius_cxcli.__version__ == X.Y.Z`, and only then pushes the tag to trigger the release workflow.
+- Package PRs carry immutable semver fragments. After exact-result CI, the shared Actions coordinator reserves the next version/tag, runs the credentialless service builder, and publishes verified assets.
+- The publish-release skill is the sole maintainer entry point to that coordinator. Its optional tag asserts the allocated version. Project-local publishers and local prep/tag/push are retired.
+- Laptop and automatic requests share durable reservations and asset hashes. Docs/test-only edits do not release. Hosted qualification remains pending; see `github-ai-automation/docs/architecture.md` at repository root.
 
 ## Source Code Structure
 

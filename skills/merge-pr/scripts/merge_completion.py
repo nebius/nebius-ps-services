@@ -115,7 +115,11 @@ def read_intent(api, run_id, attempt, number, head, policy, *, allowed_ids=None)
     )
     require(
         type(run["actor"]["id"]) is int
-        and run["actor"]["id"] in (operator_ids() if allowed_ids is None else allowed_ids)
+        and ((policy.get("automation_required") and run["actor"]["id"] == ACTIONS_BOT_ID
+              and isinstance(value.get("automation"), dict)
+              and value["automation"].get("candidate", {}).get("head_sha") == head
+              and value["automation"].get("candidate", {}).get("pr_number") == number)
+             or run["actor"]["id"] in (operator_ids() if allowed_ids is None else allowed_ids))
         and type(value.get("review_id")) is int
         and value["review_id"] > 0,
         "Untrusted operator intent",

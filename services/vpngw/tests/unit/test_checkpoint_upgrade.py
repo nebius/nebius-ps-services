@@ -524,7 +524,7 @@ def test_first_start_requires_current_creation_and_never_reuses_historical_autho
             else vm_ha_missing_standby_replacement_effect
         )
         effects.append(effect("gateway", 2, "create-compute"))
-    tx = NS(resource_bindings=resources, completed_effects=effects)
+    tx = NS(resource_bindings=resources, completed_effects=effects, approval_kind="migration")
     state = NS(
         status=VMHALifecycleStatus.ACTIVATING,
         transaction=tx,

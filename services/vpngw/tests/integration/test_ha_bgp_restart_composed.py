@@ -49,6 +49,156 @@ from nebius_vpngw.deploy.vm_ha_routes import (
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("case", ["unchanged", "pending", "firewall_failure"])
+def test_promoted_owner_dispatches_deferred_agent_reload(tmp_path, monkeypatch, case):
+    """Compose actual HA dispatch/readiness/reload with recorded effect ports.
+
+    Signal delivery is deferred until the controller releases its writer lock.
+    Firewall/kernel effects are ports here; their native correctness is covered
+    independently, not inferred from this orchestration test.
+    """
+    import fcntl
+    import os
+
+    from nebius_vpngw.agent.vm_ha.tunnel_runtime import tunnel_operation_pending
+
+    runtime, tunnels, native, selector, now, ports = composed(tmp_path, monkeypatch)
+    try:
+        for _ in range(8):
+            runtime.step()
+            now[0] += 1
+        assert native.forwarding and ports.routes.readiness().promotion_ready
+        state_dir = tmp_path / "state"
+        config_path = tmp_path / "config.yaml"
+        cfg = yaml.safe_load(config_path.read_text())
+        monkeypatch.setattr(
+            runtime, "_write_status", main.VMHAControllerRuntime._write_status.__get__(runtime)
+        )
+        runtime.snapshots.clock = lambda: now[0]
+        runtime.snapshots.last_apply_operation_id = None
+        runtime.snapshots.last_transfer_inhibition_operation_id = None
+        runtime.snapshots.config = cfg["vm_ha"]
+        wrapper = main.DefaultVMHAControllerRuntime(
+            runtime,
+            ports,
+            boot_id="local-boot",
+            sequence_path=state_dir / "sequence.json",
+            guard_path=ports.data_plane.guard_path,
+            config_path=config_path,
+            clock=lambda: now[0],
+        )
+        wrapper.started_guarded = True
+        monkeypatch.setattr(wrapper, "_start_peer_listener", lambda: None)
+        wrapper.publisher = SimpleNamespace(
+            start=lambda: None,
+            check=lambda: None,
+            progress=lambda _: None,
+            invalidate=lambda: None,
+        )
+        monkeypatch.setattr(main, "CONFIG_PATH", config_path)
+        monkeypatch.setattr(main, "STATE_PATH", tmp_path / "agent-applied.json")
+        monkeypatch.setattr(main, "VM_HA_GUARD_PATH", ports.data_plane.guard_path)
+        read_config = main._read_vm_ha_config
+        monkeypatch.setattr(main, "_read_vm_ha_config", lambda path=config_path: read_config(path))
+        boot_path = tmp_path / "boot-id"
+        boot_path.write_text("local-boot")
+        monkeypatch.setattr(
+            main,
+            "require_vm_ha_current_boot_readiness",
+            lambda: main.require_vm_ha_current_boot_ready(
+                cfg,
+                status_path=runtime.status_path,
+                boot_id_path=boot_path,
+                guard_path=ports.data_plane.guard_path,
+            ),
+        )
+
+        def routing_lock(**_kwargs):
+            descriptor = os.open(state_dir / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return descriptor
+
+        monkeypatch.setattr(main, "acquire_routing_lock", routing_lock)
+        agent = main.Agent()
+        agent.state.save_last_applied(cfg)
+        saved = main.STATE_PATH.read_bytes()
+        route_receipt = ports.routes.receipt_context()
+        effects = []
+
+        def firewall(_cfg, *, require_reload=False):
+            effects.append(("firewall", require_reload))
+            if case == "firewall_failure":
+                raise RuntimeError("required firewall reload failed")
+
+        def unexpected_render(*_args, **_kwargs):
+            raise AssertionError("unchanged promoted owner must not render configuration")
+
+        monkeypatch.setattr(main, "update_firewall_from_config", firewall)
+        monkeypatch.setattr(agent.ss, "render_and_apply", unexpected_render)
+        monkeypatch.setattr(agent.frr, "render_and_apply", unexpected_render)
+        monkeypatch.setattr(
+            agent.frr, "ensure_local_prefix_routes", lambda _cfg: effects.append("local-routes")
+        )
+        monkeypatch.setattr(
+            agent.xfrm,
+            "setup_interfaces",
+            lambda endpoints, *, persist_sysctl: effects.append(
+                ("xfrm", bool(endpoints), persist_sysctl)
+            ),
+        )
+        monkeypatch.setattr(
+            main, "enforce_routing_invariants_locked", lambda _cfg: effects.append("routing")
+        )
+        requests = []
+        pending_reload = []
+        previous_runner = ports.data_plane.runner
+
+        def runner(argv, timeout):
+            normalized = (Path(argv[0]).name, *argv[1:])
+            if normalized == ("systemctl", "reload-or-restart", "nebius-vpngw-agent"):
+                requests.append(normalized)
+                pending_reload.append(True)
+                return CommandResult(0, "")
+            return previous_runner(argv, timeout)
+
+        ports.data_plane.runner = runner
+        wrapper.step()
+        wrapper.step()
+        assert len(requests) == len(pending_reload) == 1
+        assert effects == []  # Delivery does not synchronously execute Agent.reload.
+        assert wrapper.active_reconcile_requested
+        main.require_vm_ha_current_boot_readiness()
+        selection = read_state(selector.path)
+        if case == "pending":
+            selector.state = selection
+            authority = tunnel_runtime.Authority(**selection["authority"])
+            selector.effects.current = authority
+            selector.request("failback", None, authority, now[0])
+            assert tunnel_operation_pending(cfg, state_dir)
+        pending_reload.pop()
+        if case == "firewall_failure":
+            with pytest.raises(RuntimeError, match="required firewall reload failed"):
+                agent.reload()
+            assert effects == [("firewall", True)]
+        else:
+            agent.reload()
+            assert effects == (
+                []
+                if case == "pending"
+                else [("firewall", True), "local-routes", ("xfrm", True, False), "routing"]
+            )
+        assert main.STATE_PATH.read_bytes() == saved
+        assert native.forwarding
+        assert ports.routes.receipt_context() == route_receipt
+        if case != "pending":
+            assert read_state(selector.path) == selection
+            wrapper.step()
+            assert len(requests) == 1 and not pending_reload
+    finally:
+        tunnels.close()
+        ports.close()
+
+
 class NativeCommands:
     def __init__(self, path):
         self.path = path
@@ -681,19 +831,27 @@ def test_unknown_passive_import_binding_never_admits_refresh_or_activation(
 
 
 @pytest.mark.parametrize("policy", [None, False, True])
+@pytest.mark.parametrize("static_state", ["cold", "responder", "unknown"])
 def test_mixed_cold_static_exception_requires_complete_bgp_policy_evidence(
-    tmp_path, monkeypatch, policy
+    tmp_path, monkeypatch, policy, static_state
 ):
     runtime, tunnels, native, selector, now, ports = composed(tmp_path, monkeypatch)
     ports.routes.static_manifest = replace(
         ports.routes.static_manifest, prefixes=frozenset({"10.2.0.0/16"})
     )
     ports.routes.passive_bgp_policy_provider = lambda: policy
+    ports.data_plane.tunnel_cold_passive = True
+    ports.data_plane.static_tunnel_names = ("static",)
+    if static_state == "responder":
+        native.loaded_connections.append("static")
+    elif static_state == "unknown":
+        command = native.command
+        native.command = lambda argv: "{}" if "--configuration" in argv else command(argv)
     readiness = ports.routes.readiness()
     assert not readiness.promotion_ready
     assert readiness.candidate_preparation_required
-    assert readiness.cold_standby_ready is (policy is True)
-    assert readiness.transfer_ready is (policy is True)
+    assert readiness.cold_standby_ready is (policy is True and static_state == "cold")
+    assert readiness.transfer_ready is (policy is True and static_state == "cold")
     tunnels.close()
     ports.close()
 

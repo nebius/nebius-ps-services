@@ -186,8 +186,32 @@ def reserve_wave(run_dir, repo, execution_id, wave_id, task_ids):
     occupied.update((execution_id, wave_id, task) for task in task_ids)
     if len(task_ids) > limits["wave_task_limit"] or len(occupied) > limits["worker_worktree_limit"]:
         raise WorkflowError("RESOURCE_LIMIT", "whole wave exceeds retained worker worktree budget; reconcile owners")
+    from workflow_objectives import validate_run
+    if validate_run(run_dir)[0].get("shared_admission"):
+        from workflow_projects import reserve_resources
+        reserve_resources(run_dir, "worktrees", [f"{execution_id}/{wave_id}/{task}" for task in task_ids])
     if selected.exists():
         if read(selected) != expected:
             raise WorkflowError("RESOURCE_LIMIT", "immutable wave reservation changed")
     else:
         write(selected, expected, exclusive=True)
+
+
+def reconcile_retired_wave(run_dir: Path, execution_id: str, wave: dict) -> None:
+    """Release only reserved workers whose path, branch and registration are absent."""
+    import workflow_execution as e
+    from workflow_objectives import validate_run
+    from workflow_projects import release_resources, complete_wave
+    if not validate_run(run_dir)[0].get("shared_admission"):
+        return
+    coordinator = read(e.coordinator_path(run_dir, execution_id))
+    repo = Path(coordinator["git_root"])
+    registered = e.worktrees(repo)
+    absent = []
+    for task in wave["task_ids"]:
+        worker = run_dir / "worktrees" / execution_id / "waves" / wave["wave_id"] / task
+        branch = f"codex/{coordinator['owner']}/{e._safe_id(run_dir.name)}/{e._safe_id(execution_id)}/{e._safe_id(wave['wave_id'])}/{e._safe_id(task)}"
+        if not _present(repo, worker, branch, registered):
+            absent.append(f"{execution_id}/{wave['wave_id']}/{task}")
+    release_resources(run_dir, "worktrees", absent)
+    complete_wave(run_dir)

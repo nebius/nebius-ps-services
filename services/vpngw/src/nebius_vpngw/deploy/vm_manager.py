@@ -2100,7 +2100,9 @@ class VMManager:
                 raise RuntimeError(f"Gateway VM {inst_name!r} has no exact boot disk attachment")
             disk_obj = self._get_disk_by_id(client, boot_disk_id)
             if disk_obj is None:
-                raise RuntimeError(f"Gateway VM {inst_name!r} attached boot disk is unavailable")
+                from .recovery import DeploymentPrerequisite
+
+                raise DeploymentPrerequisite("attached-boot-disk-unavailable")
 
             # Extract actual spec from live resources
             from nebius.api.nebius.compute.v1 import GetImageRequest, ImageServiceClient

@@ -17,6 +17,7 @@ from nebius_vpngw.agent.vm_ha import (
     StateValidationError,
     TransitionRecord,
 )
+from nebius_vpngw.agent.vm_ha import store as state_store
 
 
 def _digests(marker: str) -> DigestSet:
@@ -51,6 +52,14 @@ def _heartbeat(*, boot_id: str = "boot-a", sequence: int = 0) -> PeerHeartbeat:
         promotion_ready=False,
         auto_healing_policy_state="enabled",
         auto_healing_policy_digest="e" * 64,
+    )
+
+
+def _publish_replay(store: AtomicGenerationStore, state: ReplayState) -> None:
+    store.save_accepted_peer_heartbeat(
+        "node-b",
+        _heartbeat(boot_id=state.current_boot_id, sequence=state.highest_sequence),
+        replay_state=state,
     )
 
 
@@ -360,70 +369,89 @@ def test_replay_boundary_persists_monotonically_across_store_restart(tmp_path) -
     store = AtomicGenerationStore(root)
     first = ReplayState("boot-a", 4)
     next_boot = ReplayState("boot-b", 0, ("boot-a",))
-    store.save_replay_state("node-b", first)
+    _publish_replay(store, first)
 
     restarted = AtomicGenerationStore(root)
     assert restarted.load_replay_state("node-b") == first
     with pytest.raises(StalePeerStateError, match="must advance"):
-        restarted.save_replay_state("node-b", ReplayState("boot-a", 3))
+        _publish_replay(restarted, ReplayState("boot-a", 3))
     with pytest.raises(StalePeerStateError, match="must retire"):
-        restarted.save_replay_state("node-b", ReplayState("boot-b", 0))
+        _publish_replay(restarted, ReplayState("boot-b", 0))
 
-    restarted.save_replay_state("node-b", next_boot)
+    _publish_replay(restarted, next_boot)
     assert AtomicGenerationStore(root).load_replay_state("node-b") == next_boot
     with pytest.raises(StalePeerStateError, match="cannot be restored"):
-        restarted.save_replay_state("node-b", ReplayState("boot-a", 5, ("boot-b",)))
+        _publish_replay(restarted, ReplayState("boot-a", 5, ("boot-b",)))
 
 
 def test_last_accepted_peer_heartbeat_survives_controller_restart(tmp_path) -> None:
     root = tmp_path / "ha"
     heartbeat = _heartbeat(sequence=7)
     store = AtomicGenerationStore(root)
-
-    with pytest.raises(StalePeerStateError, match="replay boundary"):
-        store.save_accepted_peer_heartbeat("node-b", heartbeat)
-
-    store.save_replay_state("node-b", ReplayState("boot-a", 7))
-    store.save_accepted_peer_heartbeat("node-b", heartbeat)
-
+    store.save_accepted_peer_heartbeat("node-b", heartbeat, replay_state=ReplayState("boot-a", 7))
     assert AtomicGenerationStore(root).load_accepted_peer_heartbeat("node-b") == heartbeat
 
 
-def test_last_accepted_peer_heartbeat_fails_closed_when_replay_lineage_advances(
-    tmp_path,
-) -> None:
-    root = tmp_path / "ha"
-    store = AtomicGenerationStore(root)
-    heartbeat = _heartbeat(sequence=7)
-    store.save_replay_state("node-b", ReplayState("boot-a", 7))
-    store.save_accepted_peer_heartbeat("node-b", heartbeat)
-    store.save_replay_state("node-b", ReplayState("boot-b", 0, ("boot-a",)))
-
-    assert AtomicGenerationStore(root).load_accepted_peer_heartbeat("node-b") is None
-
-
-def test_last_accepted_peer_heartbeat_fails_closed_when_same_boot_replay_advances(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "ha"
-    store = AtomicGenerationStore(root)
-    heartbeat = _heartbeat(sequence=7)
-    store.save_replay_state("node-b", ReplayState("boot-a", 7))
-    store.save_accepted_peer_heartbeat("node-b", heartbeat)
-
-    # PeerStateExchange persists the replay boundary before BoundPeerRuntime
-    # persists the accepted heartbeat. A crash in that window must not let the
-    # older heartbeat become parity evidence after restart.
-    store.save_replay_state("node-b", ReplayState("boot-a", 8))
-
-    assert AtomicGenerationStore(root).load_accepted_peer_heartbeat("node-b") is None
+@pytest.mark.parametrize(
+    "heartbeat",
+    [
+        replace(_heartbeat(sequence=8), node_id="foreign"),
+        _heartbeat(boot_id="foreign", sequence=8),
+        _heartbeat(sequence=9),
+    ],
+)
+def test_publication_rejects_mismatched_pair_before_writes(tmp_path, heartbeat):
+    store = AtomicGenerationStore(tmp_path / "ha")
+    _publish_replay(store, ReplayState("boot-a", 7))
     with pytest.raises(StalePeerStateError, match="replay boundary"):
-        store.save_accepted_peer_heartbeat("node-b", heartbeat)
+        store.save_accepted_peer_heartbeat(
+            "node-b", heartbeat, replay_state=ReplayState("boot-a", 8)
+        )
+    assert store.load_replay_state("node-b") == ReplayState("boot-a", 7)
+    assert store.load_accepted_peer_heartbeat("node-b") == _heartbeat(sequence=7)
+
+
+@pytest.mark.parametrize(
+    "next_state", [ReplayState("boot-a", 8), ReplayState("boot-b", 0, ("boot-a",))]
+)
+@pytest.mark.parametrize("failed_file", ["replay.json", "accepted-heartbeat.json"])
+def test_publication_write_failure_preserves_replay_and_fails_closed(
+    tmp_path, monkeypatch, next_state, failed_file
+):
+    store = AtomicGenerationStore(tmp_path / "ha")
+    previous = ReplayState("boot-a", 7)
+    _publish_replay(store, previous)
+    write = state_store.atomic_write_json
+
+    def fail_write(path, value):
+        if path.name == failed_file:
+            raise OSError("injected publication failure")
+        write(path, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(state_store, "atomic_write_json", fail_write)
+        with pytest.raises(OSError, match="injected publication failure"):
+            _publish_replay(store, next_state)
+    restarted = AtomicGenerationStore(store.root)
+    if failed_file == "replay.json":
+        assert restarted.load_replay_state("node-b") == previous
+        assert restarted.load_accepted_peer_heartbeat("node-b") == _heartbeat(sequence=7)
+    else:
+        assert restarted.load_replay_state("node-b") == next_state
+        assert restarted.load_accepted_peer_heartbeat("node-b") is None
+        with pytest.raises(StalePeerStateError, match="must advance"):
+            _publish_replay(restarted, next_state)
+    recovered = replace(next_state, highest_sequence=next_state.highest_sequence + 1)
+    _publish_replay(restarted, recovered)
+    assert restarted.load_replay_state("node-b") == recovered
+    assert restarted.load_accepted_peer_heartbeat("node-b") == _heartbeat(
+        boot_id=recovered.current_boot_id, sequence=recovered.highest_sequence
+    )
 
 
 def test_corrupt_accepted_peer_heartbeat_still_fails_hard(tmp_path: Path) -> None:
     store = AtomicGenerationStore(tmp_path / "ha")
-    store.save_replay_state("node-b", ReplayState("boot-a", 1))
+    _publish_replay(store, ReplayState("boot-a", 1))
     heartbeat_path = store.peers / "node-b" / "accepted-heartbeat.json"
     heartbeat_path.write_text("{truncated", encoding="utf-8")
 
@@ -436,7 +464,7 @@ def test_replay_boundary_rejects_malformed_state_and_unsafe_peer_path(tmp_path) 
     with pytest.raises(StateValidationError, match="stable identifier"):
         store.load_replay_state("../node-b")
 
-    store.save_replay_state("node-b", ReplayState("boot-a", 1))
+    _publish_replay(store, ReplayState("boot-a", 1))
     replay_path = store.peers / "node-b" / "replay.json"
     replay_path.write_text("{truncated", encoding="utf-8")
     with pytest.raises(CorruptStateError, match="invalid replay state"):
@@ -445,10 +473,10 @@ def test_replay_boundary_rejects_malformed_state_and_unsafe_peer_path(tmp_path) 
 
 def test_replay_boundary_never_forgets_older_retired_boot_id(tmp_path) -> None:
     store = AtomicGenerationStore(tmp_path / "ha")
-    store.save_replay_state("node-b", ReplayState("boot-b", 0, ("boot-a",)))
+    _publish_replay(store, ReplayState("boot-b", 0, ("boot-a",)))
 
     with pytest.raises(StalePeerStateError, match="cannot forget"):
-        store.save_replay_state("node-b", ReplayState("boot-c", 0, ("boot-b",)))
+        _publish_replay(store, ReplayState("boot-c", 0, ("boot-b",)))
 
 
 def test_replay_guard_never_forgets_retired_boot_id() -> None:

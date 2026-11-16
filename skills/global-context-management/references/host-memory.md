@@ -57,6 +57,22 @@ sudo, credentials, raw environment dumps or memory stress tests are needed.
 
 ## Resource Owners And Limits
 
+Inspect a tool call's output and exit status before retaining its optional
+session handle. A monitor can exit immediately, including with status 75 when
+measurement is unavailable; a completed call has no running session to poll or
+stop. Store a handle only when the tool actually returned one. With batched
+calls, distinguish rejected calls from fulfilled results before reading fields.
+Never let a missing handle discard the original measurement or exit status.
+
+An outer coordinator or verifier with physical-host visibility may own the
+monitor for its sandboxed children. Declare that owner and a fresh successful
+host observation before launch, retain active monitoring throughout the child
+work, and route critical or unknown observations to exact owned cancellation.
+Repeat this setup context in worker assignments. A child may rely on that
+declared active owner without duplicating an unavailable sandbox probe; it must
+not claim to have measured the host itself. Without that actual owner and
+visibility, unknown measurement still pauses memory-heavy work.
+
 For a multi-step task, keep a bounded watcher active and consume its results
 between steps; prefer `run` for supervised foreground builds/tests. On critical
 or unknown status, dispatch cleanup through the already-authorized resource
@@ -67,8 +83,11 @@ and close it in the task's normal and interrupted cleanup paths.
 Docker daemon allocations, detached/escaped process groups, browser MCP server
 lifetimes, remote workloads and the agent application's own heap are outside
 the foreground supervisor's containment. Use exact container/session/resource
-identities and the existing owner's stop/close operation. Never kill user apps
-or OS services such as directory services. If cleanup cannot be verified,
+identities and the existing owner's stop/close operation. Record process ownership
+when launching; PID, start time and command matching alone do not prove which
+task owns a process. Confirm its recorded workspace or lifecycle as well before
+stopping it. Never kill user apps or OS services such as directory services.
+If cleanup cannot be verified,
 report it explicitly. Do not claim that killing a CLI stopped a daemon job.
 
 Sampling cannot prevent a sudden allocation between observations or changes by

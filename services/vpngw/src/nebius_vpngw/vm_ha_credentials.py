@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 import stat
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
@@ -97,6 +98,39 @@ class VMHACredentialIdentityError(RuntimeError):
     def __init__(self, reason: str) -> None:
         self.reason = reason
         super().__init__(f"VM-HA runtime credential identity is {reason}")
+
+
+def _identity_failure_reason(error: Exception) -> str:
+    """Classify identity reads without retaining provider messages or secrets."""
+
+    from nebius.aio.service_error import RequestError
+
+    codes = {
+        "UNAUTHENTICATED": "authentication-failed",
+        "PERMISSION_DENIED": "authorization-failed",
+        "DEADLINE_EXCEEDED": "provider-timeout",
+        "UNAVAILABLE": "provider-unavailable",
+        "RESOURCE_EXHAUSTED": "provider-unavailable",
+        "INTERNAL": "provider-unavailable",
+    }
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, RequestError):
+            code = getattr(getattr(current.status, "code", None), "name", None)
+            if code in codes:
+                return codes[code]
+        if isinstance(current, socket.gaierror):
+            return "dns-unavailable"
+        if isinstance(current, TimeoutError):
+            return "provider-timeout"
+        if isinstance(current, ConnectionError):
+            return "provider-unavailable"
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+    return "identity-unverified"
 
 
 @dataclass(frozen=True)
@@ -309,8 +343,8 @@ def verify_sdk_service_account_profile(
                 OPTION_RENEW_REQUEST_TIMEOUT: str(VM_HA_IDENTITY_REQUEST_TIMEOUT_SECONDS),
             },
         ).wait()
-    except Exception:
-        raise VMHACredentialIdentityError("authentication-failed") from None
+    except Exception as error:
+        raise VMHACredentialIdentityError(_identity_failure_reason(error)) from None
     profile = getattr(response, "service_account_profile", None)
     info = getattr(profile, "info", None)
     metadata = getattr(info, "metadata", None)
@@ -365,8 +399,8 @@ def _preflight_one(
     try:
         try:
             sdk = sdk_factory(credentials_file_name=str(path))
-        except Exception:
-            raise VMHACredentialIdentityError("authentication-failed") from None
+        except Exception as error:
+            raise VMHACredentialIdentityError(_identity_failure_reason(error)) from None
         _service_account_id, authenticated_project_id, service_account_name = (
             verify_sdk_service_account_profile(
                 sdk,

@@ -1057,7 +1057,17 @@ def test_static_probe_loss_switches_with_live_ike_and_persisted_debounce(native_
 
 @pytest.mark.parametrize("native_paths", ["bgp", "bgp-no-advertise"], indirect=True)
 @pytest.mark.parametrize(
-    "scenario", ["activate", "verify", "release", "failed-selected", "missing-protection"]
+    "scenario",
+    [
+        "activate",
+        "verify",
+        "release",
+        "failed-selected",
+        "missing-protection",
+        "expired",
+        "late-readback",
+        "slow-verify",
+    ],
 )
 def test_owner_bgp_restart_replays_only_after_fenced_activation(
     native_paths, scenario, record_property
@@ -1097,7 +1107,17 @@ def test_owner_bgp_restart_replays_only_after_fenced_activation(
     record_property("restart_driver.stderr", result.stderr)
     row = json.loads(result.stdout.strip().splitlines()[-1])
     assert row["active"]
-    assert row["phase"] == ("failed" if scenario in {"release", "failed-selected"} else "succeeded")
+    assert row["completed_at"] <= row["observed_at"]
+    if scenario == "late-readback":
+        assert row["completed_at"] < row["original_deadline"] <= row["observed_at"]
+    if scenario == "slow-verify":
+        assert row["verification_delayed"] and row["completed_at"] >= row["original_deadline"]
+    restored = scenario in {"release", "failed-selected", "expired", "slow-verify"} or (
+        row["completed_at"] >= row["original_deadline"]
+    )
+    assert row["phase"] == ("failed" if restored else "succeeded")
+    assert row["result"] == ("normal-policy-restored" if restored else "verified")
+    assert row["selected"] == ({} if restored else {"site": "backup"})
 
 
 def owner_coverage_driver(gateway, record_property, *scenario):
@@ -1129,7 +1149,9 @@ def owner_coverage_driver(gateway, record_property, *scenario):
             if isinstance(value, bytes):
                 value = value.decode("utf-8", errors="replace")
             record_property(f"owner_driver.{stream}", value)
-        pytest.fail(f"Owner coverage driver {type(error).__name__}:\n{error.stdout}\n{error.stderr}")
+        pytest.fail(
+            f"Owner coverage driver {type(error).__name__}:\n{error.stdout}\n{error.stderr}"
+        )
     record_property("owner_driver.stdout", result.stdout)
     record_property("owner_driver.stderr", result.stderr)
     return result

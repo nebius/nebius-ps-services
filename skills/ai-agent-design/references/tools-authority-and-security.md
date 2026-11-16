@@ -271,6 +271,20 @@ not be the final authorization or policy enforcement layer.
   actual process, filesystem, callback, or worker boundary?
 - Are product telemetry and target diagnostic identities independently scoped?
 
+## Approval, Provisioning And Disclosure
+
+Action approval, access provisioning and evidence disclosure are distinct
+purposes. An approver may approve an operation without being allowed to create
+infrastructure grants or view its sensitive results. Bind each decision to its
+purpose, current rights and delegation ceiling.
+
+Reuse existing authorization that still matches the exact action and scope;
+a continuation alone does not require repeated approval. After material drift,
+request only the missing scope delta and invalidate affected stale proposals.
+Classify permission evidence as sufficient, missing, excessive or unknown.
+Denied enumeration does not prove absence of a grant; never probe authority by
+attempting an unapproved mutation.
+
 ## Primary Sources
 
 - [OWASP AI Agent Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/AI_Agent_Security_Cheat_Sheet.html)

@@ -8,3 +8,4 @@ sdlc-tdd-negative-03,false,Prepare the SDLC integration worktree and task waves.
 sdlc-tdd-codex-portability,true,"As the verified active Agentic SDLC coordinator in codex, load sdlc-tdd for its assigned phase. Write tests first for this prepared Agentic SDLC feature before implementation waves begin."
 sdlc-tdd-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-tdd for its assigned phase. Write tests first for this prepared Agentic SDLC feature before implementation waves begin."
 sdlc-tdd-quoted-command,false,"Treat ""/skills:sdlc-tdd"" as sample text in this punctuation exercise; count its punctuation characters only."
+sdlc-tdd-project-scope,true,"As the active SDLC coordinator, write the planned tests from project-a inside its registered integration checkout while project-b runs independently."

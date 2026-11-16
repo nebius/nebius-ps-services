@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 from nebius_vpngw import pair_apply, pair_cli, pair_config, pair_worker
 from nebius_vpngw.apply_approval import digest
 from nebius_vpngw.cli import app
+from nebius_vpngw.deploy.apply_plan import Evidence, Outcome, Result
 
 
 @pytest.fixture(autouse=True)
@@ -48,6 +49,24 @@ def evidence(side, phase="prepared"):
         "receipts": {"prepared": {"proof": side}},
         "result": None,
     }
+
+
+@pytest.mark.parametrize("outcome", tuple(Outcome))
+@pytest.mark.parametrize("health", tuple(Evidence))
+def test_actual_apply_result_persists_through_child_metadata_guard(tmp_path, outcome, health):
+    child = pair_worker.Child.__new__(pair_worker.Child)
+    child.status = tmp_path / "child.status.json"
+    child.record = evidence("a", "starting")
+    result = Result(outcome, health, health, health, health, pending=("credentials",))
+
+    child.report(result.mapping())
+
+    saved = json.loads(child.status.read_text())
+    assert saved["result"] == json.loads(json.dumps(result.mapping()))
+    assert saved["result"]["outcome"] == outcome.value
+    assert saved["result"]["authority"] == health.value
+    assert saved["result"]["pending"] == ["credentials"]
+    assert saved["phase"] == "starting"
 
 
 def test_no_region_converges_before_both_preparation_and_unlock_receipts():
@@ -90,7 +109,13 @@ def test_worker_keeps_first_readiness_failure_across_unknown_observations(
 
     descriptor = os.open(tmp_path, os.O_RDONLY)
     child = NS(
-        request={"approval": "a" * 64, "lock_fd": descriptor, "parent": os.getppid()},
+        request={
+            "approval": "a" * 64,
+            "lock_fd": descriptor,
+            "parent": os.getppid(),
+            "repair": False,
+            "inspect_repair": False,
+        },
         record={"result": {"outcome": "unchanged"}},
         config=tmp_path / "a.yaml",
         deadline=100,
@@ -107,7 +132,7 @@ def test_worker_keeps_first_readiness_failure_across_unknown_observations(
     if converges:
         results.append({"connection": "ready", "connectivity": "unknown"})
     monkeypatch.setattr(pair_readiness, "observe", Mock(side_effect=results))
-    with pytest.raises(SystemExit if converges else RuntimeError) as error:
+    with pytest.raises(SystemExit) as error:
         pair_worker.main(tmp_path / "request.json")
     assert child.record["first_readiness_failure"] == first.failure.mapping()
     assert child.record["phase"] == ("complete" if converges else "failed")
@@ -115,7 +140,7 @@ def test_worker_keeps_first_readiness_failure_across_unknown_observations(
         assert error.value.code == 0
         assert child.record["readiness"]["connection"] == "ready"
     else:
-        assert "pair-owner/regional-health-not-verified" in str(error.value)
+        assert error.value.code == 1
         assert child.record["readiness"]["latest_failure"] == later.failure.mapping()
 
 
@@ -162,6 +187,95 @@ def test_atomic_child_progress_race_is_unknown_then_reobserved(tmp_path, monkeyp
     assert all(c["readiness"]["connection"] == "ready" for c in result["children"].values())
 
 
+@pytest.mark.parametrize("phase", ["prepared", "originating"])
+@pytest.mark.parametrize("valid", [True, False])
+def test_child_reobserves_racing_barrier_without_accepting_invalid_release(
+    tmp_path, monkeypatch, selected_artifact, phase, valid
+):
+    from nebius_vpngw.deploy import operator_keys
+
+    path = prepared_pair(tmp_path)
+    manifest, configs = pair_config.load(path)
+    child = pair_worker.Child.__new__(pair_worker.Child)
+    child.path = path.parent / "a.request.json"
+    child.status = path.parent / "a.status.json"
+    child.request = {
+        "run": "run",
+        "side": "a",
+        "manifest": str(path),
+        "configuration": digest(configs["a"]),
+        "profile": manifest["operator_profiles"]["a"],
+        "artifact": hashlib.sha256(selected_artifact.read_bytes()).hexdigest(),
+        "parent": os.getppid(),
+    }
+    child.record = evidence("a", "starting")
+    child.deadline = pair_worker.time.monotonic() + 30
+    receipt = {"artifact": child.request["artifact"], "execution": "a"}
+    release = path.parent / (phase + ".release.json")
+    operator_keys.publish_new(
+        release,
+        json.dumps(
+            {"run": "run" if valid else "foreign", "receipts": {"a": digest(receipt)}}
+        ).encode(),
+    )
+    reads = []
+
+    def racing_read(target, **kwargs):
+        assert target == release
+        reads.append(target)
+        if len(reads) == 1:
+            raise operator_keys.PrivateFileChanged("publication metadata changed")
+        return operator_keys.read_private_file(target, **kwargs)
+
+    sleeps = []
+    monkeypatch.setattr(pair_worker, "read_private_file", racing_read)
+    monkeypatch.setattr(pair_worker.time, "sleep", sleeps.append)
+    if valid:
+        child.reached(phase, receipt)
+    else:
+        with pytest.raises(RuntimeError, match="differs from exact child evidence"):
+            child.reached(phase, receipt)
+    assert len(reads) == 2
+    assert sleeps == [0.2]
+    assert json.loads(child.status.read_bytes())["phase"] == phase
+
+
+def test_child_barrier_race_keeps_original_deadline(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from nebius_vpngw.deploy.operator_keys import PrivateFileChanged
+
+    child = SimpleNamespace(
+        request={
+            "artifact": "artifact",
+            "manifest": "manifest",
+            "side": "a",
+            "configuration": digest({}),
+            "profile": None,
+            "parent": os.getppid(),
+        },
+        record={"receipts": {}},
+        path=tmp_path / "a.request.json",
+        deadline=10,
+        save=Mock(),
+    )
+    monkeypatch.setattr(
+        pair_config, "load", lambda *_a, **_k: ({"operator_profiles": {"a": None}}, {"a": {}})
+    )
+    clock = iter([1, 10])
+    monkeypatch.setattr(pair_worker.time, "monotonic", lambda: next(clock))
+    sleeps = Mock()
+    monkeypatch.setattr(pair_worker.time, "sleep", sleeps)
+    reader = Mock(side_effect=PrivateFileChanged("publication metadata changed"))
+    monkeypatch.setattr(pair_worker, "read_private_file", reader)
+    with pytest.raises(RuntimeError, match="Pair barrier deadline expired"):
+        pair_worker.Child.reached(child, "prepared", {"artifact": "artifact"})
+    assert reader.call_count == 1
+    sleeps.assert_called_once_with(0.2)
+    assert child.deadline == 10
+
+
 @pytest.mark.parametrize("a,b", [(False, False), (False, True), (True, False), (True, True)])
 def test_real_child_process_barriers_and_independent_project_context(tmp_path, monkeypatch, a, b):
     path = prepared_pair(tmp_path, a, b)
@@ -176,6 +290,45 @@ def test_real_child_process_barriers_and_independent_project_context(tmp_path, m
     assert resumed["run"] != before["run"]
     assert resumed["previous"] == before["run"]
     assert (path.parent / ".pair-runs" / before["run"] / "a.status.json").exists()
+
+
+@pytest.mark.parametrize("approve", [False, True])
+def test_pair_repair_inspects_both_targets_before_one_confirmation_and_keeps_barriers(tmp_path, monkeypatch, approve):
+    import typer
+
+    path = prepared_pair(tmp_path)
+    code = CHILD.replace("side=child.request['side']", """side=child.request['side']
+scope={'targets':[{'name':side,'compute':'compute-'+side,'disk':'disk-'+side}]}
+assert child.request['repair'] is True
+if child.request['inspect_repair']:
+ child.record['repair_scope']=scope
+ child.record['phase']='complete'
+ child.save()
+ os.close(child.request['lock_fd'])
+ raise SystemExit(0)
+assert child.request['repair_scope']==scope
+""")
+    monkeypatch.setattr(pair_apply, "command", lambda: [sys.executable, "-c", code])
+    confirmations = []
+
+    def confirm(prompt, *, default):
+        inspections = list((path.parent / ".pair-runs").glob("*/inspection/*.status.json"))
+        assert len(inspections) == 2
+        assert all(json.loads(item.read_text())["phase"] == "complete" for item in inspections)
+        assert default is False
+        confirmations.append(prompt)
+        return approve
+
+    monkeypatch.setattr(typer, "confirm", confirm)
+    result = pair_apply.apply(path, approvals={"a": None, "b": None}, repair=True)
+    assert len(confirmations) == 1
+    if not approve:
+        assert result == {"phase": "cancelled"}
+        assert not (path.parent / ".pair-apply.json").exists()
+    else:
+        assert result["phase"] == "complete"
+        for child in result["children"].values():
+            assert set(child["receipts"]) == {"prepared", "originating"}
 
 
 def test_inherited_writer_lock_survives_parent_fd_close(tmp_path):
@@ -214,6 +367,9 @@ def test_child_parent_loss_leaves_barrier_without_fabricating_completion(
             "profile": manifest["operator_profiles"]["a"],
             "timeout": 300,
             "artifact": hashlib.sha256(selected_artifact.read_bytes()).hexdigest(),
+            "repair": False,
+            "repair_scope": None,
+            "inspect_repair": False,
         }
         target = path.parent / "a.request.json"
         from nebius_vpngw.deploy.operator_keys import publish_new
@@ -303,6 +459,38 @@ def test_successful_child_exit_without_readiness_does_not_complete_pair(tmp_path
     with pytest.raises(RuntimeError, match="independent connection readiness"):
         pair_apply.apply(path, approvals={"a": None, "b": None})
     assert json.loads((path.parent / ".pair-apply.json").read_bytes())["phase"] == "pending"
+
+
+def test_failed_child_diagnostic_reaches_pair_journal_and_releases_lock(tmp_path, monkeypatch):
+    import shlex
+
+    path = prepared_pair(tmp_path)
+    code = CHILD.replace("side=child.request['side']", """side=child.request['side']
+if side=='a':
+ child.report({'outcome':'blocked','recovery':{'reason_code':'dns-unavailable','reason':'private-sentinel'}})
+ child.record['phase']='failed'
+ child.save()
+ os.close(child.request['lock_fd'])
+ raise SystemExit(1)
+""")
+    monkeypatch.setattr(pair_apply, "command", lambda: [sys.executable, "-c", code])
+    result = CliRunner().invoke(app, ["pair", "apply", str(path)])
+    assert result.exit_code == 1
+    terminal = json.loads(result.stdout.splitlines()[-1])
+    recovery = terminal["recovery"]
+    assert recovery["reason_code"] == "dns-unavailable"
+    assert recovery["reason"].startswith("Region a:")
+    assert "private-sentinel" not in result.output
+    assert shlex.split(recovery["repair_command"]) == [
+        "nebius-vpngw", "pair", "apply", str(path), "--repair"
+    ]
+    saved = json.loads((path.parent / ".pair-apply.json").read_text())
+    assert saved["phase"] == "pending"
+    assert saved["recovery"] == recovery
+    assert saved["children"]["a"]["result"]["recovery"]["reason_code"] == "dns-unavailable"
+    assert saved["children"]["a"]["phase"] == "failed"
+    with pair_apply.writer(path):
+        pass
 
 
 def test_stop_tolerates_child_exit_between_poll_and_signal(monkeypatch):

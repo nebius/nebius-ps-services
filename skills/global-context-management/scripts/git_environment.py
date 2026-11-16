@@ -134,7 +134,7 @@ def _marker(value: dict, *, bootstrap: bool) -> None:
                 or project != root / "project" or root.name != value["owner_id"]
                 or root.parent.name != "runs"):
             _fail("three-tier fixture identity changed")
-        expected = {"schema": "agentic-sdlc/three-tier-lifecycle-v8", "verification_id": value["owner_id"]}
+        expected = {"schema": "agentic-sdlc/three-tier-lifecycle-v9", "verification_id": value["owner_id"]}
         if _json(root / ".agentic-sdlc-three-tier-run.json") != expected:
             _fail("three-tier generation marker changed")
         if _json(project / ".sdlc-workflow-test-project.json", private=False) != {
@@ -365,6 +365,19 @@ def _local_configuration(metadata: Path, worktree_metadata: Path, value: dict, e
                 or re.fullmatch(r"branch\..+\.remote", key) is not None and item in {"origin", "."}
                 or re.fullmatch(r"branch\..+\.merge", key) is not None and item.startswith("refs/heads/")
             )
+            managed = re.fullmatch(r"branch\.[^\s\x00-\x1f\x7f]+\.worktreeskill(scope|path|base|name)", key)
+            if not safe and sealed and metadata != origin and managed:
+                field = managed[1]
+                candidate = Path(item)
+                safe = (
+                    field == "scope" and bool(item) and not candidate.is_absolute()
+                    and ".." not in candidate.parts and candidate.as_posix() == item
+                    or field == "path" and candidate.is_absolute()
+                    and candidate.is_relative_to(Path(value["owner_root"]))
+                    and ".." not in candidate.parts and "\n" not in item
+                    or field == "base" and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", item) is not None
+                    or field == "name" and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,95}", item) is not None
+                )
             if (not safe and sealed and metadata != origin
                     and re.fullmatch(r"branch\.[^\s\x00-\x1f\x7f]+\.vscode-merge-base", key)):
                 # This editor hint changes no Git behavior or authority. Bind its

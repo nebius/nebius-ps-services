@@ -66,15 +66,27 @@ polling, CI conclusions, and branch cleanup. Help requests stop before this read
 
 ## Issue closure
 
-For an issue-linked PR, read `../worktree/references/issue-resolution.md`.
+For an issue-linked PR, read `../worktree/references/issue-resolution.md` and
+`review-pr/references/pr-lifecycle.md` from the installed sibling skill.
 Before merge, verify the intended closing set against current issue scope and
 current-head resolution evidence. Mere references are insufficient. Stale managed
 references route through create-pr's existing preparation owner; preserve human
 content and reconcile conflicting closing keywords or links. GitHub owns native
 closure on default-branch merge. After confirmed merge, independently read the
 intended issue states and report closed/open/unverified separately from result
-CI. Never silently substitute issue-write calls, reopen issues after CI failure,
-or grant publication/merge authority from a plan or receipt.
+CI. Under explicit lifecycle or enrolled policy authority, use the shared
+contract's verified explicit closure fallback if native closure leaves a resolved
+issue open. Preserve later human reopening/scope changes. Never reopen issues
+after CI failure or infer publication/merge authority from a plan or receipt.
+
+## Enrolled automation repositories
+
+Before the workflow below, check live repository enrollment and read
+[automation authority](references/automation-authority.md). An enrolled repository
+uses its shared Actions controller for every merge request, including requests
+from a laptop. The controller's standing policy is the merge intent for eligible
+PR events. Local skills do not issue competing approvals or merge calls. The
+ordinary un-enrolled protocol below does not run in that profile.
 
 ## Workflow
 

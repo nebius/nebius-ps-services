@@ -37,7 +37,7 @@ def _named_step(steps: list[object], name: str) -> dict[str, object]:
 
 
 def _uses_step(steps: list[object], action: str) -> dict[str, object]:
-    matches = [step for step in steps if isinstance(step, dict) and step.get("uses") == action]
+    matches = [step for step in steps if isinstance(step, dict) and (step.get("uses") == action or (isinstance(step.get("uses"), str) and step["uses"].partition("@")[0] == action.partition("@")[0] and re.fullmatch(r"[0-9a-f]{40}", step["uses"].partition("@")[2])))]
     assert len(matches) == 1, f"Expected exactly one {action} step, found {len(matches)}"
     return matches[0]
 
@@ -186,6 +186,7 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
         "verify",
         "wheel-compatibility",
         "result-evidence",
+        "candidate-evidence",
     }
     expected_checkout = {
         "ref": "${{ github.sha }}",

@@ -619,6 +619,7 @@ def read_observation(state, summary):
                 or not set(target).issubset(
                     {
                         "path",
+                        "checkout_root",
                         "head",
                         "branch",
                         "run_id",

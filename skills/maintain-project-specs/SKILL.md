@@ -231,6 +231,13 @@ recover  --project-root <path>
 
 ## Process
 
+`check-candidates --requirements-candidate PATH --design-candidate PATH` is a
+read-only canonical pair check. Workflow-owned publication may return structured
+`correction_pending` or `classification_required` before repository effects, after
+authority and predecessor checks. See
+the bounded input-correction contract supplied by `sdlc-classify-failure`.
+These results are not paired publication receipts or spec authority.
+
 1. Resolve the exact selected project and Git root. Explicit scope supplied by
    the current user or its root PR coordinator wins; otherwise use the startup cwd. If multiple plausible
    projects remain, ask before any spec write. Read applicable instructions

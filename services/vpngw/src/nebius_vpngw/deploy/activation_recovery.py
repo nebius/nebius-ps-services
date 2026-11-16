@@ -224,7 +224,9 @@ class Recovery:
         if attempts and attempts[-1]["state"] in {"reserved", "dispatched", "uncertain"}:
             raise RuntimeError("previous activation repair requires observation before replay")
         if len(attempts) >= POLICY["attempts"]:
-            raise RuntimeError("activation recovery exhausted three attempts")
+            error = DiagnosticFailure("activation recovery exhausted three attempts")
+            error.first = Failure("activation-recovery", "activation-recovery-exhausted")
+            raise error
         if any(
             (a["stage"], a["action"], a["fingerprint"])
             == (stage, diagnosis.action, diagnosis.fingerprint)

@@ -66,13 +66,13 @@ Gather only the context needed for one feature and produce a compact context pac
 
 ## Required Reads
 
-- `../worktree/references/document-delivery.md` for source coverage, phase/slice
-  identities, shared-skill caller contracts and protected completion policy.
-
-- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
-  assignment/ownership and evidence to the current immutable execution basis.
-  Before preparation, bind evidence to the accepted objective and applicable
-  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+- `../worktree/references/workflow-invariants.md` for shared ownership,
+  evidence, failure and conditional-read rules.
+- Read `../worktree/references/workflow-contract.md` before this phase performs
+  execution planning, reconciliation or any execution lifecycle operation.
+- Read `../worktree/references/document-delivery.md` when accepted inputs include
+  a source manifest/program, this phase handles SLICE/source coverage or phase
+  barriers, or it handles delivery admission, phase exit or protected completion.
 
 - `docs/requirements.md`.
 - `docs/design.md` if present.
@@ -85,6 +85,13 @@ Gather only the context needed for one feature and produce a compact context pac
 
 - `context/FEAT-*.context.md`.
 - Context fingerprint, source list, and open context questions.
+
+## Architecture Statistics
+
+Refresh the source-bound architecture inventory through the private owner in
+`../worktree/references/statistics.md`. Preserve declared and observed facts,
+stable component IDs, source digests and explicit disagreements/gaps. Known
+architecture does not depend on completed task planning.
 
 ## Process
 

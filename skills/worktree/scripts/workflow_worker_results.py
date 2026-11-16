@@ -80,10 +80,24 @@ def ingest_result(run_dir: Path, execution_id: str, wave_id: str, task_id: str,
     with engine._execution_transition_lock(run_dir, execution_id):
         run, _ = authorize_coordinator(run_dir, session)
         assignment, state = _context(run_dir, execution_id, wave_id, task_id)
+        path = receipt_path(assignment, state["attempt"])
+        if run["owner"] == "agentic-sdlc" and not path.exists():
+            from workflow_corrections import submit
+            from workflow_worker_contract import result_feedback
+            owner_feedback = result_feedback(payload, assignment)
+            if owner_feedback["status"] == "valid" or owner_feedback["correction_kind"] is not None:
+                # Structural feedback cannot excuse unknown worker effects or
+                # an unowned native termination observation.
+                termination(run_dir, execution_id, wave_id, task_id, termination_path, session)
+            feedback = submit(run_dir, {"owner": "worktree", "run_id": run_dir.name,
+                              "execution_id": execution_id, "wave_id": wave_id, "task_id": task_id,
+                              "operation": "worker-result"}, {"result": payload},
+                              owner_feedback)
+            if feedback["status"] in {"correction_pending", "classification_required"}:
+                return feedback
         rejection = result_rejection(payload, assignment)
         if rejection is not None:
             raise WorkflowError("WORKER_FAILED", f"worker result is invalid (reason={rejection})")
-        path = receipt_path(assignment, state["attempt"])
         if path.exists():
             _, receipt = read_receipt(assignment, state)
             if (receipt["worker_result"] != payload
@@ -115,6 +129,8 @@ def ingest_result(run_dir: Path, execution_id: str, wave_id: str, task_id: str,
             }
             receipt["receipt_sha256"] = digest(receipt)
             write(path, receipt, exclusive=True)
+        from workflow_statistics import safe_record
+        safe_record(run_dir, "worker_result")
         return {"receipt_path": str(path), "receipt_sha256": receipt["receipt_sha256"],
                 "worker_status": receipt["worker_result"]["status"], "attempt": receipt["attempt"]}
 

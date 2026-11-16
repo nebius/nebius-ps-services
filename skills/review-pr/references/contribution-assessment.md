@@ -50,7 +50,9 @@ base sync and publication under the original receipt/grant. Use its
 standalone and nested reviews; preserve the caller checkout throughout. Use its
 [PR publication contract](../../create-pr/references/pr-publication.md) for both
 same-repository and fork updates. Keep the original PR and contributor history;
-do not create a replacement branch/PR to bypass missing write permission.
+do not bypass missing write permission. An authorized full-lifecycle adoption
+uses the separate [replacement contract](pr-lifecycle.md), retaining original
+authority, budgets, attribution and complete feature coverage.
 
 ## Root-owned spec reconciliation
 

@@ -2793,6 +2793,10 @@ def main_callback(
     _RUNTIME_AUTH_READY_PROJECTS.clear()
     _RUNTIME_AUTH_OPERATOR_ENV_SNAPSHOT = None
     try:
+        if ctx.invoked_subcommand == "wireguard":
+            from .preconfigured_auth import reject_managed_operation
+
+            reject_managed_operation("WireGuard operations")
         set_component_sources_file_override(component_sources_file)
         set_component_sources_profile_override(source_profile)
     except ValueError as exc:
@@ -2800,6 +2804,12 @@ def main_callback(
 
 
 def _ensure_project_auth_identity(*, project_id: str, client_name: str) -> None:
+    from . import preconfigured_auth
+
+    if preconfigured_auth.enabled():
+        sdk = preconfigured_auth.client(preconfigured_auth.load(project_id))
+        sdk.sync_close(timeout=10)
+        return
     auth_config = SimpleNamespace(
         client_info=SimpleNamespace(
             client_name=client_name or "project",
@@ -36734,6 +36744,10 @@ def _create_or_recreate_runtime_auth_profile(
     sdk_config_file: Path | None,
     reconcile_permissions: bool = False,
 ) -> tuple[RuntimeAuthCacheMaterial, bool]:
+    from .preconfigured_auth import enabled as static_auth_enabled
+
+    if static_auth_enabled():
+        raise RuntimeError("Preconfigured static authentication cannot bootstrap or rotate IAM credentials")
     _capture_runtime_auth_operator_environment()
     with _runtime_auth_project_lock(project_id=project_id, client_name=client_name):
         existing = _runtime_auth_cache_material(project_id=project_id, client_name=client_name)
@@ -37030,6 +37044,9 @@ def _runtime_auth_error_requires_rotation(exc: Exception) -> bool:
 
 
 def _export_runtime_auth_material(material: RuntimeAuthCacheMaterial) -> None:
+    from .preconfigured_auth import reject_managed_operation
+
+    reject_managed_operation("managed credential export")
     # Bootstrap credentials are not runtime authority. Remove snapshot/user
     # surfaces in this process before any product SDK can select them.
     for name in (
@@ -37061,6 +37078,9 @@ def _export_runtime_auth_material(material: RuntimeAuthCacheMaterial) -> None:
 def _ensure_runtime_auth_s3_material(
     material: RuntimeAuthCacheMaterial,
 ) -> RuntimeAuthCacheMaterial:
+    from .preconfigured_auth import reject_managed_operation
+
+    reject_managed_operation("managed Object Storage key issuance")
     if material.s3_access_key_id and material.s3_secret_access_key:
         return material
     with _runtime_auth_project_lock(
@@ -37146,6 +37166,18 @@ def _ensure_runtime_auth_material(
     *,
     need_terraform: bool,
 ) -> None:
+    from . import preconfigured_auth
+
+    if preconfigured_auth.enabled():
+        static = preconfigured_auth.load(str(config.client_info.nebius.project_id).strip())
+        preconfigured_auth.admit_cpu_vm_config(config)
+        sdk = preconfigured_auth.client(static)
+        sdk.sync_close(timeout=10)
+        if need_terraform:
+            from .object_storage_transport import StorageCredentials
+
+            StorageCredentials.from_environment()
+        return
     _capture_runtime_auth_operator_environment()
     project_id = str(config.client_info.nebius.project_id).strip()
     client_name = str(config.client_info.client_name).strip() or "project"
@@ -37402,6 +37434,14 @@ def _terraform_runtime_env(config: Any) -> dict[str, str]:
         project_id=project_id,
     )
     runtime_env["TF_VAR_nebius_provider_parent_id"] = project_id
+
+    from . import preconfigured_auth
+
+    if preconfigured_auth.enabled():
+        static = preconfigured_auth.load(project_id)
+        preconfigured_auth.admit_cpu_vm_config(config)
+        runtime_env["NEBIUS_IAM_TOKEN"] = static.token
+        return runtime_env
 
     credentials_file = os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE", "").strip()
     if credentials_file:
@@ -38778,10 +38818,11 @@ def _ensure_terraform_backend_ready(config: Any) -> None:
     _ensure_backend_s3_env_aliases()
     settings = backend_settings_from_config(config)
     from .deployment_recovery import is_deployment_preview
+    from .preconfigured_auth import enabled as static_auth_enabled
 
     created = (
         ensure_state_bucket(settings, create=False)
-        if is_deployment_preview()
+        if is_deployment_preview() or static_auth_enabled()
         else ensure_state_bucket(settings)
     )
     if created:
@@ -54275,6 +54316,9 @@ def bootstrap_ci_command(
 ) -> None:
     """Generate or reconcile the CLI-managed customer GitHub workflow and environment settings for one project config.yaml."""
     try:
+        from .preconfigured_auth import reject_managed_operation
+
+        reject_managed_operation("bootstrap-ci")
         config, paths = _load_context(config_path)
         resolved_cli_ref = str(cli_ref or "").strip() or default_cli_ref()
         repo_root = _require_git_root(paths.deployments_dir)

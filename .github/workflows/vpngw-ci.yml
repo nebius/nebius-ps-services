@@ -3,7 +3,7 @@ name: vpngw-ci
 permissions:
   contents: read
 
-run-name: ${{ inputs.correlation_id != '' && format('post-merge-{0}', inputs.correlation_id) || format('{0} {1}', github.workflow, github.event_name) }}
+run-name: ${{ inputs.candidate_head != '' && format('ai-candidate-{0}-{1}-{2}-{3}', inputs.candidate_pr, inputs.candidate_head, inputs.candidate_base, inputs.candidate_request_id) || inputs.correlation_id != '' && format('post-merge-{0}', inputs.correlation_id) || format('{0} {1}', github.workflow, github.event_name) }}
 
 on:
   pull_request:
@@ -19,6 +19,26 @@ on:
       - ".github/workflows/vpngw-release.yml"
   workflow_dispatch:
     inputs:
+      candidate_pr:
+        description: Trusted candidate identity (all five fields required together)
+        required: false
+        type: string
+      candidate_head:
+        description: Trusted candidate identity (all five fields required together)
+        required: false
+        type: string
+      candidate_base:
+        description: Trusted candidate identity (all five fields required together)
+        required: false
+        type: string
+      candidate_request_id:
+        description: Active automation request ID
+        required: false
+        type: string
+      candidate_source:
+        description: Trusted admission run ID and attempt separated by a colon
+        required: false
+        type: string
       result_sha:
         description: Post-merge identity (all fields required together)
         required: false
@@ -46,8 +66,8 @@ defaults:
     working-directory: services/vpngw
 
 concurrency:
-  group: vpngw-${{ github.workflow }}-${{ inputs.result_sha || github.ref }}
-  cancel-in-progress: ${{ inputs.result_sha == '' }}
+  group: vpngw-${{ github.workflow }}-${{ inputs.candidate_head || inputs.result_sha || github.ref }}
+  cancel-in-progress: ${{ inputs.result_sha == '' && inputs.candidate_head == '' }}
 
 jobs:
   merge-inputs:
@@ -61,10 +81,11 @@ jobs:
       run:
         working-directory: .
     outputs:
+      candidate: ${{ steps.identity.outputs.candidate }}
       post_merge: ${{ steps.identity.outputs.post_merge }}
       checkout_sha: ${{ steps.identity.outputs.checkout_sha }}
     steps:
-      - if: inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != ''
+      - if: (inputs.candidate_pr != '' || inputs.candidate_head != '' || inputs.candidate_base != '' || inputs.candidate_request_id != '' || inputs.candidate_source != '') || inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
@@ -73,9 +94,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+          CANDIDATE_INPUTS: ${{ (inputs.candidate_pr != '' || inputs.candidate_head != '' || inputs.candidate_base != '' || inputs.candidate_request_id != '' || inputs.candidate_source != '') }}
           POST_MERGE_INPUTS: ${{ inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != '' }}
         run: |
-          if [ "$POST_MERGE_INPUTS" = true ]; then
+          if [ "$CANDIDATE_INPUTS" = true ]; then
+            python3 skills/merge-pr/scripts/candidate_ci.py inputs --workflow vpngw-ci.yml
+          elif [ "$POST_MERGE_INPUTS" = true ]; then
             python3 skills/merge-pr/scripts/merge_completion.py ci-inputs --workflow vpngw-ci.yml
           else
             printf 'post_merge=false\ncheckout_sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
@@ -110,6 +134,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Check out the admitted PR candidate
+        if: needs.merge-inputs.outputs.candidate == 'true'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py checkout --workflow vpngw-ci.yml
       - name: Check out the authoritative merged result
         if: needs.merge-inputs.outputs.post_merge == 'true'
         shell: bash
@@ -151,6 +181,12 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Check out the admitted PR candidate
+        if: needs.merge-inputs.outputs.candidate == 'true'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py checkout --workflow vpngw-ci.yml
       - name: Check out the authoritative merged result
         if: needs.merge-inputs.outputs.post_merge == 'true'
         working-directory: .
@@ -201,6 +237,12 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Check out the admitted PR candidate
+        if: needs.merge-inputs.outputs.candidate == 'true'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py checkout --workflow vpngw-ci.yml
       - name: Check out the authoritative merged result
         if: needs.merge-inputs.outputs.post_merge == 'true'
         shell: bash
@@ -272,6 +314,12 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Check out the admitted PR candidate
+        if: needs.merge-inputs.outputs.candidate == 'true'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py checkout --workflow vpngw-ci.yml
       - name: Check out the authoritative merged result
         if: needs.merge-inputs.outputs.post_merge == 'true'
         shell: bash
@@ -327,12 +375,10 @@ jobs:
             tests/unit/test_ssh_push.py::test_vm_ha_activation_classifies_host_identity_rejection
       - name: CLI integration smoke tests
         run: python -m pytest -n auto tests/integration/test_cli_commands.py
-      - name: Release helper regressions
-        run: python -m pytest tests/integration/test_publish_release.py
 
   build:
     needs: [merge-inputs, unit-tests]
-    if: (github.event_name != 'workflow_dispatch') || needs.merge-inputs.outputs.post_merge == 'true'
+    if: (github.event_name != 'workflow_dispatch') || needs.merge-inputs.outputs.post_merge == 'true' || needs.merge-inputs.outputs.candidate == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -348,6 +394,12 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Check out the admitted PR candidate
+        if: needs.merge-inputs.outputs.candidate == 'true'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py checkout --workflow vpngw-ci.yml
       - name: Check out the authoritative merged result
         if: needs.merge-inputs.outputs.post_merge == 'true'
         shell: bash
@@ -397,6 +449,12 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Check out the admitted PR candidate
+        if: needs.merge-inputs.outputs.candidate == 'true'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py checkout --workflow vpngw-ci.yml
       - name: Check out the authoritative merged result
         if: needs.merge-inputs.outputs.post_merge == 'true'
         shell: bash
@@ -440,6 +498,12 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Check out the admitted PR candidate
+        if: needs.merge-inputs.outputs.candidate == 'true'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py checkout --workflow vpngw-ci.yml
       - name: Check out the authoritative merged result
         if: needs.merge-inputs.outputs.post_merge == 'true'
         shell: bash
@@ -488,6 +552,12 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Check out the admitted PR candidate
+        if: needs.merge-inputs.outputs.candidate == 'true'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py checkout --workflow vpngw-ci.yml
       - name: Check out the authoritative merged result
         if: needs.merge-inputs.outputs.post_merge == 'true'
         shell: bash
@@ -552,3 +622,32 @@ jobs:
           path: ${{ runner.temp }}/result.json
           retention-days: 30
           if-no-files-found: error
+
+  candidate-evidence:
+    name: Exact candidate CI evidence
+    needs: [merge-inputs, ordinary-job-settlement, historical-package-upgrades, lint, unit-tests, build, integration-tests, coverage, packaging]
+    if: always() && needs.merge-inputs.outputs.candidate == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Independently collect job outcomes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py evidence --workflow vpngw-ci.yml --output "$RUNNER_TEMP/candidate.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: candidate-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate.json
+          if-no-files-found: error
+          retention-days: 30

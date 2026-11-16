@@ -205,3 +205,13 @@ before assessment; GPU-only scope and SDK request fields were checked on 2026-10
 - [Allowance API](https://docs.nebius.com/cli/reference/quotas/quota-allowance/list)
 
 - [Quota and usage states](https://docs.nebius.com/terraform-provider/reference/resources/quotas_v1_quota_allowance)
+
+## Unconfigured project allowance dimensions
+
+Project list responses can include dimensions with no resource ID and no optional
+limit. The inspector keys rows by parent/name/region. Only an ID-less project row
+with an absent limit, unspecified lifecycle state and measured usage is treated
+as unconfigured, allowing the active tenant constraint to govern. Frozen/deleted
+rows, unknown usage and malformed ancestry remain unresolved. Zero is an explicit
+limit; never confuse it with absence. The SDK tests cover both typed absent fields
+and unknown-usage negatives.

@@ -18,7 +18,8 @@ This is an internal helper, not a new public skill action. It holds the same
 generation lock as Compose and runs a fixed `DiscoverRunner` adapter using
 `docker compose exec -T web python`. It reads result counters directly from
 `unittest.TestResult`, suppresses product stdout/stderr, and records no raw
-test output. The command has a five-minute timeout. Product tests must use the
+test output. Healthy test commands continue through periodic observations without
+a duration-only timeout. Product tests must use the
 standard Django runner interface; unsupported output never becomes PASS.
 
 Run all five classes before the first UAT browser stage and before the declared

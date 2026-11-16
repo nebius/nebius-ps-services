@@ -61,6 +61,8 @@ class DeliveryTests(unittest.TestCase):
                 "artifact_sha256": "e" * 64,
                 "configuration_sha256": "f" * 64,
             },
+            "head": self.head, "tree": "e" * 40,
+            "uat": {"status": "not_requested", "reason": "No UAT requested", "policy_sha256": "a" * 64, "delivery_eligible": True, "head": self.head},
             "criteria": {"AC-001": {}},
             "plan": {"live": True},
         }
@@ -188,7 +190,7 @@ class DeliveryTests(unittest.TestCase):
             self.run,
             execution,
             self.review,
-            {"receipt": "qualification/reference.json", "sha256": digest(self.receipt)},
+            {"receipt": "delivery-admission/reference.json", "sha256": digest(self.receipt)},
         )
 
     def test_two_slices_and_all_supported_merge_methods(self):
@@ -394,16 +396,16 @@ class PhaseEvidenceTests(unittest.TestCase):
                 {"id": "P1", "depends_on": ["P0"], "exit_criteria": ["AC1"]},
                 {"id": "P2", "depends_on": ["P1"], "exit_criteria": ["AC2"]},
             ]
-            program = {"phases": phases, "slices": []}
+            program = {"phases": phases, "slices": [], "uat_criteria": []}
             program_digest = digest(program)
             write(run / "program" / (program_digest + ".json"), program)
             records = [
                 {
-                    "schema": "workflow/phase-exit-v1",
+                    "schema": "workflow/phase-exit-v2",
                     "phase": p["id"],
                     "definition_sha256": digest(p),
                     "slices": [],
-                    "qualifications": [{"phase": p["id"]}],
+                    "admissions": [{"phase": p["id"]}],
                 }
                 for p in phases
             ]

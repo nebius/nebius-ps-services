@@ -25,3 +25,4 @@ maintain-project-specs-quoted-command,false,"Treat ""/skills:maintain-project-sp
 spec-steering-shared-intake,true,This steering changes the accepted API behavior; extract its requirements and reconcile the canonical design through the normal owner workflow.
 spec-metadata-bootstrap,true,"Create the missing canonical spec pair using the owner templates, preserving machine-readable markers and normal prose lint checks."
 spec-prose-formatting,false,Wrap the long prose lines in README.md without changing project requirements or design.
+spec-sibling-publication,true,Publish the initial canonical specification pair for project-a while project-b has an active workflow in the same repository.

@@ -139,6 +139,12 @@ file timestamps/inodes and execution logs are excluded from payload convergence.
 These exclusions never permit payload, recovery authority or safety-policy drift.
 This check proves package convergence; mutation-free full apply remains a live-VM
 requirement. Fixture hashes bind each report separately from the candidate wheel.
+The authentic 0.6.4 cases also inspect a fixture route reservation before upgrading
+the guest package. The selected command runs against the predecessor interpreter
+and real Linux lock, covering immediate admission, a released lock and deadline
+expiry. Each case verifies unchanged route authority; the fixture reservation is
+then removed before the package transition. This is transport proof, not live
+cloud-route reconciliation.
 
 The base image contains systemd, fixture prerequisites and the legacy native
 daemon. It removes the minimal Ubuntu image's documentation exclusions before

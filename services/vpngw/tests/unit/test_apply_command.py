@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import json
 from types import SimpleNamespace
@@ -32,6 +33,25 @@ def command_fixture(tmp_path):
         "artifact_sha256": "a" * 64,
     }
     return journal, inputs
+
+
+@pytest.mark.parametrize("policy", [None, b"#!/bin/sh\nexit 101\n", b"#!/bin/sh\n# secret-fixture-sentinel\nexit 0\n"])
+def test_runtime_policy_bytes_never_enter_command_journal(command_fixture, monkeypatch, policy):
+    from nebius_vpngw import runtime_migration as migration
+
+    payload = None if policy is None else {"content": base64.b64encode(policy).decode(), "mode": 0o755}
+    monkeypatch.setattr(migration, "policy_payload", lambda: payload)
+    journal, inputs = command_fixture
+    for prepared in inputs["plans"].values():
+        prepared.manifest["runtime_plan"] = {"startup_policy": migration.policy_snapshot()}
+    command = begin(journal, inputs)
+    reopened = CommandJournal("project", "gateway", root=journal.root)
+    assert CommandPlan.parse(reopened.snapshot()["transaction"]["plan"]) == command.plan
+    data = journal.path.read_bytes()
+    assert b'"content"' not in data
+    assert b"secret-fixture-sentinel" not in data
+    if policy is not None:
+        assert policy not in data and base64.b64encode(policy) not in data
 
 
 def begin(journal, inputs):

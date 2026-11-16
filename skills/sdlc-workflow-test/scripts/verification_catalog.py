@@ -41,18 +41,30 @@ def _snapshot(project: Path) -> dict:
             raise CatalogError("Mixed runtime catalogs; run the live owner in a fresh process.")
         files = {
             str(Path(path).relative_to(catalog)): digest
-            for path, digest in workflow_impact._identity_files(project).items()
+            for path, digest in workflow_impact._identity_files(project, owner="agentic-sdlc").items()
             if Path(path).is_relative_to(catalog)
         }
     for relative, data in native.hook_sources(catalog).items():
         files[relative] = hashlib.sha256(data).hexdigest()
-    skill = catalog / "sdlc-workflow-test"
-    for path in sorted(skill.rglob("*")):
-        if path.is_symlink():
-            raise CatalogError("Live runtime catalog contains a symlink.")
-        if not path.is_file() or path.name == ".install-source-id" or "__pycache__" in path.parts:
-            continue
-        files[str(path.relative_to(catalog))] = hashlib.sha256(path.read_bytes()).hexdigest()
+    # The companion executes the same public-native observer as Implement Test.
+    for path in sorted((catalog / "implement-test/scripts").glob("*.py")):
+        if not path.name.startswith("test"):
+            if path.is_symlink() or not path.is_file():
+                raise CatalogError("Companion runtime dependency is unsafe.")
+            files[str(path.relative_to(catalog))] = hashlib.sha256(path.read_bytes()).hexdigest()
+    # This explicitly selected verifier declares core container acceptance before
+    # task plans exist. Freeze that owner without making it a default dependency
+    # of ordinary Implement or SDLC execution.
+    for name in ("sdlc-workflow-test", "test-software-in-container"):
+        skill = catalog / name
+        if skill.is_symlink() or not skill.is_dir():
+            raise CatalogError("Live runtime catalog owner is missing or unsafe.")
+        for path in sorted(skill.rglob("*")):
+            if path.is_symlink():
+                raise CatalogError("Live runtime catalog contains a symlink.")
+            if not path.is_file() or path.name == ".install-source-id" or "__pycache__" in path.parts:
+                continue
+            files[str(path.relative_to(catalog))] = hashlib.sha256(path.read_bytes()).hexdigest()
     return {"schema": SCHEMA, "catalog_root": str(catalog), "files": files}
 
 

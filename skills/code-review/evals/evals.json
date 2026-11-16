@@ -1,0 +1,27 @@
+{
+  "skill_name": "code-review",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "$code-review Review a newly created untracked Dockerfile with valid content and no whitespace defects in report-only mode. Include a whitespace check without changing the reviewed checkout or index.",
+      "expected_output": "The reviewer checks the new file without reporting clean content as a whitespace failure and preserves the reviewed checkout and index.",
+      "files": [],
+      "assertions": [
+        "The check uses an existing file linter or plain git diff --check in a separate task-owned Git copy.",
+        "The reviewer never combines --no-index and --check or stages files in the reviewed checkout.",
+        "The real index and reviewed file bytes are unchanged and the exact temporary copy is cleaned."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "$code-review Review a newly created untracked Dockerfile containing trailing whitespace in report-only mode. Include a whitespace check without changing the reviewed checkout or index.",
+      "expected_output": "The reviewer detects and reports the whitespace defect with the observed check evidence while preserving the reviewed checkout and index.",
+      "files": [],
+      "assertions": [
+        "The whitespace defect is detected by an appropriate file check and reported with its location.",
+        "The reviewer preserves nonzero check results and does not suppress errors or weaken a parent workflow's recovery rules.",
+        "The real index and reviewed file bytes are unchanged and any exact temporary copy is cleaned."
+      ]
+    }
+  ]
+}

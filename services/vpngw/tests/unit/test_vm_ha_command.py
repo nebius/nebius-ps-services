@@ -102,6 +102,45 @@ def isolated_package_recovery_root(monkeypatch, tmp_path):
     )
 
 
+@pytest.fixture
+def ha_apply_admission(monkeypatch):
+    """Isolate existing HA orchestration oracles from schema/cloud preflight.
+
+    These tests provide typed inspection and effect-owner doubles. The public
+    apply integration suite separately exercises actual YAML admission and locks.
+    """
+    monkeypatch.setattr(
+        cli_module,
+        "load_local_config",
+        lambda *a, **kw: {
+            "project_id": "project-a",
+            "region_id": "eu-west1",
+            "gateway_group": {"name": "gateway", "vm_ha": {"enabled": True}},
+        },
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "merge_with_peer_configs",
+        lambda *a, **kw: SimpleNamespace(
+            vm_ha=object(),
+            gateway_group=SimpleNamespace(name="gateway", region="eu-west1"),
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_plan_vm_ha_apply_convergence",
+        lambda *a, **kw: _VMHAApplyPlanReport(
+            kind="unchanged",
+            digest="f" * 64,
+            engine_digest="f" * 64,
+            effects=(),
+            has_destructive_changes=False,
+            managed_ssh_action=None,
+            impact=VMHACommandImpact("Verified unchanged", False, False, False),
+        ),
+    )
+
+
 class _ContextManagedFake:
     def __enter__(self):
         return self
@@ -134,7 +173,7 @@ def _write_vm_ha_agent_wheel(wheel: Path) -> None:
             b'STANDBY_RESTORATION_CAPABILITY = "vm-ha-standby-restoration-v2"\n'
         ),
         "nebius_vpngw/agent/vm_ha/inhibition.py": (
-            b'LIVE_PEER_REPLACEMENT_CAPABILITY = "vm-ha-live-peer-replacement-v4"\n'
+            b'LIVE_PEER_REPLACEMENT_CAPABILITY = "vm-ha-live-peer-replacement-v5"\n'
         ),
         f"{dist_info}/METADATA": b"Metadata-Version: 2.4\nName: nebius-vpngw\nVersion: 1.2.3\n",
         f"{dist_info}/WHEEL": (b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n"),
@@ -1121,6 +1160,11 @@ def test_vm_ha_apply_planner_never_infers_authentication_from_bare_exit(
     ("credential_reason", "public_reason"),
     (
         ("authentication-failed", "runtime-credential-authentication-failed"),
+        ("authorization-failed", "runtime-credential-authorization-failed"),
+        ("provider-timeout", "runtime-credential-provider-timeout"),
+        ("provider-unavailable", "runtime-credential-provider-unavailable"),
+        ("dns-unavailable", "runtime-credential-dns-unavailable"),
+        ("identity-unverified", "runtime-credential-identity-unverified"),
         ("file-unavailable", "runtime-credential-identity-invalid"),
     ),
 )
@@ -1725,7 +1769,9 @@ def test_vm_ha_apply_executor_preserves_artifact_failure_from_apply_exit(
     assert raised.value is artifact_error
 
 
-@pytest.mark.parametrize("origin", ("apply-exit", "owner-refresh", "artifact-recovery"))
+@pytest.mark.parametrize(
+    "origin", ("apply-exit", "owner-refresh", "artifact-recovery", "recovery-exit", "recovery-error")
+)
 def test_vm_ha_executor_preserves_member_bound_package_failure(monkeypatch, tmp_path, origin):
     report = _VMHAApplyPlanReport(
         kind="artifact-standby-recovery" if origin == "artifact-recovery" else "apply-convergence",
@@ -1738,6 +1784,13 @@ def test_vm_ha_executor_preserves_member_bound_package_failure(monkeypatch, tmp_
     error = _VMHAAgentPackagePreparationFailed(2, "VM-HA exact agent package installation failed")
 
     def fail(*_args, **_kwargs):
+        if origin.startswith("recovery-"):
+            try:
+                raise RuntimeError("PRIVATE_RECOVERY_DETAIL") from error
+            except RuntimeError as wrapped:
+                if origin == "recovery-exit":
+                    raise typer.Exit(code=1) from wrapped
+                raise
         if origin == "apply-exit":
             raise typer.Exit(code=1) from error
         raise error
@@ -1754,6 +1807,7 @@ def test_vm_ha_executor_preserves_member_bound_package_failure(monkeypatch, tmp_
     assert raised.value is error
     assert raised.value.reason == "package-preparation-failed-member-2"
     assert "exact agent package installation failed" in raised.value.next_action
+    assert "PRIVATE_RECOVERY_DETAIL" not in str(raised.value)
 
 
 def test_apply_projects_owner_refresh_package_failure_without_traceback(monkeypatch, tmp_path):
@@ -1767,7 +1821,8 @@ def test_apply_projects_owner_refresh_package_failure_without_traceback(monkeypa
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
     assert "Package preparation failed on member 1" in result.output
-    assert "Reason: SSH package preparation authentication failed" in result.output
+    assert "SSH package preparation authentication failed" in result.output
+    assert result.output.count("Reason:") == 1
 
 
 def test_vm_ha_apply_executor_projects_untyped_apply_exit_as_convergence_failure(
@@ -1950,9 +2005,13 @@ def test_vm_ha_interactive_conversion_stops_resolve_spinner_before_prompt(
     monkeypatch.setattr("nebius_vpngw.cli.run_vm_ha_conversion_wizard", wizard)
     monkeypatch.setattr("nebius_vpngw.cli._reserve_vm_ha_passive_public_ip", reserve)
 
-    result = CliRunner().invoke(app, ["vm-ha", "-c", str(source)])
+    monkeypatch.setattr(
+        cli_module, "_ordinary_vm_ha_conversion_trust_prerequisite", lambda *a, **kw: None
+    )
 
-    assert result.exit_code == 3, result.output
+    result = CliRunner().invoke(app, ["apply", "--convert-to-ha", "-c", str(source)])
+
+    assert result.exit_code == 0, result.output
     assert source.read_text(encoding="utf-8") == original
     assert not destination.exists()
     reserve.assert_not_called()
@@ -1990,7 +2049,7 @@ def test_vm_ha_interactive_conversion_interrupt_has_no_dangling_progress_or_effe
     monkeypatch.setattr("nebius_vpngw.cli.run_vm_ha_conversion_wizard", wizard)
     monkeypatch.setattr("nebius_vpngw.cli._reserve_vm_ha_passive_public_ip", reserve)
 
-    result = CliRunner().invoke(app, ["vm-ha", "-c", str(source)])
+    result = CliRunner().invoke(app, ["apply", "--convert-to-ha", "-c", str(source)])
 
     assert result.exit_code == 130, result.output
     assert source.read_text(encoding="utf-8") == original
@@ -2314,7 +2373,8 @@ def test_vm_ha_json_noninteractive_ordinary_input_requires_conversion_input(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
+            "--convert-to-ha",
             "--local-config-file",
             str(source),
             "--output-format",
@@ -2322,12 +2382,12 @@ def test_vm_ha_json_noninteractive_ordinary_input_requires_conversion_input(
         ],
     )
 
-    assert result.exit_code == 3
+    assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["classification"] == "conversion-required"
-    assert payload["reasons"] == ["conversion-input-required"]
-    assert payload["actions"] == []
-    assert payload["failover_tested"] is False
+    assert payload["ha"]["classification"] == "conversion-required"
+    assert payload["ha"]["reasons"] == ["conversion-input-required"]
+    assert payload["ha"]["actions"] == []
+    assert payload["ha"]["failover_tested"] is False
     assert not (tmp_path / "gateway.vm-ha.config.yaml").exists()
 
 
@@ -2343,7 +2403,7 @@ def test_vm_ha_rejects_invalid_standby_auto_healing_before_authentication(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -2352,10 +2412,11 @@ def test_vm_ha_rejects_invalid_standby_auto_healing_before_authentication(
     )
 
     assert result.exit_code == 2
-    assert "Invalid value for '--standby-auto-healing'" in unstyle(result.output)
+    assert "invalid-arguments" in unstyle(result.output)
     authenticate.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_standby_auto_healing_dry_run_emits_exact_plan_without_effects(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2374,7 +2435,7 @@ def test_vm_ha_standby_auto_healing_dry_run_emits_exact_plan_without_effects(
     effect = Mock(side_effect=AssertionError("dry-run changed the policy"))
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -2404,7 +2465,7 @@ def test_vm_ha_standby_auto_healing_dry_run_emits_exact_plan_without_effects(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -2417,16 +2478,16 @@ def test_vm_ha_standby_auto_healing_dry_run_emits_exact_plan_without_effects(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "planned"
-    assert payload["classification"] == "maintenance-policy"
-    assert payload["impact"] == {
+    assert payload["ha"]["outcome"] == "planned"
+    assert payload["ha"]["classification"] == "maintenance-policy"
+    assert payload["ha"]["impact"] == {
         "summary": "No VPN traffic interruption or destructive changes are expected",
         "destructive": False,
         "vpn_traffic_interruption": False,
         "resource_creation": False,
         "approval_required": False,
     }
-    assert payload["approval"] == {
+    assert payload["ha"]["approval"] == {
         "kind": "standby-auto-healing-policy",
         "digest": "d" * 64,
         "effects": [
@@ -2442,6 +2503,7 @@ def test_vm_ha_standby_auto_healing_dry_run_emits_exact_plan_without_effects(
     effect.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_missing_owner_policy_dry_run_plans_exact_bootstrap_recovery(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2481,7 +2543,7 @@ def test_vm_ha_missing_owner_policy_dry_run_plans_exact_bootstrap_recovery(
     effect = Mock(side_effect=AssertionError("dry-run changed the policy"))
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -2498,7 +2560,7 @@ def test_vm_ha_missing_owner_policy_dry_run_plans_exact_bootstrap_recovery(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -2511,9 +2573,9 @@ def test_vm_ha_missing_owner_policy_dry_run_plans_exact_bootstrap_recovery(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "planned"
-    assert payload["classification"] == "maintenance-policy"
-    assert payload["approval"]["effects"] == [
+    assert payload["ha"]["outcome"] == "planned"
+    assert payload["ha"]["classification"] == "maintenance-policy"
+    assert payload["ha"]["approval"]["effects"] == [
         "initialize-owner-policy",
         "arm-owner-local-standby-recovery",
         "request-owner-rearm-start",
@@ -2539,6 +2601,7 @@ def test_vm_ha_missing_owner_policy_dry_run_plans_exact_bootstrap_recovery(
         ("running", []),
     ),
 )
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_completed_owner_recovery_dry_run_resumes_after_compute_start(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2563,7 +2626,7 @@ def test_vm_ha_completed_owner_recovery_dry_run_resumes_after_compute_start(
     lock = Mock(side_effect=AssertionError("dry-run acquired the writer lock"))
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -2579,7 +2642,7 @@ def test_vm_ha_completed_owner_recovery_dry_run_resumes_after_compute_start(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -2592,11 +2655,11 @@ def test_vm_ha_completed_owner_recovery_dry_run_resumes_after_compute_start(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "planned"
-    assert payload["classification"] == "maintenance-policy"
-    assert payload["approval"]["kind"] == "standby-auto-healing-policy"
-    assert payload["approval"]["digest"] != "d" * 64
-    assert payload["approval"]["effects"] == [
+    assert payload["ha"]["outcome"] == "planned"
+    assert payload["ha"]["classification"] == "maintenance-policy"
+    assert payload["ha"]["approval"]["kind"] == "standby-auto-healing-policy"
+    assert payload["ha"]["approval"]["digest"] != "d" * 64
+    assert payload["ha"]["approval"]["effects"] == [
         *start_effects,
         "wait-for-restored-standby-readiness",
         "initialize-restored-peer-policy",
@@ -2607,6 +2670,7 @@ def test_vm_ha_completed_owner_recovery_dry_run_resumes_after_compute_start(
     lock.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_completed_owner_recovery_approval_rearms_stopped_target(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2686,7 +2750,7 @@ def test_vm_ha_completed_owner_recovery_approval_rearms_stopped_target(
             return None
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", inspect)
@@ -2707,7 +2771,7 @@ def test_vm_ha_completed_owner_recovery_approval_rearms_stopped_target(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -2721,8 +2785,8 @@ def test_vm_ha_completed_owner_recovery_approval_rearms_stopped_target(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "healthy"
-    assert payload["actions"] == ["standby-auto-healing-enabled"]
+    assert payload["ha"]["outcome"] == "healthy"
+    assert payload["ha"]["actions"] == ["standby-auto-healing-enabled"]
     assert prepare.call_count == 1
     before_rearm_request = prepare.call_args.kwargs["before_rearm_request"]
     before_rearm_request("node-0", "node-1", "revision-b")
@@ -2731,6 +2795,7 @@ def test_vm_ha_completed_owner_recovery_approval_rearms_stopped_target(
     assert inspect.call_count == 6
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_bare_policy_invalid_guidance_is_repeatable_and_mutation_free(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2744,11 +2809,11 @@ def test_vm_ha_bare_policy_invalid_guidance_is_repeatable_and_mutation_free(
             reasons=("standby-auto-healing-policy-invalid",),
         )
     )
-    lock = Mock(side_effect=AssertionError("bare status acquired the writer lock"))
+    lock = Mock(return_value=_ContextManagedFake())
     effect = Mock(side_effect=AssertionError("bare status attempted recovery"))
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -2763,7 +2828,7 @@ def test_vm_ha_bare_policy_invalid_guidance_is_repeatable_and_mutation_free(
         result = CliRunner().invoke(
             app,
             [
-                "vm-ha",
+                "apply",
                 "--local-config-file",
                 str(config_path),
                 "--output-format",
@@ -2774,12 +2839,12 @@ def test_vm_ha_bare_policy_invalid_guidance_is_repeatable_and_mutation_free(
         payloads.append(json.loads(result.stdout))
 
     assert payloads[0] == payloads[1]
-    assert payloads[0]["classification"] == "maintenance-policy"
-    assert payloads[0]["reasons"] == ["standby-auto-healing-policy-invalid"]
-    assert payloads[0]["next_action"] == (
-        f"run nebius-vpngw vm-ha --local-config-file {config_path} --standby-auto-healing enabled"
+    assert payloads[0]["ha"]["classification"] == "maintenance-policy"
+    assert payloads[0]["ha"]["reasons"] == ["standby-auto-healing-policy-invalid"]
+    assert payloads[0]["ha"]["next_action"] == (
+        f"run nebius-vpngw apply --local-config-file {config_path} --standby-auto-healing enabled"
     )
-    lock.assert_not_called()
+    assert lock.call_count == 2
     effect.assert_not_called()
 
 
@@ -3200,6 +3265,7 @@ def test_replacement_policy_reproof_resumes_after_coordinator_prepare(
     ]
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_safe_standby_auto_healing_disable_executes_without_confirmation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3235,7 +3301,7 @@ def test_vm_ha_safe_standby_auto_healing_disable_executes_without_confirmation(
             return None
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", inspect)
@@ -3262,7 +3328,7 @@ def test_vm_ha_safe_standby_auto_healing_disable_executes_without_confirmation(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -3274,9 +3340,9 @@ def test_vm_ha_safe_standby_auto_healing_disable_executes_without_confirmation(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "maintenance"
-    assert payload["actions"] == ["standby-auto-healing-disabled"]
-    assert payload["reasons"] == ["maintenance-ready"]
+    assert payload["ha"]["outcome"] == "maintenance"
+    assert payload["ha"]["actions"] == ["standby-auto-healing-disabled"]
+    assert payload["ha"]["reasons"] == ["maintenance-ready"]
     assert "Proceed with this exact VM-HA plan?" not in result.stderr
     effect.assert_called_once_with(
         config_path=config_path,
@@ -3293,6 +3359,7 @@ def test_vm_ha_safe_standby_auto_healing_disable_executes_without_confirmation(
     ("drift_owner_node_id", "drift_observation_digest"),
     (("node-1", "cloud-a"), ("node-0", "cloud-b")),
 )
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_auto_healing_projection_fails_closed_on_cloud_authority_drift(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3349,7 +3416,7 @@ def test_vm_ha_auto_healing_projection_fails_closed_on_cloud_authority_drift(
             return None
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", inspect)
@@ -3377,7 +3444,7 @@ def test_vm_ha_auto_healing_projection_fails_closed_on_cloud_authority_drift(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -3389,11 +3456,12 @@ def test_vm_ha_auto_healing_projection_fails_closed_on_cloud_authority_drift(
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["reasons"] == ["convergence-failed-safely"]
+    assert payload["ha"]["reasons"] == ["convergence-failed-safely"]
     execute.assert_called_once()
     assert inspect.call_count == 4
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_terminal_enabled_policy_retries_completed_recovery_cleanup(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3406,7 +3474,7 @@ def test_vm_ha_terminal_enabled_policy_retries_completed_recovery_cleanup(
     cleanup = Mock(return_value=True)
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -3426,7 +3494,7 @@ def test_vm_ha_terminal_enabled_policy_retries_completed_recovery_cleanup(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -3438,8 +3506,8 @@ def test_vm_ha_terminal_enabled_policy_retries_completed_recovery_cleanup(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "healthy"
-    assert payload["actions"] == [
+    assert payload["ha"]["outcome"] == "healthy"
+    assert payload["ha"]["actions"] == [
         "standby-auto-healing-recovery-cleared",
         "standby-auto-healing-already-enabled",
     ]
@@ -3449,6 +3517,7 @@ def test_vm_ha_terminal_enabled_policy_retries_completed_recovery_cleanup(
     )
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_committed_enabled_policy_clears_completed_recovery_before_fresh_peer_heartbeat(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3466,7 +3535,7 @@ def test_vm_ha_committed_enabled_policy_clears_completed_recovery_before_fresh_p
         return [{**statuses[0], "recovery": None, "recovery_phase": None}]
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -3489,7 +3558,7 @@ def test_vm_ha_committed_enabled_policy_clears_completed_recovery_before_fresh_p
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -3501,14 +3570,15 @@ def test_vm_ha_committed_enabled_policy_clears_completed_recovery_before_fresh_p
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "healthy"
-    assert payload["actions"] == [
+    assert payload["ha"]["outcome"] == "healthy"
+    assert payload["ha"]["actions"] == [
         "standby-auto-healing-recovery-cleared",
         "standby-auto-healing-already-enabled",
     ]
     planner.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_completed_recovery_cleanup_failure_keeps_specific_maintenance_guidance(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3521,7 +3591,7 @@ def test_vm_ha_completed_recovery_cleanup_failure_keeps_specific_maintenance_gui
     planner = Mock(side_effect=AssertionError("cleanup failure planned a transaction"))
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -3544,7 +3614,7 @@ def test_vm_ha_completed_recovery_cleanup_failure_keeps_specific_maintenance_gui
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -3556,17 +3626,18 @@ def test_vm_ha_completed_recovery_cleanup_failure_keeps_specific_maintenance_gui
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["classification"] == "maintenance-policy"
-    assert payload["health"] == "blocked"
-    assert payload["reasons"] == ["standby-auto-healing-recovery-cleanup-required"]
-    assert payload["next_action"] == (
+    assert payload["ha"]["classification"] == "maintenance-policy"
+    assert payload["ha"]["health"] == "blocked"
+    assert payload["ha"]["reasons"] == ["standby-auto-healing-recovery-cleanup-required"]
+    assert payload["ha"]["next_action"] == (
         "inspect VM-HA agent journals for the recovery owner, then rerun the same "
-        "requested vm-ha command"
+        "requested apply command"
     )
     assert "private cleanup detail" not in result.stdout
     planner.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_completed_recovery_without_current_or_durable_agreement_stays_blocked(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3583,7 +3654,7 @@ def test_vm_ha_completed_recovery_without_current_or_durable_agreement_stays_blo
     planner = Mock(side_effect=AssertionError("unacknowledged recovery was replanned"))
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -3606,7 +3677,7 @@ def test_vm_ha_completed_recovery_without_current_or_durable_agreement_stays_blo
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -3618,12 +3689,13 @@ def test_vm_ha_completed_recovery_without_current_or_durable_agreement_stays_blo
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["classification"] == "maintenance-policy"
-    assert payload["reasons"] == ["standby-auto-healing-recovery-cleanup-required"]
+    assert payload["ha"]["classification"] == "maintenance-policy"
+    assert payload["ha"]["reasons"] == ["standby-auto-healing-recovery-cleanup-required"]
     cleanup.assert_not_called()
     planner.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_terminal_enabled_dry_run_never_clears_completed_recovery(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3635,7 +3707,7 @@ def test_vm_ha_terminal_enabled_dry_run_never_clears_completed_recovery(
     cleanup = Mock(side_effect=AssertionError("dry-run cleared completed recovery"))
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -3655,7 +3727,7 @@ def test_vm_ha_terminal_enabled_dry_run_never_clears_completed_recovery(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -3668,9 +3740,9 @@ def test_vm_ha_terminal_enabled_dry_run_never_clears_completed_recovery(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "planned"
-    assert payload["actions"] == ["standby-auto-healing-already-enabled"]
-    assert payload["approval"]["effects"] == [
+    assert payload["ha"]["outcome"] == "planned"
+    assert payload["ha"]["actions"] == ["standby-auto-healing-already-enabled"]
+    assert payload["ha"]["approval"]["effects"] == [
         "clear-completed-recovery",
         "verify-two-member-policy-agreement",
         "confirm-standby-auto-healing-already-enabled",
@@ -3678,6 +3750,7 @@ def test_vm_ha_terminal_enabled_dry_run_never_clears_completed_recovery(
     cleanup.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_disable_dry_run_orders_cleanup_before_requested_transition(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3689,7 +3762,7 @@ def test_vm_ha_disable_dry_run_orders_cleanup_before_requested_transition(
     cleanup = Mock(side_effect=AssertionError("dry-run cleared completed recovery"))
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -3708,7 +3781,7 @@ def test_vm_ha_disable_dry_run_orders_cleanup_before_requested_transition(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -3721,13 +3794,14 @@ def test_vm_ha_disable_dry_run_orders_cleanup_before_requested_transition(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "planned"
-    assert payload["actions"] == ["standby-auto-healing-disable"]
-    assert payload["approval"]["effects"][0] == "clear-completed-recovery"
-    assert payload["approval"]["effects"][1].startswith("prepare-disable-on-coordinator-")
+    assert payload["ha"]["outcome"] == "planned"
+    assert payload["ha"]["actions"] == ["standby-auto-healing-disable"]
+    assert payload["ha"]["approval"]["effects"][0] == "clear-completed-recovery"
+    assert payload["ha"]["approval"]["effects"][1].startswith("prepare-disable-on-coordinator-")
     cleanup.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_disable_cleanup_plan_has_a_distinct_approval_digest(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3742,7 +3816,7 @@ def test_vm_ha_disable_cleanup_plan_has_a_distinct_approval_digest(
     current_statuses = [clean_statuses]
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -3757,7 +3831,7 @@ def test_vm_ha_disable_cleanup_plan_has_a_distinct_approval_digest(
     clean_plan = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -3771,7 +3845,7 @@ def test_vm_ha_disable_cleanup_plan_has_a_distinct_approval_digest(
     cleanup_plan = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -3784,12 +3858,13 @@ def test_vm_ha_disable_cleanup_plan_has_a_distinct_approval_digest(
 
     assert clean_plan.exit_code == 0
     assert cleanup_plan.exit_code == 0
-    clean_digest = json.loads(clean_plan.stdout)["approval"]["digest"]
+    clean_digest = json.loads(clean_plan.stdout)["ha"]["approval"]["digest"]
     cleanup_payload = json.loads(cleanup_plan.stdout)
-    assert cleanup_payload["approval"]["digest"] != clean_digest
-    assert cleanup_payload["approval"]["effects"][0] == "clear-completed-recovery"
+    assert cleanup_payload["ha"]["approval"]["digest"] != clean_digest
+    assert cleanup_payload["ha"]["approval"]["effects"][0] == "clear-completed-recovery"
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_stale_clean_plan_approval_cannot_clear_completed_recovery(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3805,7 +3880,7 @@ def test_vm_ha_stale_clean_plan_approval_cannot_clear_completed_recovery(
     cleanup = Mock(side_effect=AssertionError("stale approval cleared recovery"))
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -3824,7 +3899,7 @@ def test_vm_ha_stale_clean_plan_approval_cannot_clear_completed_recovery(
     clean_plan = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -3835,13 +3910,13 @@ def test_vm_ha_stale_clean_plan_approval_cannot_clear_completed_recovery(
         ],
     )
     assert clean_plan.exit_code == 0
-    clean_digest = json.loads(clean_plan.stdout)["approval"]["digest"]
+    clean_digest = json.loads(clean_plan.stdout)["ha"]["approval"]["digest"]
     current_statuses[0] = recovery_statuses
 
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -3855,10 +3930,11 @@ def test_vm_ha_stale_clean_plan_approval_cannot_clear_completed_recovery(
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["reasons"] == ["approval-digest-stale-or-incorrect"]
+    assert payload["ha"]["reasons"] == ["approval-digest-stale-or-incorrect"]
     cleanup.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_disable_clears_completed_recovery_and_finishes_requested_transition(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3891,7 +3967,7 @@ def test_vm_ha_disable_clears_completed_recovery_and_finishes_requested_transiti
             return None
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", inspect)
@@ -3912,7 +3988,7 @@ def test_vm_ha_disable_clears_completed_recovery_and_finishes_requested_transiti
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--standby-auto-healing",
@@ -3924,8 +4000,8 @@ def test_vm_ha_disable_clears_completed_recovery_and_finishes_requested_transiti
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "maintenance"
-    assert payload["actions"] == [
+    assert payload["ha"]["outcome"] == "maintenance"
+    assert payload["ha"]["actions"] == [
         "standby-auto-healing-recovery-cleared",
         "standby-auto-healing-disabled",
     ]
@@ -3964,6 +4040,7 @@ def test_vm_ha_force_never_replaces_a_conflicting_candidate(
     wizard.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_healthy_requires_two_agreeing_fresh_samples(
     monkeypatch,
     tmp_path: Path,
@@ -3984,7 +4061,7 @@ def test_vm_ha_healthy_requires_two_agreeing_fresh_samples(
 
     inspect = Mock(side_effect=inspect_with_retry)
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ("candidate-reused",)),
     )
     monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", inspect)
@@ -3993,7 +4070,7 @@ def test_vm_ha_healthy_requires_two_agreeing_fresh_samples(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--output-format",
@@ -4003,14 +4080,15 @@ def test_vm_ha_healthy_requires_two_agreeing_fresh_samples(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "healthy"
-    assert payload["actions"] == ["candidate-reused"]
+    assert payload["ha"]["outcome"] == "healthy"
+    assert payload["ha"]["actions"] == ["candidate-reused"]
     assert inspect.call_count == 2
     assert "request attempt" not in result.stderr
     assert "TRANSIENT_PROVIDER_DETAIL" not in result.stderr
     assert "Traceback" not in result.stderr
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_region_override_reaches_every_health_observation(
     monkeypatch,
     tmp_path: Path,
@@ -4029,7 +4107,7 @@ def test_vm_ha_region_override_reaches_every_health_observation(
         return healthy
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", inspect)
@@ -4038,7 +4116,7 @@ def test_vm_ha_region_override_reaches_every_health_observation(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--region",
@@ -4049,7 +4127,7 @@ def test_vm_ha_region_override_reaches_every_health_observation(
     )
 
     assert result.exit_code == 0
-    assert json.loads(result.stdout)["outcome"] == "healthy"
+    assert json.loads(result.stdout)["ha"]["outcome"] == "healthy"
     assert observed_regions == ["eu-north1", "eu-north1"]
 
 
@@ -4097,6 +4175,7 @@ def test_vm_ha_inspection_uses_the_plan_region_for_both_manager_fields(
     assert observed["region_id"] == "eu-north1"
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_dry_run_plans_rearm_without_lock_or_effect(
     monkeypatch,
     tmp_path: Path,
@@ -4106,14 +4185,15 @@ def test_vm_ha_dry_run_plans_rearm_without_lock_or_effect(
     degraded = _inspection(
         _snapshot(
             overall="DEGRADED",
-            action="nebius-vpngw vm-ha --local-config-file fixture",
+            action="nebius-vpngw apply --local-config-file fixture",
             reasons=("standby-not-ready",),
+            member_compute_states=(("node-0", "running"), ("node-1", "stopped")),
         )
     )
     lock = Mock(side_effect=AssertionError("dry-run acquired a lock"))
     effect = Mock(side_effect=AssertionError("dry-run invoked rearm"))
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -4126,7 +4206,7 @@ def test_vm_ha_dry_run_plans_rearm_without_lock_or_effect(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--dry-run",
@@ -4137,13 +4217,14 @@ def test_vm_ha_dry_run_plans_rearm_without_lock_or_effect(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "planned"
-    assert payload["classification"] == "standby-rearm"
-    assert payload["actions"] == ["rearm-exact-standby"]
+    assert payload["ha"]["outcome"] == "planned"
+    assert payload["ha"]["classification"] == "standby-rearm"
+    assert payload["ha"]["actions"] == ["rearm-exact-standby"]
     lock.assert_not_called()
     effect.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_rearm_reclassifies_under_lock_and_verifies_two_samples(
     monkeypatch,
     tmp_path: Path,
@@ -4153,12 +4234,13 @@ def test_vm_ha_rearm_reclassifies_under_lock_and_verifies_two_samples(
     degraded = _inspection(
         _snapshot(
             overall="DEGRADED",
-            action="nebius-vpngw vm-ha --local-config-file fixture",
+            action="nebius-vpngw apply --local-config-file fixture",
             reasons=("standby-not-ready",),
+            member_compute_states=(("node-0", "running"), ("node-1", "stopped")),
         )
     )
     healthy = _inspection(_snapshot(overall="HEALTHY", action="none", digest="b" * 64))
-    inspect = Mock(side_effect=(degraded, degraded, healthy, healthy))
+    inspect = Mock(side_effect=(degraded, degraded, healthy, healthy, healthy, healthy))
     effect = Mock()
 
     class Lock:
@@ -4172,7 +4254,7 @@ def test_vm_ha_rearm_reclassifies_under_lock_and_verifies_two_samples(
             return None
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", inspect)
@@ -4183,7 +4265,7 @@ def test_vm_ha_rearm_reclassifies_under_lock_and_verifies_two_samples(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--output-format",
@@ -4193,21 +4275,22 @@ def test_vm_ha_rearm_reclassifies_under_lock_and_verifies_two_samples(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "healthy"
-    assert payload["actions"] == ["standby-rearmed"]
+    assert payload["ha"]["outcome"] == "healthy"
+    assert payload["ha"]["actions"] == ["standby-rearmed"]
     assert result.stderr.count("acquiring the VM-HA writer lock") == 1
     assert "✓ acquiring the VM-HA writer lock" in result.stderr
-    assert result.stderr.count("verifying two agreeing fresh health samples") == 1
+    assert result.stderr.count("verifying two agreeing fresh health samples") == 2
     assert "✓ verifying two agreeing fresh health samples" in result.stderr
     effect.assert_called_once()
     assert effect.call_args.kwargs["local_config_file"] == config_path
     assert effect.call_args.kwargs["target_role"] is None
-    assert effect.call_args.kwargs["command"] == "vm-ha"
+    assert effect.call_args.kwargs["command"] == "apply"
     assert effect.call_args.kwargs["show_auth_progress"] is False
     assert callable(effect.call_args.kwargs["progress_sink"])
-    assert inspect.call_count == 4
+    assert inspect.call_count == 6
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_transition_is_action_required_and_never_calls_legacy_handlers(
     monkeypatch,
     tmp_path: Path,
@@ -4222,7 +4305,7 @@ def test_vm_ha_transition_is_action_required_and_never_calls_legacy_handlers(
         )
     )
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     inspect = Mock(return_value=transitioning)
@@ -4237,7 +4320,7 @@ def test_vm_ha_transition_is_action_required_and_never_calls_legacy_handlers(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--output-format",
@@ -4245,22 +4328,23 @@ def test_vm_ha_transition_is_action_required_and_never_calls_legacy_handlers(
         ],
     )
 
-    assert result.exit_code == 3
+    assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["classification"] == "controller-transition"
-    assert payload["actions"] == ["controller-observed"]
-    assert payload["reasons"] == [
+    assert payload["ha"]["classification"] == "controller-transition"
+    assert payload["ha"]["actions"] == ["controller-observed"]
+    assert payload["ha"]["reasons"] == [
         "controller-operation-pending",
         "controller-no-progress",
     ]
-    assert payload["next_action"] == (
-        "inspect VM-HA controller service journals on both members, then rerun vm-ha"
+    assert payload["ha"]["next_action"] == (
+        "inspect VM-HA controller service journals on both members, then rerun apply"
     )
     assert result.stderr.count("observing controller-owned recovery") == 1
     assert "✗ observing controller-owned recovery" in result.stderr
     assert inspect.call_count == 121
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_observes_controller_progress_then_confirms_health(
     monkeypatch,
     tmp_path: Path,
@@ -4277,7 +4361,7 @@ def test_vm_ha_observes_controller_progress_then_confirms_health(
     healthy = _inspection(_snapshot(overall="HEALTHY", action="none", digest="b" * 64))
     inspect = Mock(side_effect=(transitioning, healthy, healthy))
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", inspect)
@@ -4286,7 +4370,7 @@ def test_vm_ha_observes_controller_progress_then_confirms_health(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--output-format",
@@ -4296,13 +4380,14 @@ def test_vm_ha_observes_controller_progress_then_confirms_health(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "healthy"
-    assert payload["actions"] == ["controller-observed"]
-    assert payload["approval"] is None
+    assert payload["ha"]["outcome"] == "healthy"
+    assert payload["ha"]["actions"] == ["controller-observed"]
+    assert payload["ha"]["approval"] is None
     assert "Proceed with this exact VM-HA plan?" not in result.stderr
     assert inspect.call_count == 3
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_interrupted_apply_transaction_plans_resume_without_observer_wait(
     monkeypatch,
     tmp_path: Path,
@@ -4327,7 +4412,7 @@ def test_vm_ha_interrupted_apply_transaction_plans_resume_without_observer_wait(
     )
     inspect = Mock(return_value=provisioning)
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", inspect)
@@ -4341,7 +4426,7 @@ def test_vm_ha_interrupted_apply_transaction_plans_resume_without_observer_wait(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--dry-run",
@@ -4352,13 +4437,14 @@ def test_vm_ha_interrupted_apply_transaction_plans_resume_without_observer_wait(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["classification"] == "vm-ha-required"
-    assert payload["approval"]["kind"] == "resume-transaction"
-    assert payload["reasons"] == ["apply-transaction-resume-required"]
+    assert payload["ha"]["classification"] == "vm-ha-required"
+    assert payload["ha"]["approval"]["kind"] == "resume-transaction"
+    assert payload["ha"]["reasons"] == ["apply-transaction-resume-required"]
     assert inspect.call_count == 1
     sleep.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_removed_lifecycle_plans_fresh_provisioning(
     monkeypatch,
     tmp_path: Path,
@@ -4383,7 +4469,7 @@ def test_vm_ha_removed_lifecycle_plans_fresh_provisioning(
     )
     planner = Mock(return_value=report)
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -4395,7 +4481,7 @@ def test_vm_ha_removed_lifecycle_plans_fresh_provisioning(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--dry-run",
@@ -4406,13 +4492,14 @@ def test_vm_ha_removed_lifecycle_plans_fresh_provisioning(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["classification"] == "vm-ha-required"
-    assert payload["approval"]["kind"] == "provisioning"
-    assert payload["reasons"] == ["apply-provisioning-required"]
+    assert payload["ha"]["classification"] == "vm-ha-required"
+    assert payload["ha"]["approval"]["kind"] == "provisioning"
+    assert payload["ha"]["reasons"] == ["apply-provisioning-required"]
     planner.assert_called_once_with(config_path)
 
 
-def test_vm_ha_rejects_approval_when_current_state_has_no_approval_domain(
+@pytest.mark.usefixtures("ha_apply_admission")
+def test_vm_ha_healthy_rerun_rejects_surplus_approval_without_effects(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -4421,16 +4508,18 @@ def test_vm_ha_rejects_approval_when_current_state_has_no_approval_domain(
     healthy = _inspection(_snapshot(overall="HEALTHY", action="none"))
     inspect = Mock(side_effect=(healthy, healthy))
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", inspect)
     monkeypatch.setattr("nebius_vpngw.cli.time.sleep", lambda _seconds: None)
+    execute = Mock()
+    monkeypatch.setattr("nebius_vpngw.cli._execute_vm_ha_apply_convergence", execute)
 
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--approve",
@@ -4442,8 +4531,9 @@ def test_vm_ha_rejects_approval_when_current_state_has_no_approval_domain(
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["reasons"] == ["approval-not-applicable"]
+    assert payload["ha"]["reasons"] == ["approval-digest-stale-or-incorrect"]
     assert inspect.call_count == 2
+    execute.assert_not_called()
 
 
 def test_vm_ha_rejects_approval_when_conversion_still_needs_input(
@@ -4456,7 +4546,8 @@ def test_vm_ha_rejects_approval_when_conversion_still_needs_input(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
+            "--convert-to-ha",
             "--local-config-file",
             str(source),
             "--approve",
@@ -4468,9 +4559,10 @@ def test_vm_ha_rejects_approval_when_conversion_still_needs_input(
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["reasons"] == ["approval-not-applicable"]
+    assert payload["ha"]["reasons"] == ["approval-not-applicable"]
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_missing_cloud_member_plans_exact_non_owner_replacement(
     monkeypatch,
     tmp_path: Path,
@@ -4526,7 +4618,7 @@ def test_vm_ha_missing_cloud_member_plans_exact_non_owner_replacement(
         ),
     )
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -4541,7 +4633,7 @@ def test_vm_ha_missing_cloud_member_plans_exact_non_owner_replacement(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--output-format",
@@ -4549,27 +4641,27 @@ def test_vm_ha_missing_cloud_member_plans_exact_non_owner_replacement(
         ],
     )
 
-    assert result.exit_code == 3
+    assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["classification"] == "vm-ha-required"
-    assert payload["reasons"] == ["active-standby-replacement-required"]
-    assert payload["approval"]["kind"] == "active-standby-replacement"
-    assert payload["impact"]["resource_creation"] is True
-    assert payload["impact"]["destructive"] is False
-    assert payload["impact"]["vpn_traffic_interruption"] is False
-    assert payload["next_action"] == (
-        "run nebius-vpngw vm-ha --local-config-file "
+    assert payload["ha"]["classification"] == "vm-ha-required"
+    assert payload["ha"]["reasons"] == ["active-standby-replacement-required"]
+    assert payload["ha"]["approval"]["kind"] == "active-standby-replacement"
+    assert payload["ha"]["impact"]["resource_creation"] is True
+    assert payload["ha"]["impact"]["destructive"] is False
+    assert payload["ha"]["impact"]["vpn_traffic_interruption"] is False
+    assert payload["ha"]["next_action"] == (
+        "run nebius-vpngw apply --local-config-file "
         f"{config_path} --approve {'d' * 64} to create the missing non-owner VM"
     )
 
     text_result = CliRunner().invoke(
         app,
-        ["vm-ha", "--local-config-file", str(config_path)],
+        ["apply", "--local-config-file", str(config_path)],
     )
 
-    assert text_result.exit_code == 3
+    assert text_result.exit_code == 1
     assert (
-        "Next: run nebius-vpngw vm-ha --local-config-file "
+        "Next action: run nebius-vpngw apply --local-config-file "
         f"{config_path} --approve {'d' * 64} to create the missing non-owner VM"
         in text_result.stdout
     )
@@ -4623,6 +4715,7 @@ def test_vm_ha_missing_cloud_member_rejects_contradictory_authority(
     assert not cli_module._vm_ha_snapshot_is_missing_non_owner_candidate(snapshot)
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_failure_is_redacted_and_reports_effective_candidate(
     monkeypatch,
     tmp_path: Path,
@@ -4632,7 +4725,7 @@ def test_vm_ha_failure_is_redacted_and_reports_effective_candidate(
     source.write_text("version: 1\n", encoding="utf-8")
     candidate.write_text("version: 1\n", encoding="utf-8")
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(candidate, ("candidate-reused",)),
     )
 
@@ -4654,7 +4747,7 @@ def test_vm_ha_failure_is_redacted_and_reports_effective_candidate(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(source),
             "--output-format",
@@ -4664,8 +4757,8 @@ def test_vm_ha_failure_is_redacted_and_reports_effective_candidate(
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["effective_config_file"] == str(candidate)
-    assert payload["reasons"] == ["convergence-failed-safely"]
+    assert payload["ha"]["effective_config_file"] == str(candidate)
+    assert payload["ha"]["reasons"] == ["convergence-failed-safely"]
     assert "TOP_SECRET_PROVIDER_DETAIL" not in result.output
     assert "request attempt" not in result.stderr
     assert "TRANSIENT_PROVIDER_DETAIL" not in result.stderr
@@ -4703,6 +4796,7 @@ def test_vm_ha_failure_is_redacted_and_reports_effective_candidate(
         ),
     ),
 )
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_agent_artifact_prerequisite_is_actionable_and_zero_effect(
     monkeypatch,
     tmp_path: Path,
@@ -4733,10 +4827,10 @@ def test_vm_ha_agent_artifact_prerequisite_is_actionable_and_zero_effect(
             else reject_replay_artifact
         )
     )
-    lock = Mock(side_effect=AssertionError("artifact prerequisite acquired the lock"))
+    lock = Mock(return_value=_ContextManagedFake())
     effect = Mock(side_effect=AssertionError("artifact prerequisite executed apply"))
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -4756,7 +4850,7 @@ def test_vm_ha_agent_artifact_prerequisite_is_actionable_and_zero_effect(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--output-format",
@@ -4764,18 +4858,19 @@ def test_vm_ha_agent_artifact_prerequisite_is_actionable_and_zero_effect(
         ],
     )
 
-    assert result.exit_code == 3
+    assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "action-required"
-    assert payload["classification"] == "external-prerequisite"
-    assert payload["reasons"] == [reason]
-    assert action_fragment in payload["next_action"]
+    assert payload["ha"]["outcome"] == "action-required"
+    assert payload["ha"]["classification"] == "external-prerequisite"
+    assert payload["ha"]["reasons"] == [reason]
+    assert action_fragment in payload["ha"]["next_action"]
     assert "PRIVATE_ARTIFACT_DETAIL" not in result.output
     assert "✗ planning exact VM-HA convergence." in result.stderr
-    lock.assert_not_called()
+    lock.assert_called_once()
     effect.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_replacement_ssh_identity_prerequisite_is_actionable_and_zero_effect(
     monkeypatch,
     tmp_path: Path,
@@ -4793,13 +4888,13 @@ def test_vm_ha_replacement_ssh_identity_prerequisite_is_actionable_and_zero_effe
         reason="replacement-ssh-identity-unavailable",
         next_action=(
             "restore the missing non-owner's original private SSH host key "
-            "matching its exact pin, then rerun vm-ha"
+            "matching its exact pin, then rerun apply"
         ),
     )
-    lock = Mock(side_effect=AssertionError("SSH prerequisite acquired the lock"))
+    lock = Mock(return_value=_ContextManagedFake())
     effect = Mock(side_effect=AssertionError("SSH prerequisite executed apply"))
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -4816,7 +4911,7 @@ def test_vm_ha_replacement_ssh_identity_prerequisite_is_actionable_and_zero_effe
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--output-format",
@@ -4824,36 +4919,37 @@ def test_vm_ha_replacement_ssh_identity_prerequisite_is_actionable_and_zero_effe
         ],
     )
 
-    assert result.exit_code == 3
+    assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == "action-required"
-    assert payload["classification"] == "external-prerequisite"
-    assert payload["health"] == "blocked"
-    assert payload["reasons"] == ["replacement-ssh-identity-unavailable"]
-    assert payload["next_action"] == (
+    assert payload["ha"]["outcome"] == "action-required"
+    assert payload["ha"]["classification"] == "external-prerequisite"
+    assert payload["ha"]["health"] == "blocked"
+    assert payload["ha"]["reasons"] == ["replacement-ssh-identity-unavailable"]
+    assert payload["ha"]["next_action"] == (
         "restore the missing non-owner's original private SSH host key "
-        "matching its exact pin, then rerun vm-ha"
+        "matching its exact pin, then rerun apply"
     )
-    assert "authentication" not in payload["next_action"]
-    lock.assert_not_called()
+    assert "authentication" not in payload["ha"]["next_action"]
+    lock.assert_called_once()
     effect.assert_not_called()
 
     text_result = CliRunner().invoke(
         app,
-        ["vm-ha", "--local-config-file", str(config_path)],
+        ["apply", "--local-config-file", str(config_path)],
     )
 
-    assert text_result.exit_code == 3
-    assert "Classification: external-prerequisite" in text_result.stdout
-    assert "Reasons: replacement-ssh-identity-unavailable" in text_result.stdout
+    assert text_result.exit_code == 1
+    assert "Reason:" in text_result.stdout
+    assert "(replacement-ssh-identity-unavailable)" in text_result.stdout
     assert (
-        "Next: restore the missing non-owner's original private SSH host key "
-        "matching its exact pin, then rerun vm-ha" in text_result.stdout
+        "Next action: restore the missing non-owner's original private SSH host key "
+        "matching its exact pin, then rerun apply" in text_result.stdout
     )
     assert "authentication-or-provider-unavailable" not in text_result.stdout
 
 
 @pytest.mark.parametrize("replay", [False, True])
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_artifact_change_after_execution_starts_reports_partial_resume(
     monkeypatch,
     tmp_path: Path,
@@ -4901,7 +4997,7 @@ def test_vm_ha_artifact_change_after_execution_starts_reports_partial_resume(
             return None
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -4921,7 +5017,7 @@ def test_vm_ha_artifact_change_after_execution_starts_reports_partial_resume(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--approve",
@@ -4931,15 +5027,15 @@ def test_vm_ha_artifact_change_after_execution_starts_reports_partial_resume(
         ],
     )
 
-    assert result.exit_code == 3
+    assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["classification"] == "external-prerequisite"
-    assert payload["health"] == "blocked"
-    assert payload["actions"] == ["convergence-effects-may-have-started"]
+    assert payload["ha"]["classification"] == "external-prerequisite"
+    assert payload["ha"]["health"] == "blocked"
+    assert payload["ha"]["actions"] == ["convergence-effects-may-have-started"]
     problem = "incompatible" if replay else "changed"
-    assert payload["reasons"] == [f"agent-artifact-{problem}-during-convergence"]
-    assert "durable checkpoints and resume idempotently" in payload["next_action"]
-    assert "gateway changes may already have started" in payload["next_action"]
+    assert payload["ha"]["reasons"] == [f"agent-artifact-{problem}-during-convergence"]
+    assert "durable checkpoints and resume idempotently" in payload["ha"]["next_action"]
+    assert "gateway changes may already have started" in payload["ha"]["next_action"]
     assert "PRIVATE_ARTIFACT_DETAIL" not in result.output
     assert planner.call_count == 2
     effect.assert_called_once()
@@ -4966,6 +5062,24 @@ def test_vm_ha_artifact_change_after_execution_starts_reports_partial_resume(
         (
             _VMHAApplyConvergenceFailed(
                 "PRIVATE_APPLY_DETAIL",
+                pending=True,
+                diagnostics=("controller-observation-unavailable",),
+            ),
+            "waiting-for-authority",
+            "resume the retained operation",
+        ),
+        (
+            _VMHAApplyConvergenceFailed(
+                "PRIVATE_APPLY_DETAIL",
+                pending=True,
+                diagnostics=("controller-observation-budget-exhausted",),
+            ),
+            "waiting-for-authority",
+            "resume the retained operation",
+        ),
+        (
+            _VMHAApplyConvergenceFailed(
+                "PRIVATE_APPLY_DETAIL",
                 reason="standby-replacement-inhibition-not-ready",
                 next_action=(
                     "rerun vm-ha to resume the exact inhibition checkpoint; if it "
@@ -4977,6 +5091,7 @@ def test_vm_ha_artifact_change_after_execution_starts_reports_partial_resume(
         ),
     ),
 )
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_apply_exit_reports_checkpoint_resume_not_authentication(
     monkeypatch,
     tmp_path: Path,
@@ -5014,7 +5129,7 @@ def test_vm_ha_apply_exit_reports_checkpoint_resume_not_authentication(
             return None
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -5034,7 +5149,7 @@ def test_vm_ha_apply_exit_reports_checkpoint_resume_not_authentication(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--approve",
@@ -5046,15 +5161,24 @@ def test_vm_ha_apply_exit_reports_checkpoint_resume_not_authentication(
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["health"] == ("unknown" if failure.pending else "blocked")
-    assert payload["outcome"] == ("pending" if failure.pending else "failed")
-    assert payload["actions"] == ["convergence-effects-may-have-started"]
-    assert payload["reasons"] == [expected_reason]
-    assert expected_next_fragment in payload["next_action"]
-    assert "authentication" not in payload["next_action"]
+    assert payload["ha"]["health"] == ("unknown" if failure.pending else "blocked")
+    assert payload["ha"]["outcome"] == ("pending" if failure.pending else "failed")
+    assert payload["ha"]["actions"] == ["convergence-effects-may-have-started"]
+    assert payload["ha"]["reasons"] == [expected_reason, *failure.diagnostics]
+    assert expected_next_fragment in payload["ha"]["next_action"]
+    assert "authentication" not in payload["ha"]["next_action"]
     assert "PRIVATE_APPLY_DETAIL" not in result.output
+    if failure.diagnostics:
+        recovery = payload["recovery"]
+        assert recovery["reason_code"] == failure.diagnostics[0]
+        assert "--repair" in recovery["repair_command"]
+        assert str(config_path) in recovery["repair_command"]
+        assert recovery["repair_prerequisite"]
+        assert "vm-ha" in recovery["resume_command"]
+        assert recovery["destroy_command"] is None
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_authentication_exit_keeps_authentication_guidance(
     monkeypatch,
     tmp_path: Path,
@@ -5065,12 +5189,14 @@ def test_vm_ha_authentication_exit_keeps_authentication_guidance(
     def fail_authentication(**_kwargs) -> None:
         raise typer.Exit(code=1) from NebiusCLIAuthenticationError("redacted")
 
-    monkeypatch.setattr("nebius_vpngw.cli._resolve_vm_ha_effective_config", fail_authentication)
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion", fail_authentication
+    )
 
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(source),
             "--output-format",
@@ -5080,10 +5206,11 @@ def test_vm_ha_authentication_exit_keeps_authentication_guidance(
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["reasons"] == ["authentication-or-provider-unavailable"]
-    assert payload["next_action"] == "restore authentication and rerun vm-ha"
+    assert payload["ha"]["reasons"] == ["authentication-or-provider-unavailable"]
+    assert payload["ha"]["next_action"] == "restore authentication and rerun apply"
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_bare_exit_is_not_reported_as_authentication(
     monkeypatch,
     tmp_path: Path,
@@ -5091,14 +5218,14 @@ def test_vm_ha_bare_exit_is_not_reported_as_authentication(
     source = tmp_path / "gateway.config.yaml"
     source.write_text("version: 1\n", encoding="utf-8")
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         Mock(side_effect=typer.Exit(code=1)),
     )
 
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(source),
             "--output-format",
@@ -5108,10 +5235,11 @@ def test_vm_ha_bare_exit_is_not_reported_as_authentication(
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["reasons"] == ["command-preflight-failed"]
-    assert "authentication" not in payload["next_action"]
+    assert payload["ha"]["reasons"] == ["command-preflight-failed"]
+    assert "authentication" not in payload["ha"]["next_action"]
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_interruption_returns_130_with_stable_json(
     monkeypatch,
     tmp_path: Path,
@@ -5119,14 +5247,14 @@ def test_vm_ha_interruption_returns_130_with_stable_json(
     source = tmp_path / "gateway.config.yaml"
     source.write_text("version: 1\n", encoding="utf-8")
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         Mock(side_effect=KeyboardInterrupt),
     )
 
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(source),
             "--output-format",
@@ -5136,11 +5264,135 @@ def test_vm_ha_interruption_returns_130_with_stable_json(
 
     assert result.exit_code == 130
     payload = json.loads(result.stdout)
-    assert payload["schema"] == "nebius-vpngw/vm-ha-result-v1"
-    assert payload["reasons"] == ["interrupted"]
+    assert payload["schema"] == "nebius-vpngw.apply-result.v1"
+    assert payload["ha"]["reasons"] == ["interrupted"]
+
+
+@pytest.mark.usefixtures("ha_apply_admission")
+@pytest.mark.parametrize("exit_wrapper", (False, True))
+@pytest.mark.parametrize("pending", (False, True))
+@pytest.mark.parametrize("output_format", ("text", "json"))
+def test_ha_apply_preserves_package_reason_through_recovery_wrappers(
+    monkeypatch, tmp_path: Path, exit_wrapper: bool, pending: bool, output_format: str
+) -> None:
+    from nebius_vpngw.deploy.apply_diagnostics import ObservationUnavailable
+
+    config = tmp_path / "gateway.vm-ha.config.yaml"
+    config.write_text("version: 1\n", encoding="utf-8")
+    drift = _inspection(
+        _snapshot(
+            overall="BLOCKED",
+            action="repair-route-authority",
+            reasons=("route-next-hop-not-exact",),
+        )
+    )
+    report = _VMHAApplyPlanReport(
+        kind="apply-convergence",
+        digest="d" * 64,
+        engine_digest="e" * 64,
+        effects=("reconcile-managed-routes-through-apply-owner",),
+        has_destructive_changes=False,
+        managed_ssh_action=None,
+    )
+    failure = _VMHAAgentPackagePreparationFailed(2, "HA handoff package plan changed")
+    if pending:
+        failure.__cause__ = ObservationUnavailable("package-observation", "read-timeout")
+
+    def fail(**_kwargs):
+        try:
+            raise RuntimeError("PRIVATE_RECOVERY_DETAIL") from failure
+        except RuntimeError as wrapped:
+            if exit_wrapper:
+                raise typer.Exit(1) from wrapped
+            raise
+
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
+        lambda **_kwargs: _VMHAEffectiveConfig(config, ()),
+    )
+    monkeypatch.setattr(cli_module, "_inspect_vm_ha_command_status", lambda _path: drift)
+    monkeypatch.setattr(cli_module, "_plan_vm_ha_apply_convergence", lambda *_a, **_k: report)
+    monkeypatch.setattr(cli_module, "_apply_impl", fail)
+
+    result = CliRunner().invoke(
+        app,
+        ["apply", "-c", str(config), "--approve", "d" * 64, "--output-format", output_format],
+    )
+
+    assert result.exit_code == 1
+    assert "PRIVATE_RECOVERY_DETAIL" not in result.output
+    if output_format == "json":
+        payload = json.loads(result.stdout)
+        assert payload["ha"]["outcome"] == ("pending" if pending else "failed")
+        assert payload["ha"]["reasons"][0] == (
+            "waiting-for-authority" if pending else "package-preparation-failed-member-2"
+        )
+        assert "--repair" in payload["recovery"]["repair_command"]
+        assert str(config) in payload["recovery"]["repair_command"]
+        if not pending:
+            assert "member 2" in payload["recovery"]["reason"]
+            assert "HA handoff package plan changed" in payload["recovery"]["reason"]
+    else:
+        assert "Reason:" in result.output and "Next action:" in result.output
+        assert result.output.count("--repair") == 1
+        if not pending:
+            assert "HA handoff package plan changed" in result.output
+
+
+@pytest.mark.usefixtures("ha_apply_admission")
+@pytest.mark.parametrize("exit_code", (130, 1))
+@pytest.mark.parametrize("output_format", ("text", "json"))
+def test_ha_apply_preserves_nested_engine_interrupt(
+    monkeypatch, tmp_path: Path, exit_code: int, output_format: str
+) -> None:
+    config = tmp_path / "gateway.vm-ha.config.yaml"
+    config.write_text("version: 1\n", encoding="utf-8")
+    drift = _inspection(
+        _snapshot(
+            overall="BLOCKED",
+            action="repair-route-authority",
+            reasons=("route-next-hop-not-exact",),
+        )
+    )
+    report = _VMHAApplyPlanReport(
+        kind="apply-convergence",
+        digest="d" * 64,
+        engine_digest="e" * 64,
+        effects=("reconcile-managed-routes-through-apply-owner",),
+        has_destructive_changes=False,
+        managed_ssh_action=None,
+    )
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
+        lambda **kwargs: _VMHAEffectiveConfig(config, ()),
+    )
+    monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", lambda path: drift)
+    planner = Mock(side_effect=(report, report))
+    monkeypatch.setattr("nebius_vpngw.cli._plan_vm_ha_apply_convergence", planner)
+    effect = Mock(side_effect=typer.Exit(exit_code))
+    monkeypatch.setattr("nebius_vpngw.cli._apply_impl", effect)
+
+    result = CliRunner().invoke(
+        app,
+        ["apply", "-c", str(config), "--approve", "d" * 64, "--output-format", output_format],
+    )
+
+    effect.assert_called_once()
+    assert planner.call_count == 2
+    assert result.exit_code == exit_code
+    if output_format == "json":
+        payload = json.loads(result.stdout)
+        assert payload["schema"] == "nebius-vpngw.apply-result.v1"
+        assert "--repair" in payload["recovery"]["repair_command"]
+        if exit_code == 130:
+            assert payload["ha"]["reasons"] == ["interrupted"]
+    else:
+        assert "Reason:" in result.output and "Next action:" in result.output
+        assert result.output.count("--repair") == 1
 
 
 @pytest.mark.parametrize("extra_args", ((), ("--output-format", "json")))
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_dry_run_emits_domain_bound_apply_plan_without_prompting(
     monkeypatch,
     tmp_path: Path,
@@ -5164,7 +5416,7 @@ def test_vm_ha_dry_run_emits_domain_bound_apply_plan_without_prompting(
         managed_ssh_action=None,
     )
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -5182,7 +5434,7 @@ def test_vm_ha_dry_run_emits_domain_bound_apply_plan_without_prompting(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--dry-run",
@@ -5195,19 +5447,20 @@ def test_vm_ha_dry_run_emits_domain_bound_apply_plan_without_prompting(
     assert "Proceed with this exact VM-HA plan?" not in result.stderr
     if extra_args:
         payload = json.loads(result.stdout)
-        assert payload["outcome"] == "planned"
-        assert payload["classification"] == "vm-ha-required"
-        assert payload["approval"] == {
+        assert payload["ha"]["outcome"] == "planned"
+        assert payload["ha"]["classification"] == "vm-ha-required"
+        assert payload["ha"]["approval"] == {
             "kind": "apply-convergence",
             "digest": "d" * 64,
             "effects": ["reconcile-managed-routes-through-apply-owner"],
         }
     else:
-        assert "VM-HA plan is ready; no changes were made." in result.stdout
+        assert "Apply plan." in result.stdout
     effect.assert_not_called()
 
 
 @pytest.mark.parametrize("extra_args", ((), ("--output-format", "json")))
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_explicitly_safe_plan_executes_without_confirmation(
     monkeypatch,
     tmp_path: Path,
@@ -5252,7 +5505,7 @@ def test_vm_ha_explicitly_safe_plan_executes_without_confirmation(
             return None
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", inspect)
@@ -5264,7 +5517,7 @@ def test_vm_ha_explicitly_safe_plan_executes_without_confirmation(
 
     result = CliRunner().invoke(
         app,
-        ["vm-ha", "--local-config-file", str(config_path), *extra_args],
+        ["apply", "--local-config-file", str(config_path), *extra_args],
         input="n\n",
     )
 
@@ -5272,10 +5525,10 @@ def test_vm_ha_explicitly_safe_plan_executes_without_confirmation(
     assert "Proceed with this exact VM-HA plan?" not in result.stderr
     if extra_args:
         payload = json.loads(result.stdout)
-        assert payload["outcome"] == "healthy"
+        assert payload["ha"]["outcome"] == "healthy"
         assert result.stdout.count("\n") == 1
     else:
-        assert result.stdout == "VM-HA is healthy now.\n"
+        assert "Apply completed." in result.stdout and "HA health: healthy" in result.stdout
     assert planner.call_count == 2
     effect.assert_called_once()
     assert effect.call_args.args == (config_path, report)
@@ -5285,6 +5538,7 @@ def test_vm_ha_explicitly_safe_plan_executes_without_confirmation(
 @pytest.mark.parametrize(
     "recovery_kind", ("artifact-standby-recovery", "replacement-artifact-recovery")
 )
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_disruptive_artifact_recovery_warns_and_requires_confirmation(
     monkeypatch,
     tmp_path: Path,
@@ -5330,7 +5584,7 @@ def test_vm_ha_disruptive_artifact_recovery_warns_and_requires_confirmation(
             return None
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", inspect)
@@ -5342,12 +5596,12 @@ def test_vm_ha_disruptive_artifact_recovery_warns_and_requires_confirmation(
 
     result = CliRunner().invoke(
         app,
-        ["vm-ha", "--local-config-file", str(config_path)],
+        ["apply", "--local-config-file", str(config_path)],
         input="y\n",
     )
 
     assert result.exit_code == 0
-    assert "VM-HA is healthy now." in result.stdout
+    assert "Apply completed." in result.stdout
     assert f"Approval kind: {recovery_kind}" in result.stderr
     assert f"Approval digest: {'d' * 64}" in result.stderr
     assert f"Impact: {report.impact.summary}." in result.stderr
@@ -5361,6 +5615,7 @@ def test_vm_ha_disruptive_artifact_recovery_warns_and_requires_confirmation(
     assert inspect.call_count == 4
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_missing_non_owner_confirms_and_executes_in_one_interactive_command(
     monkeypatch,
     tmp_path: Path,
@@ -5402,7 +5657,7 @@ def test_vm_ha_missing_non_owner_confirms_and_executes_in_one_interactive_comman
             return None
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", inspect)
@@ -5414,7 +5669,7 @@ def test_vm_ha_missing_non_owner_confirms_and_executes_in_one_interactive_comman
 
     result = CliRunner().invoke(
         app,
-        ["vm-ha", "--local-config-file", str(config_path)],
+        ["apply", "--local-config-file", str(config_path)],
         input="y\n",
     )
 
@@ -5427,6 +5682,7 @@ def test_vm_ha_missing_non_owner_confirms_and_executes_in_one_interactive_comman
     assert effect.call_args.args == (config_path, report)
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_missing_non_owner_decline_hides_automation_digest(
     monkeypatch,
     tmp_path: Path,
@@ -5453,7 +5709,7 @@ def test_vm_ha_missing_non_owner_decline_hides_automation_digest(
         ),
     )
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -5468,18 +5724,19 @@ def test_vm_ha_missing_non_owner_decline_hides_automation_digest(
 
     result = CliRunner().invoke(
         app,
-        ["vm-ha", "--local-config-file", str(config_path)],
+        ["apply", "--local-config-file", str(config_path)],
         input="n\n",
     )
 
-    assert result.exit_code == 3
+    assert result.exit_code == 0
     assert "Create the missing non-owner VM now? [y/N]" in result.stderr
     assert "Approval digest:" not in result.output
     assert "--approve" not in result.output
-    assert "rerun vm-ha and answer y" in result.stdout
+    assert "rerun apply and answer y" in result.stdout
 
 
 @pytest.mark.parametrize("answer", ("\n", "n\n"))
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_interactive_approval_defaults_no_and_performs_zero_effects(
     monkeypatch,
     tmp_path: Path,
@@ -5502,10 +5759,10 @@ def test_vm_ha_interactive_approval_defaults_no_and_performs_zero_effects(
         has_destructive_changes=False,
         managed_ssh_action=None,
     )
-    lock = Mock(side_effect=AssertionError("declined approval acquired the lock"))
+    lock = Mock(return_value=_ContextManagedFake())
     effect = Mock(side_effect=AssertionError("declined approval executed apply"))
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -5522,17 +5779,18 @@ def test_vm_ha_interactive_approval_defaults_no_and_performs_zero_effects(
 
     result = CliRunner().invoke(
         app,
-        ["vm-ha", "--local-config-file", str(config_path)],
+        ["apply", "--local-config-file", str(config_path)],
         input=answer,
     )
 
-    assert result.exit_code == 3
-    assert "operator-declined-approval" in result.stdout
+    assert result.exit_code == 0
+    assert "Apply cancelled." in result.stdout
     assert "Proceed with this exact VM-HA plan? [y/N]" in result.stderr
-    lock.assert_not_called()
+    lock.assert_called_once()
     effect.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_destructive_plan_reports_impact_and_never_auto_executes(
     monkeypatch,
     tmp_path: Path,
@@ -5558,10 +5816,10 @@ def test_vm_ha_destructive_plan_reports_impact_and_never_auto_executes(
             has_destructive_changes=True,
         ),
     )
-    lock = Mock(side_effect=AssertionError("destructive plan acquired the lock"))
+    lock = Mock(return_value=_ContextManagedFake())
     effect = Mock(side_effect=AssertionError("destructive plan executed apply"))
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -5578,7 +5836,7 @@ def test_vm_ha_destructive_plan_reports_impact_and_never_auto_executes(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--output-format",
@@ -5586,21 +5844,22 @@ def test_vm_ha_destructive_plan_reports_impact_and_never_auto_executes(
         ],
     )
 
-    assert result.exit_code == 3
+    assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["reasons"] == ["destructive-gateway-recreation-required"]
-    assert payload["approval"] is None
-    assert payload["impact"] == {
+    assert payload["ha"]["reasons"] == ["destructive-gateway-recreation-required"]
+    assert payload["ha"]["approval"] is None
+    assert payload["ha"]["impact"] == {
         "summary": "Deletes and recreates gateway VM resources and may interrupt VPN traffic",
         "destructive": True,
         "vpn_traffic_interruption": True,
         "resource_creation": True,
         "approval_required": True,
     }
-    lock.assert_not_called()
+    lock.assert_called_once()
     effect.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_interactive_approval_eof_returns_130_without_effects(
     monkeypatch,
     tmp_path: Path,
@@ -5622,10 +5881,10 @@ def test_vm_ha_interactive_approval_eof_returns_130_without_effects(
         has_destructive_changes=False,
         managed_ssh_action=None,
     )
-    lock = Mock(side_effect=AssertionError("interrupted approval acquired the lock"))
+    lock = Mock(return_value=_ContextManagedFake())
     effect = Mock(side_effect=AssertionError("interrupted approval executed apply"))
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -5642,17 +5901,18 @@ def test_vm_ha_interactive_approval_eof_returns_130_without_effects(
 
     result = CliRunner().invoke(
         app,
-        ["vm-ha", "--local-config-file", str(config_path)],
+        ["apply", "--local-config-file", str(config_path)],
         input="",
     )
 
     assert result.exit_code == 130
-    assert "Reasons: interrupted" in result.stdout
+    assert "(interrupted)" in result.stdout
     assert "Proceed with this exact VM-HA plan? [y/N]" in result.stderr
-    lock.assert_not_called()
+    lock.assert_called_once()
     effect.assert_not_called()
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_json_approval_required_never_prompts_and_keeps_stdout_pure(
     monkeypatch,
     tmp_path: Path,
@@ -5675,7 +5935,7 @@ def test_vm_ha_json_approval_required_never_prompts_and_keeps_stdout_pure(
         managed_ssh_action=None,
     )
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -5691,7 +5951,7 @@ def test_vm_ha_json_approval_required_never_prompts_and_keeps_stdout_pure(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--output-format",
@@ -5700,8 +5960,8 @@ def test_vm_ha_json_approval_required_never_prompts_and_keeps_stdout_pure(
         input="y\n",
     )
 
-    assert result.exit_code == 3
-    assert json.loads(result.stdout)["outcome"] == "action-required"
+    assert result.exit_code == 1
+    assert json.loads(result.stdout)["ha"]["outcome"] == "action-required"
     assert result.stdout.count("\n") == 1
     assert "Starting:" not in result.stdout
     assert "Proceed with this exact VM-HA plan?" not in result.stderr
@@ -5713,6 +5973,7 @@ def test_vm_ha_json_approval_required_never_prompts_and_keeps_stdout_pure(
 @pytest.mark.parametrize(
     ("plan_kind", "ssh_action"), (("apply-convergence", None), ("migration", "migrate"))
 )
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_exact_apply_approval_replans_under_lock_and_never_prompts(
     monkeypatch,
     tmp_path: Path,
@@ -5753,7 +6014,7 @@ def test_vm_ha_exact_apply_approval_replans_under_lock_and_never_prompts(
             return None
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", inspect)
@@ -5766,7 +6027,7 @@ def test_vm_ha_exact_apply_approval_replans_under_lock_and_never_prompts(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--approve",
@@ -5780,10 +6041,10 @@ def test_vm_ha_exact_apply_approval_replans_under_lock_and_never_prompts(
     assert "Proceed with this exact VM-HA plan?" not in result.stderr
     if extra_args:
         payload = json.loads(result.stdout)
-        assert payload["outcome"] == "healthy"
-        assert payload["actions"] == ["apply-converged"]
+        assert payload["ha"]["outcome"] == "healthy"
+        assert payload["ha"]["actions"] == ["apply-converged"]
     else:
-        assert "VM-HA is healthy now." in result.stdout
+        assert "Apply completed." in result.stdout
     assert result.stderr.count("revalidating the exact approved plan") == 1
     assert "✓ revalidating the exact approved plan" in result.stderr
     assert planner.call_count == 2
@@ -5793,6 +6054,7 @@ def test_vm_ha_exact_apply_approval_replans_under_lock_and_never_prompts(
     assert inspect.call_count == 3
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_stale_apply_approval_fails_before_lock_or_effect(
     monkeypatch,
     tmp_path: Path,
@@ -5815,7 +6077,7 @@ def test_vm_ha_stale_apply_approval_fails_before_lock_or_effect(
         managed_ssh_action=None,
     )
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr(
@@ -5826,7 +6088,7 @@ def test_vm_ha_stale_apply_approval_fails_before_lock_or_effect(
         "nebius_vpngw.cli._plan_vm_ha_apply_convergence",
         lambda _path: report,
     )
-    lock = Mock(side_effect=AssertionError("stale approval acquired lock"))
+    lock = Mock(return_value=_ContextManagedFake())
     effect = Mock(side_effect=AssertionError("stale approval executed apply"))
     monkeypatch.setattr("nebius_vpngw.cli.VMHAApplyLock", lock)
     monkeypatch.setattr("nebius_vpngw.cli._execute_vm_ha_apply_convergence", effect)
@@ -5834,7 +6096,7 @@ def test_vm_ha_stale_apply_approval_fails_before_lock_or_effect(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "--local-config-file",
             str(config_path),
             "--approve",
@@ -5846,13 +6108,14 @@ def test_vm_ha_stale_apply_approval_fails_before_lock_or_effect(
 
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["reasons"] == ["approval-digest-stale-or-incorrect"]
-    lock.assert_not_called()
+    assert payload["ha"]["reasons"] == ["approval-digest-stale-or-incorrect"]
+    lock.assert_called_once()
     effect.assert_not_called()
 
 
 @pytest.mark.parametrize("dry_run", (False, True))
 @pytest.mark.parametrize("commit_boundary", ("before-prepare", "owner-prepared", "peer-committed"))
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_resumes_policy_after_completed_start_with_both_members_reachable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, dry_run: bool, commit_boundary: str
 ) -> None:
@@ -5921,7 +6184,7 @@ def test_vm_ha_resumes_policy_after_completed_start_with_both_members_reachable(
         return True
 
     monkeypatch.setattr(
-        "nebius_vpngw.cli._resolve_vm_ha_effective_config",
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
     monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", lambda _path: healthy)
@@ -5938,7 +6201,7 @@ def test_vm_ha_resumes_policy_after_completed_start_with_both_members_reachable(
     result = CliRunner().invoke(
         app,
         [
-            "vm-ha",
+            "apply",
             "-c",
             str(config_path),
             "--standby-auto-healing",
@@ -5950,7 +6213,447 @@ def test_vm_ha_resumes_policy_after_completed_start_with_both_members_reachable(
     )
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
-    assert payload["outcome"] == ("planned" if dry_run else "healthy")
+    assert payload["ha"]["outcome"] == ("planned" if dry_run else "healthy")
     assert effects == ([] if dry_run else ["commit-enabled", "clear-completed"])
     if dry_run:
-        assert "clear-completed-recovery" not in payload["approval"]["effects"]
+        assert "clear-completed-recovery" not in payload["ha"]["approval"]["effects"]
+
+
+def _disabled_recovery_observation_statuses(*, consumed: bool = False):
+    """An acknowledged disabled pair with one original accepted recovery."""
+    from dataclasses import replace
+
+    owner, peer = _terminal_enabled_recovery_statuses(peer_agrees=True)
+    disabled_digest = policy_decision_digest(
+        cluster_id="cluster-a",
+        member_node_ids=("node-0", "node-1"),
+        generation_id="a" * 64,
+        desired=StandbyAutoHealing.DISABLED,
+        operation_id="c" * 64,
+        coordinator_node_id="node-0",
+        predecessor_digest="b" * 64,
+    )
+    for status in (owner, peer):
+        record = replace(
+            AutoHealingPolicyRecord.from_mapping(status["record"]),
+            desired=StandbyAutoHealing.DISABLED,
+            decision_digest=disabled_digest,
+            peer_ack_digest=disabled_digest,
+        )
+        status.update(record=record.to_dict(), desired="disabled", decision_digest=disabled_digest)
+    transaction = cli_module._vm_ha_auto_healing_transaction(
+        desired=StandbyAutoHealing.ENABLED, statuses=[owner, peer]
+    )
+    recovery = replace(
+        AutoHealingRecoveryRecord.from_mapping(owner["recovery"]),
+        operation_id=transaction.operation_id,
+        policy_digest=disabled_digest,
+        predecessor_digest=disabled_digest,
+        phase=AutoHealingRecoveryPhase.CONSUMED if consumed else AutoHealingRecoveryPhase.COMPLETED,
+    )
+    owner.update(
+        recovery=recovery.to_dict(),
+        recovery_phase=recovery.phase.value,
+        accepted_start=consumed,
+        recovery_authority={
+            "allocation_id": recovery.allocation_id,
+            "ownership_epoch": recovery.ownership_epoch,
+            "promotion_receipt_id": recovery.promotion_receipt_id,
+        },
+    )
+    return owner, peer, transaction
+
+
+@pytest.fixture
+def recovery_observation_clock(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(cli_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        cli_module.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay)
+    )
+    return clock
+
+
+@pytest.mark.parametrize("counterfactual", [False, True])
+@pytest.mark.parametrize("initial_pair", [False, True])
+@pytest.mark.usefixtures("ha_apply_admission")
+def test_vm_ha_observes_original_start_before_policy_approval(
+    monkeypatch, tmp_path, recovery_observation_clock, counterfactual, initial_pair
+):
+    config = tmp_path / "gateway.config.yaml"
+    config.write_text("version: 1\n")
+    owner, peer, transaction = _disabled_recovery_observation_statuses()
+    first = _inspection(
+        _snapshot(
+            overall="TRANSITIONING",
+            action="wait",
+            digest="a" * 64,
+            member_compute_states=(("node-0", "running"), ("node-1", "stopped")),
+        )
+    )
+    running = _inspection(_snapshot(overall="MAINTENANCE", action="enable", digest="b" * 64))
+    healthy = _inspection(_snapshot(overall="HEALTHY", action="none", digest="b" * 64))
+    calls = {"inspect": 0, "status": 0, "execute": 0, "lock": 0}
+
+    def inspect(*_args, **_kwargs):
+        calls["inspect"] += 1
+        return healthy if calls["execute"] else first if calls["inspect"] == 1 else running
+
+    def statuses(**_kwargs):
+        calls["status"] += 1
+        return [owner] if calls["status"] <= 2 and not initial_pair else [owner, peer]
+
+    def execute(**kwargs):
+        assert calls["status"] == (4 if initial_pair else 5)
+        assert recovery_observation_clock[0] == (1 if initial_pair else 2)
+        assert kwargs["initial_statuses"] == [owner, peer]
+        assert kwargs["transaction"] == transaction
+        kwargs["authority_guard"]()
+        calls["execute"] += 1
+        return list(
+            _terminal_enabled_recovery_statuses(
+                peer_agrees=True,
+                operation_id=transaction.operation_id,
+                predecessor_digest=transaction.predecessor_digest,
+            )
+        )
+
+    class Lock(_ContextManagedFake):
+        def __init__(self, **_kwargs):
+            calls["lock"] += 1
+            calls["status_at_lock"] = calls["status"]
+
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
+        lambda **_kw: _VMHAEffectiveConfig(config, ()),
+    )
+    monkeypatch.setattr(cli_module, "_inspect_vm_ha_status_with_region", inspect)
+    monkeypatch.setattr(cli_module, "_run_vm_ha_auto_healing_statuses", statuses)
+    monkeypatch.setattr(cli_module, "_execute_vm_ha_auto_healing_policy", execute)
+    monkeypatch.setattr(
+        cli_module, "_clear_completed_vm_ha_auto_healing_recovery", lambda **_kw: True
+    )
+    monkeypatch.setattr(cli_module, "VMHAApplyLock", Lock)
+    no_start = Mock(side_effect=AssertionError("must not repeat the original Start"))
+    monkeypatch.setattr(cli_module, "_prepare_vm_ha_planned_target", no_start)
+    if counterfactual:
+        monkeypatch.setattr(
+            cli_module,
+            "_observe_vm_ha_auto_healing_recovery",
+            lambda _p, current, observed, **_kw: (current, observed),
+        )
+    result = CliRunner().invoke(
+        app,
+        [
+            "apply",
+            "--local-config-file",
+            str(config),
+            "--standby-auto-healing",
+            "enabled",
+            "--output-format",
+            "json",
+        ],
+    )
+    payload = json.loads(result.stdout)
+    if counterfactual:
+        assert result.exit_code == 1
+        assert payload["ha"]["reasons"] == ["approval-state-changed"]
+        assert payload["recovery"]["reason_code"] == "approval-state-changed"
+        assert "--repair" in payload["recovery"]["repair_command"]
+        assert calls["execute"] == 0
+    else:
+        assert result.exit_code == 0, result.stdout
+        assert payload["ha"]["outcome"] == "healthy"
+        assert calls["execute"] == 1
+        assert recovery_observation_clock[0] == (2 if initial_pair else 3)
+    assert calls["lock"] == 1
+    assert calls["status_at_lock"] == 0
+    no_start.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "drift",
+    ["owner", "lifecycle", "project", "operation", "allocation", "record", "phase", "malformed"],
+)
+def test_recovery_observer_rejects_changed_identity_without_effects(
+    monkeypatch, recovery_observation_clock, drift
+):
+    from dataclasses import replace
+
+    owner, peer, _ = _disabled_recovery_observation_statuses()
+    first = _inspection(_snapshot(overall="TRANSITIONING", action="wait"))
+    current = _inspection(_snapshot(overall="MAINTENANCE", action="enable"))
+    if drift == "owner":
+        current = replace(
+            current,
+            snapshot=replace(
+                current.snapshot,
+                authority=replace(current.snapshot.authority, owner_node_id="node-1"),
+            ),
+        )
+    elif drift == "lifecycle":
+        current = replace(
+            current,
+            snapshot=replace(current.snapshot, lifecycle_state=SimpleNamespace(status="foreign")),
+        )
+    elif drift == "project":
+        current = replace(current, project_id="foreign")
+    changed = dict(owner)
+    if drift in {"operation", "allocation", "phase"}:
+        recovery = AutoHealingRecoveryRecord.from_mapping(owner["recovery"])
+        changes = (
+            {"operation_id": "e" * 64}
+            if drift == "operation"
+            else {"allocation_id": "foreign"}
+            if drift == "allocation"
+            else {"phase": AutoHealingRecoveryPhase.CONSUMED}
+        )
+        recovery = replace(recovery, **changes)
+        changed.update(recovery=recovery.to_dict(), recovery_phase=recovery.phase.value)
+    elif drift == "record":
+        record = AutoHealingPolicyRecord.from_mapping(owner["record"])
+        changed["record"] = replace(record, updated_at=99).to_dict()
+    elif drift == "malformed":
+        changed["recovery"] = {"invalid": "PRIVATE_DETAIL"}
+    monkeypatch.setattr(cli_module, "_inspect_vm_ha_status_with_region", lambda *_a, **_kw: current)
+    monkeypatch.setattr(
+        cli_module, "_run_vm_ha_auto_healing_statuses", lambda **_kw: [changed, peer]
+    )
+    with pytest.raises(_VMHAApplyConvergenceFailed) as failure:
+        cli_module._observe_vm_ha_auto_healing_recovery(
+            Path("config.yaml"), first, [owner], desired=StandbyAutoHealing.ENABLED
+        )
+    assert failure.value.reason == "controller-observation-contradictory"
+    assert not failure.value.pending
+
+
+@pytest.mark.parametrize("failure", ["stall", "deadline", "unavailable"])
+def test_recovery_observer_keeps_deadline_and_stall_separate(
+    monkeypatch, recovery_observation_clock, failure
+):
+    from nebius_vpngw.deploy.vm_ha_cloud import vm_ha_observation_budget
+
+    owner, _peer, _ = _disabled_recovery_observation_statuses()
+    first = _inspection(_snapshot(overall="TRANSITIONING", action="wait"))
+
+    def inspect(*_a, **_kw):
+        if failure == "unavailable":
+            raise TimeoutError("observation unavailable")
+        return first
+
+    def statuses(**_kw):
+        # A new heartbeat/recovery timestamp is not semantic progress.
+        return [
+            {
+                **owner,
+                "recovery": {**owner["recovery"], "updated_at": recovery_observation_clock[0]},
+            }
+        ]
+
+    monkeypatch.setattr(cli_module, "_inspect_vm_ha_status_with_region", inspect)
+    monkeypatch.setattr(cli_module, "_run_vm_ha_auto_healing_statuses", statuses)
+    with (
+        pytest.raises(_VMHAApplyConvergenceFailed) as error,
+        vm_ha_observation_budget(
+            seconds=2 if failure == "deadline" else 30,
+            clock=lambda: recovery_observation_clock[0],
+        ),
+    ):
+        cli_module._observe_vm_ha_auto_healing_recovery(
+            Path("config.yaml"),
+            first,
+            [owner],
+            desired=StandbyAutoHealing.ENABLED,
+            stall_timeout_seconds=3,
+        )
+    expected = {
+        "stall": "controller-no-progress",
+        "deadline": "controller-observation-budget-exhausted",
+        "unavailable": "controller-observation-unavailable",
+    }[failure]
+    assert error.value.pending
+    assert error.value.diagnostics == (expected,)
+    assert recovery_observation_clock[0] == {"stall": 3, "deadline": 2, "unavailable": 0}[failure]
+
+
+@pytest.mark.parametrize("case", ["fresh", "unsubmitted", "settled-stopped", "terminal-pair"])
+def test_recovery_observer_leaves_other_planning_paths_unchanged(monkeypatch, case):
+    owner, peer, _ = _disabled_recovery_observation_statuses(consumed=case == "unsubmitted")
+    if case == "unsubmitted":
+        owner["accepted_start"] = False
+    elif case == "fresh":
+        owner.update(recovery=None, recovery_phase=None)
+    stopped = _inspection(
+        _snapshot(
+            overall="MAINTENANCE",
+            action="enable",
+            member_compute_states=(
+                ("node-0", "running"),
+                ("node-1", "running" if case == "terminal-pair" else "stopped"),
+            ),
+        )
+    )
+    statuses = [owner, peer] if case == "terminal-pair" else [owner]
+    forbidden = Mock(side_effect=AssertionError("no extra observation required"))
+    monkeypatch.setattr(cli_module, "_inspect_vm_ha_status_with_region", forbidden)
+    assert cli_module._observe_vm_ha_auto_healing_recovery(
+        Path("config.yaml"), stopped, statuses, desired=StandbyAutoHealing.ENABLED
+    ) == (stopped, statuses)
+    forbidden.assert_not_called()
+
+
+def test_recovery_observer_tracks_progress_below_unchanged_overall(
+    monkeypatch, recovery_observation_clock
+):
+    consumed, peer, _ = _disabled_recovery_observation_statuses(consumed=True)
+    completed, _, _ = _disabled_recovery_observation_statuses()
+    first = _inspection(
+        _snapshot(
+            overall="TRANSITIONING",
+            action="wait",
+            member_compute_states=(("node-0", "running"), ("node-1", "stopped")),
+        )
+    )
+    moving = _inspection(
+        _snapshot(
+            overall="TRANSITIONING",
+            action="wait",
+            member_compute_states=(("node-0", "running"), ("node-1", "transitional")),
+        )
+    )
+    running = _inspection(_snapshot(overall="TRANSITIONING", action="wait"))
+    observations = iter([first, moving, moving, running, running, running])
+    policies = iter(
+        [[consumed], [consumed], [completed], [completed], [completed, peer], [completed, peer]]
+    )
+    monkeypatch.setattr(
+        cli_module, "_inspect_vm_ha_status_with_region", lambda *_a, **_kw: next(observations)
+    )
+    monkeypatch.setattr(
+        cli_module, "_run_vm_ha_auto_healing_statuses", lambda **_kw: next(policies)
+    )
+    assert cli_module._observe_vm_ha_auto_healing_recovery(
+        Path("config.yaml"),
+        first,
+        [consumed],
+        desired=StandbyAutoHealing.ENABLED,
+        stall_timeout_seconds=2,
+    ) == (running, [completed, peer])
+    assert recovery_observation_clock[0] == 5
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.usefixtures("ha_apply_admission")
+def test_recovery_observation_pending_has_resume_and_repair_without_writes(
+    monkeypatch, tmp_path, recovery_observation_clock, dry_run
+):
+    config = tmp_path / "config with spaces.yaml"
+    config.write_text("version: 1\n")
+    owner, _peer, _ = _disabled_recovery_observation_statuses()
+    first = _inspection(_snapshot(overall="TRANSITIONING", action="wait"))
+    calls = [0]
+
+    def inspect(*_a, **_kw):
+        calls[0] += 1
+        if calls[0] > 1:
+            raise TimeoutError("PRIVATE_DETAIL")
+        return first
+
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
+        lambda **_kw: _VMHAEffectiveConfig(config, ()),
+    )
+    monkeypatch.setattr(cli_module, "_inspect_vm_ha_status_with_region", inspect)
+    monkeypatch.setattr(cli_module, "_run_vm_ha_auto_healing_statuses", lambda **_kw: [owner])
+    forbidden = Mock(side_effect=AssertionError("pending observation must not mutate"))
+    lock = Mock(return_value=_ContextManagedFake())
+    monkeypatch.setattr(cli_module, "VMHAApplyLock", lock)
+    monkeypatch.setattr(cli_module, "_prepare_vm_ha_planned_target", forbidden)
+    monkeypatch.setattr(cli_module, "_execute_vm_ha_auto_healing_policy", forbidden)
+    args = [
+        "apply",
+        "--local-config-file",
+        str(config),
+        "--standby-auto-healing",
+        "enabled",
+        "--output-format",
+        "json",
+    ]
+    if dry_run:
+        args.append("--dry-run")
+    result = CliRunner().invoke(app, args)
+    payload = json.loads(result.stdout)
+    if dry_run:
+        assert result.exit_code == 0, result.stdout
+        assert payload["ha"]["outcome"] == "planned"
+        assert calls[0] == 1
+    else:
+        assert payload["ha"]["outcome"] == "pending", result.stdout
+        assert payload["recovery"]["reason_code"] == "controller-observation-unavailable"
+        assert "--repair" in payload["recovery"]["repair_command"]
+        assert str(config) in payload["recovery"]["repair_command"]
+        assert "--standby-auto-healing enabled" in payload["recovery"]["resume_command"]
+        assert "PRIVATE_DETAIL" not in result.stdout + result.stderr
+    forbidden.assert_not_called()
+
+    assert lock.call_count == (0 if dry_run else 1)
+
+
+@pytest.mark.parametrize("output_format", ["json", "text"])
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.usefixtures("ha_apply_admission")
+def test_vm_ha_final_health_failure_explains_verification_and_repair(
+    monkeypatch, tmp_path: Path, output_format: str, dry_run: bool
+) -> None:
+    config_path = tmp_path / "gateway's HA config.yaml"
+    config_path.write_text("version: 1\n", encoding="utf-8")
+    initial = _inspection(_snapshot(overall="TRANSITIONING", action="wait"))
+    healthy = _inspection(_snapshot(overall="HEALTHY", action="none"))
+    degraded = _inspection(_snapshot(overall="DEGRADED", action="inspect"))
+    inspections = iter((initial, healthy))
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
+        lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
+    )
+    monkeypatch.setattr(
+        cli_module, "_inspect_vm_ha_command_status", lambda *_a, **_kw: next(inspections, degraded)
+    )
+    monkeypatch.setattr(cli_module.time, "sleep", lambda _seconds: None)
+    result = CliRunner().invoke(
+        app,
+        [
+            "apply",
+            "--local-config-file",
+            str(config_path),
+            "--output-format",
+            output_format,
+            *(["--dry-run"] if dry_run else []),
+        ],
+    )
+    assert result.exit_code == 1
+    if output_format == "json":
+        payload = json.loads(result.stdout)
+        assert payload["ha"]["reasons"] == ["health-observations-did-not-agree"]
+        assert payload["recovery"]["reason_code"] == "health-observations-did-not-agree"
+        assert "healthy HA" in payload["recovery"]["reason"]
+        assert "--repair" in payload["recovery"]["repair_command"]
+        assert payload["ha"]["actions"] == (
+            [] if dry_run else ["convergence-effects-may-have-started"]
+        )
+    else:
+        assert "healthy HA" in result.stdout
+        assert "Reason:" in result.stdout
+        assert result.stdout.count("--repair") == 1
+
+
+def test_apply_health_confirmation_retains_shared_verification_diagnostic(tmp_path: Path) -> None:
+    from nebius_vpngw.deploy.recovery import Invocation, advice
+
+    config = tmp_path / "gateway.yaml"
+    observed = _inspection(_snapshot(overall="DEGRADED", action="inspect"))
+    with pytest.raises(_VMHAApplyConvergenceFailed) as caught:
+        cli_module._confirm_vm_ha_healthy(config, observed, attempts=1)
+    recovery = advice(Invocation("apply", str(config)), caught.value)
+    assert recovery.reason_code == "health-observations-did-not-agree"
+    assert "healthy HA" in recovery.reason
+    assert "--repair" in recovery.repair_command

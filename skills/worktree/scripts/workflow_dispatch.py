@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 
-from workflow_process import OwnedProcessGroup, ProcessCleanupError
+from workflow_process import ProcessCleanupError
 
 
 SDLC_EXECUTION_SCRIPTS = (
@@ -145,12 +145,8 @@ class DispatchError(RuntimeError):
 
 TERMINAL_WORKER_STATUSES = frozenset(
     {
-        "WORKER_PRESTART_TIMEOUT",
         "WORKER_PRESTART_MUTATION",
-        "WORKER_STALLED",
-        "WORKER_READ_ONLY_TIMEOUT",
         "WORKER_SCOPE_VIOLATION",
-        "WORKER_TIMEOUT",
     }
 )
 PRESTART_DIAGNOSTIC_BYTES = 65536
@@ -213,20 +209,30 @@ def _transition(
         *extra,
     ]
     try:
-        completed = subprocess.run(
-            command,
-            cwd=str(assignment["scope_cwd"]),
-            env=runtime_environment(cwd=Path(assignment["scope_cwd"])),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=60,
-        )
+        environment = runtime_environment(cwd=Path(assignment["scope_cwd"]))
+        if action == "task-watch":
+            # This bound is only an observation transport allowance. Expiry is
+            # unknown health and never terminates the owned native worker.
+            completed = subprocess.run(command, cwd=str(assignment["scope_cwd"]), env=environment,
+                                       text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       check=False, timeout=60)
+        else:
+            from workflow_process import run_owned, Capture
+            observation = run_owned(command, cwd=Path(assignment["scope_cwd"]), env=environment,
+                                    stdout_capture=Capture(1024 * 1024))
+            raw = observation["stdout"]["data"]
+            if raw is None:
+                raise DispatchError("EXECUTION_STATE_INVALID", "transition result is incomplete")
+            completed = subprocess.CompletedProcess(command, observation["exit_code"], raw.decode(), "")
         value = json.loads(completed.stdout)
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise DispatchError("HEALTH_UNKNOWN" if action == "task-watch" else "ENVIRONMENT_BLOCKER",
+                            f"{action} observation is unavailable") from exc
+    except ProcessCleanupError as exc:
+        raise DispatchError("CLEANUP_BLOCKED", "transition process cleanup is unproven") from exc
+    except (json.JSONDecodeError, UnicodeError) as exc:
         raise DispatchError(
-            "EXECUTION_STATE_INVALID", f"{action} transition failed"
+            "HEALTH_UNKNOWN" if action == "task-watch" else "EXECUTION_STATE_INVALID", f"{action} transition failed"
         ) from exc
     if completed.returncode != 0 or not isinstance(value, dict):
         code = value.get("code") if isinstance(value, dict) else None
@@ -239,19 +245,6 @@ def _transition(
             "EXECUTION_STATE_INVALID", f"{action} transition result is invalid"
         )
     return result
-
-
-def _stop_worker(process: subprocess.Popen[str], *, terminate_grace: float) -> tuple[str, str]:
-    owner = getattr(process, "_workflow_group", None)
-    if owner is None:
-        raise DispatchError("CLEANUP_BLOCKED", "worker group ownership is unavailable")
-    try:
-        owner.close(grace=terminate_grace)
-        output = process.communicate(timeout=max(1, terminate_grace))
-        owner.verify_absent()
-        return output
-    except (ProcessCleanupError, subprocess.TimeoutExpired) as exc:
-        raise DispatchError("CLEANUP_BLOCKED", "worker termination is unproven; retain its resources") from exc
 
 
 def _agent_available(agent_binary: str) -> bool:
@@ -297,87 +290,87 @@ def dispatch_sequential(
             "workspace-write",
             *[argument for root in launch["support_write_roots"] for argument in ("--add-dir", root)],
             "--ephemeral",
+            "--json",
             "--output-schema",
             str(output_schema.resolve()),
             "-",
         ]
         if selected == "claude":
             command = [agent_binary, "--add-dir", *launch["support_write_roots"],
-                       "--print", "--output-format", "json",
+                       "--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                        "--no-session-persistence", "--json-schema", output_schema.read_text()]
         environment = runtime_environment(selected, fresh_session=True, cwd=Path(assignment["scope_cwd"]))
-        owner = OwnedProcessGroup()
-        try:
-            process = subprocess.Popen(
-                command,
-                cwd=str(assignment["scope_cwd"]),
-                env=environment,
-                stdin=subprocess.PIPE,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                process_group=owner.id,
-            )
-        except BaseException as exc:
-            owner.close(grace=0)
-            owner.verify_absent()
-            if not isinstance(exc, OSError):
-                raise
-            raise DispatchError(
-                "ENVIRONMENT_BLOCKER", "selected agent executable is unavailable"
-            ) from exc
-        process._workflow_group = owner
-        try:
-            prompt: str | None = launch["prompt"]
+        from concurrent.futures import ThreadPoolExecutor
+        from workflow_process import run_owned, Capture
+        from workflow_native_stream import NativeStream
+        import time
+        stream = NativeStream(selected)
+        last_watch = None
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="worker-observation") as probes:
+            probe = probes.submit(_transition, assignment, "task-watch")
+            def observe(sample):
+                nonlocal probe, last_watch
+                if not probe.done():
+                    return "health_unknown"
+                try:
+                    last_watch = probe.result()
+                except DispatchError as error:
+                    if error.code != "HEALTH_UNKNOWN":
+                        raise
+                    last_watch = None
+                probe = probes.submit(_transition, assignment, "task-watch")
+                if last_watch is None:
+                    return "health_unknown"
+                status = str(last_watch.get("status") or "")
+                if status in TERMINAL_WORKER_STATUSES:
+                    raise DispatchError(status, "sequential worker exceeded its authorized scope")
+                if status not in {"PENDING_START", "ACTIVE"}:
+                    raise DispatchError("EXECUTION_STATE_INVALID", "worker observation state is invalid")
+                return "health_unknown" if last_watch.get("health") == "unknown" else "continue"
+            try:
+                observation = run_owned(
+                    command, cwd=Path(assignment["scope_cwd"]), env=environment,
+                    stdin=launch["prompt"].encode(), on_stdout=stream.feed, stderr_capture=Capture(65536),
+                    policy={"observation_interval_seconds": max(1, min(300, int(watch_interval))), "deadline": None},
+                    control=observe)
+            except OSError as error:
+                raise DispatchError("ENVIRONMENT_BLOCKER", "selected agent executable is unavailable") from error
+            except ProcessCleanupError as error:
+                raise DispatchError("CLEANUP_BLOCKED", "worker termination is unproven; retain its resources") from error
+            if observation["exit_code"] != 0:
+                stderr = observation["stderr"]["data"] or b""
+                detail = ("native worker output schema was rejected" if b"invalid_json_schema" in stderr and b"codex_output_schema" in stderr
+                          else "sequential worker exited unsuccessfully")
+                raise DispatchError("WORKER_FAILED", f"{detail} (exit {observation['exit_code']})")
+            # The native process has exited, but unavailable observation is not a
+            # task failure. Retain its assignment until the owner can reconcile.
             while True:
                 try:
-                    stdout, stderr = process.communicate(
-                        input=prompt, timeout=watch_interval
-                    )
+                    final_watch = probe.result()
+                    final_watch = _transition(assignment, "task-watch")
                     break
-                except subprocess.TimeoutExpired:
-                    prompt = None
-                    watched = _transition(assignment, "task-watch")
-                    status = str(watched.get("status") or "")
-                    if status in TERMINAL_WORKER_STATUSES:
-                        raise DispatchError(
-                            status, "sequential worker was interrupted"
-                        )
-                    if status not in {"PENDING_START", "ACTIVE"}:
-                        raise DispatchError(
-                            "EXECUTION_STATE_INVALID",
-                            "sequential worker liveness state is invalid",
-                        )
-            if process.returncode != 0:
-                # Report only fixed labels, never native stderr, prompts or paths.
-                detail = "sequential worker exited unsuccessfully"
-                if "invalid_json_schema" in stderr and "codex_output_schema" in stderr:
-                    detail = "native worker output schema was rejected"
-                raise DispatchError(
-                    "WORKER_FAILED", f"{detail} (exit {process.returncode})"
-                )
-            final_watch = _transition(assignment, "task-watch")
+                except DispatchError as error:
+                    if error.code != "HEALTH_UNKNOWN":
+                        raise
+                    time.sleep(min(30, max(.1, watch_interval)))
+                    probe = probes.submit(_transition, assignment, "task-watch")
+            try:
+                stdout = stream.result()
+            except ValueError as error:
+                raise DispatchError("WORKER_FAILED", "native result stream is incomplete or unsuccessful") from error
             final_status = str(final_watch.get("status") or "")
             if final_status in TERMINAL_WORKER_STATUSES:
-                raise DispatchError(
-                    final_status, "sequential worker exceeded its budget"
-                )
+                raise DispatchError(final_status, "sequential worker exceeded its authorized scope")
             if final_status != "ACTIVE":
                 if final_status == "PENDING_START":
                     raise _prestart_failure(stdout, selected, assignment)
-                raise DispatchError(
-                    "WORKER_FAILED", "sequential worker exited before task-start"
-                )
+                raise DispatchError("WORKER_FAILED", "sequential worker exited before task-start")
             result = _validated_result(stdout, selected, assignment)
             if result["status"] in {"blocked", "replan_required"}:
                 raise DispatchError(
                     "WORKER_BLOCKED" if result["status"] == "blocked" else "WORKER_REPLAN_REQUIRED",
-                    "sequential worker requires coordinator diagnosis or replanning",
-                    worker_result=result,
-                )
+                    "sequential worker requires coordinator diagnosis or replanning", worker_result=result)
             results.append(result)
-        finally:
-            _stop_worker(process, terminate_grace=terminate_grace)
     return results
 
 

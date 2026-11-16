@@ -2,63 +2,70 @@
 
 ## Scope
 
-- Delivery slice: <SLICE ID>
-- Branch: <branch>
-- Promoted/reviewed HEAD: <full SHA>
-- Source manifest / execution basis: <digests>
-- Artifact / deployment configuration: <digests>
-- Qualification producer receipt: <private reference and digest>
-- Environment / resource lease: <public-safe identities>
-- Trial / reset / independent observation: <evidence references>
-- Intervened: <false required; otherwise trial is invalid>
-- Live applicability: <tested or reviewed prose-only N/A>
-- Requirements: <REQ IDs>
-- Features: <FEAT IDs>
+- Requested: `<true|false>`
+- Backend: `<existing|container|nebius|none>`
+- Scope/timing: `<whole accepted objective/release or explicit milestone, after readiness>`
+- Executions/criteria: `<accepted IDs>`
+- Status: `<not_requested|pending|running|passed|failed|incomplete>`
+- Missing prerequisites: `<concise list or none>`
+- Branch: `<branch>`
+- Promoted/reviewed HEAD: `<full SHA>`
+- Source manifest / execution basis: `<digests>`
+- Artifact / deployment configuration: `<digests>`
+- Qualification producer receipt: `<private reference and digest>`
+- Environment / resource lease: `<public-safe identities>`
+- Trial / reset / independent observation: `<evidence references>`
+- Intervened: `<false required; otherwise trial is invalid>`
+- Runtime identity fields above: `<observed only; omit when unexecuted>`
+- Requirements: `<REQ IDs>`
+- Features: `<FEAT IDs>`
 
 ## Live Experiment Environment
 
 | Field | Value |
 | --- | --- |
-| Status | <not-used, used, unavailable, unsafe> |
-| Requirements Reference | <Live Experiment Environment section or none> |
-| Environment Type | <local, disposable, sandbox, staging, other, none> |
-| Allowed Actions Used | <summary> |
-| Cleanup Completed | <yes, no, not-needed> |
+| Status | `<not-used, used, unavailable, unsafe>` |
+| Requirements Reference | `<Live Experiment Environment section or none>` |
+| Environment Type | `<local, disposable, sandbox, staging, other, none>` |
+| Allowed Actions Used | `<summary>` |
+| Cleanup Completed | `<yes, no, not-needed>` |
 
 ## GUI Harness
 
 | Field | Value |
 | --- | --- |
-| Required Harness | <playwright-test, native-desktop, api, tui, none> |
-| Headless | <true/false/not-applicable> |
-| Browser Version | <observed version> |
-| Target SHA / Receipt | <revision and owned receipt> |
-| Trace / Cleanup | <trace path and outcome> |
-| Actual Harness | <playwright-test, native-desktop, api, tui, none> |
-| Browser | <edge, chrome, other, none> |
-| Accessibility Refreshed After Each Action | <yes, no, not-applicable> |
-| Independent Oracle | <api, database, service, none> |
+| Required Harness | `<playwright-test, native-desktop, api, tui, none>` |
+| Headless | `<true/false/not-applicable>` |
+| Browser Version | `<observed version>` |
+| Target SHA / Receipt | `<revision and owned receipt>` |
+| Trace / Cleanup | `<trace path and outcome>` |
+| Actual Harness | `<playwright-test, native-desktop, api, tui, none>` |
+| Browser | `<edge, chrome, other, none>` |
+| Accessibility Refreshed After Each Action | `<yes, no, not-applicable>` |
+| Independent Oracle | `<api, database, service, none>` |
 
 ## Matrix
 
 | Requirement | Flow | Harness | Result | Evidence |
 | --- | --- | --- | --- | --- |
-| REQ-<id> | <journey> | <gui, tui, api, service> | <pass, fail> | <path> |
+| REQ-`<id>` | `<journey>` | `<gui, tui, api, service>` | `<passed, failed, not_run>` | `<path>` |
 
 ## Ordered GUI Action Ledger
 
 | Step | Action | Fresh State | Observation | Oracle | Evidence |
 | ---: | --- | --- | --- | --- | --- |
-| 1 | <action> | <yes, no> | <observation> | <correlated result> | <path> |
+| 1 | `<action>` | `<yes, no>` | `<observation>` | `<correlated result>` | `<path>` |
 
 ## Cross-Feature Findings
 
-- <finding>
+- `<finding>`
 
 ## Negative Criteria
 
-- <criterion>: <pass|fail>
+- `<criterion>`: `<passed|failed|not_run>`
 
 ## Final Result
 
-<ready-for-pr | blocked>
+UAT: `<not_requested|pending|running|passed|failed|incomplete>`
+Delivery eligibility: `<separate implementation admission reference and outcome>`
+Late-test handoff: `<candidate/scope/backend/prerequisites; new campaign after completion>`

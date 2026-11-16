@@ -222,7 +222,7 @@ Evaluate the acceptance criteria using the recorded verification method.
 
 #### User Story
 
-Make `nebius-vpngw status` the only public status interface and render one concise, authoritative VM-HA section when explicit VM HA is configured. Constraints: Remove the unpublished `vm-ha-recover` command and its private duplicate agent flag without an alias, replacement command, deprecation shim, or focused-view flag. Preserve the private canonical `--vm-ha-status` agent read, public `vm-ha`, `failover vm`, and `failback vm`, ordinary non-HA status output, VM-HA fencing and mutation boundaries, and existing fatal setup/configuration/authentication exits. Unresolved environment references used only as tunnel PSKs are not setup errors for this read-only command; all non-secret placeholders and secret requirements of mutating commands remain strict. After successful command setup, HA health and member-observation failures remain informational. Non-goals: Adding `vm-ha-status`, `vm-ha-state`, `--vm-ha-only`, a machine-readable status schema, new cloud or gateway mutations, a metrics exporter, or changing any ownership-transfer, route, forwarding, rearm, configuration, or lifecycle record.
+Make `nebius-vpngw status` the only public status interface and render one concise, authoritative VM-HA section when explicit VM HA is configured. Constraints: Remove the unpublished `vm-ha-recover` command and its private duplicate agent flag without an alias, replacement command, deprecation shim, or focused-view flag. Preserve the private canonical `--vm-ha-status` agent read, public `apply`, `failover vm`, and `failback vm`, ordinary non-HA status output, VM-HA fencing and mutation boundaries, and existing fatal setup/configuration/authentication exits. Unresolved environment references used only as tunnel PSKs are not setup errors for this read-only command; all non-secret placeholders and secret requirements of mutating commands remain strict. After successful command setup, HA health and member-observation failures remain informational. Non-goals: Adding `vm-ha-status`, `vm-ha-state`, `--vm-ha-only`, a machine-readable status schema, new cloud or gateway mutations, a metrics exporter, or changing any ownership-transfer, route, forwarding, rearm, configuration, or lifecycle record.
 
 #### Acceptance Criteria
 
@@ -234,7 +234,7 @@ Make `nebius-vpngw status` the only public status interface and render one conci
 - `Ready=yes` requires exact authority, role-specific safe readiness, and an aggregate state of `HEALTHY` or `DEGRADED`. `BLOCKED` and `TRANSITIONING` render `no`; unavailable evidence renders `unknown`. Missing member IP, trust, SSH, JSON, or valid status produces one sanitized unavailable row rather than omitting the member.
 - Every status SSH probe uses the configured management username and private key. Explicit VM HA additionally resolves one immutable exact-pin policy per member, so a missing pin affects only that member's sanitized semantic row and never falls back to trust-on-first-use or disabled host verification.
 - Cloud route authority distinguishes an inexact target set, malformed or duplicate managed records, missing or inconsistent prefix coverage, and a managed next hop that does not equal the shared allocation. Authority is scoped by the complete product-managed label set for the current cluster: a well-formed foreign-cluster record is ignored, while partial, malformed, current-cluster, target, kind, or allocation-label drift fails closed and prevents a healthy aggregate projection.
-- The HA renderer exposes the configured member names, current operational roles, closed mTLS states, and conservative readiness in the existing four-column table, followed by one concise identity-free `Redundancy`/`Identity`/`Auto-healing`/`Action` summary. `Auto-healing` reports the closed two-member standby-restoration policy as `enabled` or `disabled` and reports `transitioning`, `blocked`, or `unknown` when exact committed agreement is unavailable; it never coerces incomplete evidence to a committed value. Rearm evidence remains internal classification authority, and maintenance state is expressed through Redundancy, Auto-healing, and Action rather than a permanent `Rearm` row. When Auto-healing is disabled for committed maintenance, Action renders the exact shell-quoted `nebius-vpngw vm-ha --local-config-file <current-config> --standby-auto-healing enabled` command so the operator can re-enable restoration after maintenance. Only that disabled-maintenance Action may reproduce the local configuration path supplied to this status invocation; every other config-bearing action retains the `<file>` placeholder, and the summary never exposes configured role preference, cloud resource, allocation, node, generation, digest, revision, operation, epoch, fingerprint, raw agent/cloud payload, raw exception, or any other environment-specific command argument.
+- The HA renderer exposes the configured member names, current operational roles, closed mTLS states, and conservative readiness in the existing four-column table, followed by one concise identity-free `Redundancy`/`Identity`/`Auto-healing`/`Action` summary. `Auto-healing` reports the closed two-member standby-restoration policy as `enabled` or `disabled` and reports `transitioning`, `blocked`, or `unknown` when exact committed agreement is unavailable; it never coerces incomplete evidence to a committed value. Rearm evidence remains internal classification authority, and maintenance state is expressed through Redundancy, Auto-healing, and Action rather than a permanent `Rearm` row. When Auto-healing is disabled for committed maintenance, Action renders the exact shell-quoted `nebius-vpngw apply --local-config-file <current-config> --standby-auto-healing enabled` command so the operator can re-enable restoration after maintenance. Only that disabled-maintenance Action may reproduce the local configuration path supplied to this status invocation; every other config-bearing action retains the `<file>` placeholder, and the summary never exposes configured role preference, cloud resource, allocation, node, generation, digest, revision, operation, epoch, fingerprint, raw agent/cloud payload, raw exception, or any other environment-specific command argument.
 - `status` accepts a schema-valid local configuration whose tunnel PSKs remain exact unresolved environment references, never expands or renders those unused secret values, and still rejects unresolved project, topology, credential-path, or other operational placeholders required by its observation path. When PSKs are unresolved, each available member must report a self-consistent generation, both available members must agree exactly on generation and digests, and the locally derivable static-route and BGP-policy digests must still match; status must not synthesize an expected full configuration digest from placeholder text.
 - `vm-ha-recover` and private `--vm-ha-recover` fail at argument parsing before configuration, authentication, SSH, cloud reads, or mutation. No public replacement or focused-view option is registered.
 
@@ -297,7 +297,7 @@ Evaluate the acceptance criteria using the recorded verification method.
 
 #### User Story
 
-Make VM-HA mutual TLS completely product-managed: each member generates and retains an independent self-signed identity, exact peer leaf certificates are exchanged only through pre-established exact-pinned SSH, initial enrollment and member replacement are automatic under `apply`, and both identities rotate only through the explicit `vm-ha --rotate-mtls` operation. Constraints: VM-HA has no compatibility obligation because no user depends on its existing configuration, credential bundle, persisted mTLS, or peer-wire formats. Replace those HA-only contracts without aliases, legacy readers, dual modes, or migration shims; a stale configuration receives only actionable conversion guidance. Preserve explicit default-disabled VM HA, all non-HA behavior, exact SSH host verification, former-owner fencing, cloud ownership, routes, forwarding, rearm authority, and secret-redaction boundaries. Do not use an external CA, CA private key, Vault, KMS, trust-on-first-use, certificate discovery from an untrusted channel, automatic renewal, or scheduled rotation. Non-goals: Repairing or enrolling SSH host trust during mTLS rotation; learning SSH identity from a gateway or unauthenticated scan; starting a stopped member; changing Compute, allocation, VPC route, firewall, or forwarding state during mTLS rotation; exporting VM private keys; supporting more than two members; preserving mixed mTLS protocol versions; or claiming a physically simultaneous two-machine key switch. REQ-013 assigns bounded operator-side SSH trust creation and repair only to `apply`.
+Make VM-HA mutual TLS completely product-managed: each member generates and retains an independent self-signed identity, exact peer leaf certificates are exchanged only through pre-established exact-pinned SSH, initial enrollment and member replacement are automatic under `apply`, and both identities rotate only through the explicit `apply --rotate-mtls` operation. Constraints: VM-HA has no compatibility obligation because no user depends on its existing configuration, credential bundle, persisted mTLS, or peer-wire formats. Replace those HA-only contracts without aliases, legacy readers, dual modes, or migration shims; a stale configuration receives only actionable conversion guidance. Preserve explicit default-disabled VM HA, all non-HA behavior, exact SSH host verification, former-owner fencing, cloud ownership, routes, forwarding, rearm authority, and secret-redaction boundaries. Do not use an external CA, CA private key, Vault, KMS, trust-on-first-use, certificate discovery from an untrusted channel, automatic renewal, or scheduled rotation. Non-goals: Repairing or enrolling SSH host trust during mTLS rotation; learning SSH identity from a gateway or unauthenticated scan; starting a stopped member; changing Compute, allocation, VPC route, firewall, or forwarding state during mTLS rotation; exporting VM private keys; supporting more than two members; preserving mixed mTLS protocol versions; or claiming a physically simultaneous two-machine key switch. REQ-013 assigns bounded operator-side SSH trust creation and repair only to `apply`.
 
 #### Acceptance Criteria
 
@@ -306,11 +306,11 @@ Make VM-HA mutual TLS completely product-managed: each member generates and reta
 - Root-owned node-local state uses immutable identity and peer-certificate objects plus atomic active and transaction records. Private keys are mode-restricted, no-follow, single-link files and never cross SSH, enter YAML/manifests/status/logs, or return from an agent command. Only validated public certificates, fingerprints, transaction receipts, and secret-free status may leave a VM.
 - TLS retains `CERT_REQUIRED`, peer hostname/URI identity validation, and exact DER leaf-fingerprint validation. Every new transport connection selects one immutable managed snapshot, carries a protocol-v2 mTLS epoch bound to the actually presented certificate, and disables reusable old sessions so trust pruning cannot preserve an obsolete authenticated channel.
 - Initial HA apply generates both identities, cross-installs direct peer pins, proves fresh bidirectional TLS, and only then activates HA. An unchanged healthy apply performs no mTLS mutation. Exact member replacement generates only the replacement identity after the former Compute is authoritatively stopped or absent and network-fenced, preserves the survivor identity, uses temporary old/new overlap trust, proves fresh replacement traffic, and prunes the former leaf.
-- `nebius-vpngw vm-ha --rotate-mtls --local-config-file FILE [--dry-run] [--approve PLAN_DIGEST]` rotates both members and has no target flag. The option is an exclusive action mode: candidate `--output`, `--force`, `--standby-auto-healing`, explicit `--region`, and JSON output are rejected before conversion, authentication, SSH, cloud reads, or mutation. Dry-run performs no key, journal, lock, or inhibition write. Interactive execution confirms a secret-free plan; noninteractive execution requires a digest bound to current config, cluster, members, Compute identities, owner/allocation observation, fingerprints, epochs, and exact phases, and any drift invalidates it. Default output is concise human-readable text: state the expected passive-first availability behavior at startup, show a bounded plan summary and exact digest without raw preview/result JSON, animate active work on an interactive terminal, and leave one terminal success or failure row.
+- `nebius-vpngw apply --rotate-mtls --local-config-file FILE [--dry-run] [--approve PLAN_DIGEST]` rotates both members and has no target flag. The option is an exclusive action mode: candidate `--output`, `--force`, `--standby-auto-healing`, explicit `--region`, and JSON output are rejected before conversion, authentication, SSH, cloud reads, or mutation. Dry-run performs no key, journal, lock, or inhibition write. Interactive execution confirms a secret-free plan; noninteractive execution requires a digest bound to current config, cluster, members, Compute identities, owner/allocation observation, fingerprints, epochs, and exact phases, and any drift invalidates it. Default output is concise human-readable text: state the expected passive-first availability behavior at startup, show a bounded plan summary and exact digest without raw preview/result JSON, animate active work on an interactive terminal, and leave one terminal success or failure row.
 - Rotation requires ACTIVE lifecycle, exact cloud/member ownership, both members Running and reachable through exact-pinned SSH, one owner and one alias-free non-owner, and no competing writer. Before rendering an executable plan or requesting approval, it requires both installed agents to advertise the exact split rotation-inhibition/controller-quiescence capability through the fixed read-only capability document and requires the same capability in status persisted by each running controller process; missing, malformed, unavailable, or restart-skewed evidence fails before inhibition with actionable same-version `apply` guidance and no mixed-version fallback. Under the shared writer lock it durably inhibits the passive first, waits for the exact controller-processed operation with no pending controller or cloud/rearm effect and the former owner still Running, then applies and proves the same barrier on the owner before preparing either identity. Controller transfer effects, rearm, apply locking, and inhibition installation share the node-local writer lock and re-read apply/mTLS inhibition inside that critical section, so a controller decision made before inhibition cannot execute afterward. Apply and rotation inhibition are mutually exclusive. Rotation then prepares pending identities, expands trust to old/new, switches passive then owner, and commits only after independently reread active slots plus three consecutive fresh epoch-and-fingerprint-bound authenticated observations in both directions. Rotation inhibition is distinct from an apply lock: it blocks competing transfer and rearm effects but does not fence the healthy current owner, change forwarding or routes, withdraw BGP exports, or suspend tunnels. Independent cloud-ownership and safety failures retain authority to fence. Barrier drift before any identity prepare releases the exact inhibition and exits retriably; once prepare may have begun, failure retains inhibition for journal-based resume. After verification, rotation drains old connections, prunes obsolete public and private material, and releases inhibition.
 - Rollback eligibility comes from independently reread served fingerprints and active slots, never the CLI's last acknowledgement. Before either new leaf is observed serving, rollback is permitted; afterward every retry rolls forward under overlap trust. The same operation and monotonic epoch resume idempotently after CLI, SSH, service, or host restart, including an inhibition-only interruption before prepare; status and the plan renderer classify that exact state as resumable rotation rather than an apply lock or transaction conflict.
 - Broken current mTLS may be rebuilt through exact-pinned SSH when both exact members are Running and ownership is unambiguous. Missing SSH trust, a stopped member, a foreign or unfenced former member, corrupt cross-node identity, ambiguous ownership, or a competing apply/rearm/transfer blocks before mutation with a closed reason and safe action.
-- Ordinary `status` remains read-only and reports each member's closed mTLS health state in the concise VM-HA table without epochs, fingerprints, transaction details, keys, internal paths, or cloud identities. Public `vm-ha` delegates standby restoration to the internal sole Compute-start workflow and gains mTLS authority only when the operator explicitly selects `--rotate-mtls`; a bare invocation never rotates identities.
+- Ordinary `status` remains read-only and reports each member's closed mTLS health state in the concise VM-HA table without epochs, fingerprints, transaction details, keys, internal paths, or cloud identities. Public `apply` delegates standby restoration to the internal sole Compute-start workflow and gains mTLS authority only when the operator explicitly selects `--rotate-mtls`; a bare invocation never rotates identities.
 
 #### Negative Criteria
 
@@ -339,9 +339,9 @@ Make VM-HA mutual TLS completely product-managed: each member generates and reta
   operation was performed.
 - Offline command-consolidation evidence on 2026-08-29: the public tree and
   built-release integration path expose rotation only as
-  `vm-ha --rotate-mtls`; the old standalone command fails during parsing, and
+  `apply --rotate-mtls`; the old standalone command fails during parsing, and
   exclusive-mode regressions prove rejected facade options cannot reach the
-  rotation handler while bare `vm-ha` cannot dispatch it. Ruff, mypy, all
+  rotation handler while bare `apply` cannot dispatch it. Ruff, mypy, all
   1,925 unit tests and 84 isolated integration tests passed. Focused approval,
   progress, controller, rearm, status-guidance, help, documentation, security,
   and diff-integrity checks found no introduced blocker. No live cloud, SSH,
@@ -370,9 +370,9 @@ Make VM-HA mutual TLS completely product-managed: each member generates and reta
   operation was performed.
 - Offline command-consolidation evidence on 2026-08-29: the public tree and
   built-release integration path expose rotation only as
-  `vm-ha --rotate-mtls`; the old standalone command fails during parsing, and
+  `apply --rotate-mtls`; the old standalone command fails during parsing, and
   exclusive-mode regressions prove rejected facade options cannot reach the
-  rotation handler while bare `vm-ha` cannot dispatch it. Ruff, mypy, all
+  rotation handler while bare `apply` cannot dispatch it. Ruff, mypy, all
   1,925 unit tests and 84 isolated integration tests passed. Focused approval,
   progress, controller, rearm, status-guidance, help, documentation, security,
   and diff-integrity checks found no introduced blocker. No live cloud, SSH,
@@ -580,7 +580,7 @@ Give every public `nebius-vpngw` command, subcommand, and flag one explicit, tes
 
 #### Acceptance Criteria
 
-- One centralized applicability policy covers every executable leaf and the action-specific `vm-ha --rotate-mtls` constraints before authentication, prompts, SSH, cloud mutation, or agent requests. VM-only operations reject ordinary configurations; `destroy` is topology-aware and accepts ordinary or explicit VM-HA configurations through one canonical workflow. Tunnel restart rejects every explicit VM-HA configuration with one topology-first message that identifies the gateway as VM-HA-enabled, states that tunnel recovery is controller-owned, directs health inspection to `status`, and limits `apply` guidance to configuration convergence. Tunnel failover/failback support Static and BGP on both topologies through the shared selector and exact authority adapter. Ordinary tunnel restart remains supported for Static and BGP. Tunnel selection never changes VM ownership.
+- One centralized applicability policy covers every executable leaf and the action-specific `apply --rotate-mtls` constraints before authentication, prompts, SSH, cloud mutation, or agent requests. VM-only operations reject ordinary configurations; `destroy` is topology-aware and accepts ordinary or explicit VM-HA configurations through one canonical workflow. Tunnel restart rejects every explicit VM-HA configuration with one topology-first message that identifies the gateway as VM-HA-enabled, states that tunnel recovery is controller-owned, directs health inspection to `status`, and limits `apply` guidance to configuration convergence. Tunnel failover/failback support Static and BGP on both topologies through the shared selector and exact authority adapter. Ordinary tunnel restart remains supported for Static and BGP. Tunnel selection never changes VM ownership.
 - `add-routes-local` uses the ordinary route owner for Static and BGP. When a Single-VM runtime binding exists, apply and manual route commands use its durable guest reservation and handoff; workstation locking alone is insufficient. For explicit VM HA, it never derives next hops from member primary allocations or mutates controller-owned VPC routes. Static-only mode may wait for the autonomous controller to reconcile only the already-installed exact generation, while BGP-only mode may repair only exact proven advertisement drift under the existing VM-HA authority contract; mixed VM-HA routing remains unsupported by this command.
 - `--summarize`, `--swap-route-table`, and `--yes` are rejected for VM-HA route repair; `--yes` is also rejected when no route-table swap was requested. Rejection is parse- or plan-time and precedes every external effect.
 - Any workflow that depends on a private installed-agent behavior or can invoke a private installed-agent action first performs a bounded read-only capability handshake on every affected gateway. Missing, malformed, or incomplete capability evidence reports installed/source skew, directs the operator to the supported apply workflow, and prevents all route or agent mutation.
@@ -694,10 +694,10 @@ When `VPNGW_SSH_KNOWN_HOSTS_FILE` is unset, resolve exact ordinary and VM-HA SSH
 - The named legacy ordinary enrollment is eligible only when exact read-only discovery finds one retained ordinary member, no explicit, managed, default-known-hosts, local private-key, or product-provisioning authority succeeds, no recreation is requested or required, and the same project/gateway writer lock covers the invocation. It observes Ed25519 H1, re-reads the complete Compute signature, observes identical H2, connects with H1 pinned and only the configured client identity, correlates guest IMDS identity or the bounded cloud-init instance ID to that Compute, and re-reads Compute again. Any member, key, Compute, address, guest, client-key, or configuration-change drift fails without publication or cloud/host mutation. A successful strict-policy rebuild publishes one `legacy-ordinary-network-enrollment-v1` authority and never relearns it automatically.
 - Every SSH operation whose configuration includes `ssh_public_key` resolves exactly that public identity from the explicit owner-only `ssh_private_key_path`, one matching `ssh-agent` key, or one matching owner-only supported default private key. Paramiko and OpenSSH disable unrelated-key discovery, password, keyboard-interactive, and prompt fallback. Zero, multiple, encrypted, insecure, or mismatched candidates fail without logging key material, fingerprints, or local key paths.
 - Every retained ordinary member's exact Compute ID, name, project, revision, management address, and cloud-init digest are bound during read-only discovery and rechecked for explicit, managed-receipt, managed-projection, default-file migration, and cloud-recovery trust before publication, cloud mutation, or later policy use. Apply's connectivity, cloud-init, ESP4, and package health probes use the configured management SSH username rather than a hard-coded image default.
-- Before ordinary-source conversion may prompt, publish a candidate, or reserve a passive allocation, `vm-ha` requires the ordinary managed receipt and directs the operator to actual ordinary `apply` when it is absent. During approved migration, apply imports the retained active's exact ordinary pin into the HA v2 receipt with `ordinary-migration-v1`, the ordinary predecessor receipt digest, and a freshly proved Compute-binding digest. That authority-bearing desired receipt digest is part of the public approval plan. After product-owned alias attachment and passive creation, apply must rediscover both exact members and rebuild the immutable SSH policy against their fresh Compute revisions while retaining the same managed pins before any staging SSH. An explicit candidate with no recoverable source path gives generic `<ordinary-source>` apply guidance and performs no migration effect.
+- Before ordinary-source conversion may prompt, publish a candidate, or reserve a passive allocation, `apply` requires the ordinary managed receipt and directs the operator to actual ordinary `apply` when it is absent. During approved migration, apply imports the retained active's exact ordinary pin into the HA v2 receipt with `ordinary-migration-v1`, the ordinary predecessor receipt digest, and a freshly proved Compute-binding digest. That authority-bearing desired receipt digest is part of the public approval plan. After product-owned alias attachment and passive creation, apply must rediscover both exact members and rebuild the immutable SSH policy against their fresh Compute revisions while retaining the same managed pins before any staging SSH. An explicit candidate with no recoverable source path gives generic `<ordinary-source>` apply guidance and performs no migration effect.
 - `apply --dry-run` validates and reports a secret-free trust action without creating directories, private keys, receipts, or persistent pins; it may use an ephemeral preview identity for a genuinely fresh member or an eligible absent-non-owner rotation. When the named legacy ordinary enrollment is required, dry-run reports that exact action and exits nonzero without observing a network key. Actual apply defers fresh-member default-key persistence to explicit trust publication after approval, verifies every retained present member, then publishes an owner-only authoritative receipt and derived projection with locked compare-and-swap and atomic per-file replacement before the first cloud mutation. For approved absent-non-owner rotation, the lifecycle journal first records the secret-free authorization, then stages one operation-derived retry-stable private key, binds its new fingerprint and successor receipt/projection digests, publishes the canonical key and managed trust, and marks publication complete before any replacement disk or Compute effect. The receipt is committed first, so an interruption can leave only a stale or missing reproducible projection, never partial authoritative receipt content; retries reuse the bound key and exact successor digests. Concurrent, symlink, hard-link, ownership, mode, predecessor-drift, or invalid existing-key failures block key preparation or publication without overwriting an existing foreign object.
 - `status` and every non-apply ordinary or VM-HA command may consume an existing managed receipt through the same immutable snapshot policy but never create, import, repair, or persist trust. Missing trust remains isolated to the affected status member; mutating commands fail before authentication and direct the operator to `apply`.
-- An existing deployment may migrate without changing YAML or setting an environment variable when its exact current member pin already exists in the safe default user known-hosts file and the deployment binding remains authoritative. Otherwise it may migrate through an explicit trust file, retained original private host key, authenticated product cloud-init, or the named bounded ordinary enrollment. Ordinary `apply` is the sole writer for all four paths and must complete before `vm-ha` conversion. Older releases can consume the generated OpenSSH projection by explicitly pointing `VPNGW_SSH_KNOWN_HOSTS_FILE` to it; compatibility is verified against exact current address lookup rather than inferred from hostname-only content.
+- An existing deployment may migrate without changing YAML or setting an environment variable when its exact current member pin already exists in the safe default user known-hosts file and the deployment binding remains authoritative. Otherwise it may migrate through an explicit trust file, retained original private host key, authenticated product cloud-init, or the named bounded ordinary enrollment. Ordinary `apply` is the sole writer for all four paths and must complete before `apply` conversion. Older releases can consume the generated OpenSSH projection by explicitly pointing `VPNGW_SSH_KNOWN_HOSTS_FILE` to it; compatibility is verified against exact current address lookup rather than inferred from hostname-only content.
 
 #### Negative Criteria
 
@@ -798,22 +798,24 @@ Evaluate the acceptance criteria using the recorded verification method.
 <!-- /REQUIREMENT: REQ-014 -->
 
 <!-- REQUIREMENT: REQ-015 status=active priority=P1 type=feature -->
-### REQ-015: Use one VM-HA command and canonical Nebius region terminology
+### REQ-015: Reconcile VM-HA through apply with canonical region terminology
 
 #### User Story
 
-Expose `nebius-vpngw vm-ha` as the only public VM-HA setup, convergence, verification, standby-restoration, and explicit managed-mTLS rotation command. Each invocation must idempotently repair every currently recoverable HA issue through the canonical effect owners until the deployment is healthy, or stop at an exact approval, authority, safety, or external-prerequisite boundary with a typed reason and actionable next step. Use `--region` as the only public location override across `vm-ha`, `apply`, `prep-network`, `status`, and `destroy`. Constraints: Remove the unpublished pre-adoption setup, rearm, and standalone mTLS-rotation command names and every public `--zone` option without aliases, deprecation wrappers, migration shims, or public migration guidance. Preserve the ordinary source, conversion file-safety and redaction rules, separate default-No passive-IP reservation, apply approvals, exact rearm authority, controller budgets, internal rearm module/service/schema names, and all non-HA behavior except the explicitly approved option spelling. Retain the persisted `region_id` and optional `gateway_group.region` keys as region values. Non-goals: Removing or duplicating the internal sole Compute-start writer, changing failover or failback, adding availability-zone selection, renaming persisted configuration keys, running a failover drill, or documenting a migration for VM-HA surfaces that have not shipped.
+Expose `nebius-vpngw apply` as the only public VM-HA setup, convergence, verification, standby-restoration, and explicit managed-mTLS rotation command. Each invocation must idempotently repair every currently recoverable HA issue through the canonical effect owners until the deployment is healthy, or stop at an exact approval, authority, safety, or external-prerequisite boundary with a typed reason and actionable next step. Use `--region` as the only public location override across `apply`, `apply`, `prep-network`, `status`, and `destroy`. Constraints: Remove the unpublished pre-adoption setup, rearm, and standalone mTLS-rotation command names and every public `--zone` option without aliases, deprecation wrappers, migration shims, or public migration guidance. Preserve the ordinary source, conversion file-safety and redaction rules, separate default-No passive-IP reservation, apply approvals, exact rearm authority, controller budgets, internal rearm module/service/schema names, and all non-HA behavior except the explicitly approved option spelling. Retain the persisted `region_id` and optional `gateway_group.region` keys as region values. Non-goals: Removing or duplicating the internal sole Compute-start writer, changing failover or failback, adding availability-zone selection, renaming persisted configuration keys, running a failover drill, or documenting a migration for VM-HA surfaces that have not shipped.
 
 #### Acceptance Criteria
 
-- Root and leaf help expose exactly 16 executable operations; the three removed
+- The long-running standby rearm service must publish a closed blocked observation result when a Compute or allocation read fails, including a missing non-owner. It must remain available to reobserve on the next service cycle without failure handling submitting a Start, changing remaining recovery authority, or treating unavailable evidence as ownership drift. Completed operation settlement remains completed. Provider failures must not leak raw messages or crash the service; malformed parsed observations still fail closed.
+
+- Root and leaf help expose exactly 15 executable operations; the three removed
   command names and `--zone` fail during parsing before configuration,
   authentication, SSH, cloud reads, or mutation.
-- `vm-ha` accepts ordinary or explicit VM-HA input and owns the existing
+- `apply` accepts explicit VM-HA input, or ordinary input with `--convert-to-ha`, and owns the existing
   conversion, exact-candidate reuse, passive-only allocation reservation,
   apply convergence, health proof, exact non-owner rearm delegation, and the
   exclusive explicit `--rotate-mtls` transaction. Rotation dispatches before
-  ordinary conversion or convergence and retains its existing text-only,
+  ordinary conversion or convergence and uses the shared text/JSON result boundary and retains its
   passive-first, exact-digest approval contract. For
   every state it classifies as recoverable, the selected canonical owner drives
   that repair to its verified checkpoint and the façade re-observes authority
@@ -826,7 +828,7 @@ Expose `nebius-vpngw vm-ha` as the only public VM-HA setup, convergence, verific
 - A VM-HA-owned convergence plan is classified `vm-ha-required`; the existing
   `apply-required` classification remains reserved for a genuinely separate
   apply workflow. When an interactive text invocation proves that the current
-  non-owner Compute is absent, `vm-ha` asks one default-No confirmation and,
+  non-owner Compute is absent, `apply` asks one default-No confirmation and,
   on `y`, creates and converges that member in the same invocation. That prompt
   does not expose the automation digest. JSON, non-TTY, and dry-run output stay
   noninteractive and retain the exact digest-bound `--approve` contract.
@@ -860,7 +862,7 @@ Expose `nebius-vpngw vm-ha` as the only public VM-HA setup, convergence, verific
   committed-enabled record without a peer acknowledgement. Persist the full
   original decision before adoption, including its predecessor; a rebound
   decision must retain its history. The fresh zero-predecessor default member
-  acknowledges only that decision, then `vm-ha` runs the canonical two-member
+  acknowledges only that decision, then `apply` runs the canonical two-member
   enabled-policy transaction using its digest as predecessor before releasing
   replacement inhibition. Interrupted prepare or commit resumes only the
   deterministic successor proved by the persisted original record. Arbitrary
@@ -899,7 +901,7 @@ Expose `nebius-vpngw vm-ha` as the only public VM-HA setup, convergence, verific
   remains a separate authorization boundary.
 - Offline implementation evidence on 2026-08-26: the public tree contains 16
   executable leaves, both removed command names and every public `--zone`
-  path fail during parsing, and `vm-ha` owns the separately confirmed passive
+  path fail during parsing, and `apply` owns the separately confirmed passive
   allocation callback plus sanitized reserved-or-may-exist continuation. The
   focused CLI/conversion/region/VM-manager suites, all 1,638 unit tests,
   all 80 isolated integration tests, Ruff, mypy across 49 source files, and
@@ -918,7 +920,7 @@ Expose `nebius-vpngw vm-ha` as the only public VM-HA setup, convergence, verific
   remains a separate authorization boundary.
 - Offline implementation evidence on 2026-08-26: the public tree contains 16
   executable leaves, both removed command names and every public `--zone`
-  path fail during parsing, and `vm-ha` owns the separately confirmed passive
+  path fail during parsing, and `apply` owns the separately confirmed passive
   allocation callback plus sanitized reserved-or-may-exist continuation. The
   focused CLI/conversion/region/VM-manager suites, all 1,638 unit tests,
   all 80 isolated integration tests, Ruff, mypy across 49 source files, and
@@ -941,6 +943,16 @@ Make `nebius-vpngw destroy` the single idempotent teardown workflow for ordinary
 
 #### Acceptance Criteria
 
+- Successful destroy retires repair and deployment authority for the deleted
+  incarnation automatically, retaining evidence as history. Ordinary apply with
+  the unchanged YAML creates fresh VMs without repair flags, stale-checkpoint
+  errors or manual deletion of sidecars. Preserve reusable public addresses,
+  networks and peer inputs while verifying all new identities.
+- Destruction following interrupted repair settles the exact repair-owned cloud
+  requests before final fencing. Stopped or absent Compute excludes guest
+  workers without requiring SSH or repaired packages. Clean only receipt-bound
+  repair quarantine resources; preserve terminal failures as evidence. Partial
+  deletion and cleanup resume through their existing durable owners.
 - Ordinary selection uses only configured member, disk, and allocation names;
   a gateway-name prefix never authorizes an extra resource. Existing ordinary
   routes are adopted only when their supported `vpngw-` management name and
@@ -1252,7 +1264,7 @@ Expose generation parity, observed owner, promotion readiness, fencing progress,
 - Direct explicit VM-HA `apply` suppresses only Nebius SDK diagnostics that
   announce an internal retry. If a bounded cloud request ultimately fails with
   typed `DEADLINE_EXCEEDED`, the command exits nonzero with one sanitized
-  timeout and `vm-ha` recovery guidance instead of a traceback. It does not
+  timeout and `apply` recovery guidance instead of a traceback. It does not
   reset the request deadline, add another retry loop, change cloud authority,
   or alter ordinary non-HA errors and output.
 - Apply passes an explicitly supplied `NEBIUS_IAM_TOKEN` directly to every
@@ -1461,7 +1473,7 @@ Evaluate the acceptance criteria using the recorded verification method.
 
 #### User Story
 
-Unify planned and automatic VM ownership transfer around typed, durable intent, then automatically restore the exact non-owner Compute as a guarded warm standby after a terminally committed promotion. Constraints: Preserve the public `failover vm`, `failback vm`, and `vm-ha` commands, both role-bound transfer-request schemas, deployment lifecycle v4, controller checkpoint v5 under REQ-033, strict former-owner `Stopped` fencing, and the single canonical allocation/route/forwarding cutover engine. Replace heartbeat v1 with the clean-slate epoch-bound protocol v2 required by REQ-008 and reject mixed versions. Automatic owner-loss takeover is role-neutral, but never moves a healthy owner merely to restore configured-role preference. Rearm is enabled whenever explicit VM HA is enabled, has no YAML setting, is independently inhibitable, and is the only Compute-start writer. Private transfer lineage, promotion, rearm, standby, and mTLS records are strict and separately versioned. Non-goals: Keeping the former owner running during allocation transfer, proactive or preference-driven automatic return to the configured active, changing detection or repair windows, adding active-active behavior, granting the rearm service stop/allocation/route/firewall/forwarding authority, inferring promotion from cloud topology, exposing resource identities, or adding a metrics exporter.
+Unify planned and automatic VM ownership transfer around typed, durable intent, then automatically restore the exact non-owner Compute as a guarded warm standby after a terminally committed promotion. Constraints: Preserve the public `failover vm`, `failback vm`, and `apply` commands, both role-bound transfer-request schemas, deployment lifecycle v4, controller checkpoint v5 under REQ-033, strict former-owner `Stopped` fencing, and the single canonical allocation/route/forwarding cutover engine. Replace heartbeat v1 with the clean-slate epoch-bound protocol v2 required by REQ-008 and reject mixed versions. Automatic owner-loss takeover is role-neutral, but never moves a healthy owner merely to restore configured-role preference. Rearm is enabled whenever explicit VM HA is enabled, has no YAML setting, is independently inhibitable, and is the only Compute-start writer. Private transfer lineage, promotion, rearm, standby, and mTLS records are strict and separately versioned. Non-goals: Keeping the former owner running during allocation transfer, proactive or preference-driven automatic return to the configured active, changing detection or repair windows, adding active-active behavior, granting the rearm service stop/allocation/route/firewall/forwarding authority, inferring promotion from cloud topology, exposing resource identities, or adding a metrics exporter.
 
 #### Acceptance Criteria
 
@@ -1472,7 +1484,8 @@ Unify planned and automatic VM ownership transfer around typed, durable intent, 
 - An independent systemd rearm service runs on both members without becoming a `Requires=` dependency of the safety controller. It acts only on the exact stable owner with a matching promotion receipt and has read/start capability only. Before its synchronous idempotent Compute-start call, it durably publishes the receipt-bound `starting` checkpoint and status so observers remain truthful while the provider operation is in flight; crash replay retains the same logical operation identity.
 - The rearm service submits at most one idempotent logical start for each promotion receipt and stopped-resource revision, resumes an accepted cloud operation after crash, prevents retry storms, and adopts an already-running alias-free target without mutation. Unknown, stopping, error, ownership drift, apply/removal activity, ambiguous operations, corrupt evidence, or service inhibition block safely.
 - Repeating planned failover or failback when the requested role is already the exact healthy owner succeeds as an explicit identity-free no-op, writes no transfer request, and leaves forwarding unchanged. An unhealthy or ambiguous same-owner observation fails without mutation.
-- Planned failover and failback are two-milestone synchronous operator workflows: safely committed service cutover, then restored VM redundancy. Preparation, request-to-cutover observation, and post-cutover redundancy restoration receive independent fixed internal budgets of 300, 600, and 300 seconds respectively; time consumed by an earlier phase never reduces a later phase's budget, no observation or progress transition resets or extends a deadline, and every human progress and success line retains one monotonic total elapsed time from command start. Both commands expose one optional `--output-format text|json` selector whose default is `text`; invalid values fail during CLI parsing before authentication or any product effect. For a real transfer, default text mode suppresses the request record, emits the exact role-specific start message plus phase-labelled bounded elapsed-time progress to stderr, and does not print its terminal success message until both milestones are independently proven. TI-REQ-013 refines progress to exact lineage-bound phases when current evidence is available; otherwise it preserves `<Operation> in progress: <elapsed>s elapsed, cutting over...` before cutover and uses independently observed rearm and Compute state to report `starting former owner as standby...` or `waiting for standby readiness...` after cutover, with `restoring standby...` only when no more specific current restoration evidence is available. When the current exact transfer record reports `effect-failed` for the same operation that the controller checkpoint still owns as pending, the CLI reports that forwarding remains fenced and continues its existing bounded wait while the controller retries that durable operation; the CLI never submits the retry, restarts a service, invokes rearm, or treats progress as transfer authority. Missing, malformed, foreign-lineage, stale-boot, or pending-operation-mismatched retry evidence fails immediately with identity-free status and controller-journal guidance. If the exact controller retry remains pending through the cutover deadline, the command exits nonzero with its safe phase and the same guidance. An already-owner no-op in default text mode emits exactly `Failover not needed: the passive VM already owns the gateway.` or `Failback not needed: the active VM already owns the gateway.` to stderr and submits no request. Explicit `--output-format json` is the automation migration path and preserves the former sorted request or already-owner record bytes on stdout, including the request record when later observation fails; human start, progress, success, and failure output remains on stderr. Cutover requires a newly committed exact promotion receipt that proves the former Compute owner was `Stopped` and alias-free before transfer, plus fresh active status and cloud evidence that admit the former member already being automatically rearmed; the candidate exclusively owns the shared allocation, route reconciliation matches the current generation and ownership epoch, forwarding is active only on that owner, and no apply lock or controller effect is pending. Redundancy restoration then requires the former owner to be `Running` and alias-free, the current owner to report terminal `running` rearm with `redundancy_ready`, the returned member to report fresh guarded standby readiness, and a final stable agent/cloud reread. `failover vm` names the configured passive target and ends with `Failover to the passive VM is done successfully in <elapsed>s.`; `failback vm` names the configured active target and uses the corresponding active-VM text. A cutover timeout exits nonzero without a success message. A post-cutover restoration timeout or blocked rearm also exits nonzero, but explicitly reports cutover elapsed time, restoration elapsed time, and total elapsed time, states that standby restoration did not finish, and names `vm-ha` as the supported retry. Request schemas, controller behavior, exit status, and all fencing and terminal redundancy gates remain unchanged.
+- A recognized temporary SSH transport failure during the read-only same-owner status check is unavailable evidence, not unhealthy evidence. Retry the complete member read within the original preparation deadline, rechecking unchanged configuration/lifecycle authority and exact cloud ownership. Authentication, host-key, malformed, foreign, contradictory and unhealthy evidence remain immediate failures. Never retry a mutating agent request; deadline expiry reports an unverified no-op and status/retry guidance without publishing a transfer request.
+- Planned failover and failback are two-milestone synchronous operator workflows: safely committed service cutover, then restored VM redundancy. Preparation, request-to-cutover observation, and post-cutover redundancy restoration receive independent fixed internal budgets of 300, 600, and 300 seconds respectively; time consumed by an earlier phase never reduces a later phase's budget, no observation or progress transition resets or extends a deadline, and every human progress and success line retains one monotonic total elapsed time from command start. Both commands expose one optional `--output-format text|json` selector whose default is `text`; invalid values fail during CLI parsing before authentication or any product effect. For a real transfer, default text mode suppresses the request record, emits the exact role-specific start message plus phase-labelled bounded elapsed-time progress to stderr, and does not print its terminal success message until both milestones are independently proven. TI-REQ-013 refines progress to exact lineage-bound phases when current evidence is available; otherwise it preserves `<Operation> in progress: <elapsed>s elapsed, cutting over...` before cutover and uses independently observed rearm and Compute state to report `starting former owner as standby...` or `waiting for standby readiness...` after cutover, with `restoring standby...` only when no more specific current restoration evidence is available. When the current exact transfer record reports `effect-failed` for the same operation that the controller checkpoint still owns as pending, the CLI reports that forwarding remains fenced and continues its existing bounded wait while the controller retries that durable operation; the CLI never submits the retry, restarts a service, invokes rearm, or treats progress as transfer authority. Missing, malformed, foreign-lineage, stale-boot, or pending-operation-mismatched retry evidence fails immediately with identity-free status and controller-journal guidance. If the exact controller retry remains pending through the cutover deadline, the command exits nonzero with its safe phase and the same guidance. An already-owner no-op in default text mode emits exactly `Failover not needed: the passive VM already owns the gateway.` or `Failback not needed: the active VM already owns the gateway.` to stderr and submits no request. Explicit `--output-format json` is the automation migration path and preserves the former sorted request or already-owner record bytes on stdout, including the request record when later observation fails; human start, progress, success, and failure output remains on stderr. Cutover requires a newly committed exact promotion receipt that proves the former Compute owner was `Stopped` and alias-free before transfer, plus fresh active status and cloud evidence that admit the former member already being automatically rearmed; the candidate exclusively owns the shared allocation, route reconciliation matches the current generation and ownership epoch, forwarding is active only on that owner, and no apply lock or controller effect is pending. Redundancy restoration then requires the former owner to be `Running` and alias-free, the current owner to report terminal `running` rearm with `redundancy_ready`, the returned member to report fresh guarded standby readiness, and a final stable agent/cloud reread. `failover vm` names the configured passive target and ends with `Failover to the passive VM is done successfully in <elapsed>s.`; `failback vm` names the configured active target and uses the corresponding active-VM text. A cutover timeout exits nonzero without a success message. A post-cutover restoration timeout or blocked rearm also exits nonzero, but explicitly reports cutover elapsed time, restoration elapsed time, and total elapsed time, states that standby restoration did not finish, and names `apply` as the supported retry. Request schemas, controller behavior, exit status, and all fencing and terminal redundancy gates remain unchanged.
 - Read-only terminal agent timeouts, transient SSH/status failures, and typed
   retryable or ambiguous cloud-read failures are observation loss only: the
   CLI retries them inside the current cutover or restoration phase deadline
@@ -1505,7 +1518,7 @@ Unify planned and automatic VM ownership transfer around typed, durable intent, 
   terminal-success line.
 - An explicit rearm retry request authorizes at most one logical start attempt. Its exact request identity is durably consumed before the cloud call; service restart may resume only the same accepted operation, while a definite failure requires a new request. A retained accepted-operation journal is cleared only after exact operation-status success, including when it belongs to the matching checkpoint from an earlier promotion; foreign, unbound, failed, or unavailable operation evidence remains blocked.
 - Rearm, retry submission, apply-lock installation and removal, and VM-HA removal inhibition share one writer lock. The enabled marker and apply lock are rechecked immediately before Compute start. Removal installs and proves the same exact-operation gate on both members, stops both mutation services everywhere before any deactivation, checkpoints that barrier for crash-safe deactivation-only replay, retains the stable root-only lock inode and state directory, and clears every other rearm state entry while still holding that lock.
-- Public `vm-ha` delegates role-neutral restoration to the internal rearm engine, which submits an explicit retry request for whichever exact member is currently the non-owner and never starts Compute directly. Planned failover and failback share one preparation path that requests rearm for a stopped target, observes a starting target, waits for fresh `standby_ready` when running, then reproves ownership and readiness immediately before submitting the unchanged role-bound transfer request.
+- Public `apply` delegates role-neutral restoration to the internal rearm engine, which submits an explicit retry request for whichever exact member is currently the non-owner and never starts Compute directly. Planned failover and failback share one preparation path that requests rearm for a stopped target, observes a starting target, waits for fresh `standby_ready` when running, then reproves ownership and readiness immediately before submitting the unchanged role-bound transfer request.
 - Rearm is not a general setup reconciler. Missing SSH trust, stale or mismatched deployed generation, local route-hygiene drift on an already-running member, inexact cloud route authority, allocation drift, firewall drift, or forwarding drift fails outside its start-only authority and must be reconciled through the owning setup or apply workflow.
 - Planned preparation uses one bounded deadline across Compute startup, pinned SSH, and repeated same-target standby-status reads. Valid not-yet-ready evidence may converge; malformed, mixed-identity, generation, digest, owner, or alias evidence fails immediately. The final request follows a fresh cloud reread and target-readiness reread.
 - Preparation and remote-agent failures cross one closed public-command boundary. Text and JSON invocations emit one bounded identity-free stderr diagnostic without raw SSH, provider, remote-process, traceback, token, or local-variable content; JSON stdout remains empty before request publication and retains only the already-published stable request record after publication.
@@ -1537,7 +1550,7 @@ Unify planned and automatic VM ownership transfer around typed, durable intent, 
   start, alias-attach, and alias-detach mutation, including accepted-operation
   replay, while the original action ID remains the durable journal identity.
 - Cover exact current-lineage `effect-failed` plus same-pending-operation recovery through retry, committed cutover, and standby restoration. Counterexamples must prove that absent, malformed, foreign-request, stale, or pending-operation-mismatched progress cannot extend the wait; all paths remain deadline-bounded and identity-free.
-- Live acceptance remains a separately authorized non-production workflow with at least three clean trials each for planned failover plus rearm, warm failback plus rearm, automatic failover plus rearm, repair success without transfer, and repair exhaustion followed by transfer. Probe bidirectionally at 5 Hz; recovery is five consecutive successes in the slower direction and loss is the exact missing sequence count. Report preparation, detection/repair, common cutover, total recovery, and redundancy-restoration separately. Under the same fixture, planned failover and warm failback median common-cutover time and directional loss, and automatic post-admission cutover, must remain within 20 percent; rearm must cause zero packet loss and no forwarding, route, or allocation mutation.
+- Live acceptance remains a separately authorized non-production workflow with at least three clean trials each for planned failover plus rearm, warm failback plus rearm, automatic failover plus rearm, repair success without transfer, and repair exhaustion followed by transfer. Probe bidirectionally at 5 Hz; recovery is five consecutive successes in the slower direction and loss is the exact missing sequence count. Report preparation, detection/repair, common cutover, total recovery, and redundancy-restoration separately. Under the same fixture, planned failover and warm failback median common-cutover time and directional loss, and automatic post-admission cutover, must remain within 20 percent; rearm traffic uses REQ-023's strictly-below-1% measured loss per direction, with no change to the serving owner, forwarding state, managed routes, or allocation ownership. Preserve complete phase observations and original failed verdicts; a measured loss pass does not establish its cause.
 - Implementation evidence on 2026-08-27: exact same-request reattachment reuses the unchanged original fingerprint, while request publication and effect dispatch serialize through the existing writer lock. Focused negative control reproduced stale post-decision dispatch for planned failback and failover before the intent recheck was added, then passed for both directions. The complete 1,715-test unit suite, 83-test integration suite, Ruff, mypy, CLI help, and scoped diff-integrity checks passed. Whole-file formatter and Markdown checks retain unrelated pre-existing drift outside the added lines. Installed-package parity, deployment, and a clean live failback replay remain separately authorized and unverified.
 - Implementation evidence on 2026-08-27: sanitized live status and a bounded
   controller-journal sample proved an automatic failover retained its pending
@@ -1616,7 +1629,7 @@ Unify planned and automatic VM ownership transfer around typed, durable intent, 
   start, alias-attach, and alias-detach mutation, including accepted-operation
   replay, while the original action ID remains the durable journal identity.
 - Cover exact current-lineage `effect-failed` plus same-pending-operation recovery through retry, committed cutover, and standby restoration. Counterexamples must prove that absent, malformed, foreign-request, stale, or pending-operation-mismatched progress cannot extend the wait; all paths remain deadline-bounded and identity-free.
-- Live acceptance remains a separately authorized non-production workflow with at least three clean trials each for planned failover plus rearm, warm failback plus rearm, automatic failover plus rearm, repair success without transfer, and repair exhaustion followed by transfer. Probe bidirectionally at 5 Hz; recovery is five consecutive successes in the slower direction and loss is the exact missing sequence count. Report preparation, detection/repair, common cutover, total recovery, and redundancy-restoration separately. Under the same fixture, planned failover and warm failback median common-cutover time and directional loss, and automatic post-admission cutover, must remain within 20 percent; rearm must cause zero packet loss and no forwarding, route, or allocation mutation.
+- Live acceptance remains a separately authorized non-production workflow with at least three clean trials each for planned failover plus rearm, warm failback plus rearm, automatic failover plus rearm, repair success without transfer, and repair exhaustion followed by transfer. Probe bidirectionally at 5 Hz; recovery is five consecutive successes in the slower direction and loss is the exact missing sequence count. Report preparation, detection/repair, common cutover, total recovery, and redundancy-restoration separately. Under the same fixture, planned failover and warm failback median common-cutover time and directional loss, and automatic post-admission cutover, must remain within 20 percent; rearm traffic uses REQ-023's strictly-below-1% measured loss per direction, with no change to the serving owner, forwarding state, managed routes, or allocation ownership. Preserve complete phase observations and original failed verdicts; a measured loss pass does not establish its cause.
 - Implementation evidence on 2026-08-27: exact same-request reattachment reuses the unchanged original fingerprint, while request publication and effect dispatch serialize through the existing writer lock. Focused negative control reproduced stale post-decision dispatch for planned failback and failover before the intent recheck was added, then passed for both directions. The complete 1,715-test unit suite, 83-test integration suite, Ruff, mypy, CLI help, and scoped diff-integrity checks passed. Whole-file formatter and Markdown checks retain unrelated pre-existing drift outside the added lines. Installed-package parity, deployment, and a clean live failback replay remain separately authorized and unverified.
 - Implementation evidence on 2026-08-27: sanitized live status and a bounded
   controller-journal sample proved an automatic failover retained its pending
@@ -1855,11 +1868,11 @@ Evaluate the acceptance criteria using the recorded verification method.
 
 #### User Story
 
-Add a top-level `vm-ha` command that safely converges an ordinary single-VM gateway into managed warm-standby VM HA and repeatedly verifies or heals an existing VM-HA deployment through the product's authoritative conversion, apply, status, controller, and rearm boundaries. Constraints: Require an explicit local configuration file; preserve an ordinary source file and publish a deterministic separate VM-HA candidate; expose no separate setup or rearm command; keep failover and failback as separate explicit operations; never reset or duplicate the controller's one-attempt repair budget; never mutate IAM, SSH trust, peer-provider infrastructure, shared-allocation ownership, routes, or forwarding outside their existing owners; and require an exact digest-bound approval when the exact plan is destructive, may interrupt VPN traffic, or creates cloud resources. A plan may run without a second confirmation only when its typed impact explicitly proves no destructive change, no expected VPN traffic interruption, and no resource creation; missing or unknown impact fails closed to approval. Retain the existing exact non-owner rearm authority. The private VM-HA lifecycle and request formats are not yet customer-supported and may make one explicitly approved clean break to a single canonical format. REQ-015 owns the approved command and region-option break; YAML field names remain compatible. Non-goals: Exercising failover as a health check, claiming failover was tested from passive inspection, inventing missing credentials or trust, silently normalizing IAM or external peer resources, bypassing current stopped-owner/allocation/route/forwarding gates, adding an `ensure` subcommand, or removing the internal sole-start-writer rearm engine.
+Add a top-level `apply` command that safely converges an ordinary single-VM gateway into managed warm-standby VM HA and repeatedly verifies or heals an existing VM-HA deployment through the product's authoritative conversion, apply, status, controller, and rearm boundaries. Constraints: Require an explicit local configuration file; preserve an ordinary source file and publish a deterministic separate VM-HA candidate; expose no separate setup or rearm command; keep failover and failback as separate explicit operations; never reset or duplicate the controller's one-attempt repair budget; never mutate IAM, SSH trust, peer-provider infrastructure, shared-allocation ownership, routes, or forwarding outside their existing owners; and require an exact digest-bound approval when the exact plan is destructive, may interrupt VPN traffic, or creates cloud resources. A plan may run without a second confirmation only when its typed impact explicitly proves no destructive change, no expected VPN traffic interruption, and no resource creation; missing or unknown impact fails closed to approval. Retain the existing exact non-owner rearm authority. The private VM-HA lifecycle and request formats are not yet customer-supported and may make one explicitly approved clean break to a single canonical format. REQ-015 owns the approved command and region-option break; YAML field names remain compatible. Non-goals: Exercising failover as a health check, claiming failover was tested from passive inspection, inventing missing credentials or trust, silently normalizing IAM or external peer resources, bypassing current stopped-owner/allocation/route/forwarding gates, adding an `ensure` subcommand, or removing the internal sole-start-writer rearm engine.
 
 #### Acceptance Criteria
 
-- `nebius-vpngw vm-ha --local-config-file FILE` accepts an ordinary or explicit
+- `nebius-vpngw apply --local-config-file FILE` accepts an ordinary or explicit
   VM-HA configuration. Ordinary input is converted with the existing
   allowlisted semantics; the source is never overwritten, the default
   candidate name is deterministic, `--output` selects another destination,
@@ -1900,7 +1913,7 @@ Add a top-level `vm-ha` command that safely converges an ordinary single-VM gate
   is required. A bounded transition count and repeated-state detector prevent
   self-healing loops. When exact cloud authority proves that a non-owner still
   reports active forwarding, the continuously running controller remains the
-  sole safety-fence owner. `vm-ha` classifies the state as a controller
+  sole safety-fence owner. `apply` classifies the state as a controller
   transition, recognizes only its exact `blocked:disable-active` operation
   targeting that reporting non-owner, and observes bounded progress without
   prompting or executing apply, rearm,
@@ -1915,7 +1928,7 @@ Add a top-level `vm-ha` command that safely converges an ordinary single-VM gate
   automatic mutation. For an authoritatively absent replacement member whose
   product-managed public pin has no matching managed private key, the exact
   `active-standby-replacement` plan includes a managed identity rotation and
-  `vm-ha --approve DIGEST` owns the checkpointed repair. If either SSH source
+  `apply --approve DIGEST` owns the checkpointed repair. If either SSH source
   is explicitly operator-owned or the managed predecessor is not exact, the
   command instead reports `replacement-ssh-identity-unavailable`, directs the
   operator to restore the matching key, and never classifies the condition as
@@ -1927,7 +1940,7 @@ Add a top-level `vm-ha` command that safely converges an ordinary single-VM gate
   may have started and directs the next invocation to re-inspect and resume from
   durable checkpoints; it is never reported as authentication failure.
 - Initial standby creation and interrupted provisioning resume through the
-  existing apply transaction. For an already-active lifecycle, `vm-ha` may
+  existing apply transaction. For an already-active lifecycle, `apply` may
   replace exactly one authoritatively absent current non-owner after proving the
   other member is the stable shared-allocation owner. The exact cloud-missing
   member identity overrides any stale configured public IP and prevents an SSH
@@ -2050,7 +2063,7 @@ Add a top-level `vm-ha` command that safely converges an ordinary single-VM gate
   authentication guidance.
   A separately authorized live static VM-HA recovery then proved the retained
   controller conflict, deployed the request-admission and shared-runtime fixes
-  to both members, completed the exact `vm-ha` resume transaction, and
+  to both members, completed the exact `apply` resume transaction, and
   completed a separate clean `apply`. Independent current-boot checks found
   both controllers, guards, rearm services, and agents healthy with no restart
   loop; the owner was forwarding with exact routes and the peer was passive and
@@ -2058,7 +2071,7 @@ Add a top-level `vm-ha` command that safely converges an ordinary single-VM gate
   The spinner and retry-diagnostic refinement then passed 50 focused VM-HA
   command tests, Ruff, mypy across 52 source files, 1,612 unit tests, 79
   integration tests, wheel construction, and a read-only interactive
-  `vm-ha --dry-run` against the retained healthy deployment. The live command
+  `apply --dry-run` against the retained healthy deployment. The live command
   visibly replaced each spinner with one green terminal row and exited
   healthy; deterministic command tests injected the installed and current SDK
   retry wordings with exception tracebacks and proved both successful retry
@@ -2103,7 +2116,7 @@ Add a top-level `vm-ha` command that safely converges an ordinary single-VM gate
   authentication guidance.
   A separately authorized live static VM-HA recovery then proved the retained
   controller conflict, deployed the request-admission and shared-runtime fixes
-  to both members, completed the exact `vm-ha` resume transaction, and
+  to both members, completed the exact `apply` resume transaction, and
   completed a separate clean `apply`. Independent current-boot checks found
   both controllers, guards, rearm services, and agents healthy with no restart
   loop; the owner was forwarding with exact routes and the peer was passive and
@@ -2111,7 +2124,7 @@ Add a top-level `vm-ha` command that safely converges an ordinary single-VM gate
   The spinner and retry-diagnostic refinement then passed 50 focused VM-HA
   command tests, Ruff, mypy across 52 source files, 1,612 unit tests, 79
   integration tests, wheel construction, and a read-only interactive
-  `vm-ha --dry-run` against the retained healthy deployment. The live command
+  `apply --dry-run` against the retained healthy deployment. The live command
   visibly replaced each spinner with one green terminal row and exited
   healthy; deterministic command tests injected the installed and current SDK
   retry wordings with exception tracebacks and proved both successful retry
@@ -2139,7 +2152,7 @@ Evaluate the acceptance criteria using the recorded verification method.
 
 #### User Story
 
-Add an explicit, durable, cluster-wide maintenance policy that lets an operator disable and later re-enable automatic starting of the exact VM-HA non-owner standby through `nebius-vpngw vm-ha --standby-auto-healing enabled|disabled` while keeping new deployments enabled by default. Constraints: Preserve automatic owner-loss failover, former-owner fencing, exact shared-allocation ownership, route and forwarding authority, the rearm service as the sole Compute-start writer, existing `vm-ha` approval/output/exit contracts, and the current no-YAML policy boundary. The option is canonical with no alias. Disabling never stops Compute, never cancels an accepted provider operation, and never authorizes maintenance until both members agree and accepted start work is quiescent. Missing, corrupt, stale, foreign, unsupported, or split policy inhibits ordinary starts rather than enabling them; only an explicit digest-bound `enabled` recovery may initialize a missing exact-owner record and arm the single-use rearm exception. The pre-adoption private policy protocol may clean-break to one canonical v2 format with no legacy reader, mixed-version fallback, or migration shim. Non-goals: Disabling automatic owner-loss failover, adding scheduled expiry, a YAML setting, a second public maintenance command, direct CLI Compute start/stop authority, a one-shot policy override, changing controller transfer action order, or claiming availability while the standby is intentionally stopped.
+Add an explicit, durable, cluster-wide maintenance policy that lets an operator disable and later re-enable automatic starting of the exact VM-HA non-owner standby through `nebius-vpngw apply --standby-auto-healing enabled|disabled` while keeping new deployments enabled by default. Constraints: Preserve automatic owner-loss failover, former-owner fencing, exact shared-allocation ownership, route and forwarding authority, the rearm service as the sole Compute-start writer, existing `apply` approval/output/exit contracts, and the current no-YAML policy boundary. The option is canonical with no alias. Disabling never stops Compute, never cancels an accepted provider operation, and never authorizes maintenance until both members agree and accepted start work is quiescent. Missing, corrupt, stale, foreign, unsupported, or split policy inhibits ordinary starts rather than enabling them; only an explicit digest-bound `enabled` recovery may initialize a missing exact-owner record and arm the single-use rearm exception. The pre-adoption private policy protocol may clean-break to one canonical v2 format with no legacy reader, mixed-version fallback, or migration shim. Non-goals: Disabling automatic owner-loss failover, adding scheduled expiry, a YAML setting, a second public maintenance command, direct CLI Compute start/stop authority, a one-shot policy override, changing controller transfer action order, or claiming availability while the standby is intentionally stopped.
 
 #### Acceptance Criteria
 
@@ -2154,7 +2167,7 @@ Add an explicit, durable, cluster-wide maintenance policy that lets an operator 
   redundancy returns. A transfer begun from committed disabled, missing,
   corrupt, or split policy never receives that authorization.
 - `disabled` produces terminal maintenance-ready success only after both members commit disabled, ownership remains stable, and no accepted rearm cloud operation or transitional target remains. An earlier accepted start is observed to a bounded terminal result or returns nonzero action-required guidance; it is never cancelled or compensated.
-- `enabled` may plan from the exact Running owner plus either its jointly acknowledged disabled policy or an unambiguously missing generation-bound local record when the non-owner is proven alias-free and `Stopped`. The missing-record plan predicts the canonical enabled initialization transaction from the exact cluster, generation, and member set and lists both member initializations as material effects. After exact approval, it initializes only the owner, verifies that receipt against the predicted transaction, and then persists one single-use recovery intent bound to the transaction, owner/allocation authority, stopped target revision, policy predecessor, and approval digest. The existing rearm service consumes that intent and remains the sole Compute-start writer; the CLI never starts Compute directly. After the peer reaches fresh current-boot standby readiness, the command idempotently initializes the peer, requires the same predicted transaction, waits for accepted-start quiescence and fresh two-member agreement, and clears recovery state only after terminal agreement. Corrupt, stale, foreign, prepared, or conflicting policy evidence remains blocked and is never bootstrapped. If final clear is interrupted after enabled agreement commits, the next explicit non-dry-run `enabled` or `disabled` invocation recognizes every present exact member-local completed recovery associated with that committed enabled operation. A recovery may carry either writer-valid policy binding: the committed decision when armed during the same enabled operation, or that decision's predecessor when armed to exit maintenance. Cleanup requires the two current policy records to agree on cluster, generation, members, operation, coordinator, predecessor, and decision; sends one full observed recovery-record digest to each member that owns a completed record; requires every requested compare-and-clear to succeed; rereads both policy records; and then completes the requested same-state no-op or opposite-state transaction in that invocation. Dry-run never clears recovery state and instead reports cleanup plus the requested policy outcome as one ordered no-effect plan. Any approval digest for such a combined plan binds the pre-cleanup authority, exact sorted recovery digest set, ordered cleanup effects, and requested policy effects, so a stale or clean-state approval cannot authorize cleanup. Missing, changed, foreign, inconsistent, active, or otherwise unsafe cleanup evidence remains blocked without starting the requested transition. The same bounded recovery path may resume an already-started partial policy transaction after a member loss, but only with a fresh authority-bound approval for that exact operation and desired state. Omitted policy input never changes policy; ordinary `vm-ha` may report an already-ready no-op but cannot start while disabled. Planned failover/failback rejects disabled maintenance before effects; automatic failover remains enabled and retains the disabled or partial policy after any emergency promotion.
+- `enabled` may plan from the exact Running owner plus either its jointly acknowledged disabled policy or an unambiguously missing generation-bound local record when the non-owner is proven alias-free and `Stopped`. The missing-record plan predicts the canonical enabled initialization transaction from the exact cluster, generation, and member set and lists both member initializations as material effects. After exact approval, it initializes only the owner, verifies that receipt against the predicted transaction, and then persists one single-use recovery intent bound to the transaction, owner/allocation authority, stopped target revision, policy predecessor, and approval digest. The existing rearm service consumes that intent and remains the sole Compute-start writer; the CLI never starts Compute directly. After the peer reaches fresh current-boot standby readiness, the command idempotently initializes the peer, requires the same predicted transaction, waits for accepted-start quiescence and fresh two-member agreement, and clears recovery state only after terminal agreement. Corrupt, stale, foreign, prepared, or conflicting policy evidence remains blocked and is never bootstrapped. If final clear is interrupted after enabled agreement commits, the next explicit non-dry-run `enabled` or `disabled` invocation recognizes every present exact member-local completed recovery associated with that committed enabled operation. A recovery may carry either writer-valid policy binding: the committed decision when armed during the same enabled operation, or that decision's predecessor when armed to exit maintenance. Cleanup requires the two current policy records to agree on cluster, generation, members, operation, coordinator, predecessor, and decision; sends one full observed recovery-record digest to each member that owns a completed record; requires every requested compare-and-clear to succeed; rereads both policy records; and then completes the requested same-state no-op or opposite-state transaction in that invocation. Dry-run never clears recovery state and instead reports cleanup plus the requested policy outcome as one ordered no-effect plan. Any approval digest for such a combined plan binds the pre-cleanup authority, exact sorted recovery digest set, ordered cleanup effects, and requested policy effects, so a stale or clean-state approval cannot authorize cleanup. Missing, changed, foreign, inconsistent, active, or otherwise unsafe cleanup evidence remains blocked without starting the requested transition. The same bounded recovery path may resume an already-started partial policy transaction after a member loss, but only with a fresh authority-bound approval for that exact operation and desired state. Omitted policy input never changes policy; ordinary `apply` may report an already-ready no-op but cannot start while disabled. Planned failover/failback rejects disabled maintenance before effects; automatic failover remains enabled and retains the disabled or partial policy after any emergency promotion.
 - Policy preparation, commit, and recovery admission execute under the existing node-local writer lock and compare exact lifecycle generation, policy predecessor, apply/removal lock, mTLS inhibition, accepted rearm work, and pending or accepted controller-effect evidence before every write. Apply, replacement, removal, and mTLS admission symmetrically reject prepared policy or active recovery state. No persistent policy lock may inhibit automatic owner-loss transfer; if automatic transfer wins a race, the policy command stops before its next cross-node effect and requires a newly bound approval to resume.
 - The option accepts only `enabled|disabled`, rejects invalid values before authentication, permits the existing `--dry-run`, `--approve`, `--output-format`, config, and region surfaces, and rejects candidate-conversion `--output` or `--force`. Interactive execution retains default-No confirmation; JSON and noninteractive execution never prompt. Exact plans bind desired policy, both member states, ownership, generation, in-flight operation evidence, and proposed effects. A same-state request exits successfully and says that standby auto-healing is already enabled or disabled. A completed opposite-state request exits successfully and says that standby auto-healing was enabled or disabled successfully. After the direct two-member transaction proves terminal agreement, the command may perform a bounded read-only reread while the public VM-HA projection's sole divergence is `standby-auto-healing-policy-invalid` under the exact owner and frozen cloud observation digest captured before the transaction. Every observed sample, including an otherwise terminal projection, must retain that owner and digest; this admits peer-heartbeat propagation but never repeats a policy mutation. Any authority change, additional reason, or exhausted observation budget fails closed. Human output does not expose internal recovery-cleanup steps; structured output retains bounded action codes for automation.
 - Status exposes the closed policy through an `Auto-healing` summary value of `enabled` or `disabled`, preserves `transitioning`, `blocked`, or `unknown` when committed agreement is unavailable, and renders the exact config-bound enable command only for committed disabled maintenance. In that maintenance projection, the second-column `Redundancy` value `maintenance` and `Auto-healing` value `disabled` render in red so the intentionally reduced redundancy is conspicuous; the `Identity` value, explanatory details, Action command, status classification, and JSON remain unchanged. That maintenance Action is emitted on its own non-ellipsizing soft-wrapped line so the complete shell-quoted command remains copy/pasteable at narrow terminal widths. It never publishes internal policy records, operation identities, digests, raw exceptions, cloud identifiers, or paths other than the shell-quoted local configuration path in that disabled-maintenance Action; every other config-bearing action is parsed as shell syntax, replaces the complete config argument structurally with `<file>`, and never exposes a quoted path suffix. Local policy transitions emit bounded sanitized journal diagnostics without secrets or environment-specific identities.
@@ -2206,7 +2219,7 @@ Evaluate the acceptance criteria using the recorded verification method.
 
 #### User Story
 
-After any planned failover, planned failback, or automatic owner-loss promotion admitted while the cluster-wide standby auto-healing policy is committed enabled, automatically return the exact stopped former owner as a guarded warm standby without requiring another operator command. Constraints: Preserve the controller's stopped-former-owner, exclusive allocation, route, and forwarding order; keep rearm as the only Compute-start writer; keep `vm-ha` as the one public conversion, recovery, and convergence command; and preserve the existing planned-command phase budgets, result schema and exit codes, default-No approvals, configuration schema, and public status table. An artifact-changing approval adds the exact local wheel SHA-256 to its existing approval object without adding a command or flag. Do not widen the peer-heartbeat freshness window, use stale heartbeat liveness as authority, derive authority from presentation progress, add a compatibility reader, or let apply-owner adoption arm restoration. Non-goals: Making committed-disabled maintenance self-heal, retrying a permanent or identity-ambiguous start forever, hiding a safe cutover failure, adding a new public command or flag, changing automatic-failover admission, or granting rearm stop, allocation, route, firewall, or forwarding authority.
+After any planned failover, planned failback, or automatic owner-loss promotion admitted while the cluster-wide standby auto-healing policy is committed enabled, automatically return the exact stopped former owner as a guarded warm standby without requiring another operator command. Constraints: Preserve the controller's stopped-former-owner, exclusive allocation, route, and forwarding order; keep rearm as the only Compute-start writer; keep `apply` as the one public conversion, recovery, and convergence command; and preserve the existing planned-command phase budgets, result schema and exit codes, default-No approvals, configuration schema, and public status table. An artifact-changing approval adds the exact local wheel SHA-256 to its existing approval object without adding a command or flag. Do not widen the peer-heartbeat freshness window, use stale heartbeat liveness as authority, derive authority from presentation progress, add a compatibility reader, or let apply-owner adoption arm restoration. Non-goals: Making committed-disabled maintenance self-heal, retrying a permanent or identity-ambiguous start forever, hiding a safe cutover failure, adding a new public command or flag, changing automatic-failover admission, or granting rearm stop, allocation, route, firewall, or forwarding authority.
 
 #### Acceptance Criteria
 
@@ -2231,6 +2244,14 @@ After any planned failover, planned failback, or automatic owner-loss promotion 
   receipt first, then advances that same authorization to committed before
   releasing the writer boundary. Restart recovery may advance only an exact
   receipt-plus-armed pair. Apply-owner adoption never creates an authorization.
+- Repeating terminal receipt publication preserves the original receipt bytes
+  and timestamps. Recognize exact already-committed transfer identity for all
+  three transfer intents independently of wall-clock order. Complete restoration
+  bookkeeping and lineage retirement under the existing writer lock; contention
+  cannot turn a proven completed transfer back into an unfinished takeover.
+  Foreign or changed ownership, generation, digests or first-operation identity
+  cannot authorize completion or cleanup. Never recreate restoration authority
+  from a receipt alone.
 - The authorization advances monotonically through `ARMED`, `COMMITTED`,
   `START_ACCEPTED`, `RUNNING`, `AWAITING_STANDBY`, and `COMPLETED`, or terminal
   `BLOCKED`. `START_ACCEPTED` is durable after the rearm `start-requested`
@@ -2260,7 +2281,7 @@ After any planned failover, planned failback, or automatic owner-loss promotion 
   standby restoration. If its restoration wait expires first, it exits nonzero
   and reports that safe cutover completed while durable background retries
   continue. The CLI deadline never cancels or consumes the authorization.
-  `vm-ha` joins and observes active recovery; for an exact blocked or exhausted
+  `apply` joins and observes active recovery; for an exact blocked or exhausted
   enabled-policy authorization it may render a digest-bound default-No
   operator-restoration plan. Missing, corrupt, disabled, or split policy
   requires the existing explicit `--standby-auto-healing enabled` recovery.
@@ -2270,17 +2291,17 @@ After any planned failover, planned failback, or automatic owner-loss promotion 
   owner/standby proof. Logs emit secret-free phase transitions and retry
   decisions without one-message-per-loop noise. The public status rows and JSON
   schemas remain unchanged.
-- Every running controller status used to report `vm-ha` healthy or admit a
+- Every running controller status used to report `apply` healthy or admit a
   planned transfer advertises `vm-ha-standby-restoration-v2`, and the fixed
   installed-agent capability document advertises the same feature. Missing or
-  stale capability is apply-owned drift: `vm-ha` must not report healthy and a
+  stale capability is apply-owned drift: `apply` must not report healthy and a
   planned failover/failback must stop before its request or any transfer effect.
   Matching package versions or configuration generations never substitute for
   this runtime proof. VM-HA package preparation must reject fallback to the
   artifact recorded by the existing installation, bind the selected local wheel
   by SHA-256, verify the uploaded bytes before installation, and require a fresh
   installed-agent capability document containing the restoration feature.
-- Every `vm-ha` approval that installs an agent artifact must select one
+- Every `apply` approval that installs an agent artifact must select one
   existing non-fallback local wheel before approval, publish its exact SHA-256,
   and bind that digest into the approval domain. Planning must not build,
   delete, or replace a wheel. Revalidation under the canonical apply lock must
@@ -2315,7 +2336,7 @@ After any planned failover, planned failback, or automatic owner-loss promotion 
   ownership, policy conflict, pending writer, or artifact drift fails closed.
 - Active authorization blocks conflicting apply, removal, mTLS, policy, and
   replacement writers. `COMPLETED` is inert. `BLOCKED` grants no automatic
-  start authority and can be retired only by an exact `vm-ha` recovery or a
+  start authority and can be retired only by an exact `apply` recovery or a
   superseding current-authority plan, so it cannot deadlock maintenance
   indefinitely.
 
@@ -2331,7 +2352,7 @@ After any planned failover, planned failback, or automatic owner-loss promotion 
   stopped-peer heartbeat older than 30 seconds, both ownership directions,
   automatic failover under enabled/disabled/missing/partial policy, typed
   retries and exhaustion with one provider key, CLI timeout with continuing
-  service recovery, `vm-ha` join/operator recovery, writer races, status, logs,
+  service recovery, `apply` join/operator recovery, writer races, status, logs,
   packaging, and service wiring. Run focused suites, Ruff, mypy, complete unit
   and integration suites, wheel/help checks, security review, documentation
   alignment, and diff integrity. Installed parity and clean non-production live
@@ -2359,7 +2380,7 @@ After any planned failover, planned failback, or automatic owner-loss promotion 
   stopped-peer heartbeat older than 30 seconds, both ownership directions,
   automatic failover under enabled/disabled/missing/partial policy, typed
   retries and exhaustion with one provider key, CLI timeout with continuing
-  service recovery, `vm-ha` join/operator recovery, writer races, status, logs,
+  service recovery, `apply` join/operator recovery, writer races, status, logs,
   packaging, and service wiring. Run focused suites, Ruff, mypy, complete unit
   and integration suites, wheel/help checks, security review, documentation
   alignment, and diff integrity. Installed parity and clean non-production live
@@ -2943,6 +2964,14 @@ packet loss without a mandatory ten-minute observation period.
 - Apply the same loss threshold to operation baselines and steady-state recovery.
   Preserve separately specified outage limits, recovery deadlines, BGP/HA health,
   ownership/fencing and compatibility checks. Report transition loss separately.
+- Apply the same strictly-below-1% measured-loss criterion to newly declared VM-HA
+  passive-restoration windows. This supersedes the absolute zero-loss phase gate
+  previously used for TI-REQ-011. Preserve the full conservatively bounded window,
+  positive packet count, complete observations and each direction independently.
+  Separately verify unchanged serving ownership, shared allocation, managed routes
+  and enabled forwarding; a numerical loss pass cannot waive these checks or
+  establish that restoration caused no packet loss. Missing evidence stays unverified.
+  Keep independent native zero-loss checks with a different declared purpose.
 - Existing complete measurements may be compared with this newly accepted criterion,
   with the original criteria and verdict preserved. Unrun, truncated or intervened
   operations remain unverified; a loss-only pass does not qualify them.
@@ -3075,6 +3104,12 @@ roles. VM ownership failback remains separate from tunnel failback.
   configuration, boot identity and its operation lock; HA authority retains owner
   incarnation, allocation, generation and writer exclusion. Serialize all writers.
   Revalidate before effects and after restart; persist progress before effects.
+- An unavailable cloud read during HA tunnel-authority observation defers that
+  tunnel pass without selecting a repair, declaring ownership drift or discarding
+  admitted intent. The VM controller must still acquire its own fresh snapshot;
+  unavailable main-controller authority retains its existing fail-closed behavior.
+  No cached snapshot may authorize an effect. Permanent identity/access failures
+  and non-observation errors retain their blocking behavior.
 - Switch whole connections only between same-owner alternatives covering every
   required destination. Preserve disjoint required paths; reject incomplete coverage,
   conflicting route ownership, ambiguous targets and unsafe shared IKE termination.
@@ -3208,7 +3243,15 @@ stopped-former-owner fence remain mandatory before promotion.
   preserve 300-second journalled effects, ten-second silence, five-second suspicion
   and existing repair/recovery deadlines.
 - Quiesce and guard both members before replacing either wire implementation;
-  require reciprocal running v5 proof before ordered owner and standby release.
+  require reciprocal running current-protocol proof before ordered owner and standby release.
+- Retry only typed transient individual cloud reads and pagination requests
+  within that same absolute observation deadline, with paced bounded backoff.
+  Do not replay a complete snapshot, multiply SDK retries, accept a late result,
+  or reuse stale ownership after exhaustion. Mutation settlement retains its
+  original durable operation identity and never enters this read retry path.
+- An artifact advertising the current independent heartbeat capability must
+  include its publisher and evidence modules, with exact package RECORD hashes
+  and source identity matching the admitting CLI.
 - Preserve sequence/replay/journal security state across restart and upgrades.
   Worker failure, late completion and shutdown cannot restore positive evidence.
 
@@ -3251,7 +3294,7 @@ explicitly approves the recovery artifact and potential traffic interruption.
 
 #### Acceptance Criteria
 
-- The public `vm-ha` preview classifies one exact ACTIVATING replacement recovery
+- The public `apply` preview classifies one exact ACTIVATING replacement recovery
   and binds the lifecycle digest, original operation, exact resources and SSH
   identities, current owner, matching apply/mTLS authority, original policy and
   repaired artifact. Preview has no effects; execution revalidates under the
@@ -3719,6 +3762,15 @@ REQ-033 where they conflict; their remaining safety obligations remain active.
   restart. The existing recovery owner may reload only exact current policy
   under writer/ownership admission; unknown evidence and deliberate cold or
   suspended connections never admit loading. Preserve bounded durable attempts.
+  Before HA reload, complete native absence of an authorized connection and its
+  IKE sessions permits exact removal of that forgotten daemon's scoped kernel
+  objects. Bind cleanup to fresh provider/peer admission; recheck local authority,
+  policy and native absence before each deletion, then reobserve provider/peer
+  authority before loading. Revoke lower-precedence traps before negotiated
+  policies, then remove SAs; unknown priority or changed cleanup order blocks
+  further effects. Share the original repair deadline and attempt.
+  Preserve loaded paths, surviving sessions, rekey overlaps and unrelated state;
+  credential loss alone never grants kernel teardown authority.
 - AC-005: Confirmed required-coverage loss starts one persisted 30s episode,
   shared across connection failures/restarts/native retries. Static candidates
   retain 10s first, up to 5s subsequent, then restoration within the remainder.
@@ -3754,7 +3806,7 @@ REQ-033 where they conflict; their remaining safety obligations remain active.
   Native runtime properties participate in no-op detection. Preserve dry-run
   and approve-disruption contracts and mutation-free second apply.
 
-- AC-011: Verify public `apply`, `status`, `vm-ha`, and VM/tunnel
+- AC-011: Verify public `apply`, `status`, `apply`, and VM/tunnel
   `failover`/`failback` commands against the final candidate, including the
   authorized existing Static and BGP non-production fixtures. Diagnose and
   repair failures at their authoritative owner; separate command success from
@@ -3767,7 +3819,13 @@ REQ-033 where they conflict; their remaining safety obligations remain active.
   guest journals as immutable audit records. Create a new approved transaction
   and fresh locks; inhibit startup and quiesce writers before replacement.
   Interruptions resume the new approved operation without erasing the failed
-  trial. Incomplete package work continues to require its original artifact.
+  trial. Package completion is independent of activation completion: native
+  `installed` or `activating` records may be superseded only with their matching
+  completed package-owner journal, exact installed native postconditions and
+  completed conversion. Preserve the original runtime phase in the archive;
+  never fabricate activation completion. Read-only preview may propose a fresh
+  package closure while the old transaction remains pending. Incomplete package
+  work continues to require its original artifact.
 
 #### Negative Criteria
 
@@ -3782,7 +3840,7 @@ REQ-033 where they conflict; their remaining safety obligations remain active.
 Run source checks, authentic historical package upgrades in isolated Ubuntu 24.04
 containers, native Linux and final-artifact live qualification as distinct lanes.
 At qualification start, freeze the four latest published stable VPNGW releases
-and their wheel hashes (currently 0.6.0-0.6.3). Exercise supported ordinary/HA
+and their wheel hashes. Exercise supported ordinary/HA
 package and saved-state paths in Static/BGP from those artifacts to one frozen
 candidate. Verify exact installation, dependency consistency and partial-package
 recovery. Repeat the real package preparation with the identical selected request;
@@ -3793,7 +3851,7 @@ execution metadata may change and must be reported separately. Mutation-free
 full-apply checks remain mandatory on live VMs. Container trials do not establish
 connectivity or VM reboot behavior.
 Live upgrade qualification starts only from the latest published stable release
-(currently 0.6.3), covering SingleVM Static/BGP and VM-HA Static/BGP. Retain fresh
+covering SingleVM Static/BGP and VM-HA Static/BGP. Retain fresh
 installations in all four modes, migration, bounded repair, command, forwarding
 and recovery trials. This accepted split supersedes earlier all-predecessor live
 qualification clauses; supported upgrade behavior remains unchanged. Measure
@@ -3802,6 +3860,15 @@ soft target for normal-upgrade interruption and report overruns separately.
 Require unchanged identities and mutation-free reapply.
 Already-failed recovery is reported separately; missing live evidence blocks
 release qualification, not implementation work.
+
+Mixed HA standby materialization must suspend only Static connections while
+preserving healthy BGP IKE identities when the daemon already uses the exact
+current runtime configuration. Reuse requires a private, process-bound startup
+receipt; missing, changed or unsafe evidence retains the normal restart path.
+Ordinary apply still restarts. Prove completed Static connection and SA absence
+before cold readiness; unknown evidence never proves absence. Existing BGP SAs
+cannot satisfy candidate Static establishment. Preserve exact kernel cleanup,
+writer serialization, former-owner fencing and shared allocation verification.
 
 #### Test Method
 
@@ -3895,6 +3962,68 @@ resource identities except effects explicitly included in an approved plan.
   prefix limits, local-network exclusions and destination protection.
 - AC-013: Fresh provisioning propagates connectivity=unknown when evidence is
   incomplete. Deployment completion never implies verified workload connectivity.
+- AC-014: Recoverable admission conditions must not become permanent customer
+  blockers across Single VM and VM-HA, in Static and BGP modes. Wait for known
+  transient manager work within the original deadline and a bounded observation
+  window; refresh authority afterward. Missing capabilities, unknown evidence and
+  active competing writers remain distinct from transient manager work.
+- AC-015: A positively verified healthy VM-HA no-op succeeds when a previous
+  approval token is supplied. Surplus approval never authorizes new effects.
+  Interactive recovery and replacement offer one default-No confirmation for the
+  exact displayed scope; automation still requires explicit matching approval.
+- AC-016: Classify changed interrupted intent before presenting a resume plan or
+  mutating credentials. Permit a fresh reviewed successor for unexecuted plans
+  and conclusively settled partial deployments. Inspect every participating owner,
+  prove previous writers stopped, and reconcile uncertain requests through their
+  original operation identities. Archive predecessor evidence through its owners
+  and plan from actual state and current desired configuration. Never execute
+  obsolete unsubmitted steps to retire a checkpoint. Settlement mutations require
+  their own approval before the fresh deployment plan is separately approved.
+  Dry-run and declined approval never settle, archive or mutate state. Unknown
+  settlement, foreign identity and concurrent writers remain explicit blockers.
+  Completed replacement ownership history must remain intact and must not be
+  mistaken for active replacement work during later host-only recovery. Admit
+  only complete history matching current member identities; unresolved replacement
+  operations and incomplete or changed ownership remain blockers.
+- AC-017: Package verification binds the active transitive VPNGW dependency
+  closure rather than unrelated installed software. Preserve conflict checks
+  before changing shared dependencies and reject ambiguity in the owned closure.
+  Normal apply and vm-ha use a 120-second soft interruption target. Explicit
+  --repair has no overall outage limit; never abandon accepted work to meet a
+  normal-operation target.
+
+- AC-018: Transaction-preparation failures retain a typed, sanitized cause and
+  actionable recovery. Explicitly regress the interrupted desired-state mismatch
+  and the convergence wrapper that formerly reported only
+  apply-convergence-interrupted, phase-prepare-transaction, cause-unclassified.
+  Known recoverable causes select their canonical recovery or safe replan before
+  effects; foreign identity and competing writers never inherit stale approval.
+
+- AC-019: Managed HA apply and repair reconcile runtime service-account identity
+  through the SDK without requesting an unused CLI impersonation token. Keep the
+  selected operator authentication for discovery and infrastructure execution;
+  independently authenticate the retained managed runtime source and preserve
+  exact IAM, authorized-key and source-digest checks. Ordinary explicit --sa
+  retains its requested impersonation boundary.
+
+- AC-020: Apply, vm-ha and their installed and pair wrappers share one sanitized
+  failure model: plain-language reason with technical code, immediate next action,
+  shell-quoted same-context repair command and any repair prerequisite. Cover
+  parsing, configuration, authentication, dependencies, DNS, preflight, deployment,
+  verification, dry-run and unknown failures. Populate recovery before JSON and
+  pair-child publication, preserve result fields and exit codes, and emit once.
+  Use the authoritative generated HA configuration after conversion. Help,
+  successful no-ops and declined approval are not deployment failures; pending
+  operations retain truthful resume guidance. Unknown causes stay unknown.
+- AC-021: Final-candidate qualification retains 28 core cells: four topology and
+  routing combinations by fresh apply, authentic ordinary upgrade, unchanged
+  reapply, configuration change, interrupted resume, dry-run and repair followed
+  by normal no-op. Add changed-intent successors, all failure guidance, HA vm-ha,
+  and one HA BGP destroy then same-configuration fresh apply. Preserve regional,
+  repeated recovery, native suites and strict traffic obligations. Historical
+  passes and repair cannot substitute for new-candidate ordinary upgrade proof.
+  Fresh deployment requires working default DNS; fixture DNS overrides prove no
+  product DNS fix. Measure interruption separately from steady-state traffic.
 
 #### Negative Criteria
 
@@ -4010,6 +4139,19 @@ prerequisite upgrades for rotation and standby-policy enablement.
 - Preserve exact artifact, configuration, policy, identities, current-boot fences,
   ownership and route proofs. Complete an approved package closure; never select
   an arbitrary newer artifact, replace credentials or override disabled policy.
+- Resume a verified migration SSH prerequisite from its exact published receipt.
+  Later approved Compute revisions must not regenerate predecessor provenance.
+  Retain fresh Compute and lifecycle checks, exact pins and private identities,
+  command/child receipt matching, and rejection of foreign or changed trust.
+  SSH publication must not remove unfinished ordinary-to-HA package ownership;
+  reattach the original reserved worker without changing its admitted request.
+  Preserve its approval only when it matches the active lifecycle transaction;
+  changing a fresh preview digest must not change the admitted worker identity.
+- Preserve completed standby-restoration history during later activation when
+  canonical promotion-receipt proof and the installed cluster, allocation and
+  member pair match. Current configuration, exact apply lock and boot fence remain
+  mandatory; active, blocked, unsafe, malformed or foreign restoration evidence
+  grants no activation authority. Never delete history to admit activation.
 - Recover classified transient authority reads within the same operation before
   SSH or guest effects. Waiting for fresh evidence consumes no corrective attempt;
   denied access, invalid credentials after bounded refresh, malformed evidence and
@@ -4040,6 +4182,12 @@ prerequisite upgrades for rotation and standby-policy enablement.
   windows are measured separately; exhausted or uncertain work remains safely
   fenced without claiming restored traffic.
 
+- Controller observation distinguishes progressing, unavailable, contradictory
+  and stalled evidence. Track meaningful operation and member progress even when
+  aggregate status is unchanged. Continue within the existing operation deadline
+  while progress is established; otherwise report pending with the exact resume
+  command. The 120-second interruption target is not an observation timeout.
+
 #### Negative Criteria
 
 - No blind retries, repeated completion effects, lock deletion, inferred owner,
@@ -4063,6 +4211,174 @@ Separate source/unit, native service and live workload evidence. Missing live
 qualification remains explicit; historical failures are never erased by recovery.
 
 <!-- /REQUIREMENT: REQ-037 -->
+
+<!-- REQUIREMENT: REQ-038 status=active priority=P0 type=reliability -->
+### REQ-038: Explicit disruptive reconstruction on retained gateway VMs
+
+#### User Story
+
+An operator can run apply --repair to reconstruct the complete VPNGW installation
+on existing Ubuntu gateways without manually deleting checkpoints or replacing
+VMs. Support ordinary and VM-HA deployments in Static and BGP modes, including
+regional pairs. This explicit operation accepts a full VPN outage.
+
+#### Acceptance Criteria
+
+- Inspect exact targets, show the outage and reset scope, and ask a default-No
+  confirmation before changes. No separate repair dry-run or user-supplied digest
+  is required. Declined or missing confirmation makes no changes. Ordinary apply
+  preview and confirmation contracts remain unchanged.
+- Admit repair before old deployment resume validation. Missing or malformed
+  journals, changed desired digests, broken package imports, altered product
+  assets, failed services and broken managed node identities select reconstruction
+  rather than manual internal-state cleanup. Do not require old apply completion.
+- Preserve Ubuntu, VM and disk identities, IP allocations, SSH access, external
+  peer credentials and unrelated resources. Force-reinstall the complete managed
+  VPNGW stack even when installed versions match; reconstruct generated assets,
+  managed node mTLS, HA generations and operational state.
+  Preserve canonical writer-lock inodes and reconstruct owner-private managed
+  certificate storage, including ordinary repair before subsequent HA conversion.
+- Independently exclude old writers and reconcile accepted cloud/package effects.
+  Confirmed reconstruction may retire an exact idle handoff owner after all
+  submitted phases have known outcomes. Preserve its evidence and exclude new
+  work; never execute old unsubmitted steps or interrupt an active package phase.
+  Use package-independent persistent boot inhibition outside reset directories.
+  During confirmed repair, wait for ordinary service-manager shutdown within
+  the existing guest request deadline. A normal stop timeout must not be cut
+  short by an earlier quiescence poll limit. Continue only after independent
+  process, job and descendant checks; unresolved writers remain blockers.
+  A stopped member without proven inhibition requires verified external isolation
+  before Start; isolate cloud mutation access as well as workload traffic.
+- Keep exact resource identity, pinned SSH and former-owner Stopped/allocation
+  proof before promotion. Recoverable product damage is handled automatically;
+  inaccessible hosts, unavailable packages, exhausted storage and unresolvable
+  provider effects remain explicit genuine blockers, never fake success.
+  Unavailable signed package repositories report their DNS, outbound-access or
+  repository prerequisites rather than a misleading checkpoint failure.
+- Archive old bytes securely without requiring them to parse. Retain a minimal
+  durable repair record outside the reset footprint. Resume interrupted repair;
+  changed intent requires a freshly confirmed successor after effect settlement.
+  A completed repair followed by confirmed --repair starts a new reconstruction.
+- Reject combinations with dry-run, disruption-digest approval, replacement,
+  migration, network preparation and independent credential-rotation modes.
+  Pair repair confirms the complete scope once and propagates repair authority
+  to its children; both prepare before release and originate before peer waits.
+- Report reconstruction separately from workload connectivity. Remote-only loss
+  never triggers repeated installation. Normal apply after repair is unchanged.
+- For a genuine blocker to reconstructing the retained VMs, explain the cause
+  and offer explicit destroy followed by ordinary apply with the same YAML.
+  Never run teardown automatically. Settle prior cloud requests and exclude old
+  writers before deletion; identity uncertainty, missing authorization and
+  unavailable provider operations remain blockers to destructive fallback too.
+  Explain that VM and disk contents are lost and full outage continues until
+  fresh deployment and peer connectivity are verified.
+  Successful destroy automatically retires obsolete repair authority so the
+  unchanged YAML can be applied as a fresh deployment without manual cleanup.
+  Normal apply after standby replacement must retain its exact historical
+  Compute/disk ownership through later approved transactions and repair. This
+  history never authorizes replay of an old effect or adoption by resource name.
+- This opt-in contract explicitly supersedes old-state equality, node-identity
+  preservation and normal recovery-only package restrictions for repair only.
+  Ordinary apply, rotation and automatic recovery retain their existing contracts.
+
+#### Negative Criteria
+
+- No VM/disk deletion or recreation, broad OS purge, foreign route removal,
+  TOFU, privilege expansion, unguarded boot, duplicate uncertain cloud effect,
+  silent success, permanent repair daemon or manual checkpoint-edit instructions.
+
+#### Validation Method
+
+Qualify the exact candidate through source, native installation and authorized
+live tests. HA-VM BGP is first priority; all remaining campaign scenarios remain
+required. Explicit repair has no overall outage limit or two-minute acceptance
+criterion. Measure and report its outage separately. Per-request bounds, exact
+writer exclusion and accepted-effect settlement remain necessary. Qualify one
+HA BGP destroy followed by ordinary apply using unchanged YAML, independently
+proving old-resource absence, replacement identities, healthy HA and VPN traffic.
+
+#### Test Method
+
+Cover customer-shaped interrupted desired-state mismatch, malformed and absent
+records, missing imports, corrupt same-version binaries, identities, both members
+Stopped, either former owner, concurrent writers, package contention, lost replies,
+reboot and interruption at each repair phase, regional cold pairs, confirmation
+cancellation, repeated repair and mutation-free ordinary reapply. Preserve prior
+failed trials and protected handoff authority.
+
+#### Evaluation Method
+
+Prove retained resource identity, byte-verified installation, safe owner/standby,
+encrypted bidirectional traffic and complete coverage. Report repair outage
+separately from steady-state loss and normal-upgrade targets. No release readiness
+claim until final-artifact obligations pass independently.
+
+<!-- /REQUIREMENT: REQ-038 -->
+
+<!-- REQUIREMENT: REQ-039 status=active priority=P0 type=feature -->
+### REQ-039: Consolidate HA lifecycle orchestration into apply
+
+#### User Story
+
+Use one public apply workflow for Single and HA deployment, verification and
+reconciliation, with explicit conversion, identity rotation, healing-policy and
+software-repair actions. Remove duplicated command orchestration without changing
+existing effect ownership or weakening deployment safety.
+
+#### Acceptance Criteria
+
+- Remove public vm-ha without an alias. Preserve existing apply options, exits,
+  result fields, pair-child reporting and ordinary deployment behavior.
+- Plain apply reconciles the explicit YAML topology and checks configuration,
+  artifact and infrastructure parity before a healthy no-op. Runtime controllers
+  remain the sole continuous healing, rearm and failover owners.
+- Explicit --convert-to-ha preserves Single YAML and publishes separate HA YAML.
+  A protected source-to-candidate record makes repeats with either YAML and a
+  custom output idempotent, including later legitimate HA edits. It selects
+  configuration only; existing lifecycle/cloud checks still establish authority.
+- Expose --rotate-mtls and --standby-auto-healing enabled|disabled through apply.
+  Preserve specialized prerequisite composition and typed exact approvals. The
+  new --approve accepts only the displayed HA domain and cannot combine with
+  another approval flag. Conversion, rotation, policy and repair are exclusive.
+- --output and --force are conversion-only. Force can repair the permissions of
+  an exact candidate, never replace conflicting YAML or authorize cloud effects.
+- Keep repair before normal HA metadata interpretation, one default-No repair
+  confirmation, retained Ubuntu VMs/disks, no repair dry-run and no outage cap.
+- One outer invocation owns the canonical lock, progress, diagnostics and final
+  result. Preserve effective project/region and generated HA configuration in
+  resume and conditional repair guidance; help, no-op and declined approval are
+  not failures. Dry-run has no file, allocation, settlement or archive effects.
+- Preserve predecessor settlement, exact provider operation identity, fresh
+  approval, stopped-former-owner fencing and verified candidate allocation.
+- Current delivery acceptance needs one final-build HA BGP live pass for apply,
+  repair, conversion with both-input repeats, rotation and healing-policy flags.
+  Defer the full matrix and repeat campaigns; report that reduced coverage
+  explicitly and never promote historical passes to the final build.
+
+#### Negative Criteria
+
+- No public-command recursion, duplicate locks/results, implicit conversion,
+  implicit full repair, automatic resource adoption or automatic policy enable.
+- No new migration shim, runtime ownership framework or relaxed traffic criterion.
+
+#### Validation Method
+
+Run focused, full local and installed regression lanes; freeze artifacts before
+isolated live apply/repair/action/conversion checks and independent health and
+traffic verification. Preserve failures and all remaining full qualification IDs.
+
+#### Test Method
+
+Cover repeat conversion, edited HA candidate, conflicting source/selectors/files,
+crash publication, concurrent writers, exact approval domains, malformed repair
+metadata, interruption/resume, dry-run, JSON, installed entrypoints and pair cleanup.
+
+#### Evaluation Method
+
+Separate implemented, locally verified, focused-live verified and fully qualified
+claims. An unresolved runtime reproducer prevents a tested release-candidate claim.
+
+<!-- /REQUIREMENT: REQ-039 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->

@@ -34,6 +34,8 @@ import three_tier_target as target  # noqa: E402
 from git_fixture_environment import isolated_git_configuration  # noqa: E402
 import initialize_phase  # noqa: E402
 
+PLAN = PLAN.replace("exact: src/", "exact: project-a/src/")
+
 
 def private_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -42,6 +44,98 @@ def private_json(path, value):
 
 
 from test_workflow_fixture import prepare_execution as fixture_prepare_execution, replan_future as fixture_replan_future, complete_wave as fixture_complete_wave  # noqa: E402
+
+class BrowserRepairAuthorityTests(unittest.TestCase):
+    """Real repair-owner records; only native registration/Git observation are synthetic."""
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "sdlc-classify-failure/scripts"))
+        import repair_control
+        import test_repair_control
+        self.owner = repair_control
+        self.helpers = test_repair_control
+        self.fixture = test_repair_control.RepairControlTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.tearDown)
+        self.run = self.fixture.run_dir.resolve()
+        self.head = "b" * 40
+        self.fingerprints = {"requirements": "sha256:" + "2" * 64,
+                             "design": "sha256:" + "3" * 64, "plan": "sha256:" + "4" * 64,
+                             "basis": "sha256:" + "d" * 64}
+        self.current = {"current_execution": "FEAT-001", "current_phase": "sdlc-evaluate",
+                        "fingerprint_ids": [key + ":" + value for key, value in self.fingerprints.items()]}
+        private_json(self.run / "current-state.json", self.current)
+        self.state = {"run_root": str(self.run.parent)}
+        self.target = {"execution_id": "FEAT-001", "run_id": self.run.name,
+                       "head": self.head, "basis_sha256": "d" * 64, "phase": "sdlc-evaluate"}
+        self.enterContext(mock.patch.object(target, "_registration",
+                          return_value=(None, None, None, None, self.run, self.current, None)))
+        self.enterContext(mock.patch.object(repair_control, "_current_revalidation_commit", return_value=self.head))
+
+    def repair(self, ordinal):
+        event = self.fixture.record_event(self.helpers.failure_payload(operation=f"repair-{ordinal}",
+            independent="This independent fixture cause persists after the earlier defect is repaired."))
+        classification = self.fixture.classify(event)
+        attempt = self.owner.begin_remediation(self.run, "FEAT-001", classification["classification_id"],
+                    "localized", "Correct the proven isolated defect.", "evidence/repair.json")
+        return self.owner.complete_remediation(self.run, "FEAT-001", attempt["attempt"]["dispatch_id"],
+                    "succeeded", "evidence/oracle.json")["control"]
+
+    def gate(self, surface, index):
+        payload = self.helpers.revalidation_payload(self.run, surface, index,
+                    commit=self.head, fingerprints=self.fingerprints)
+        for path in (self.run / "evidence").rglob("*.json"):
+            path.chmod(0o600)
+        return self.owner.record_revalidation(self.run, payload)
+
+    def observe(self, binding=None, complete=False):
+        return target.browser_revalidation(self.state, self.target, skills_root=ROOT, agent="codex",
+                                           binding=binding, require_complete=complete)
+
+    def test_fourth_dispatch_evaluation_and_completed_historical_binding(self):
+        for ordinal in range(1, 5):
+            self.repair(ordinal)
+        before = self.owner._load_control(self.run, "FEAT-001")
+        self.assertEqual(before["feature_dispatches"], 4)
+        from workflow_candidate import _repair_binding
+        checkpoint_binding = _repair_binding(self.run, "FEAT-001")
+        self.assertEqual(_repair_binding(self.run, "FEAT-001"), checkpoint_binding)
+        self.assertEqual(self.owner._load_control(self.run, "FEAT-001"), before)
+        with self.assertRaisesRegex(target.TargetError, "current counted evaluation gate"):
+            self.observe()
+        self.gate("validation", 0)
+        with self.assertRaisesRegex(execution.ExecutionError, "before its first revalidation gate"):
+            _repair_binding(self.run, "FEAT-001")
+        self.gate("tests", 1)
+        binding = self.observe()
+        self.assertEqual(self.observe(binding), binding)
+        with self.assertRaisesRegex(target.TargetError, "no completed"):
+            self.observe(binding, complete=True)
+        self.gate("evaluation", 2)
+        self.assertEqual(self.observe(binding, complete=True), binding)
+        self.assertEqual(self.owner._load_control(self.run, "FEAT-001")["feature_dispatches"], 4)
+        with self.assertRaises(target.TargetError):
+            self.observe({**binding, "repair_dispatch_id": "f" * 64}, complete=True)
+        with self.assertRaises(self.owner.RepairControlError):
+            self.repair(5)
+        self.assertEqual(self.owner._load_control(self.run, "FEAT-001")["feature_dispatches"], 4)
+        self.assertEqual(self.observe(binding, complete=True), binding)
+
+    def test_stale_target_and_missing_gate_source_cannot_qualify(self):
+        self.repair(1)
+        self.gate("validation", 0)
+        self.gate("tests", 1)
+        binding = self.observe()
+        self.target["head"] = "c" * 40
+        with self.assertRaises(target.TargetError):
+            self.observe()
+        with self.assertRaises(target.TargetError):
+            self.observe(binding)
+        self.target["head"] = self.head
+        self.gate("evaluation", 2)
+        (self.run / "evidence/FEAT-001/evaluation.json").unlink()
+        with self.assertRaises(target.TargetError):
+            self.observe(binding, complete=True)
+
 
 class ThreeTierTargetTests(unittest.TestCase):
     def setUp(self):
@@ -62,10 +156,12 @@ class ThreeTierTargetTests(unittest.TestCase):
             ),
         ):
             self.state = lifecycle.prepare(self.root)
-        self.project = Path(self.state["project_root"])
+        self.repo = Path(self.state["project_root"])
+        self.logical = Path(self.state["selected_project_root"])
+        self.project = self.logical
         self.home = Path(self.state["private_root"]) / "codex-home"
         self.environment = mock.patch.dict(
-            os.environ, {**lifecycle.owned_git_origin.environment(self.project), "CODEX_HOME": str(self.home), "SKILLS_AGENT": "codex", "CODEX_THREAD_ID": "target-root"}
+            os.environ, {**lifecycle.owned_git_origin.environment(self.repo), "CODEX_HOME": str(self.home), "SKILLS_AGENT": "codex", "CODEX_THREAD_ID": "target-root"}
         )
         self.environment.start()
         self.addCleanup(self.environment.stop)
@@ -73,6 +169,7 @@ class ThreeTierTargetTests(unittest.TestCase):
             'outcome':'Implement the planned behavior', 'scope':['fixture project'], 'constraints':[],
             'acceptance_criteria':['observable behavior passes'], 'clarifications':[],
             'provenance':{'kind':'direct_request','source_sha256':'a'*64}})
+        self.project = Path(initial['project_root'])
         self.run = Path(initial['run_dir'])
         self.run_id = self.run.name
         self.manifest = self.run.parent / 'project.json'
@@ -101,9 +198,15 @@ class ThreeTierTargetTests(unittest.TestCase):
             self.root, "sdlc-start", "PASS", "Exact hook registration observed.", [relative],
             coordinator_session="target-root",
         )
-        # The deterministic coordinator fixture selects its feature after startup.
+        # The synthetic coordinator selects its feature in a new checkpoint;
+        # preserve the immutable startup checkpoint and its observation receipt.
         current = json.loads((self.run / 'current-state.json').read_text())
         current['current_execution'] = 'FEAT-001'
+        ordinal = int(current['checkpoint_id'].removeprefix('checkpoint-')) + 1
+        current['checkpoint_id'] = f'checkpoint-{ordinal:04d}'
+        private_json(self.run / 'checkpoints' / (current['checkpoint_id'] + '.json'),
+                     initialize_phase._checkpoint(current))
+        private_json(self.run / 'checkpoints/latest.json', initialize_phase._pointer(current))
         private_json(self.run / 'current-state.json', current)
         publish_spec_pair(
             self.project,
@@ -145,14 +248,14 @@ class ThreeTierTargetTests(unittest.TestCase):
         coordinator = self.admit_and_prepare()
         startup = dict(self.state['workflow_startup'])
         continued = objectives.continue_run(
-            self.project, self.home, 'agentic-sdlc', 'continued-root'
+            self.logical, self.home, 'agentic-sdlc', 'continued-root'
         )
         self.assertEqual(continued['run_dir'], str(self.run))
         # The original native session may bind another objective after handoff.
         old_binding = self.home / 'sdlc-runs/bindings' / (objectives.session_hash('target-root') + '.json')
         private_json(old_binding, {'schema': 'foreign-binding'})
         with mock.patch.dict(os.environ, {'CODEX_THREAD_ID': 'continued-root'}):
-            self.assertEqual(self.resolve()['path'], coordinator['integration_worktree'])
+            self.assertEqual(self.resolve()['path'], str(Path(coordinator['integration_worktree']) / 'project-a'))
             objective_sha, basis_sha = lifecycle.phase_identity(self.state, 'sdlc-implement-plan')
             self.assertEqual(objective_sha, self.startup_observation['objective_sha256'])
             self.assertEqual(len(basis_sha), 64)
@@ -186,12 +289,12 @@ class ThreeTierTargetTests(unittest.TestCase):
         private_json(lock_path, lock)
         self.resolve()
 
-    def admit_and_prepare(self):
+    def admit_and_prepare(self, *, wave_check=None):
         refinement.ready(self.run)
         # Execute the documented initial admission: only the new canonical pair is dirty.
-        canonical = {"docs/requirements.md", "docs/design.md"}
+        canonical = {"project-a/docs/requirements.md", "project-a/docs/design.md"}
         self.assertEqual(
-            set(self.git("ls-files", "--others", "--exclude-standard").splitlines()),
+            set(self.git("ls-files", "--others", "--exclude-standard", path=self.project.parent).splitlines()),
             canonical,
         )
         self.assertEqual(self.git("diff", "--name-only"), "")
@@ -202,7 +305,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         )
         for name in canonical:
             self.assertEqual(
-                self.git("show", ":" + name), (self.project / name).read_text().strip()
+                self.git("show", ":" + name), (self.project.parent / name).read_text().strip()
             )
         self.assertEqual(self.git("rev-parse", "HEAD"), self.base)
         plans = self.run / "plans"
@@ -213,10 +316,17 @@ class ThreeTierTargetTests(unittest.TestCase):
         plan.chmod(0o600)
         plan.with_suffix(".md.lock").write_text("locked\n")
         plan.with_suffix(".md.lock").chmod(0o600)
+        if wave_check is not None:
+            from test_workflow_fixture import seed_validation
+            from workflow_validation import plan_path
+            seed_validation(plan)
+            validation = json.loads(plan_path(plan).read_text())
+            validation["wave_checks"] = [wave_check]
+            private_json(plan_path(plan), validation)
         # Exercise the preparation owner; a fixture commit would pre-satisfy
         # the exact product transition this composition test must observe.
         refinement.settle(self.run, self.claim)
-        coordinator = fixture_prepare_execution(self.run, self.project, "FEAT-001", plan, 1)
+        coordinator = fixture_prepare_execution(self.run, self.project, "FEAT-001", plan, 1, session="target-root")
         contract = self.git("rev-parse", "HEAD")
         self.assertEqual(self.git("rev-list", "--parents", "-n", "1", contract).split(),
                          [contract, self.base])
@@ -233,7 +343,7 @@ class ThreeTierTargetTests(unittest.TestCase):
 
     def unsealed_classifier_fixture(self):
         coordinator = self.admit_and_prepare()
-        integration = Path(coordinator["integration_worktree"])
+        integration = Path(coordinator["integration_worktree"]) / "project-a"
         document = integration / "README.md"
         document.write_text("Documentation awaiting its normal final seal.\n")
         current_path = self.run / "current-state.json"
@@ -242,7 +352,8 @@ class ThreeTierTargetTests(unittest.TestCase):
         return coordinator, integration, document
 
     def record_observed_phase(self, phase):
-        observation = {"phase_observation": phase} if phase == "sdlc-classify-failure" else {}
+        observation = ({"phase_observation": phase, "require_clean": False}
+                       if phase in {"sdlc-classify-failure", "sdlc-tdd", "sdlc-prepare-execution"} else {})
         selected = self.resolve(**observation)
         relative = f"evidence/phases/{phase}.json"
         private_json(Path(self.state["run_root"]) / relative, {
@@ -254,15 +365,15 @@ class ThreeTierTargetTests(unittest.TestCase):
         self.state = lifecycle.record_phase(self.root, phase, "PASS", "Deterministic owner observation.", [relative])
         return self.state["phases"][-1]
 
-    def pending_design_fixture(self, *, observe_preparation=False):
+    def pending_design_fixture(self, *, observe_preparation=False, test_revision=False):
         """Reach the observed native boundary through real owners; exits are synthetic."""
         from test_workflow_execution import GitLifecycleTests
         from workflow_state import read
         from workflow_publication import _basis
-        import workflow_design_revision as revision
+        import workflow_revision as revision
 
         coordinator = self.admit_and_prepare()
-        integration = Path(coordinator["integration_worktree"])
+        integration = Path(coordinator["integration_worktree"]) / "project-a"
         if observe_preparation:
             self.record_observed_phase("sdlc-prepare-execution")
         (integration / "test_contract.py").write_text("def test_contract():\n    assert False\n")
@@ -281,28 +392,35 @@ class ThreeTierTargetTests(unittest.TestCase):
         import repair_control
         from test_repair_control import failure_payload, design_diagnosis
 
-        payload = failure_payload(proposed="UNKNOWN_DEFECT", cause_status="unknown",
+        payload = failure_payload(proposed="TEST_DEFECT" if test_revision else "UNKNOWN_DEFECT",
+                                  cause_status="proven" if test_revision else "unknown",
                                   commit=parent, lifecycle="active_task")
         payload["phase"] = "sdlc-implement-plan"
         payload["fingerprints"] = {**{key: "sha256:" + value for key, value in before.items()},
                                    "plan": "sha256:" + coordinator["plan_digest"],
                                    "basis": "sha256:" + _basis(self.run, "FEAT-001")}
         event = repair_control.record_failure_event(self.run, payload)["event"]
-        diagnosis = repair_control.record_diagnosis(self.run, design_diagnosis(event))["diagnosis"]
+        diagnosis = (None if test_revision else
+                     repair_control.record_diagnosis(self.run, design_diagnosis(event))["diagnosis"])
         classification = repair_control.classify_failure(
-            self.run, "FEAT-001", event["event_id"], diagnosis["diagnosis_id"])["classification"]
+            self.run, "FEAT-001", event["event_id"], diagnosis["diagnosis_id"] if diagnosis else None)["classification"]
         dispatch = repair_control.begin_remediation(
-            self.run, "FEAT-001", classification["classification_id"], "design",
+            self.run, "FEAT-001", classification["classification_id"], "localized" if test_revision else "design",
             "Correct the proven contract at its semantic owner.", "evidence/design-cause.json")["attempt"]
-        prepared = revision.prepare_design_revision(
-            self.run, "FEAT-001", classification["classification_id"], dispatch["dispatch_id"],
-            [termination], "target-root")
+        if test_revision:
+            prepared = revision.prepare_test_revision(
+                self.run, "FEAT-001", classification["classification_id"], dispatch["dispatch_id"],
+                [termination], ["project-a/test_contract.py"], "target-root")
+        else:
+            prepared = revision.prepare_design_revision(
+                self.run, "FEAT-001", classification["classification_id"], dispatch["dispatch_id"],
+                [termination], "target-root")
         current = read(self.run / "current-state.json")
         private_json(self.run / "current-state.json", {**current, "current_phase": "sdlc-classify-failure"})
         return prepared, integration
 
     def test_material_design_replan_requires_fresh_classifier_and_preparation(self):
-        import workflow_design_revision as revision
+        import workflow_revision as revision
         from project_specs_lib.impact import statement_inventory
 
         prepared, integration = self.pending_design_fixture(observe_preparation=True)
@@ -338,7 +456,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         replacement.write_text(original.replace("Plan v1", "Plan v2") + "### TASK-002" +
                                original.split("### TASK-001", 1)[1].replace("src/a.py", "src/new.py"))
         replacement.with_suffix(".md.lock").write_text("locked\n")
-        fixture_replan_future(self.run, "FEAT-001", replacement, 1)
+        fixture_replan_future(self.run, "FEAT-001", replacement, 1, session="target-root")
         for phase in phases:
             with self.subTest(phase=phase), self.assertRaisesRegex(lifecycle.LifecycleError, "material identity"):
                 lifecycle.validate_phase_pass_artifact(self.state, phase, old[phase]["evidence"], historical_entry=old[phase])
@@ -373,6 +491,468 @@ class ThreeTierTargetTests(unittest.TestCase):
             with self.assertRaises(lifecycle.LifecycleError):
                 lifecycle.run_owned_compose(self.state, ["build", "web"])
             command.assert_not_called()
+
+    def test_pending_test_revision_is_observable_but_not_a_runtime_target(self):
+        prepared, integration = self.pending_design_fixture(test_revision=True)
+        coordinator_path = execution.coordinator_path(self.run, "FEAT-001")
+        original = coordinator_path.read_bytes()
+        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "independent-observer"}):
+            selected = self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+        self.assertEqual(selected["path"], str(integration))
+        self.assertEqual(selected["basis_sha256"], prepared["basis_sha256"])
+        self.assertEqual(coordinator_path.read_bytes(), original)
+        with self.assertRaisesRegex(target.TargetError, "stable pre-promotion"):
+            self.resolve(require_clean=False)
+
+    def test_pending_test_revision_tdd_output_is_observed_before_sealing(self):
+        prepared, integration = self.pending_design_fixture(test_revision=True)
+        tests = integration / "test_contract.py"
+        tests.write_text("def test_contract():\n    assert True\n")
+        current_path = self.run / "current-state.json"
+        current = json.loads(current_path.read_text())
+        for checkpoint in ("sdlc-tdd", "tests_red", "tests_ready"):
+            private_json(current_path, {**current, "current_phase": checkpoint})
+            before = {str(p): p.read_bytes() for p in Path(self.state["run_root"]).rglob("*") if p.is_file()}
+            with self.subTest(checkpoint=checkpoint):
+                with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "independent-observer"}):
+                    objective, basis = lifecycle.phase_identity(self.state, "sdlc-tdd")
+                    selected = self.resolve(require_clean=False, phase_observation="sdlc-tdd")
+                self.assertEqual(basis, prepared["basis_sha256"])
+                self.assertEqual(objective, prepared["objective_sha256"])
+                self.assertEqual(selected["head"], prepared["parent"])
+                self.assertEqual({str(p): p.read_bytes() for p in Path(self.state["run_root"]).rglob("*")
+                                  if p.is_file()}, before)
+        entry = self.record_observed_phase("sdlc-tdd")
+        self.assertEqual(entry["status"], "PASS")
+        self.assertEqual(json.loads(execution.coordinator_path(self.run, "FEAT-001").read_text())["status"],
+                         "test_revision_pending")
+        with self.assertRaises(target.TargetError):
+            self.resolve(require_clean=True, phase_observation="sdlc-tdd")
+        with mock.patch.object(lifecycle, "command") as command:
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.run_owned_compose(self.state, ["build", "web"])
+            command.assert_not_called()
+
+    def test_pending_test_tdd_observation_rejects_changed_scope_and_checkpoint(self):
+        prepared, integration = self.pending_design_fixture(test_revision=True)
+        current_path = self.run / "current-state.json"
+        current = {**json.loads(current_path.read_text()), "current_phase": "tests_ready"}
+        private_json(current_path, current)
+        self.resolve(require_clean=False, phase_observation="sdlc-tdd")
+        for changes in ({"current_phase": "sdlc-evaluate"}, {"status": "blocked"}):
+            try:
+                private_json(current_path, {**current, **changes})
+                with self.subTest(changes=changes), self.assertRaises(target.TargetError):
+                    self.resolve(require_clean=False, phase_observation="sdlc-tdd")
+            finally:
+                private_json(current_path, current)
+        document = integration / "README.md"
+        before = document.read_bytes()
+        try:
+            document.write_text("Unrelated product edit\n")
+            with self.assertRaises(target.TargetError):
+                self.resolve(require_clean=False, phase_observation="sdlc-tdd")
+        finally:
+            document.write_bytes(before)
+        wave = execution.wave_path(self.run, "FEAT-001", prepared["wave_id"])
+        before = wave.read_bytes()
+        try:
+            private_json(wave, {**json.loads(before), "active_task_ids": ["TASK-001"]})
+            with self.assertRaises(target.TargetError):
+                self.resolve(require_clean=False, phase_observation="sdlc-tdd")
+        finally:
+            wave.write_bytes(before)
+        self.resolve(require_clean=False, phase_observation="sdlc-tdd")
+
+    def integrated_plan_failure_fixture(self):
+        """Retire a real failed producer through classified, counted owner authority."""
+        import workflow_validation as validation
+        from workflow_state import read
+        scripts = ROOT / "sdlc-classify-failure/scripts"
+        if str(scripts) not in sys.path:
+            sys.path.insert(0, str(scripts))
+        import repair_control
+        from test_repair_control import failure_payload, localized_diagnosis
+
+        bad = "import runpy; assert runpy.run_path('test_contract.py')['VALUE'] == 1"
+        coordinator = self.admit_and_prepare(wave_check={
+            "id": "nested-contract", "argv": ["{python}", "-B", "-c", bad],
+            "execution_policy": {"observation_interval_seconds": 30, "deadline": None}, "environment_keys": [],
+        })
+        integration = Path(coordinator["integration_worktree"]) / "project-a"
+        (integration / "test_contract.py").write_text("VALUE = 1\n")
+        execution.seal_tdd_base(self.run, "FEAT-001", "Original test contract")
+        assignment = execution.prepare_wave(self.run, "FEAT-001", "WAVE-001")[0]
+        execution.arm_task(self.run, "FEAT-001", "WAVE-001", "TASK-001", assignment["assignment_digest"])
+        execution.start_task(self.run, "FEAT-001", "WAVE-001", "TASK-001", assignment["assignment_digest"],
+                             "fixture-TASK-001", Path(assignment["scope_cwd"]))
+        fixture_finish(self.run, "FEAT-001", "WAVE-001", "TASK-001", "unchanged contract", "review passed",
+                       "", summary="Existing contract", status="verified_no_change",
+                       coordinator_identity="target-root")
+        integrated = execution.integrate_wave(self.run, "FEAT-001", "WAVE-001")
+        produced = validation.produce(self.run, "FEAT-001", "WAVE-001", session="target-root")
+        self.assertEqual(produced["outcome"], "failed")
+        receipt = read(Path(produced["receipt_path"]))
+        payload = failure_payload(proposed="PLAN_DEFECT", commit=integrated["integration_head"],
+                                  lifecycle="integrated_wave")
+        payload["evidence_digests"]["evaluate"] = "sha256:" + validation.digest(receipt)
+        event = repair_control.record_failure_event(self.run, payload)["event"]
+        payload = localized_diagnosis(event)
+        payload.update(result="plan_defect", bounded_repair_target="Frozen command source path only.",
+                       affected_files=["plans/FEAT-001-v1.md.validation.json"])
+        diagnosis = repair_control.record_diagnosis(self.run, payload)["diagnosis"]
+        classification = repair_control.classify_failure(
+            self.run, "FEAT-001", event["event_id"], diagnosis["diagnosis_id"])["classification"]
+        attempt = repair_control.begin_remediation(
+            self.run, "FEAT-001", classification["classification_id"], "localized",
+            "Select the nested contract source.", "evidence/cwd-control.json")["attempt"]
+        execution.fail_wave(self.run, "FEAT-001", "WAVE-001",
+                            classification["classification_id"], attempt["dispatch_id"], "Nested check failed")
+        return coordinator, integrated, receipt, diagnosis, classification, attempt, bad
+
+    def integrated_plan_preparation_fixture(self):
+        """Reach corrective preparation through real failure, review and replan owners."""
+        import workflow_validation as validation
+        from workflow_state import read
+
+        coordinator, integrated, receipt, diagnosis, classification, attempt, bad = (
+            self.integrated_plan_failure_fixture()
+        )
+        original = Path(coordinator["plan_path"])
+        replacement = original.with_name("FEAT-001-v2.md")
+        replacement.write_text(original.read_text().replace("Plan v1", "Plan v2") + f"""
+
+### TASK-002
+
+- Requirements: REQ-001
+- Goal: Verify the unchanged contract with corrected source selection.
+- Depends on: TASK-001
+- Write claims: exact: project-a/src/a.py
+- Conflict domains: code:a
+- Validation: original contract
+- Done criteria: unchanged contract passes
+- Rollback or stop conditions: stop if criteria change
+- Diagnosis: {diagnosis['diagnosis_id']}
+- Regression oracle: {diagnosis['regression_oracle']}
+""")
+        replacement.chmod(0o600)
+        replacement.with_suffix(".md.lock").write_text("locked\n")
+        replacement.with_suffix(".md.lock").chmod(0o600)
+        previous = read(validation.plan_path(original))
+        revised = json.loads(json.dumps(previous))
+        revised["wave_checks"][0]["argv"][-1] = bad.replace("'test_contract.py'", "'project-a/test_contract.py'")
+        revised["task_checks"]["TASK-002"] = revised["wave_checks"]
+        private_json(validation.plan_path(replacement), revised)
+        impact_receipt, _ = execution.verify_current_objective_impact(self.run, self.project)
+        review = {
+            "schema": "workflow/validation-plan-review-v1",
+            "classification_id": classification["classification_id"], "dispatch_id": attempt["dispatch_id"],
+            "failed_receipt_sha256": validation.digest(receipt),
+            "prior_validation_plan_sha256": validation.digest(previous),
+            "replacement_validation_plan_sha256": validation.digest(revised),
+            "replacement_plan_sha256": hashlib.sha256(replacement.read_bytes()).hexdigest(),
+            "objective_sha256": self.startup_observation["objective_sha256"],
+            **{key: impact_receipt[key] for key in ("requirements_sha256", "design_sha256")},
+            "criteria_unchanged": True, "source_read_only": True,
+            "summary": "Only select the nested source; preserve the original assertion and product bytes.",
+        }
+        private_json(replacement.with_suffix(".md.validation-review.json"), review)
+        fixture_replan_future(self.run, "FEAT-001", replacement, 1, session="target-root")
+        current = read(self.run / "current-state.json")
+        private_json(self.run / "current-state.json", {**current, "current_phase": "execution_prepared"})
+        return integrated, review
+
+    def test_integrated_failure_classifier_observation_preserves_owner_state(self):
+        _, integrated, *_ = self.integrated_plan_failure_fixture()
+        current_path = self.run / "current-state.json"
+        private_json(current_path, {**json.loads(current_path.read_text()),
+                                    "current_phase": "sdlc-classify-failure"})
+        before = {str(p): p.read_bytes() for p in Path(self.state["run_root"]).rglob("*") if p.is_file()}
+        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "independent-observer"}):
+            objective, basis = lifecycle.phase_identity(self.state, "sdlc-classify-failure")
+            selected = self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+        self.assertEqual(selected["head"], integrated["integration_head"])
+        self.assertEqual(selected["basis_sha256"], basis)
+        self.assertEqual(objective, self.startup_observation["objective_sha256"])
+        self.assertEqual({str(p): p.read_bytes() for p in Path(self.state["run_root"]).rglob("*")
+                          if p.is_file()}, before)
+        self.assertEqual(self.record_observed_phase("sdlc-classify-failure")["status"], "PASS")
+        with self.assertRaisesRegex(target.TargetError, "stable pre-promotion"):
+            self.resolve(require_clean=False)
+        with mock.patch.object(lifecycle, "command") as command:
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.run_owned_compose(self.state, ["build", "web"])
+            command.assert_not_called()
+
+    def interposed_integrated_failure_fixture(self):
+        _, integrated, _, _, parent, attempt, _ = self.integrated_plan_failure_fixture()
+        import repair_control
+        from test_repair_control import failure_payload
+
+        payload = failure_payload(
+            proposed="VALIDATION_DEFECT", commit=integrated["integration_head"],
+            lifecycle="integrated_wave", component="private plan author",
+            operation="import validator", error_class="ImportError",
+            source_boundary="authoring helper API",
+            independent="Authoring import fails before a replacement plan is written.",
+        )
+        payload["phase"] = "sdlc-create-plan"
+        event = repair_control.record_failure_event(self.run, payload)["event"]
+        child = repair_control.classify_failure(self.run, "FEAT-001", event["event_id"])["classification"]
+        repair_control.begin_remediation(
+            self.run, "FEAT-001", child["classification_id"], "localized",
+            "Use the existing validator export.", "evidence/import-failure.json",
+        )
+        current = self.run / "current-state.json"
+        private_json(current, {**json.loads(current.read_text()),
+                               "current_phase": "sdlc-classify-failure"})
+        return integrated, parent, attempt
+
+    def test_interposed_integrated_failure_classifier_observation_is_read_only(self):
+        integrated, parent, attempt = self.interposed_integrated_failure_fixture()
+        import repair_control
+
+        before = {str(p): p.read_bytes() for p in Path(self.state["run_root"]).rglob("*") if p.is_file()}
+        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "independent-observer"}):
+            selected = self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+        self.assertEqual(selected["head"], integrated["integration_head"])
+        self.assertEqual({str(p): p.read_bytes() for p in Path(self.state["run_root"]).rglob("*")
+                          if p.is_file()}, before)
+        self.assertEqual(self.record_observed_phase("sdlc-classify-failure")["status"], "PASS")
+        with self.assertRaises(repair_control.RepairControlError):
+            repair_control.integrated_wave_authority(
+                self.run, "FEAT-001", parent["classification_id"], attempt["dispatch_id"])
+        with self.assertRaises(target.TargetError):
+            self.resolve(require_clean=False)
+        with mock.patch.object(lifecycle, "command") as command:
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.run_owned_compose(self.state, ["build", "web"])
+            command.assert_not_called()
+
+    def test_integrated_failure_classifier_rejects_changed_authority_and_live_writers(self):
+        self.integrated_plan_failure_fixture()
+        current_path = self.run / "current-state.json"
+        private_json(current_path, {**json.loads(current_path.read_text()),
+                                    "current_phase": "sdlc-classify-failure"})
+        coordinator_path = execution.coordinator_path(self.run, "FEAT-001")
+        wave_path = execution.wave_path(self.run, "FEAT-001", "WAVE-001")
+        control_path = self.run / "repairs/FEAT-001/repair-control.json"
+        operations = self.run / "execution/FEAT-001/validation/operations"
+        operation_path = next(operations.glob("*.json"))
+        for path, changes in (
+            (current_path, {"current_phase": "sdlc-evaluate"}),
+            (current_path, {"status": "blocked"}),
+            (coordinator_path, {"active_wave": "WAVE-001"}),
+            (wave_path, {"active_task_ids": ["TASK-001"]}),
+            (control_path, {"current_classification_id": "0" * 64}),
+            (operation_path, {"status": "running"}),
+        ):
+            before = path.read_bytes()
+            try:
+                private_json(path, {**json.loads(before), **changes})
+                with self.subTest(path=path.name, changes=changes), self.assertRaises(target.TargetError):
+                    self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+            finally:
+                path.write_bytes(before)
+        wave = json.loads(wave_path.read_text())
+        receipt = self.run / "execution/FEAT-001/validation/receipts" / (
+            wave["combined_failure"]["validation_failure"]["receipt_sha256"] + ".json"
+        )
+        before = receipt.read_bytes()
+        try:
+            value = json.loads(before)
+            value["outcomes"][0]["exit_code"] = 0
+            private_json(receipt, value)
+            with self.assertRaises(target.TargetError):
+                self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+        finally:
+            receipt.write_bytes(before)
+        lease = self.home / "workflow-resources/retained-runtime.json"
+        private_json(lease, {"run_dir": str(self.run), "status": "active"})
+        try:
+            with self.assertRaises(target.TargetError):
+                self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+        finally:
+            lease.unlink()
+        integration = Path(json.loads(coordinator_path.read_text())["integration_worktree"])
+        dirty = integration / "project-a/test_unsealed.py"
+        dirty.write_text("VALUE = 2\n")
+        try:
+            with self.assertRaises(target.TargetError):
+                self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+        finally:
+            dirty.unlink()
+        self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+
+    def test_interposed_classifier_still_requires_quiescence_and_clean_target(self):
+        self.interposed_integrated_failure_fixture()
+        coordinator = execution.coordinator_path(self.run, "FEAT-001")
+        operation = next((self.run / "execution/FEAT-001/validation/operations").glob("*.json"))
+        for path, changes in ((coordinator, {"active_wave": "WAVE-001"}),
+                              (operation, {"status": "running"})):
+            before = path.read_bytes()
+            try:
+                private_json(path, {**json.loads(before), **changes})
+                with self.subTest(path=path.name), self.assertRaises(target.TargetError):
+                    self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+            finally:
+                path.write_bytes(before)
+        lease = self.home / "workflow-resources/retained-runtime.json"
+        private_json(lease, {"run_dir": str(self.run), "status": "active"})
+        try:
+            with self.assertRaises(target.TargetError):
+                self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+        finally:
+            lease.unlink()
+        integration = Path(json.loads(coordinator.read_text())["integration_worktree"])
+        dirty = integration / "project-a/unsealed.py"
+        dirty.write_text("VALUE = 2\n")
+        try:
+            with self.assertRaises(target.TargetError):
+                self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+        finally:
+            dirty.unlink()
+        self.resolve(require_clean=False, phase_observation="sdlc-classify-failure")
+
+    def test_corrective_preparation_observation_preserves_reviewed_replan(self):
+        integrated, _ = self.integrated_plan_preparation_fixture()
+        before = {str(p): p.read_bytes() for p in Path(self.state["run_root"]).rglob("*") if p.is_file()}
+        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "independent-observer"}):
+            objective, basis = lifecycle.phase_identity(self.state, "sdlc-prepare-execution")
+            selected = self.resolve(require_clean=False, phase_observation="sdlc-prepare-execution")
+        self.assertEqual(selected["head"], integrated["integration_head"])
+        self.assertEqual(selected["basis_sha256"], basis)
+        self.assertEqual(objective, self.startup_observation["objective_sha256"])
+        self.assertEqual({str(p): p.read_bytes() for p in Path(self.state["run_root"]).rglob("*")
+                          if p.is_file()}, before)
+        entry = self.record_observed_phase("sdlc-prepare-execution")
+        self.assertEqual(entry["status"], "PASS")
+        self.assertEqual(json.loads(execution.coordinator_path(self.run, "FEAT-001").read_text())["status"],
+                         "repair_required")
+        with self.assertRaisesRegex(target.TargetError, "stable pre-promotion"):
+            self.resolve(require_clean=False)
+        with mock.patch.object(lifecycle, "command") as command:
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.run_owned_compose(self.state, ["build", "web"])
+            command.assert_not_called()
+
+    def test_corrective_preparation_rejects_incomplete_or_changed_owner_proofs(self):
+        _, review = self.integrated_plan_preparation_fixture()
+        self.resolve(require_clean=False, phase_observation="sdlc-prepare-execution")
+        current_path = self.run / "current-state.json"
+        coordinator_path = execution.coordinator_path(self.run, "FEAT-001")
+        future_path = execution.task_path(self.run, "FEAT-001", "WAVE-002", "TASK-002")
+        for path, changes in (
+            (current_path, {"current_phase": "sdlc-evaluate"}),
+            (current_path, {"status": "blocked"}),
+            (coordinator_path, {"active_wave": "WAVE-002"}),
+            (future_path, {"status": "running"}),
+        ):
+            before = path.read_bytes()
+            try:
+                private_json(path, {**json.loads(before), **changes})
+                with self.subTest(path=path.name, changes=changes), self.assertRaises(target.TargetError):
+                    self.resolve(require_clean=False, phase_observation="sdlc-prepare-execution")
+            finally:
+                path.write_bytes(before)
+        journal = execution.journal_path(self.run, "FEAT-001", "coordinator")
+        before = journal.read_bytes()
+        try:
+            rows = [json.loads(line) for line in before.splitlines()]
+            rows.pop()
+            journal.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            with self.assertRaisesRegex(target.TargetError, "completed owner replan"):
+                self.resolve(require_clean=False, phase_observation="sdlc-prepare-execution")
+        finally:
+            journal.write_bytes(before)
+        from workflow_validation import digest
+        archive = self.run / "execution/FEAT-001/validation/revisions" / (digest(review) + ".json")
+        before = archive.read_bytes()
+        try:
+            private_json(archive, {**review, "source_read_only": False})
+            with self.assertRaises(target.TargetError):
+                self.resolve(require_clean=False, phase_observation="sdlc-prepare-execution")
+        finally:
+            archive.write_bytes(before)
+        coordinator = json.loads(coordinator_path.read_text())
+        document = Path(coordinator["integration_worktree"]) / "project-a/README.md"
+        before = document.read_bytes()
+        try:
+            document.write_text("Unsealed product change\n")
+            with self.assertRaisesRegex(target.TargetError, "cleanliness"):
+                self.resolve(require_clean=False, phase_observation="sdlc-prepare-execution")
+        finally:
+            document.write_bytes(before)
+        self.resolve(require_clean=False, phase_observation="sdlc-prepare-execution")
+
+    def test_corrective_tdd_observation_preserves_reviewed_replan_and_sealed_tests(self):
+        integrated, _ = self.integrated_plan_preparation_fixture()
+        self.record_observed_phase("sdlc-prepare-execution")
+        current_path = self.run / "current-state.json"
+        current = json.loads(current_path.read_text())
+        for checkpoint in ("sdlc-tdd", "tests_red", "tests_ready"):
+            private_json(current_path, {**current, "current_phase": checkpoint})
+            before = {str(p): p.read_bytes() for p in Path(self.state["run_root"]).rglob("*")
+                      if p.is_file()}
+            with self.subTest(checkpoint=checkpoint), mock.patch.dict(
+                os.environ, {"CODEX_THREAD_ID": "independent-observer"}
+            ):
+                objective, basis = lifecycle.phase_identity(self.state, "sdlc-tdd")
+                selected = self.resolve(require_clean=False, phase_observation="sdlc-tdd")
+                self.assertEqual(selected["head"], integrated["integration_head"])
+                self.assertEqual(selected["basis_sha256"], basis)
+                self.assertEqual(objective, self.startup_observation["objective_sha256"])
+                self.assertEqual({str(p): p.read_bytes() for p in Path(self.state["run_root"]).rglob("*")
+                                  if p.is_file()}, before)
+        self.assertEqual(self.record_observed_phase("sdlc-tdd")["status"], "PASS")
+        self.assertEqual(json.loads(execution.coordinator_path(self.run, "FEAT-001").read_text())["status"],
+                         "repair_required")
+        with self.assertRaisesRegex(target.TargetError, "stable pre-promotion"):
+            self.resolve(require_clean=False)
+        with mock.patch.object(lifecycle, "command") as command:
+            with self.assertRaises(lifecycle.LifecycleError):
+                lifecycle.run_owned_compose(self.state, ["build", "web"])
+            command.assert_not_called()
+
+    def test_corrective_tdd_observation_rejects_dirty_or_changed_owner_proofs(self):
+        _, review = self.integrated_plan_preparation_fixture()
+        current_path = self.run / "current-state.json"
+        current = json.loads(current_path.read_text())
+        private_json(current_path, {**current, "current_phase": "tests_ready"})
+        coordinator_path = execution.coordinator_path(self.run, "FEAT-001")
+        future_path = execution.task_path(self.run, "FEAT-001", "WAVE-002", "TASK-002")
+        for path, changes in (
+            (current_path, {"current_phase": "execution_prepared"}),
+            (current_path, {"status": "blocked"}),
+            (coordinator_path, {"active_wave": "WAVE-002"}),
+            (future_path, {"status": "running"}),
+        ):
+            before = path.read_bytes()
+            try:
+                private_json(path, {**json.loads(before), **changes})
+                with self.subTest(path=path.name, changes=changes), self.assertRaises(target.TargetError):
+                    self.resolve(require_clean=False, phase_observation="sdlc-tdd")
+            finally:
+                path.write_bytes(before)
+        from workflow_validation import digest
+        archive = self.run / "execution/FEAT-001/validation/revisions" / (digest(review) + ".json")
+        before = archive.read_bytes()
+        try:
+            private_json(archive, {**review, "source_read_only": False})
+            with self.assertRaises(target.TargetError):
+                self.resolve(require_clean=False, phase_observation="sdlc-tdd")
+        finally:
+            archive.write_bytes(before)
+        coordinator = json.loads(coordinator_path.read_text())
+        test_file = Path(coordinator["integration_worktree"]) / "project-a/test_contract.py"
+        before = test_file.read_bytes()
+        try:
+            test_file.write_text("raise AssertionError('unsealed test edit')\n")
+            with self.assertRaisesRegex(target.TargetError, "cleanliness"):
+                self.resolve(require_clean=False, phase_observation="sdlc-tdd")
+        finally:
+            test_file.write_bytes(before)
+        self.resolve(require_clean=False, phase_observation="sdlc-tdd")
 
     def test_pending_design_observation_rejects_changed_checkpoint_and_proofs(self):
         prepared, _ = self.pending_design_fixture()
@@ -414,7 +994,7 @@ class ThreeTierTargetTests(unittest.TestCase):
 
     def unsealed_tdd_output_fixture(self, checkpoint):
         coordinator = self.admit_and_prepare()
-        integration = Path(coordinator["integration_worktree"])
+        integration = Path(coordinator["integration_worktree"]) / "project-a"
         tests = integration / "test_contract.py"
         tests.write_text("def test_pending_behavior():\n    assert False\n")
         current_path = self.run / "current-state.json"
@@ -596,7 +1176,7 @@ class ThreeTierTargetTests(unittest.TestCase):
     def admit_phase_then_reconcile_delivery(self, *, material=False):
         """Real owner publication/settlement; no fabricated execution basis."""
         coordinator = self.admit_and_prepare()
-        integration = Path(coordinator["integration_worktree"])
+        integration = Path(coordinator["integration_worktree"]) / "project-a"
         phase = "sdlc-prepare-execution"
         prior_basis = self.resolve()["basis_sha256"]
         relative = f"evidence/phases/{phase}.json"
@@ -627,7 +1207,7 @@ class ThreeTierTargetTests(unittest.TestCase):
             for row in claim["dispositions"]:
                 row.update(disposition="existing_contract", effects=[])
         refinement.settle(self.run, claim)
-        fixture_replan_future(self.run, "FEAT-001", Path(coordinator["plan_path"]), 1)
+        fixture_replan_future(self.run, "FEAT-001", Path(coordinator["plan_path"]), 1, session="target-root")
         current = json.loads((self.run / "current-state.json").read_text())
         private_json(self.run / "current-state.json", {**current, "current_phase": "sdlc-update-documents"})
         self.assertNotEqual(prior_basis, self.resolve(require_clean=False)["basis_sha256"])
@@ -664,7 +1244,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         for row in claim["dispositions"]:
             row.update(disposition="existing_contract", effects=[])
         refinement.settle(self.run, claim)
-        fixture_replan_future(self.run, "FEAT-001", Path(coordinator["plan_path"]), 1)
+        fixture_replan_future(self.run, "FEAT-001", Path(coordinator["plan_path"]), 1, session="target-root")
         with self.assertRaisesRegex(lifecycle.LifecycleError, "succession is missing or material"):
             lifecycle.validate_phase_pass_artifact(
                 self.state, phase, entry["evidence"], historical_entry=entry,
@@ -676,7 +1256,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         new = self.run / "plans/FEAT-001-v2.md"
         new.write_text(old.read_text().replace("Plan v1", "Plan v2"))
         new.with_suffix(".md.lock").write_text("locked\n")
-        fixture_replan_future(self.run, "FEAT-001", new, 1)
+        fixture_replan_future(self.run, "FEAT-001", new, 1, session="target-root")
         with self.assertRaisesRegex(lifecycle.LifecycleError, "material identity"):
             lifecycle.validate_phase_pass_artifact(
                 self.state, phase, entry["evidence"], historical_entry=entry,
@@ -684,11 +1264,11 @@ class ThreeTierTargetTests(unittest.TestCase):
 
     def promoted_corrective_tdd(
         self, *, observe_before_seal=False, unchanged_seal=False,
-        seal_message="Original test-only TDD",
+        seal_message="Original test-only TDD", authoring_checkpoint=False,
     ):
         """Exercise the real execution owner from original TDD through replan/promotion."""
         coordinator = self.admit_and_prepare()
-        integration = Path(coordinator["integration_worktree"])
+        integration = Path(coordinator["integration_worktree"]) / "project-a"
         current_path = self.run / "current-state.json"
         current = json.loads(current_path.read_text())
         checkpoint = ("tests_ready" if unchanged_seal else "tests_red") if observe_before_seal else "sdlc-tdd"
@@ -718,7 +1298,7 @@ class ThreeTierTargetTests(unittest.TestCase):
             execution.arm_task(self.run, "FEAT-001", wave, task, assignment["assignment_digest"])
             execution.start_task(self.run, "FEAT-001", wave, task, assignment["assignment_digest"],
                                  "fixture-" + task, Path(assignment["scope_cwd"]))
-            worker = Path(assignment["worktree"])
+            worker = Path(assignment["scope_cwd"])
             (worker / "src").mkdir(exist_ok=True)
             (worker / "src" / filename).write_text("VALUE = 1\n")
             fixture_finish(self.run, "FEAT-001", wave, task, "fixture validation", "fixture review",
@@ -735,7 +1315,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         new.chmod(0o600)
         new.with_suffix(".md.lock").write_text("locked\n")
         new.with_suffix(".md.lock").chmod(0o600)
-        fixture_replan_future(self.run, "FEAT-001", new, 1)
+        fixture_replan_future(self.run, "FEAT-001", new, 1, session="target-root")
         complete("WAVE-002", "TASK-002", "b.py")
         # Reproduce the live combination: corrective plan followed by a
         # delivery-only specification settlement before the final seal.
@@ -755,12 +1335,23 @@ class ThreeTierTargetTests(unittest.TestCase):
         for row in claim["dispositions"]:
             row.update(disposition="existing_contract", effects=[])
         refinement.settle(self.run, claim)
-        fixture_replan_future(self.run, "FEAT-001", new, 1)
+        fixture_replan_future(self.run, "FEAT-001", new, 1, session="target-root")
+        if authoring_checkpoint:
+            from workflow_candidate import checkpoint
+            from workflow_validation import produce
+            candidate = checkpoint(self.run, "FEAT-001", "corrective-delivery",
+                                   "Checkpoint canonical delivery", session="target-root")
+            self.assertEqual(self.resolve()["head"], candidate["head"])
+            self.assertEqual(produce(self.run, "FEAT-001", None, session="target-root")["outcome"], "passed")
         execution.seal_feature(self.run, "FEAT-001", "fixture validation", "Seal corrected fixture")
         promoted = execution.promote_feature(self.run, "FEAT-001", "fixture validation")
         self.state["git"]["promoted_sha"] = promoted["promoted_head"]
         private_json(current_path, {**current, "current_phase": "post-uat-documents"})
         return phase, entry, old, new
+
+    def test_canonical_checkpoint_is_observable_before_and_after_promotion(self):
+        self.promoted_corrective_tdd(observe_before_seal=True, authoring_checkpoint=True)
+        self.assertEqual(self.resolve()["head"], self.state["git"]["promoted_sha"])
 
     def test_unsealed_original_tdd_history_survives_completed_corrective_replan(self):
         phase, entry, _, _ = self.promoted_corrective_tdd(observe_before_seal=True)
@@ -902,6 +1493,17 @@ class ThreeTierTargetTests(unittest.TestCase):
                 self.state, phase, entry["evidence"], historical_entry=entry,
             )
 
+    def test_original_tdd_rejects_changed_frozen_acceptance_policy(self):
+        phase, entry, old, _ = self.promoted_corrective_tdd()
+        path = old.with_suffix(old.suffix + ".acceptance.json")
+        policy = json.loads(path.read_text())
+        policy["tasks"]["TASK-001"]["criteria"][0]["reason"] = "changed historical criterion"
+        private_json(path, policy)
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "acceptance policy changed"):
+            lifecycle.validate_phase_pass_artifact(
+                self.state, phase, entry["evidence"], historical_entry=entry,
+            )
+
     def test_original_tdd_replan_rejects_missing_completed_owner_transition(self):
         phase, entry, _, _ = self.promoted_corrective_tdd()
         journal = execution.journal_path(self.run, "FEAT-001", "coordinator")
@@ -1015,7 +1617,7 @@ class ThreeTierTargetTests(unittest.TestCase):
 
     def test_fresh_specs_admit_without_early_commit_and_target_real_integration(self):
         coordinator = self.admit_and_prepare()
-        integration = Path(coordinator["integration_worktree"])
+        integration = Path(coordinator["integration_worktree"]) / "project-a"
         before = {
             str(p.relative_to(self.run)): p.read_bytes()
             for p in self.run.rglob("*")
@@ -1114,7 +1716,7 @@ class ThreeTierTargetTests(unittest.TestCase):
             "unit-fixture-worker",
             Path(assignment["scope_cwd"]),
         )
-        worker = Path(assignment["worktree"])
+        worker = Path(assignment["scope_cwd"])
         (worker / "src").mkdir()
         (worker / "src/a.py").write_text("VALUE = 1\n")
         fixture_finish(
@@ -1190,6 +1792,74 @@ print(outcome)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stdout.strip(), expected)
 
+    def test_counted_validation_recovery_admits_only_its_active_worker_runtime(self):
+        from test_workflow_execution import GitLifecycleTests
+        from workflow_publication import _basis
+        from workflow_state import read
+        import workflow_reconcile as reconcile
+
+        coordinator = self.admit_and_prepare()
+        execution.seal_tdd_base(self.run, "FEAT-001", "Validation recovery test base")
+        assignment = execution.prepare_wave(self.run, "FEAT-001", "WAVE-001")[0]
+        current_path = self.run / "current-state.json"
+        current = read(current_path)
+        integration = Path(coordinator["integration_worktree"]) / "project-a"
+        fingerprints = {
+            key: "sha256:" + hashlib.sha256((integration / "docs" / f"{key}.md").read_bytes()).hexdigest()
+            for key in ("requirements", "design")
+        }
+        fingerprints.update(plan="sha256:" + coordinator["plan_digest"],
+                            basis="sha256:" + _basis(self.run, "FEAT-001"))
+        current.update(current_phase="sdlc-implement-plan",
+                       fingerprint_ids=[key + ":" + value for key, value in fingerprints.items()])
+        private_json(current_path, current)
+        private_json(self.run / "checkpoints" / (current["checkpoint_id"] + ".json"), current)
+        worker = GitLifecycleTests()
+        worker.run_dir, worker.session = self.run, "target-root"
+        worker.result_start(assignment)
+        worker.result_write(assignment)
+        receipt, termination, _ = worker.result_ingest(assignment, "blocked")
+        scripts = ROOT / "sdlc-classify-failure/scripts"
+        if str(scripts) not in sys.path:
+            sys.path.insert(0, str(scripts))
+        import repair_control
+        from test_repair_control import failure_payload
+
+        payload = failure_payload(proposed="VALIDATION_DEFECT")
+        for key in ("execution_id", "phase", "execution_lifecycle", "integration_commit", "fingerprints"):
+            payload.pop(key)
+        event = repair_control.capture_worker_failure(
+            self.run, "FEAT-001", "WAVE-001", "TASK-001",
+            read(receipt)["receipt_sha256"], payload)["event"]
+        classification = repair_control.classify_failure(
+            self.run, "FEAT-001", event["event_id"])["classification"]
+        repair_control.begin_remediation(
+            self.run, "FEAT-001", classification["classification_id"], "localized",
+            "Correct the proven worker packaging defect.", "evidence/runtime-failure.json")
+        native = "fresh-validation-runtime-worker"
+        reconcile.authorize_recovery(
+            self.run, "FEAT-001", "WAVE-001", "TASK-001", termination, "target-root",
+            hashlib.sha256(native.encode()).hexdigest())
+        execution.recover_task(
+            self.run, "FEAT-001", "WAVE-001", "TASK-001", native,
+            Path(assignment["scope_cwd"]), expected_attempt=1, confirmed_stopped=True)
+        private_json(current_path, {**read(current_path), "current_phase": "sdlc-validate-codes"})
+        assignment_path = execution.assignment_path(self.run, "FEAT-001", "WAVE-001", "TASK-001")
+        resource = "sdlc-three-tier-" + self.state["verification_id"]
+        resources.acquire(self.home, assignment_path, resource, native)
+        identity = {"worker_task": "TASK-001", "assignment_digest": assignment["assignment_digest"]}
+        before = {path: path.read_bytes() for path in (receipt, termination, current_path)}
+        self.assertEqual(self.resolve(**identity)["path"], assignment["scope_cwd"])
+        self.fresh_worker_compose(assignment, "pass")
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        control_path = self.run / "repairs/FEAT-001/repair-control.json"
+        control = read(control_path)
+        private_json(control_path, {**control, "status": "completed"})
+        self.fresh_worker_compose(assignment, "denied")
+        private_json(control_path, control)
+        resources.release(self.home, assignment_path, resource, native)
+        self.fresh_worker_compose(assignment, "denied")
+
     def test_worker_runtime_is_bound_to_one_live_scoped_assignment(self):
         self.admit_and_prepare()
         execution.seal_tdd_base(self.run, "FEAT-001", "Test fixture TDD boundary")
@@ -1212,7 +1882,7 @@ print(outcome)
             assignment["assignment_digest"], "runtime-fixture-worker",
             Path(assignment["scope_cwd"]),
         )
-        worker = Path(assignment["worktree"])
+        worker = Path(assignment["scope_cwd"])
         (worker / "src").mkdir()
         (worker / "src/a.py").write_text("VALUE = 1\n")
         with self.assertRaises(target.TargetError):
@@ -1263,9 +1933,10 @@ print(outcome)
         ):
             with self.subTest(invalid=invalid), self.assertRaises(target.TargetError):
                 self.resolve(**invalid)
-        private_json(current_path, {**current, "current_phase": "sdlc-uat-tests"})
-        with self.assertRaisesRegex(target.TargetError, "implementation wave"):
-            self.resolve(**identity)
+        for denied_phase in ("sdlc-uat-tests", "sdlc-validate-codes"):
+            private_json(current_path, {**current, "current_phase": denied_phase})
+            with self.assertRaises(target.TargetError):
+                self.resolve(**identity)
         private_json(current_path, {**current, "current_phase": "sdlc-implement-plan"})
         # A lease permits this worker even when independent slots exist.
         assignment_path = execution.assignment_path(self.run, 'FEAT-001', 'WAVE-001', 'TASK-001')
@@ -1315,10 +1986,12 @@ class StartupObservationTests(unittest.TestCase):
             mock.patch.object(lifecycle, "detect_browser", return_value=("chrome", "Google Chrome")),
         ):
             self.state = lifecycle.prepare(self.root)
-        self.project = Path(self.state["project_root"])
+        self.repo = Path(self.state["project_root"])
+        self.logical = Path(self.state["selected_project_root"])
+        self.project = self.logical
         self.home = Path(self.state["private_root"]) / "codex-home"
         self.enterContext(mock.patch.dict(os.environ, {
-            **lifecycle.owned_git_origin.environment(self.project),
+            **lifecycle.owned_git_origin.environment(self.repo),
             "CODEX_HOME": str(self.home), "SKILLS_AGENT": "codex", "CODEX_THREAD_ID": "native-child",
         }))
         accepted = objectives.accept(self.project, self.home, "agentic-sdlc", "native-child", {
@@ -1326,6 +1999,7 @@ class StartupObservationTests(unittest.TestCase):
             "constraints": [], "acceptance_criteria": ["observable behavior passes"], "clarifications": [],
             "provenance": {"kind": "direct_request", "source_sha256": "a" * 64},
         })
+        self.project = Path(accepted["project_root"])
         self.run = Path(accepted["run_dir"])
 
     def startup_artifact(self):

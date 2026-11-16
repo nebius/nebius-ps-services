@@ -138,10 +138,12 @@ from implement_errors import (  # noqa: E402
     LifecycleError,
     OwnershipBlockedError,
 )
+import implement_catalog as catalog  # noqa: E402
 
 
 OWNER = "implement-test"
-OWNER_VERSION = 1
+ROOT_OWNER_VERSION = 1
+GENERATION_VERSION = 2
 GENERATION_LABEL = "org.openai.implement-test.generation"
 PROJECT_LABEL = "org.openai.implement-test.compose-project"
 COMPOSE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{2,62}$")
@@ -266,12 +268,17 @@ def _stage_status(state: dict[str, Any], stage_id: str) -> str:
 def record_stage(
     root: Path, expected: str, stage_id: str, status_value: str, detail: str
 ) -> dict[str, Any]:
+    if stage_id == "browser-uat" and status_value == "PASS":
+        raise LifecycleError("browser PASS requires lifecycle collect-browser evidence")
+    if stage_id == "workflow-statistics" and status_value == "PASS":
+        raise LifecycleError("statistics PASS requires lifecycle validate-results evidence")
     with _locked_root(root) as owned:
         found = _active(owned)
         if found is None:
             raise LifecycleError("no active generation")
         state, run_path = found
         _validate_generation(state, expected)
+        catalog.validate(state, run_path)
         _set_stage(state, stage_id, status_value, detail)
         _atomic_json(run_path / "lifecycle.json", state)
         return {
@@ -297,12 +304,14 @@ def _ensure_root(root: Path) -> Path:
             raise OwnershipBlockedError(
                 "private root ownership marker is invalid"
             ) from exc
-        if owner != {"owner": OWNER, "version": OWNER_VERSION}:
+        if (not isinstance(owner, dict) or set(owner) != {"owner", "version"}
+                or owner["owner"] != OWNER or type(owner["version"]) is not int
+                or owner["version"] != ROOT_OWNER_VERSION):
             raise OwnershipBlockedError("private root ownership marker does not match")
     else:
         root.mkdir(parents=True, mode=0o700)
         os.chmod(root, 0o700)
-        _atomic_json(marker, {"owner": OWNER, "version": OWNER_VERSION})
+        _atomic_json(marker, {"owner": OWNER, "version": ROOT_OWNER_VERSION})
     return root
 
 
@@ -333,13 +342,28 @@ def _locked_root(root: Path) -> Iterator[Path]:
 
 
 def _run(
-    command: list[str], cwd: Path | None = None, timeout: float = 120
+    command: list[str], cwd: Path | None = None, timeout: float | None = 120
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     if command and command[0] == "git":
         env = {key: value for key, value in env.items() if not key.startswith("GIT_")}
         env["GIT_CONFIG_NOSYSTEM"] = "1"
         env["GIT_CONFIG_GLOBAL"] = os.devnull
+    if timeout is None:
+        from verify_implement import scheduler
+        owner = scheduler().source_module("workflow_process", Path(__file__).resolve().parents[2] / "worktree/scripts/workflow_process.py")
+        observation = owner.run_owned(command, cwd=cwd, env=env,
+            stdout_capture=owner.Capture(4 * 1024 * 1024), stderr_capture=owner.Capture(4 * 1024 * 1024),
+            on_observation=lambda row: print("Owned command continues; elapsed " + str(round(row["elapsed_seconds"], 1)) + " seconds", flush=True))
+        if not observation["local_group_quiescent"] or not all(observation[key]["complete"] for key in ("stdout", "stderr")):
+            raise LifecycleError("owned command termination is unproven; retain operation ownership")
+        outputs = [(observation[key]["data"] or b"[output omitted; bounded capture exceeded]").decode(errors="replace")
+                   if observation[key]["data"] != b"" else "" for key in ("stdout", "stderr")]
+        result = subprocess.CompletedProcess(command, observation["exit_code"], *outputs)
+        result.observation = observation
+        if result.returncode != 0:
+            raise LifecycleError("owned application launch failed (exit " + str(result.returncode) + ")")
+        return result
     try:
         completed = subprocess.run(
             command,
@@ -367,6 +391,11 @@ def _active(root: Path) -> tuple[dict[str, Any], Path] | None:
         raise OwnershipBlockedError("active and deleting lifecycle pointers conflict")
     if not pointer_path.exists():
         if not deleting_path.exists():
+            for name in ("runs", "deleting"):
+                directory = root / name
+                _reject_symlink_components(directory)
+                if directory.exists() and (not directory.is_dir() or any(directory.iterdir())):
+                    raise OwnershipBlockedError("unreferenced lifecycle resources block creation")
             return None
         raise LifecycleError("exact cleanup deletion is pending; run destroy to retry")
     pointer = _load_json(pointer_path)
@@ -407,7 +436,7 @@ def _active(root: Path) -> tuple[dict[str, Any], Path] | None:
     _reject_symlink_components(native_home)
     if not native_home.is_dir():
         raise OwnershipBlockedError("active lifecycle belongs to another agent")
-    if not state["active"] or state["version"] != OWNER_VERSION:
+    if not state["active"] or type(state["version"]) is not int or state["version"] != GENERATION_VERSION:
         raise OwnershipBlockedError("active lifecycle version or state is invalid")
     if not COMPOSE_RE.fullmatch(state["compose_project"]):
         raise LifecycleError("active Compose project name is invalid")
@@ -464,6 +493,8 @@ def _resume_deleting(root: Path) -> dict[str, Any] | None:
     if pending is None:
         return None
     generation, source, tombstone = pending
+    archived_root = root / "archive" / generation
+    catalog.validate(_load_json(archived_root / "lifecycle.json"), archived_root)
     if source.exists() and tombstone.exists():
         raise OwnershipBlockedError("cleanup source and tombstone both exist")
     if source.exists():
@@ -544,6 +575,18 @@ def _validate_project(
     return project
 
 
+def _application_project(state: dict, run_path: Path) -> Path:
+    repo = _validate_project(state, run_path)
+    if state.get("projects") != {"application": "project-a", "companion": "project-b"}:
+        raise OwnershipBlockedError("fixed multi-project fixture registration changed")
+    for name in ("project-a", "project-b"):
+        path = repo / name
+        _reject_symlink_components(path)
+        if not path.is_dir():
+            raise OwnershipBlockedError("registered project is missing")
+    return repo / "project-a"
+
+
 def _record_promoted_identity(
     state: dict[str, Any], project: Path, *, strict: bool
 ) -> None:
@@ -577,6 +620,14 @@ def _archive(root: Path, state: dict[str, Any], run_path: Path) -> None:
     ):
         raise LifecycleError("archive path escapes the private root")
     destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+    catalog.validate(state, run_path)
+    (destination / "evidence").mkdir(mode=0o700, exist_ok=True)
+    _atomic_json(destination / catalog.RELATIVE, _load_json(run_path / catalog.RELATIVE))
+    from implement_statistics import archive
+    try:
+        archive(run_path / (agent_name() + "-home"), destination / "statistics")
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
+        raise LifecycleError("Statistics retention is incomplete; preserve the owned home.") from error
     _atomic_json(destination / "lifecycle.json", state)
     report = run_path / "report.md"
     if report.is_file() and not report.is_symlink():
@@ -971,8 +1022,12 @@ def _destroy_without_trial(
     if found is None:
         return {"status": "ALREADY_DESTROYED"}
     state, run_path = found
-    for name in ("initial", "continuation"):
-        observation = run_path / "evidence" / (name + "-invocation.json")
+    catalog.validate(state, run_path)
+    catalog.validate_runtime_hooks(state, run_path)
+    from implement_browser import close_owned
+    close_owned(state, run_path)
+    _atomic_json(run_path / "lifecycle.json", state)
+    for observation in sorted((run_path / "evidence").glob("**/*-invocation.json")):
         if observation.exists() or observation.is_symlink():
             receipt = _load_json(observation)
             if receipt.get("cleanup_verified") is not True:
@@ -1101,6 +1156,7 @@ def _validate_runtime_preflight() -> None:
 def prepare(root: Path, fixture: Path) -> dict[str, Any]:
     fixture = _validate_fixture(fixture)
     _validate_runtime_preflight()
+    verified = catalog.preflight(root)
     with _locked_root(root) as owned:
         if _active(owned) is not None:
             _destroy_active(owned)
@@ -1112,7 +1168,12 @@ def prepare(root: Path, fixture: Path) -> dict[str, Any]:
         run_path.mkdir(parents=True, mode=0o700)
         project = run_path / "project"
         try:
-            _copy_fixture(fixture, project)
+            project.mkdir(mode=0o700)
+            _copy_fixture(fixture, project / "project-a")
+            companion = project / "project-b"
+            companion.mkdir(mode=0o700)
+            (companion / "README.md").write_text("# Companion CLI\n\nA local text utility.\n")
+            (companion / "text_tool.py").write_text("def normalize(value):\n    return value.strip()\n")
             _atomic_json(
                 project / ".implement-test.json",
                 {"generation_id": generation, "owner": OWNER},
@@ -1191,7 +1252,8 @@ def prepare(root: Path, fixture: Path) -> dict[str, Any]:
                 "owner": OWNER,
                 "retained": False,
                 "stages": default_live_stages(),
-                "version": OWNER_VERSION,
+                "version": GENERATION_VERSION,
+                "projects": {"application": "project-a", "companion": "project-b"},
                 "web_port": None,
             }
             _set_stage(
@@ -1200,6 +1262,7 @@ def prepare(root: Path, fixture: Path) -> dict[str, Any]:
                 "PASS",
                 "Owned local-only fixture, origin, and isolated Implement state were created.",
             )
+            catalog.freeze(owned, run_path, state, verified)
             _atomic_json(run_path / "lifecycle.json", state)
             _atomic_json(
                 owned / "active.json",
@@ -1210,6 +1273,8 @@ def prepare(root: Path, fixture: Path) -> dict[str, Any]:
                 "generation_id": generation,
                 "compose_project": compose_project,
                 "project": str(project),
+                "application_project": str(project / "project-a"),
+                "companion_project": str(project / "project-b"),
                 "agent_home": str(run_path / (agent_name() + "-home")),
                 "agent": agent_name(),
                 "evidence": str(run_path / "evidence"),
@@ -1505,9 +1570,10 @@ def validate_compose(root: Path, expected: str) -> dict[str, Any]:
             raise LifecycleError("no active generation")
         state, run_path = found
         _validate_generation(state, expected)
+        catalog.validate(state, run_path)
         if state["live_started"]:
             raise LifecycleError("cannot replace the Compose snapshot after live start")
-        project = _validate_project(state, run_path)
+        project = _application_project(state, run_path)
         for candidate in project.rglob("*"):
             if candidate.is_symlink():
                 raise LifecycleError("project symlinks are forbidden before Docker")
@@ -1572,10 +1638,11 @@ def compose_up(root: Path, expected: str) -> dict[str, Any]:
             raise LifecycleError("no active generation")
         state, run_path = found
         _validate_generation(state, expected)
+        catalog.validate(state, run_path)
         if state["live_started"]:
             raise LifecycleError("compose-up is single-attempt; clean and create again")
         _trusted_snapshot(state, run_path)
-        project = _validate_project(state, run_path)
+        project = _application_project(state, run_path)
         if any(_owned_resource_inventory(state).values()):
             raise LifecycleError(
                 "owned Docker resources already exist before compose-up"
@@ -1587,7 +1654,7 @@ def compose_up(root: Path, expected: str) -> dict[str, Any]:
             _run(
                 _compose_command(state, run_path, project, "up", "--build", "--detach"),
                 cwd=project,
-                timeout=900,
+                timeout=None,
             )
             published = _run(
                 _compose_command(state, run_path, project, "port", "frontend", "80"),
@@ -1624,10 +1691,11 @@ def _active_live(root: Path, expected: str) -> tuple[dict[str, Any], Path, Path]
         raise LifecycleError("no active generation")
     state, run_path = found
     _validate_generation(state, expected)
+    catalog.validate(state, run_path)
     if not state["live_started"]:
         raise LifecycleError("compose-up must succeed before live inspection")
     _trusted_snapshot(state, run_path)
-    project = _validate_project(state, run_path)
+    project = _application_project(state, run_path)
     return state, run_path, project
 
 
@@ -1647,7 +1715,7 @@ def _parse_compose_ps(output: str) -> list[dict[str, Any]]:
 
 
 def _compose_ps_active(
-    state: dict[str, Any], run_path: Path, project: Path, *, timeout: float = 120
+    state: dict[str, Any], run_path: Path, project: Path, *, timeout: float | None = 120
 ) -> dict[str, Any]:
     output = _run(
         _compose_command(state, run_path, project, "ps", "--all", "--format", "json"),
@@ -1764,6 +1832,41 @@ def collect_application(root: Path, expected: str) -> dict[str, Any]:
         }
 
 
+def collect_browser(root: Path, expected: str) -> dict[str, Any]:
+    from implement_browser import collect
+    from collect_live_evidence import _healthy_services
+    with _locked_root(root) as owned:
+        state, run_path, project = _active_live(owned, expected)
+        _record_promoted_identity(state, run_path / "project", strict=True)
+        def persist():
+            _atomic_json(run_path / "lifecycle.json", state)
+        def healthy():
+            _healthy_services(owned, expected, lambda _root, _generation, *, timeout:
+                              _compose_ps_active(state, run_path, project, timeout=timeout))
+        def restart():
+            _restart_api_active(state, run_path, project)
+            healthy()
+        try:
+            _validate_live_inventory(_owned_resource_inventory(state))
+            healthy()
+            result = collect(
+                state, run_path, persist=persist,
+                database=lambda task_id: _database_probe_active(state, run_path, project, task_id),
+                restart=restart,
+            )
+            _validate_live_inventory(_owned_resource_inventory(state))
+            if _git_value(run_path / "project", "rev-parse", "HEAD") != state["promoted_head"]:
+                raise LifecycleError("delivered source changed during browser acceptance")
+            _set_stage(state, "browser-uat", "PASS", "Owned Playwright UI, API/database correlation and restart checks passed.")
+            persist()
+            return result
+        except Exception as error:
+            outcome = "PARTIAL" if isinstance(error, CapabilityUnavailableError) else "FAIL"
+            _set_stage(state, "browser-uat", outcome, "Browser acceptance did not establish its required evidence.")
+            persist()
+            raise
+
+
 def validate_results(
     root: Path,
     expected: str,
@@ -1780,7 +1883,11 @@ def validate_results(
             raise LifecycleError("no active generation")
         state, run_path = found
         _validate_generation(state, expected)
+        catalog.validate(state, run_path)
+        catalog.validate_runtime_hooks(state, run_path, required=True)
         project = _validate_project(state, run_path)
+        from implement_browser import validate as validate_browser
+        validate_browser(state, run_path)
         expected_manifest = run_path / "evidence" / "live-results.json"
         manifest = manifest.expanduser().absolute()
         if (
@@ -1824,6 +1931,8 @@ def validate_results(
             raise LifecycleError(f"semantic evidence failed: {'; '.join(errors)[:500]}")
         if data.get("status") != "PASS":
             raise LifecycleError("canonical live results must have PASS status")
+        _set_stage(state, "workflow-statistics", "PASS",
+                   "Initial architecture, execution history and terminal delivery reports were independently verified.")
         state["semantic_status"] = "PASS"
         state["semantic_results_sha256"] = _sha256(manifest)
         state["semantic_project_head"] = data["project_head"]
@@ -1859,9 +1968,13 @@ def finish(
             raise LifecycleError("no active generation")
         state, run_path = found
         _validate_generation(state, expected)
+        catalog.validate(state, run_path)
+        catalog.validate_runtime_hooks(state, run_path, required=outcome == "PASS")
         if outcome == "PASS":
             project = _validate_project(state, run_path)
             _record_promoted_identity(state, project, strict=True)
+            from implement_browser import validate as validate_browser
+            validate_browser(state, run_path)
         elif keep:
             _validate_project(state, run_path, for_destroy=True)
         if outcome == "PASS" and (
@@ -1872,6 +1985,11 @@ def finish(
             raise LifecycleError(
                 "PASS requires generation-fenced canonical semantic validation"
             )
+        if outcome == "PASS":
+            manifest = run_path / "evidence/live-results.json"
+            if (not manifest.is_file() or manifest.is_symlink()
+                    or _sha256(manifest) != state.get("semantic_results_sha256")):
+                raise LifecycleError("validated semantic manifest changed before finish")
         canonical_report = run_path / "report.md"
         if report is None:
             if outcome == "PASS":
@@ -2024,6 +2142,7 @@ def main() -> int:
         "compose-ps",
         "restart-api",
         "collect-application",
+        "collect-browser",
     ):
         child = subparsers.add_parser(name)
         child.add_argument("--expected-generation", required=True)
@@ -2070,6 +2189,8 @@ def main() -> int:
             result = database_probe(args.root, args.expected_generation, args.task_id)
         elif args.action == "collect-application":
             result = collect_application(args.root, args.expected_generation)
+        elif args.action == "collect-browser":
+            result = collect_browser(args.root, args.expected_generation)
         elif args.action == "validate-results":
             result = validate_results(
                 args.root,

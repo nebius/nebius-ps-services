@@ -45,12 +45,19 @@ class Publication:
     required: bool = False
     credentials: Any = None
     acquired: bool = False
+    repair: dict | None = None
 
     @property
     def transport(self) -> Handoff:
         if not self.target:
             raise RuntimeError("Runtime route publication has no verified guest transport")
-        return Handoff(self.ssh, self.target, self.instance, self.local)
+        return Handoff(
+            self.ssh,
+            self.target,
+            self.instance,
+            self.local,
+            repair_operation=self.repair["operation"] if self.repair else None,
+        )
 
     @property
     def holder(self) -> str:
@@ -83,6 +90,8 @@ class Publication:
 
     def preview_journal(self) -> RouteJournal:
         current = RouteJournal(self.journal.project, self.journal.gateway)
+        if self.repair is not None:
+            return current
         owner = self.observed["authority"]
         if owner and owner["writer"] == "runtime" and not self.journal.pending():
             return ObservedJournal(current.project, current.gateway, self.observed["journal"])
@@ -178,7 +187,7 @@ class Publication:
         if self.target:
             current = self.transport.inspect()
             owner = current["authority"]
-            if owner is not None:
+            if owner is not None or self.repair is not None:
                 if self.released(current):
                     self.acquired = False
                 else:
@@ -194,7 +203,46 @@ class Publication:
     def acquire(self) -> None:
         if self.acquired:
             return
-        current = self.transport.reserve(self.holder, self.predecessor)
+        if self.repair is not None:
+            current = self.transport.inspect()
+            authority = current["authority"]
+            verified = (
+                self.journal.state["transaction"]["progress"][RESERVATION]
+                == Progress.VERIFIED.value
+            )
+            if not (
+                verified
+                and authority
+                and authority["writer"] == "workstation"
+                and authority["holder"] == self.holder
+            ):
+                self.transport.call(
+                    {
+                        "action": "repair-reserve",
+                        "holder": self.holder,
+                        "expected": digest(self.predecessor),
+                        "operation": self.repair["operation"],
+                        "journal": self.repair["journal"],
+                    }
+                )
+            self.acquired = True
+            return
+        previous = self.predecessor["authority"]
+        if previous and previous["writer"] == "workstation" and previous["holder"] != self.holder:
+            from .ordinary_replan import transferred_snapshot
+
+            retirement = self.journal.retirement()
+            if (
+                retirement is None
+                or not self.journal.retirement_completed(retirement["proof"])
+                or self.instance.hostname not in retirement["proof"]["route_authority"]
+                or self.predecessor != transferred_snapshot(retirement["proof"], self.instance.hostname)
+                or self.journal.state["bindings"].get(RESERVATION) != self.desired
+            ):
+                raise RuntimeError("Route reservation lacks a settled, approved predecessor")
+            current = self.transport.supersede_reservation(previous["holder"], self.holder, self.predecessor)
+        else:
+            current = self.transport.reserve(self.holder, self.predecessor)
         if self.predecessor["authority"] and self.predecessor["authority"]["writer"] == "runtime":
             local = RouteJournal(self.journal.project, self.journal.gateway)
             transaction = local.transaction()
@@ -313,7 +361,13 @@ class Publication:
 
 
 def inspect(
-    journal: Any, ssh: Any, instances: tuple, local: dict, targets: dict
+    journal: Any,
+    ssh: Any,
+    instances: tuple,
+    local: dict,
+    targets: dict,
+    *,
+    repair: dict | None = None,
 ) -> Publication | None:
     # Retire an installed Single-VM writer through the same composed command
     # when the existing ordinary provisioning owner changes cardinality.
@@ -385,7 +439,14 @@ def inspect(
         ):
             raise RuntimeError("Credential recovery requires the exact installed Compute target")
         recovery = OrdinaryCredentialRecovery(
-            value, lambda: Handoff(ssh, target, instance, local).read_credential(value)
+            value,
+            lambda: Handoff(
+                ssh,
+                target,
+                instance,
+                local,
+                repair_operation=repair["operation"] if repair else None,
+            ).read_credential(value),
         )
     plan = inspect_managed_vm_ha_credentials(
         project_id=journal.project,
@@ -414,4 +475,5 @@ def inspect(
         predecessor,
         plan,
         runtime_enabled=runtime_enabled,
+        repair=repair,
     )

@@ -74,6 +74,7 @@
     "./shell-scripting",
     "./system-design-rules",
     "./terraform",
+    "./test-live-on-nebius",
     "./test-software-in-container",
     "./troubleshoot",
     "./update-branch",

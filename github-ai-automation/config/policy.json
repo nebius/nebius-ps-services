@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "max_fix_attempts": 2,
+  "stage_timeout_seconds": 1800,
+  "live_timeout_seconds": 3600,
+  "live_capabilities": {}
+}

@@ -40,6 +40,10 @@ states, and independent runtime evidence.
 
 Apply these checks only where the workload needs the corresponding capability.
 They do not mandate new services, caches, memory, or workflow infrastructure.
+Additional checks cover resource pressure and intermediate allocation, lifetime
+delegation budgets, SDK helper admission, cleanup after expiry, purpose-scoped
+approval and restore barriers for revoked data. Framework selection stays in
+`ai-stack`, including its preferred SDK and explicit override policy.
 Public primary sources support the underlying principles; stronger safeguards
 are explicitly identified as design rules requiring system-specific proof.
 No private project contracts or deployment values are needed to use the skill.
@@ -68,6 +72,8 @@ No private project contracts or deployment values are needed to use the skill.
 - `references/runtime-architecture-and-sessions.md`: trusted control,
   execution, and durable-state separation; provider-neutral interfaces;
   final request enforcement; sessions; bounded loops; and operator controls.
+- `references/resource-safety-and-admission.md`: trustworthy resource
+  measurements, bounded producers, pressure policy and disjoint child budgets.
 - `references/contracts-context-and-memory.md`: task, agent, context,
   provenance, derivation lineage, budgets, artifact access, cache eligibility,
   and memory contracts.

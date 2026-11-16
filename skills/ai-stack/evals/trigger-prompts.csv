@@ -25,3 +25,5 @@ ai-stack-negative-06,false,"Decide whether these capabilities should be determin
 ai-stack-codex-portability,true,"$ai-stack Choose the model runtime, agent framework, retrieval layer, and evaluation stack for this AI application."
 ai-stack-claude-portability,true,"/ai-stack Choose the model runtime, agent framework, retrieval layer, and evaluation stack for this AI application."
 ai-stack-quoted-command,false,"Treat ""/skills:ai-stack"" as sample text in this punctuation exercise; count its punctuation characters only."
+ai-stack-positive-sdk-preference,true,Select a general agent framework with OpenAI Agents SDK as our preference and a non-OpenAI model provider.
+ai-stack-positive-sdk-override,true,Review our explicitly chosen Pydantic AI stack without changing the framework.

@@ -246,10 +246,9 @@ def test_nested_vm_manager_lifetime_remains_open_for_outer_command() -> None:
     assert hasattr(_run_vm_ha_planned_transfer, "__wrapped__")
 
 
-HELP_ENV = {"COLUMNS": "120", "LINES": "200"}
+HELP_ENV = {"COLUMNS": "180", "LINES": "200"}
 EXPECTED_ROOT_COMMANDS = (
     "create-config",
-    "vm-ha",
     "prep-network",
     "validate-config",
     "apply",
@@ -267,7 +266,6 @@ EXPECTED_ROOT_COMMANDS = (
 )
 EXPECTED_PUBLIC_COMMAND_PATHS = (
     ("create-config",),
-    ("vm-ha",),
     ("prep-network",),
     ("validate-config",),
     ("apply",),
@@ -345,7 +343,6 @@ def _isolate_vm_ha_apply_identity_preflight(
         "nebius_vpngw.cli.ensure_managed_vm_ha_credentials",
         lambda managed_plan, **_kwargs: SimpleNamespace(
             credentials=managed_plan.credentials,
-            token_identity=SimpleNamespace(token="managed-token"),
         ),
     )
 
@@ -1345,10 +1342,12 @@ def test_missing_standby_direct_apply_points_to_vm_ha_without_claiming_a_digest(
 
     refusal, next_action = _missing_standby_apply_approval_lines(config_path)
 
-    assert refusal == "Missing standby replacement must be approved through vm-ha."
+    assert (
+        refusal == "Missing standby replacement must be approved through the current HA apply plan."
+    )
     assert "digest" not in refusal
     assert next_action == (
-        "Next: run nebius-vpngw vm-ha --local-config-file "
+        "Next: run nebius-vpngw apply --local-config-file "
         f"{shlex.quote(str(config_path))} to create the missing non-owner VM."
     )
 
@@ -1480,7 +1479,7 @@ def test_apply_missing_attached_disk_stops_before_deployment(
         result = CliRunner().invoke(app, ["apply", "-c", str(config_path)])
 
     assert result.exit_code != 0
-    assert "attached boot disk is unavailable" in str(result.exception)
+    assert "attached boot disk is unavailable" in result.output
     assert "Apply completed successfully" not in result.stdout
     assert "VM does not exist" not in result.stdout
     FakeVMManager.ensure_group.assert_not_called()
@@ -1836,7 +1835,7 @@ def test_never_ha_sa_apply_selects_sa_before_compute_and_needs_no_operator_or_vp
         )
 
     assert result.exit_code == 1
-    assert "incomplete gateway target set" in str(result.exception)
+    assert "incomplete gateway target set" in result.output
     check_changes.assert_called_once()
     operator_auth.assert_not_called()
     compute_read.assert_called_once()
@@ -2575,8 +2574,8 @@ def test_ha_to_non_ha_destructive_abort_happens_before_teardown(
     if additional_member == "missing":
         assert "bootstrap SSH public key" in result.output
     else:
-        assert isinstance(result.exception, RuntimeError)
-        assert "removal separately" in str(result.exception)
+        assert isinstance(result.exception, SystemExit)
+        assert "removal separately" in result.output
     assert teardown == []
 
 
@@ -2682,7 +2681,7 @@ def test_apply_waits_for_readiness_but_not_identity_failure(
 
     if identity_failure:
         assert result.exit_code == 1
-        assert isinstance(result.exception, RuntimeError)
+        assert isinstance(result.exception, SystemExit)
         assert pushed_targets == []
     else:
         assert result.exit_code == 0
@@ -3317,7 +3316,7 @@ def test_vm_ha_peer_rotation_preparation_rejects_each_approval_flag_before_effec
         )
 
     assert result.exit_code != 0
-    assert "cannot be combined" in result.output
+    assert "invalid-arguments" in result.output
 
 
 def test_vm_ha_managed_apply_orders_exact_non_owner_before_promoted_owner() -> None:
@@ -3611,6 +3610,20 @@ def test_activation_recovery_approval_requires_exact_configured_active_reset() -
         _vm_ha_activation_recovery_approval_state(plan, lifecycle, stale_owner)
 
 
+def test_changed_activation_intent_is_classified_before_exact_resume():
+    from nebius_vpngw.cli import _require_vm_ha_resume_intent
+
+    state = _lifecycle_state(status=VMHALifecycleStatus.ACTIVATING)
+    assert state.transaction is not None
+    path = Path("gateway with spaces.yaml")
+    _require_vm_ha_resume_intent(state, state.transaction.desired_state_digest, path)
+    changed = "1" * 64 if state.transaction.desired_state_digest != "1" * 64 else "2" * 64
+    with pytest.raises(RuntimeError, match="cannot resume") as error:
+        _require_vm_ha_resume_intent(state, changed, path)
+    assert "--local-config-file 'gateway with spaces.yaml' --repair" in str(error.value)
+    assert "no overall outage limit" in str(error.value)
+
+
 def test_failed_passive_replacement_digest_binds_checkpoint_and_exact_observation() -> None:
     members = (
         VMHALifecycleMember(
@@ -3729,7 +3742,11 @@ def test_failed_passive_replacement_digest_binds_checkpoint_and_exact_observatio
         _vm_ha_failed_passive_replacement_plan(plan, state, changed)
 
 
-def test_missing_standby_approval_binds_managed_ssh_rotation() -> None:
+@pytest.mark.parametrize("after_repair", (False, True))
+@pytest.mark.parametrize("drift", (None, "compute", "disk", "allocation", "route"))
+def test_missing_standby_approval_binds_managed_ssh_rotation(
+    tmp_path: Path, after_repair: bool, drift: str | None
+) -> None:
     members = (
         VMHALifecycleMember(
             instance_index=0,
@@ -3829,11 +3846,53 @@ def test_missing_standby_approval_binds_managed_ssh_rotation() -> None:
         predecessor_projection_sha256="f" * 64,
     )
     plan = SimpleNamespace(vm_ha=object())
+    assert state.transaction is not None
+    resources = dict(state.transaction.resource_bindings)
+    if after_repair:
+        from nebius_vpngw.repair_guest import GUARD
+
+        resources["heartbeat-initial-artifact"] = "a" * 64
+        for member in members:
+            resources["repair-reset:" + member.instance_name] = json.dumps(
+                {
+                    "operation": state.transaction.operation_id,
+                    "compute": member.compute_id,
+                    "disk": member.disk_id,
+                    "artifact": "a" * 64,
+                    "boot": "boot-" + member.node_id,
+                    "guard": hashlib.sha256(GUARD).hexdigest(),
+                }
+            )
+    if drift == "route":
+        resources["route:managed-route"] = "foreign-route"
+    state = replace(
+        state,
+        transaction=replace(
+            state.transaction,
+            approval_kind="repair" if after_repair else "migration",
+            resource_bindings=tuple(sorted(resources.items())),
+            checkpoint="activation-complete",
+            completed_effects=("repair-reset-node-active", "repair-reset-node-passive")
+            if after_repair
+            else (),
+        ),
+    )
+    before = state.record_sha256
+    if drift == "compute":
+        observation["members"][0]["compute_id"] = "foreign-compute"
+    elif drift == "disk":
+        observation["members"][0]["boot_disk_id"] = "foreign-disk"
+    elif drift == "allocation":
+        observation["shared_allocation"]["allocation_id"] = "foreign-allocation"
 
     with patch(
         "nebius_vpngw.cli._vm_ha_desired_approval_state",
         return_value=desired,
     ):
+        if drift is not None:
+            with pytest.raises(ValueError, match="owner is not stable|identity drift"):
+                _vm_ha_missing_standby_replacement_plan(plan, state, observation)
+            return
         without_rotation = _vm_ha_missing_standby_replacement_plan(
             plan,
             state,
@@ -3859,6 +3918,42 @@ def test_missing_standby_approval_binds_managed_ssh_rotation() -> None:
     assert with_rotation.approval_digest != without_rotation.approval_digest
     assert with_rotation.operation_id != without_rotation.operation_id
     assert changed_predecessor.approval_digest != with_rotation.approval_digest
+    assert state.record_sha256 == before
+    assert dict(state.transaction.resource_bindings) == resources
+    successor = VMHALifecycleState.start_missing_standby_replacement(
+        state,
+        target_instance_name=without_rotation.target_instance_name,
+        replacement_cycle=without_rotation.replacement_cycle,
+        replacement_disk_name=without_rotation.replacement_disk_name,
+        operation_id=without_rotation.operation_id,
+        approval_digest=without_rotation.approval_digest,
+        desired_state_digest=state.transaction.desired_state_digest,
+        current_state_digest=_canonical_digest(observation),
+        current_observation=observation,
+        artifact_sha256="a" * 64,
+    )
+    store = VMHALifecycleStore(tmp_path / "gateway.yaml")
+    store.write_verified(state)
+    if after_repair:
+        altered = dict(successor.transaction.resource_bindings)
+        del altered["repair-reset:gateway-1"]
+        with pytest.raises(ValueError, match="changed prior audit history"):
+            store.write_verified(
+                replace(
+                    successor,
+                    transaction=replace(
+                        successor.transaction, resource_bindings=tuple(sorted(altered.items()))
+                    ),
+                ),
+                predecessor_sha256=before,
+            )
+        assert (
+            store.read(expected_project_id="project-test", expected_gateway_name="gateway") == state
+        )
+    store.write_verified(successor, predecessor_sha256=before)
+    assert (
+        store.read(expected_project_id="project-test", expected_gateway_name="gateway") == successor
+    )
 
 
 def test_vm_ha_apply_stops_before_external_mutation_when_runtime_is_blocked(
@@ -3976,7 +4071,7 @@ def test_vm_ha_apply_failed_retained_trust_preflight_does_not_create_default_dir
 
     assert result.exit_code == 1
     assert "SSH trust preflight failed before external mutation" in result.stdout
-    assert "original SSH private host key for retained member gateway-0" in result.stdout
+    assert "retained-ssh-identity-unavailable" in result.stdout
     assert calls == ["construct", "discover"]
     scope = VMHASSHTrustScope(
         tenant_id="tenant-a",
@@ -4029,8 +4124,9 @@ def test_vm_ha_apply_routes_cli_auth_failure_around_ssh_preflight_to_renderer(
         result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
 
     assert result.exit_code == 1
-    assert "VM-HA apply stopped: Nebius cloud authentication was rejected." in result.stdout
-    assert "Refresh the Nebius CLI profile or replace NEBIUS_IAM_TOKEN" in result.stdout
+    assert "authentication-or-provider-unavailable" in result.stdout
+    assert "Restore the selected authentication" in result.stdout
+    assert "Repair prerequisite:" in result.stdout
     assert "SSH trust preflight failed" not in result.stdout
     assert "PRIVATE_CLI_AUTH_DETAIL" not in result.stdout
     assert "Traceback" not in result.stdout
@@ -4221,7 +4317,7 @@ def test_vm_ha_apply_retains_lifecycle_identity_before_replacement(
         )
 
     assert result.exit_code == 1
-    assert "stop after lifecycle retention classification" in result.output
+    assert "stop after lifecycle retention classification" not in result.output
     assert require_policy.call_args.kwargs["enrollment_hosts"] == (
         set() if staged_recreate else {instances[1].hostname}
     )
@@ -4236,13 +4332,13 @@ def test_vm_ha_apply_retains_lifecycle_identity_before_replacement(
         (
             VMHAReplacementSSHIdentityProblem.OPERATOR_SOURCE_CONFLICT,
             "remove VPNGW_SSH_KNOWN_HOSTS_FILE and VPNGW_SSH_HOST_KEYS_DIR from the "
-            "intended product-managed invocation, then rerun vm-ha to resume the "
+            "intended product-managed invocation, then rerun apply to resume the "
             "checkpointed SSH identity rotation",
         ),
         (
             VMHAReplacementSSHIdentityProblem.MANAGED_PREDECESSOR_UNAVAILABLE,
             "restore the exact product-managed SSH trust predecessor bound to the "
-            "checkpointed rotation, then rerun vm-ha",
+            "checkpointed rotation, then rerun apply",
         ),
     ),
 )
@@ -4358,8 +4454,9 @@ def test_vm_ha_nebius_credential_failure_precedes_auth_manager_and_cloud(
         result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
 
     assert result.exit_code == 1
-    assert isinstance(result.exception, ValueError)
-    assert "Nebius credentials for node-a are unavailable" in str(result.exception)
+    assert "configuration-invalid" in result.stdout
+    assert isinstance(result.exception, SystemExit)
+    assert "Nebius credentials for node-a are unavailable" not in result.output
     authenticate.assert_not_called()
     manager.assert_not_called()
     cloud.assert_not_called()
@@ -4370,6 +4467,7 @@ def test_vm_ha_nebius_credential_failure_precedes_auth_manager_and_cloud(
 @pytest.mark.parametrize("cloud_drift", [False, True])
 def test_vm_ha_migration_preserves_approval_through_durable_intent(
     tmp_path: Path,
+    monkeypatch,
     with_removed_tombstone: bool,
     ordinary_handoff_preview,
     execute: bool,
@@ -4438,8 +4536,36 @@ def test_vm_ha_migration_preserves_approval_through_durable_intent(
         fresh_identity_approval_sha256="1" * 64,
     )
     reservation_entered = [False]
+    from nebius_vpngw.deploy.vm_ha_package import VMHAPackagePlan
+
+    package = VMHAPackagePlan(
+        "203.0.113.99",
+        instances[0],
+        None,
+        {"wheel_sha256": "f" * 64},
+        {},
+        [],
+        ["install"],
+        "compute-active",
+        None,
+    )
+    staged_parents = []
+
+    def package_plan(artifact, **kwargs):
+        artifact.dependency_plans = ((instances[0].hostname, package),)
+        return artifact
+
+    def stage(_ssh, selected, *_args, **_kwargs):
+        assert selected is package
+        assert len(selected.manifest["ha_parent"]) == 64
+        staged_parents.append(selected.manifest["ha_parent"])
+
+    monkeypatch.setattr("nebius_vpngw.cli._plan_vm_ha_package_dependencies", package_plan)
+    monkeypatch.setattr("nebius_vpngw.deploy.vm_ha_package.stage", stage)
 
     def reserve(*args, **kwargs):
+        assert kwargs["package"] is package
+        assert staged_parents == [package.manifest["ha_parent"]]
         reservation_entered[0] = True
         return nullcontext(Mock())
 
@@ -4521,17 +4647,25 @@ def test_vm_ha_migration_preserves_approval_through_durable_intent(
             input="y\n" if execute else None,
         )
 
+    if not reservation_entered[0] and result.exception is not None:
+        import traceback
+
+        pytest.fail("".join(traceback.format_exception(result.exception.__context__)))
     if execute:
+        assert reservation_entered[0], (result.stdout, result.exception)
         if cloud_drift:
             durable_intent.assert_not_called()
-            assert "approval became stale before durable intent" in result.stdout
+            assert "approval-state-changed" in result.stdout
             return
         assert "approval became stale" not in result.stdout, result.stdout
         assert durable_intent.call_count == 1, (result.stdout, result.exception)
-        assert isinstance(result.exception, AssertionError)
-        assert str(result.exception) == "durable boundary reached"
+        assert isinstance(result.exception, SystemExit)
+        assert result.exit_code == 1
+        assert "durable boundary reached" not in result.output
         return
     durable_intent.assert_not_called()
+    assert "ha_parent" not in package.manifest
+    assert staged_parents == []
     assert result.exit_code == 0, result.stdout
     assert "Ordinary gateway to VM-HA migration plan" in result.stdout
     assert (
@@ -4629,7 +4763,6 @@ def test_fresh_ha_approval_survives_ephemeral_ssh_key_generation(
             parent.verified("credentials", {"enrolled": "exact-approved-plan"})
             return SimpleNamespace(
                 credentials=existing_plan.credentials,
-                token_identity=SimpleNamespace(token="managed-token"),
             )
 
         monkeypatch.setattr(credential_enrollment, "execute", enroll)
@@ -4695,17 +4828,20 @@ def test_fresh_ha_approval_survives_ephemeral_ssh_key_generation(
         original_target = instances[1].external_ip
         instances[1].external_ip = "203.0.113.12"
         changed = CliRunner().invoke(app, [*command, "--approve-disruption", approvals[0]])
-        assert "Disruption approval is stale" in str(changed.exception)
+        assert "approval-state-changed" in changed.output
         durable.assert_not_called()
         assert not (tmp_path / ".ssh").exists() and not (tmp_path / "trust").exists()
         instances[1].external_ip = original_target
         unapproved = CliRunner().invoke(app, command)
-        assert "requires --approve-disruption" in str(unapproved.exception)
+        assert json.loads(unapproved.stdout)["recovery"]["reason_code"] == "approval-required", (
+            unapproved.stdout
+        )
         assert enrollment_calls == []
         durable.assert_not_called()
         result = CliRunner().invoke(app, [*command, "--approve-disruption", approvals[0]])
         assert durable.call_count == 1, (result.stdout, result.exception)
-        assert str(result.exception) == "durable boundary reached"
+        assert result.exit_code == 1
+        assert "durable boundary reached" not in result.output
         assert enrollment_calls == ([approvals[0]] if credential_action == "create" else [])
 
 
@@ -4802,6 +4938,7 @@ def test_vm_ha_post_compute_refresh_rebinds_exact_current_members() -> None:
         set_ssh_policy=Mock(),
     )
     refreshed = object()
+    handoff = Mock()
 
     with patch(
         "nebius_vpngw.cli.require_vm_ha_ssh_policy",
@@ -4824,6 +4961,7 @@ def test_vm_ha_post_compute_refresh_rebinds_exact_current_members() -> None:
             management_key_path=Path("/tmp/management-key"),
             management_public_key="ssh-ed25519 fixture",
             ordinary_migration_hosts={"gateway-0"},
+            ordinary_handoffs=(handoff,),
         )
 
     assert result is refreshed
@@ -4844,6 +4982,8 @@ def test_vm_ha_post_compute_refresh_rebinds_exact_current_members() -> None:
         "gateway-1": passive_binding,
     }
     manager.set_ssh_policy.assert_called_once_with(refreshed)
+    handoff.rebind_ssh.assert_called_once()
+    assert handoff.rebind_ssh.call_args.args[0]._ssh_policy is refreshed
 
 
 @pytest.mark.parametrize(
@@ -4875,6 +5015,7 @@ def test_vm_ha_post_compute_refresh_rebinds_exact_current_members() -> None:
             )
             for mode in ("static", "bgp")
         ],
+        (None, "unchanged-plan", (("gcp", "bgp"),), False),
         (None, "initial-bootstrap", (("gcp", "static"),), False),
         (None, "fresh-parent-before-lifecycle", (("gcp", "static"),), False),
         (None, "fresh-parent-before-lifecycle", (("gcp", "bgp"),), False),
@@ -4912,6 +5053,9 @@ def test_vm_ha_post_compute_refresh_rebinds_exact_current_members() -> None:
         (None, "stopped-readback-pending", (("gcp", "static"),), False),
         (None, "stopped-readback-blocked", (("gcp", "bgp"),), False),
         (None, None, (("gcp", "bgp"),), True),
+        (None, "destroyed-lock-cycle", (("gcp", "bgp"),), True),
+        (None, "destroyed-route-source", (("gcp", "static"),), True),
+        (None, "destroyed-both", (("gcp", "bgp"),), True),
     ]
     + [
         (None, f"recovery-package-{role}-{kind}", (("gcp", "static"),), False)
@@ -4941,6 +5085,16 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
     peer_shapes: tuple[tuple[str, str], ...],
     start_destroyed: bool,
 ) -> None:
+    destroyed_runtime_bindings = {}
+    if (final_transition_fault or "").startswith("destroyed-"):
+        assert start_destroyed
+        if final_transition_fault in {"destroyed-lock-cycle", "destroyed-both"}:
+            destroyed_runtime_bindings["apply-lock-cycle"] = "operation-before-destroy"
+        if final_transition_fault in {"destroyed-route-source", "destroyed-both"}:
+            destroyed_runtime_bindings["ordinary-route-source"] = json.dumps(
+                {"schema": "nebius-vpngw.ordinary-route-migration.v1", "sources": {}}
+            )
+        final_transition_fault = None
     stopped_readback_failure = (
         final_transition_fault
         if (final_transition_fault or "").startswith("stopped-readback-")
@@ -5685,6 +5839,7 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                             "route-runtime-id": "deleted-route-runtime",
                             "shared-allocation-id": "deleted-shared-private",
                             "heartbeat-upgrade-artifact": "e" * 64,
+                            **destroyed_runtime_bindings,
                         }.items()
                     )
                 ),
@@ -5880,6 +6035,23 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             )
             final_transition_fault = None
         first_result = CliRunner().invoke(app, apply_args)
+        if final_transition_fault == "unchanged-plan":
+            from nebius_vpngw import cli as owner
+            from nebius_vpngw.deploy.apply_command import CommandJournal
+
+            assert first_result.exit_code == 0, first_result.stdout
+            parent = CommandJournal("project-test", "gateway")
+            lifecycle = VMHALifecycleStore(config_path)
+            before = (parent.path.read_bytes(), lifecycle.path.read_bytes(), list(observed))
+            # Host/artifact/fresh-health predicate has separate coverage; exercise
+            # the real engine's typed stop-before-mutation planning boundary here.
+            with patch("nebius_vpngw.cli._unchanged_vm_ha_apply", return_value=True):
+                report = owner._plan_vm_ha_apply_convergence(config_path)
+            assert report.kind == "unchanged"
+            assert report.effects == ()
+            assert not report.impact.vpn_traffic_interruption
+            assert before == (parent.path.read_bytes(), lifecycle.path.read_bytes(), list(observed))
+            return
         if final_transition_fault and final_transition_fault.startswith("pair-"):
             from nebius_vpngw.deploy.apply_command import CommandJournal
 
@@ -5988,7 +6160,9 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             proposed = record(checkpoint)
             proposed["owner"] = "node-a"
             proposed.pop("approval")
-            corrective = SimpleNamespace(resumed=False, record=proposed)
+            corrective = SimpleNamespace(
+                resumed=False, record=proposed, instances=(active, passive)
+            )
             invocation[0] = 3
             boundary = len(observed)
             with (
@@ -6006,10 +6180,11 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 with patch(
                     "nebius_vpngw.cli.ensure_managed_vm_ha_credentials",
                     side_effect=RuntimeError("after parent successor"),
-                ):
+                ) as checkpoint_fault:
                     interrupted = CliRunner().invoke(app, apply_args)
                 assert interrupted.exit_code != 0
-                assert "after parent successor" in interrupted.stdout
+                assert "after parent successor" not in interrupted.stdout
+                checkpoint_fault.assert_called_once()
                 successor = parent.snapshot()
                 assert successor["transaction"]["execution_id"] != old_execution
                 predecessor = successor["bindings"]["runtime"]["successor"]["predecessor"]
@@ -6246,11 +6421,11 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                             child,
                             "replace_unstarted",
                             side_effect=RuntimeError("before SG successor"),
-                        ):
+                        ) as checkpoint_fault:
                             interrupted = CliRunner().invoke(app, apply_args)
-                        assert interrupted.exit_code != 0 and "before SG successor" in str(
-                            interrupted.exception
-                        )
+                        assert interrupted.exit_code != 0
+                        checkpoint_fault.assert_called_once()
+                        assert "before SG successor" not in interrupted.output
                         assert child.path.read_bytes() == old_child
                         pending = parent.pending()
                         assert pending["execution_id"] != child.read_transaction()["operation_id"]
@@ -6259,18 +6434,18 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                         with patch(
                             "nebius_vpngw.cli.ensure_managed_vm_ha_credentials",
                             side_effect=RuntimeError("after SG successor"),
-                        ):
+                        ) as checkpoint_fault:
                             interrupted = CliRunner().invoke(app, apply_args)
-                        assert (
-                            interrupted.exit_code != 0
-                            and "after SG successor" in interrupted.stdout
-                        )
+                        assert interrupted.exit_code != 0
+                        checkpoint_fault.assert_called_once()
+                        assert "after SG successor" not in interrupted.output
                         assert child.read_transaction()["operation_id"] == pending["execution_id"]
                         replay = CliRunner().invoke(app, [*apply_args, "--dry-run"])
                         assert replay.exit_code == 0, (replay.stdout, replay.exception)
                         assert child.read_transaction()["operations"] == {}
                     return
-                assert "injected after HA runtime completion" in str(failed.exception)
+                assert "operation-timeout" in failed.stdout
+                assert "injected after HA runtime completion" not in failed.stdout
                 parent = CommandJournal("project-test", "gateway")
                 assert parent.pending()["progress"]["runtime"] == "verified"
                 original_approval = child.read_transaction()["approval"]
@@ -6316,11 +6491,13 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             original = attachment_journal.path.read_bytes()
             corrective = SimpleNamespace(
                 resumed=False,
+                instances=(active, passive),
                 record={
                     "prior_artifact": "e" * 64,
                     "artifact": "f" * 64,
                     "prior_record": "c" * 64,
                     "operation": "b" * 64,
+                    "children": {"node-a": {}, "node-b": {}},
                 },
             )
             invocation[0] = 2
@@ -6347,10 +6524,11 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 with patch(
                     "nebius_vpngw.cli.ensure_managed_vm_ha_credentials",
                     side_effect=RuntimeError("injected after attachment prelude"),
-                ):
+                ) as checkpoint_fault:
                     interrupted = CliRunner().invoke(app, apply_args)
                     assert interrupted.exit_code != 0
-                    assert "injected after attachment prelude" in interrupted.stdout
+                    assert "injected after attachment prelude" not in interrupted.stdout
+                    checkpoint_fault.assert_called_once()
                 pending = attachment_journal.read_transaction()
                 assert pending["approval"] != "d" * 64
                 assert pending["corrective_successor"]["prior_approval"] == "d" * 64
@@ -6437,7 +6615,8 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 if failure_kind == "verification"
                 else "SSH or local artifact I/O failed during package preparation"
             )
-            assert f"Reason: {reason}" in failed.stdout
+            assert reason in failed.stdout
+            assert failed.stdout.count("Reason:") == 1
             assert "Automatic package recovery stopped" in failed.stdout
             assert "TOP_SECRET" not in failed.stdout
             trace = [(phase, role) for phase, role, _ in observed[boundary:]]
@@ -6577,7 +6756,7 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 ):
                     rejected = CliRunner().invoke(app, apply_args)
                 assert rejected.exit_code != 0
-                assert "artifact changed" in str(rejected.exception)
+                assert "artifact-changed" in rejected.output
                 assert not any(phase == "package" for phase, _, _ in observed[resume_boundary:])
                 return
             if stopped_readback_failure:
@@ -6810,7 +6989,8 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 "package-channel": "SSH package preparation transport failed",
                 "package-eof": "SSH package preparation connection closed unexpectedly",
             }[final_transition_fault]
-            assert f"Reason: {reason}" in result.stdout
+            assert reason in result.stdout
+            assert result.stdout.count("Reason:") == 1
             assert "injected active package failure" not in result.stdout
             assert "TOP_SECRET" not in result.stdout
             assert [role for phase, role, _ in observed if phase == "package"] == (
@@ -7479,6 +7659,8 @@ def test_missing_standby_apply_resumes_pending_inhibition_release_crash_window(
             assert terminal_nodes == []
             return
         if artifact_changed_on_resume:
+            from nebius_vpngw.deploy.apply_diagnostics import PreparationBlocked
+
             with (
                 patch(
                     "nebius_vpngw.cli._resolve_vm_ha_agent_artifact",
@@ -7486,7 +7668,7 @@ def test_missing_standby_apply_resumes_pending_inhibition_release_crash_window(
                         sha256="0" * 64, dependency_plans=(), capabilities=()
                     ),
                 ),
-                pytest.raises(RuntimeError, match="artifact changed"),
+                pytest.raises(PreparationBlocked, match="artifact-changed"),
             ):
                 _apply_impl(
                     local_config_file=config_path,
@@ -7550,6 +7732,7 @@ def test_missing_standby_apply_resumes_pending_inhibition_release_crash_window(
         (None, None, None),
     ],
 )
+@pytest.mark.parametrize("operator_token", [None, "selected-operator-token"])
 def test_vm_ha_apply_passes_one_resolved_management_key_to_both_managers(
     approved_disruption,
     tmp_path: Path,
@@ -7557,6 +7740,7 @@ def test_vm_ha_apply_passes_one_resolved_management_key_to_both_managers(
     configured_key: str | None,
     environment_key: str | None,
     expected_key: Path | None,
+    operator_token: str | None,
 ) -> None:
     config_path = tmp_path / "vm-ha.config.yaml"
     config_path.write_text("version: 1\n", encoding="utf-8")
@@ -7603,6 +7787,12 @@ def test_vm_ha_apply_passes_one_resolved_management_key_to_both_managers(
         ),
     )
     manager_keys: list[Path | None] = []
+    manager_tokens: list[str | None] = []
+    monkeypatch.setattr(
+        vpngw_sa,
+        "_cli_access_token",
+        lambda **_: pytest.fail("unexpected managed HA impersonation"),
+    )
     manager_regions: list[tuple[str | None, str | None]] = []
     manager_events: list[str] = []
     trust_order: list[str] = []
@@ -7613,6 +7803,7 @@ def test_vm_ha_apply_passes_one_resolved_management_key_to_both_managers(
     class FakeVMManager(_ContextManagedFake):
         def __init__(self, *args, **kwargs) -> None:
             self.index = len(manager_keys)
+            manager_tokens.append(kwargs.get("auth_token"))
             manager_keys.append(kwargs.get("management_key_path"))
             manager_regions.append((kwargs.get("region"), kwargs.get("region_id")))
 
@@ -7643,6 +7834,11 @@ def test_vm_ha_apply_passes_one_resolved_management_key_to_both_managers(
             raise RuntimeError("fixture reached provisioning boundary")
 
     plan.gateway_group.vm_ha = plan.vm_ha
+
+    if operator_token is None:
+        monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("NEBIUS_IAM_TOKEN", operator_token)
 
     if environment_key is None:
         monkeypatch.delenv("VPNGW_SSH_KEY", raising=False)
@@ -7681,7 +7877,8 @@ def test_vm_ha_apply_passes_one_resolved_management_key_to_both_managers(
         result = CliRunner().invoke(app, ["apply", "--local-config-file", str(config_path)])
 
     assert result.exit_code == 1
-    assert "fixture reached provisioning boundary" in str(result.exception)
+    assert manager_tokens == [operator_token, operator_token]
+    assert "fixture reached provisioning boundary" not in result.output
     assert manager_keys == [expected_key, expected_key]
     assert manager_regions == [("eu-west1", "eu-west1"), ("eu-west1", "eu-west1")]
     assert manager_events == ["enter:0", "enter:1", "exit:1", "exit:0"]
@@ -7813,10 +8010,10 @@ def test_vm_ha_apply_sanitizes_exhausted_sdk_deadline_and_restores_filter(
 
     output = capsys.readouterr()
     assert raised.value.exit_code == 1
-    assert output.out == (
-        "VM-HA apply stopped: Nebius cloud request timed out after bounded retries.\n"
-        "Run 'nebius-vpngw vm-ha --local-config-file <file>' to inspect and resume.\n"
-    )
+    assert "operation-timeout" in output.out
+    assert "--local-config-file " + str(config_path) in output.out
+    assert "--repair" in output.out
+    assert output.out.count("Reason:") == 1
     assert "request attempt" not in caplog.text
     assert "PRIVATE_RETRY_DETAIL" not in caplog.text
     assert "PRIVATE_PROVIDER_DETAIL" not in output.out
@@ -7884,10 +8081,10 @@ def test_vm_ha_apply_sanitizes_unauthenticated_and_restores_filter(
 
     output = capsys.readouterr()
     assert raised.value.exit_code == 1
-    assert output.out == (
-        "VM-HA apply stopped: Nebius cloud authentication was rejected.\n"
-        "Refresh the Nebius CLI profile or replace NEBIUS_IAM_TOKEN, then rerun apply.\n"
-    )
+    assert "authentication-or-provider-unavailable" in output.out
+    assert "--local-config-file " + str(config_path) in output.out
+    assert "--repair" in output.out
+    assert output.out.count("Reason:") == 1
     assert "request attempt" not in caplog.text
     assert "PRIVATE_RETRY_DETAIL" not in caplog.text
     assert "PRIVATE_PROVIDER_DETAIL" not in output.out
@@ -8849,7 +9046,7 @@ def test_missing_standby_owner_refresh_admits_only_exact_fail_closed_peer_loss()
         "apply_operation_id": None,
         "controller_capabilities": [
             "independent-heartbeat-v6",
-            "vm-ha-live-peer-replacement-v4",
+            "vm-ha-live-peer-replacement-v5",
             "vm-ha-standby-replacement-inhibition-v1",
         ],
     }
@@ -8978,7 +9175,7 @@ def test_missing_standby_owner_refresh_admits_only_exact_fail_closed_peer_loss()
         **inhibited,
         "controller_capabilities": [
             "independent-heartbeat-v6",
-            "vm-ha-live-peer-replacement-v4",
+            "vm-ha-live-peer-replacement-v5",
             "vm-ha-standby-replacement-inhibition-v2",
         ],
     }
@@ -8990,6 +9187,31 @@ def test_missing_standby_owner_refresh_admits_only_exact_fail_closed_peer_loss()
         patch("nebius_vpngw.cli._fetch_vm_ha_agent_status", return_value=current),
     ):
         assert not _vm_ha_missing_standby_owner_refresh_required(
+            replacement=replacement,
+            planned_instances=[owner],
+            existing_members={owner.hostname: "203.0.113.10"},
+            lifecycle_state=inhibited_lifecycle,
+            vm_spec={},
+            management_key_path=None,
+            ssh_policy=SimpleNamespace(),
+        )
+
+    # v4 did not refresh the independent rearm service after peer replacement.
+    # Require the existing explicit owner-upgrade plan even when its main
+    # controller already supports live peer replacement.
+    stale_rearm = {
+        **current,
+        "controller_capabilities": [
+            "independent-heartbeat-v6",
+            "vm-ha-live-peer-replacement-v4",
+            "vm-ha-standby-replacement-inhibition-v2",
+        ],
+    }
+    with (
+        patch("nebius_vpngw.cli._vm_ha_planned_terminal_runtime_binding", return_value=binding),
+        patch("nebius_vpngw.cli._fetch_vm_ha_agent_status", return_value=stale_rearm),
+    ):
+        assert _vm_ha_missing_standby_owner_refresh_required(
             replacement=replacement,
             planned_instances=[owner],
             existing_members={owner.hostname: "203.0.113.10"},
@@ -9443,7 +9665,7 @@ def test_vm_ha_status_view_is_healthy_for_either_authoritative_owner(
     view = _vm_ha_status_view(
         _VMHACloudAuthority("active", "exact", owner_name, owner_node_id, None, ()),
         _vm_ha_view_members(owner_node_id=owner_node_id),
-        rearm_command="nebius-vpngw vm-ha --local-config-file fixture.yaml",
+        rearm_command="nebius-vpngw apply --local-config-file fixture.yaml",
     )
 
     assert view.overall == "HEALTHY"
@@ -9459,7 +9681,7 @@ def test_vm_ha_status_view_is_healthy_for_either_authoritative_owner(
 
 
 def test_vm_ha_status_view_reports_disabled_standby_restoration_as_maintenance() -> None:
-    rearm_command = "nebius-vpngw vm-ha --local-config-file nebius-gcp-classic-vpn.config.yaml"
+    rearm_command = "nebius-vpngw apply --local-config-file nebius-gcp-classic-vpn.config.yaml"
     members = list(_vm_ha_view_members())
     for index, member in enumerate(members):
         record = dict(member.record or {})
@@ -9483,7 +9705,7 @@ def test_vm_ha_status_view_reports_disabled_standby_restoration_as_maintenance()
     assert next(row for row in view.summary_rows if row[0] == "Redundancy")[1] == "maintenance"
     assert next(row for row in view.summary_rows if row[0] == "Auto-healing")[1] == "disabled"
     assert next(row for row in view.summary_rows if row[0] == "Action")[1] == (
-        "nebius-vpngw vm-ha --local-config-file "
+        "nebius-vpngw apply --local-config-file "
         "nebius-gcp-classic-vpn.config.yaml --standby-auto-healing enabled"
     )
 
@@ -9509,7 +9731,7 @@ def test_vm_ha_status_view_keeps_maintenance_when_disabled_standby_is_stopped() 
     view = _vm_ha_status_view(
         _VMHACloudAuthority("active", "exact", "nebius-vpn-gw-0", "node-active", None, ()),
         t.cast(tuple[_VMHAMemberEvidence, _VMHAMemberEvidence], tuple(members)),
-        rearm_command="nebius-vpngw vm-ha --local-config-file fixture.yaml",
+        rearm_command="nebius-vpngw apply --local-config-file fixture.yaml",
     )
 
     assert view.overall == "MAINTENANCE"
@@ -9614,9 +9836,9 @@ def test_vm_ha_status_view_reports_unknown_auto_healing_without_member_evidence(
 def test_vm_ha_local_config_command_shell_quotes_special_paths() -> None:
     config_path = Path("config dir/gateway's[maintenance].yaml")
 
-    command = _vm_ha_local_config_command("nebius-vpngw vm-ha", config_path)
+    command = _vm_ha_local_config_command("nebius-vpngw apply", config_path)
 
-    assert command == ("nebius-vpngw vm-ha --local-config-file " + shlex.quote(str(config_path)))
+    assert command == ("nebius-vpngw apply --local-config-file " + shlex.quote(str(config_path)))
 
 
 def _vm_ha_rotating_view_members(
@@ -9666,14 +9888,14 @@ def test_vm_ha_status_view_reports_resumable_managed_mtls_rotation() -> None:
     view = _vm_ha_status_view(
         _VMHACloudAuthority("active", "exact", "nebius-vpn-gw-0", "node-active", None, ()),
         _vm_ha_rotating_view_members(operation_id),
-        rearm_command="nebius-vpngw vm-ha --local-config-file fixture.yaml",
-        mtls_command="nebius-vpngw vm-ha --rotate-mtls --local-config-file fixture.yaml",
+        rearm_command="nebius-vpngw apply --local-config-file fixture.yaml",
+        mtls_command="nebius-vpngw apply --rotate-mtls --local-config-file fixture.yaml",
     )
 
     assert view.overall == "TRANSITIONING"
     assert next(row for row in view.summary_rows if row[0] == "mTLS")[1] == "rotating"
     assert next(row for row in view.summary_rows if row[0] == "Action")[1].startswith(
-        "nebius-vpngw vm-ha --rotate-mtls"
+        "nebius-vpngw apply --rotate-mtls"
     )
 
 
@@ -9713,14 +9935,14 @@ def test_vm_ha_status_view_reports_inhibition_only_rotation_recovery(
     view = _vm_ha_status_view(
         _VMHACloudAuthority("active", "exact", "nebius-vpn-gw-0", "node-active", None, ()),
         t.cast(tuple[_VMHAMemberEvidence, _VMHAMemberEvidence], tuple(members)),
-        rearm_command="nebius-vpngw vm-ha --local-config-file fixture.yaml",
-        mtls_command="nebius-vpngw vm-ha --rotate-mtls --local-config-file fixture.yaml",
+        rearm_command="nebius-vpngw apply --local-config-file fixture.yaml",
+        mtls_command="nebius-vpngw apply --rotate-mtls --local-config-file fixture.yaml",
     )
 
     assert view.overall == "TRANSITIONING"
     assert next(row for row in view.summary_rows if row[0] == "mTLS")[1] == "rotating"
     assert next(row for row in view.summary_rows if row[0] == "Action")[1].startswith(
-        "nebius-vpngw vm-ha --rotate-mtls"
+        "nebius-vpngw apply --rotate-mtls"
     )
 
 
@@ -9975,7 +10197,7 @@ def test_vm_ha_status_renderer_emits_one_four_column_table() -> None:
     view = _vm_ha_status_view(
         _VMHACloudAuthority("active", "exact", "nebius-vpn-gw-1", "node-passive", None, ()),
         _vm_ha_view_members(owner_node_id="node-passive"),
-        rearm_command="nebius-vpngw vm-ha --local-config-file fixture.yaml",
+        rearm_command="nebius-vpngw apply --local-config-file fixture.yaml",
     )
     output = io.StringIO()
 
@@ -10011,7 +10233,7 @@ def test_vm_ha_status_renderer_emits_one_four_column_table() -> None:
 
     maintenance_command = (
         _vm_ha_local_config_command(
-            "nebius-vpngw vm-ha",
+            "nebius-vpngw apply",
             Path("config dir/nebius-gcp-classic-vpn's[maintenance].yaml"),
         )
         + " --standby-auto-healing enabled"
@@ -10046,7 +10268,7 @@ def test_vm_ha_status_renderer_emits_one_four_column_table() -> None:
 
     private_config_path = Path("config dir/customer's-private[transition].yaml")
     nonmaintenance_command = _vm_ha_local_config_command(
-        "nebius-vpngw vm-ha --rotate-mtls",
+        "nebius-vpngw apply --rotate-mtls",
         private_config_path,
     )
     nonmaintenance = replace(
@@ -10066,7 +10288,7 @@ def test_vm_ha_status_renderer_emits_one_four_column_table() -> None:
         Console(file=nonmaintenance_output, color_system=None, width=240),
         nonmaintenance,
     )
-    redacted_command = "nebius-vpngw vm-ha --rotate-mtls --local-config-file <file>"
+    redacted_command = "nebius-vpngw apply --rotate-mtls --local-config-file <file>"
     assert redacted_command in nonmaintenance_output.getvalue()
     assert str(private_config_path) not in nonmaintenance_output.getvalue()
     assert "customer" not in nonmaintenance_output.getvalue()
@@ -11165,7 +11387,7 @@ def test_vm_ha_status_view_degrades_hygiene_and_recommends_periodic_repair() -> 
                 "routing-hygiene-not-ready",
             ],
         ),
-        rearm_command="nebius-vpngw vm-ha --local-config-file fixture.yaml",
+        rearm_command="nebius-vpngw apply --local-config-file fixture.yaml",
     )
 
     assert view.overall == "DEGRADED"
@@ -11487,7 +11709,6 @@ def test_requested_service_account_never_falls_back_to_ambient_credentials(
             tenant_id=None,
             project_id="project-test",
             region_id=None,
-            vm_ha_enabled=False,
         )
 
     assert "NEBIUS_IAM_TOKEN" not in os.environ
@@ -11509,29 +11730,6 @@ def test_apply_authentication_uses_renewable_cli_profile_without_exporting_token
 
     assert _apply_operator_auth_token() is None
     assert "NEBIUS_IAM_TOKEN" not in os.environ
-
-
-def test_requested_vm_ha_service_account_must_match_runtime_identity(monkeypatch) -> None:
-    monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
-    monkeypatch.setattr(
-        vpngw_sa,
-        "ensure_vm_ha_service_account_identity_and_token",
-        lambda **_kwargs: vpngw_sa.ServiceAccountTokenIdentity(
-            token="short-lived-token",
-            service_account_id="service-account-other",
-            service_account_name="gateway-runtime",
-        ),
-    )
-
-    with pytest.raises(typer.Exit):
-        _requested_apply_service_account_token(
-            sa_name="gateway-runtime",
-            tenant_id=None,
-            project_id="project-test",
-            region_id=None,
-            vm_ha_enabled=True,
-            expected_service_account_id="service-account-runtime",
-        )
 
 
 def test_apply_rejects_service_account_override_for_vm_ha(tmp_path: Path) -> None:
@@ -11610,7 +11808,8 @@ def test_vm_ha_operator_command_rejects_stale_agent_identity(monkeypatch) -> Non
             agent_flag="--vm-ha-status",
             timeout_seconds=1.25,
         )
-    assert observed_timeout == [1.25]
+    assert len(observed_timeout) == 1
+    assert 0 < observed_timeout[0] <= 1.25
 
 
 def test_vm_ha_operator_command_suppresses_remote_failure_output(
@@ -11672,6 +11871,146 @@ def _manual_failback_plan() -> SimpleNamespace:
         ),
         iter_instance_configs=lambda: iter((active, passive)),
     )
+
+
+@pytest.mark.parametrize(
+    "diagnostic,expected",
+    (
+        ("Connection timed out during banner exchange", True),
+        ("ssh: connect to host 203.0.113.10 port 22: Operation timed out", True),
+        ("Connection to 203.0.113.10 port 22 timed out", True),
+        (
+            "kex_exchange_identification: read: Connection reset by peer\n"
+            "Connection reset by 203.0.113.10 port 22",
+            True,
+        ),
+        ("Connection timed out during banner exchange\nPermission denied (publickey).", False),
+        ("Host key verification failed.\nConnection to 203.0.113.10 port 22 timed out", False),
+        ("Connection closed by 203.0.113.10 port 22\nunknown diagnostic", False),
+        ("", False),
+        ("remote application timed out", False),
+    ),
+)
+def test_vm_ha_status_transport_classifier_requires_complete_known_diagnostics(
+    diagnostic: str,
+    expected: bool,
+) -> None:
+    from nebius_vpngw.cli import _vm_ha_status_transport_failed
+
+    assert _vm_ha_status_transport_failed(255, diagnostic) is expected
+    assert not _vm_ha_status_transport_failed(1, diagnostic)
+
+
+@pytest.mark.parametrize(
+    "agent_flag", ("--vm-ha-manual-failover", "--vm-ha-manual-failback", "--vm-ha-rearm-request")
+)
+def test_vm_ha_mutating_operator_never_raises_retryable_status_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    agent_flag: str,
+) -> None:
+    from nebius_vpngw.cli import _VMHAStatusTransportUnavailable
+
+    monkeypatch.setattr("nebius_vpngw.cli.load_local_config", lambda _: {"gateway_group": {}})
+    monkeypatch.setattr(
+        "nebius_vpngw.cli.merge_with_peer_configs", lambda *_: _manual_failback_plan()
+    )
+    monkeypatch.setattr("nebius_vpngw.cli.require_vm_ha_ssh_policy", lambda *_, **__: None)
+    calls = []
+
+    def run(*args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(
+            returncode=255, stdout="", stderr="Connection timed out during banner exchange"
+        )
+
+    monkeypatch.setattr("nebius_vpngw.cli.subprocess.run", run)
+    with pytest.raises(RuntimeError) as failure:
+        _run_vm_ha_operator_command(local_config_file=Path("config.yaml"), agent_flag=agent_flag)
+    assert not isinstance(failure.value, _VMHAStatusTransportUnavailable)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("second_duration", (1.0, 3.0))
+def test_vm_ha_status_members_share_one_deadline_and_reject_late_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    second_duration: float,
+) -> None:
+    from nebius_vpngw.cli import _VMHAStatusTransportUnavailable
+
+    plan = _manual_failback_plan()
+    monkeypatch.setattr("nebius_vpngw.cli.load_local_config", lambda _: {"gateway_group": {}})
+    monkeypatch.setattr("nebius_vpngw.cli.merge_with_peer_configs", lambda *_: plan)
+    monkeypatch.setattr("nebius_vpngw.cli.require_vm_ha_ssh_policy", lambda *_, **__: None)
+    clock = [0.0]
+    monkeypatch.setattr("nebius_vpngw.cli.time.monotonic", lambda: clock[0])
+    timeouts = []
+
+    def run(*args, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        role = "passive" if len(timeouts) == 1 else "active"
+        clock[0] += 8.0 if len(timeouts) == 1 else second_duration
+        return SimpleNamespace(
+            returncode=0,
+            stderr="",
+            stdout=json.dumps(
+                {
+                    "schema": "nebius-vpngw/vm-ha-status-v1",
+                    "cluster_id": "cluster",
+                    "node_id": f"node-{role}",
+                    "configured_role": role,
+                    "generation_id": "a" * 64,
+                }
+            ),
+        )
+
+    monkeypatch.setattr("nebius_vpngw.cli.subprocess.run", run)
+    if second_duration > 2:
+        with pytest.raises(_VMHAStatusTransportUnavailable):
+            _run_vm_ha_operator_command(
+                local_config_file=Path("config.yaml"),
+                agent_flag="--vm-ha-status",
+                timeout_seconds=10,
+            )
+    else:
+        records = _run_vm_ha_operator_command(
+            local_config_file=Path("config.yaml"), agent_flag="--vm-ha-status", timeout_seconds=10
+        )
+        assert len(records) == 2
+    assert timeouts == [10.0, 2.0]
+
+
+@pytest.mark.parametrize("operation", ("failover", "failback"))
+@pytest.mark.parametrize("output_format", ("text", "json"))
+def test_planned_preparation_transport_failure_has_safe_actionable_guidance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    output_format: str,
+) -> None:
+    from nebius_vpngw.cli import _VMHAStatusTransportUnavailable
+
+    config = tmp_path / "config.yaml"
+    config.write_text("project_id: project-test\n")
+
+    def unavailable(**kwargs):
+        raise _VMHAStatusTransportUnavailable("private-detail-must-not-escape")
+
+    monkeypatch.setattr("nebius_vpngw.cli._prepare_vm_ha_planned_target", unavailable)
+    monkeypatch.setattr(
+        "nebius_vpngw.cli._run_vm_ha_operator_command",
+        lambda **_: pytest.fail("no request allowed"),
+    )
+    result = CliRunner().invoke(
+        app, [operation, "vm", "--local-config-file", str(config), "--output-format", output_format]
+    )
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "preparation is not yet verified" in result.stderr
+    assert "ssh-status-transport-unavailable" in result.stderr
+    assert "No transfer request was submitted" in result.stderr
+    assert "status --local-config-file" in result.stderr
+    assert "retry the same command" in result.stderr
+    assert "private-detail" not in result.output
 
 
 def _manual_failback_compute(
@@ -11802,8 +12141,29 @@ def test_manual_failback_starts_only_exact_stopped_configured_active(
     assert 0 < waits[0][3] <= 300
 
 
+@pytest.mark.parametrize(
+    "scenario",
+    (
+        "healthy",
+        "timeout",
+        "authentication",
+        "host-key",
+        "unknown",
+        "remote-error",
+        "config-drift",
+        "lifecycle-drift",
+        "owner-drift",
+        "standby-stopped",
+        "deadline",
+        "persistent",
+        "late-status",
+        "unhealthy-after-retry",
+        "malformed-after-retry",
+    ),
+)
 def test_manual_failback_does_not_start_an_already_active_exact_owner(
     monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
 ) -> None:
     lifecycle = _lifecycle_state()
     plan = _manual_failback_plan()
@@ -11857,8 +12217,51 @@ def test_manual_failback_does_not_start_an_already_active_exact_owner(
     monkeypatch.setattr("nebius_vpngw.cli.VMHACloudAdapter", lambda **_kw: adapter)
     operator_calls: list[tuple[str, str | None]] = []
 
+    clock = [0.0]
+    monkeypatch.setattr("nebius_vpngw.cli.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("nebius_vpngw.cli.time.sleep", lambda n: clock.__setitem__(0, clock[0] + n))
+    stderr = {
+        "authentication": "Permission denied (publickey).",
+        "host-key": "Host key verification failed.",
+        "unknown": "unrecognized private diagnostic",
+    }.get(scenario, "Connection timed out during banner exchange\n")
+    monkeypatch.setattr(
+        "nebius_vpngw.cli.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1 if scenario == "remote-error" else 255,
+            stdout="",
+            stderr=stderr,
+        ),
+    )
+    monkeypatch.setattr("nebius_vpngw.cli._build_ssh_base_cmd", lambda *_, **__: ["ssh"])
+
     def operator(**kwargs):
         operator_calls.append((kwargs["agent_flag"], kwargs.get("configured_role")))
+        if scenario == "late-status":
+            clock[0] = 301.0
+        if scenario == "persistent":
+            clock[0] += 30.0
+        if scenario not in {"healthy", "late-status"} and (
+            len(operator_calls) == 1 or scenario == "persistent"
+        ):
+            if scenario == "config-drift":
+                monkeypatch.setattr(
+                    "nebius_vpngw.cli._load_config_with_region_override", lambda *_, **__: {}
+                )
+            elif scenario == "lifecycle-drift":
+                monkeypatch.setattr(
+                    "nebius_vpngw.cli.VMHALifecycleStore",
+                    lambda _: SimpleNamespace(read=lambda **kwargs: None),
+                )
+            elif scenario == "owner-drift":
+                observation.allocation.owner = AllocationOwner("foreign", "eth0")
+            elif scenario == "standby-stopped":
+                observation.candidate.state = InstanceCloudState.STOPPED
+            elif scenario == "deadline":
+                clock[0] = 301.0
+            return _run_vm_ha_operator_command(**kwargs)
+        if scenario == "malformed-after-retry":
+            raise ValueError("malformed status")
         return [
             {
                 "node_id": "node-active",
@@ -11873,7 +12276,7 @@ def test_manual_failback_does_not_start_an_already_active_exact_owner(
             {
                 "node_id": "node-passive",
                 "state": "normal",
-                "standby_ready": True,
+                "standby_ready": scenario != "unhealthy-after-retry",
                 "standby_readiness_reasons": [],
                 "data_plane_mode": "passive",
                 "observed_owner_node_id": "node-active",
@@ -11884,11 +12287,19 @@ def test_manual_failback_does_not_start_an_already_active_exact_owner(
 
     monkeypatch.setattr("nebius_vpngw.cli._run_vm_ha_operator_command", operator)
 
-    _prepare_vm_ha_manual_failback_target(local_config_file=Path("config.yaml"))
+    if scenario in {"healthy", "timeout"}:
+        _prepare_vm_ha_manual_failback_target(local_config_file=Path("config.yaml"))
+    else:
+        with pytest.raises((RuntimeError, ValueError)):
+            _prepare_vm_ha_manual_failback_target(local_config_file=Path("config.yaml"))
 
     assert starts == []
     assert waits == ["nebius-vpn-gw-0", "nebius-vpn-gw-1"]
-    assert operator_calls == [("--vm-ha-status", None)]
+    attempts = 2 if scenario in {"timeout", "unhealthy-after-retry", "malformed-after-retry"} else 1
+    if scenario == "persistent":
+        attempts = 10
+        assert clock[0] == 309.0
+    assert operator_calls == [("--vm-ha-status", None)] * attempts
 
 
 def test_manual_failback_rearms_stopped_standby_when_active_already_owns(
@@ -12497,16 +12908,23 @@ def test_vm_ha_rearm_starts_only_exact_stopped_alias_free_passive(
 
 
 @pytest.mark.parametrize(
-    "progress_sequence",
+    ("request_acknowledged", "progress_sequence", "compute_finishes"),
     (
-        (True,),
-        (False, True),
-        (False,),
+        (False, (True,), True),
+        (False, (False, True), True),
+        (False, (False,), True),
+        (True, (True,), True),
+        (True, (False, True), True),
+        (True, (False,), True),
+        (False, (True,), False),
+        (True, (True,), False),
     ),
 )
 def test_vm_ha_rearm_retry_race_resumes_only_with_exact_consumed_progress(
     monkeypatch: pytest.MonkeyPatch,
     progress_sequence: tuple[bool, ...],
+    request_acknowledged: bool,
+    compute_finishes: bool,
 ) -> None:
     lifecycle = _lifecycle_state()
     plan = _manual_failback_plan()
@@ -12588,6 +13006,8 @@ def test_vm_ha_rearm_retry_race_resumes_only_with_exact_consumed_progress(
     def operator(**kwargs):
         operator_calls.append((kwargs["agent_flag"], kwargs.get("configured_role")))
         if kwargs["agent_flag"] == "--vm-ha-rearm-request":
+            if request_acknowledged:
+                return [{"schema": "nebius-vpngw/vm-ha-rearm-request-v1"}]
             raise RuntimeError("rearm writer busy")
         if kwargs.get("configured_role") == "active":
             return [
@@ -12617,16 +13037,57 @@ def test_vm_ha_rearm_retry_race_resumes_only_with_exact_consumed_progress(
     progress_values = iter(progress_sequence)
     exact_progress = Mock(side_effect=lambda: next(progress_values, progress_sequence[-1]))
 
-    if not any(progress_sequence):
-        monotonic = Mock(side_effect=(0.0, 0.0, 300.0))
-        monkeypatch.setattr("nebius_vpngw.cli.time.monotonic", monotonic)
-        with pytest.raises(RuntimeError, match="rearm writer busy"):
+    if not compute_finishes:
+        deadline_reads = 0
+
+        def observation_clock() -> float:
+            nonlocal deadline_reads
+            if exact_progress.call_count >= 2 - int(request_acknowledged):
+                deadline_reads += 1
+            # Allow the exact owner status read to finish, then exhaust the
+            # existing budget before another Compute observation.
+            return 300.0 if deadline_reads > 1 else 0.0
+
+        monkeypatch.setattr(
+            "nebius_vpngw.cli.time.monotonic",
+            observation_clock,
+        )
+        with pytest.raises(
+            RuntimeError, match="original standby Start has not become Running"
+        ) as raised:
             _prepare_vm_ha_planned_target(
                 local_config_file=Path("config.yaml"),
                 target_role=None,
                 before_rearm_request=lambda *_args: None,
                 rearm_request_progress_is_exact=exact_progress,
             )
+        assert raised.value.pending is True
+        assert raised.value.diagnostics == ("controller-observation-budget-exhausted",)
+        assert operator_calls.count(("--vm-ha-rearm-request", "active")) == 1
+        assert waits == []
+        return
+
+    if not any(progress_sequence):
+        monkeypatch.setattr(
+            "nebius_vpngw.cli.time.monotonic",
+            lambda: 300.0 if exact_progress.call_count else 0.0,
+        )
+        expected_message = (
+            "original standby Start needs fresh exact recovery evidence"
+            if request_acknowledged
+            else "rearm writer busy"
+        )
+        with pytest.raises(RuntimeError, match=expected_message) as raised:
+            _prepare_vm_ha_planned_target(
+                local_config_file=Path("config.yaml"),
+                target_role=None,
+                before_rearm_request=lambda *_args: None,
+                rearm_request_progress_is_exact=exact_progress,
+            )
+        if request_acknowledged:
+            assert raised.value.pending is True
+            assert raised.value.reason == "waiting-for-authority"
+            assert raised.value.diagnostics == ("controller-observation-unavailable",)
         exact_progress.assert_called_once_with()
         assert operator_calls == [("--vm-ha-rearm-request", "active")]
         assert waits == []
@@ -12646,10 +13107,12 @@ def test_vm_ha_rearm_retry_race_resumes_only_with_exact_consumed_progress(
         prepared.terminal_context.cutover_timeout_seconds,
         prepared.terminal_context.restoration_timeout_seconds,
     ) == (300.0, 600.0, 300.0)
-    assert exact_progress.call_count == (3 if progress_sequence[0] is False else 2)
+    assert exact_progress.call_count == (
+        (3 if progress_sequence[0] is False else 2) - int(request_acknowledged)
+    )
     assert operator_calls == [
         ("--vm-ha-rearm-request", "active"),
-        ("--vm-ha-status", "active"),
+        *([] if request_acknowledged else [("--vm-ha-status", "active")]),
         ("--vm-ha-status", "active"),
         ("--vm-ha-status", "passive"),
         ("--vm-ha-status", "passive"),
@@ -12893,7 +13356,7 @@ def test_planned_transfer_failure_uses_selected_output_format(
             "verified after 70.4s (300.0s total): terminal observation remained "
             "unavailable. Automatic background restoration may still be running; run "
             "'nebius-vpngw status --local-config-file <file>' and use 'nebius-vpngw "
-            "vm-ha --local-config-file <file>' only if status reports a blocked recovery.\n",
+            "apply --local-config-file <file>' only if status reports a blocked recovery.\n",
         ),
     ),
 )
@@ -13086,7 +13549,7 @@ def test_planned_transfer_reports_safe_partial_completion_when_rearm_fails(
     assert result.stderr == (
         "Failing over to the passive VM...\n"
         "Failover cutover succeeded in 41.2s, but standby restoration failed after "
-        "32.2s (73.4s total): compute-start-failed. Run 'nebius-vpngw vm-ha "
+        "32.2s (73.4s total): compute-start-failed. Run 'nebius-vpngw apply "
         "--local-config-file <file>' to recover the blocked standby restoration.\n"
     )
     assert "done successfully" not in result.stderr
@@ -14938,7 +15401,7 @@ def test_removed_vm_ha_status_surfaces_are_absent_from_help_and_parser() -> None
     assert "--vm-ha-only" not in status_help.output
 
 
-@pytest.mark.parametrize("command_name", ("vm-ha", "apply", "prep-network", "status", "destroy"))
+@pytest.mark.parametrize("command_name", ("apply", "prep-network", "status", "destroy"))
 def test_region_commands_publish_one_precedence_contract(command_name: str) -> None:
     command = get_command(app).commands[command_name]
     region_options = [parameter for parameter in command.params if parameter.name == "region"]
@@ -14970,6 +15433,7 @@ def test_each_cli_command_example_uses_supported_syntax(
     for filename in (
         "nebius-vpngw.config.yaml",
         "gateway.config.yaml",
+        "gateway.vm-ha.config.yaml",
         "peer-vpn.txt",
         "alice.pub",
         "a.config.yaml",
@@ -15001,6 +15465,9 @@ def test_apply_help_exposes_the_supported_service_account_option() -> None:
     assert "Service Account" in output
     assert "--prepare-vm-ha-peer-rotation" in output
     assert "VM-HA IPsec peer credential change" in " ".join(output.split())
+    normalized = " ".join(output.replace("│", " ").split())
+    assert "uses operator authentication" in normalized
+    assert "cannot combine with --sa" in normalized
 
 
 def test_destroy_help_publishes_topology_and_retention_contract() -> None:
@@ -16384,8 +16851,9 @@ def test_failback_targets_selected_active_tunnel_instance_in_multivm_config(tmp_
 
 
 @pytest.mark.parametrize("pending", [True, False])
+@pytest.mark.parametrize("with_recovery_digest", [True, False])
 def test_pending_handoff_checks_peer_but_waits_for_credentials_before_repair(
-    tmp_path, monkeypatch, approved_disruption, pending
+    tmp_path, monkeypatch, approved_disruption, pending, with_recovery_digest
 ):
     from contextlib import contextmanager
 
@@ -16468,7 +16936,9 @@ def test_pending_handoff_checks_peer_but_waits_for_credentials_before_repair(
     monkeypatch.setattr(cli, "VMManager", Manager)
     monkeypatch.setattr(cli, "SSHPush", Mock())
     monkeypatch.setattr(
-        cli, "_vm_ha_ordinary_migration_ssh_import_hosts", lambda *args: {instances[0].hostname}
+        cli,
+        "_vm_ha_ordinary_migration_ssh_import_hosts",
+        lambda *args, **kwargs: {instances[0].hostname},
     )
     monkeypatch.setattr(
         cli,
@@ -16510,13 +16980,15 @@ def test_pending_handoff_checks_peer_but_waits_for_credentials_before_repair(
     monkeypatch.setattr(cli, "ensure_managed_vm_ha_credentials", credentials)
     result = CliRunner().invoke(
         app,
-        ["apply", "--local-config-file", str(config_path), "--recover-vm-ha-migration", "c" * 64],
+        ["apply", "--local-config-file", str(config_path)]
+        + (["--recover-vm-ha-migration", "c" * 64] if with_recovery_digest else []),
     )
     assert events == (["peer", "credentials"] if pending else ["credentials"]), (
         result.stdout,
         result.exception,
     )
-    assert "boundary reached" in result.stdout
+    assert result.exit_code == 1
+    assert "boundary reached" not in result.stdout
 
 
 @pytest.mark.parametrize("recreate", [False, True])
@@ -16589,7 +17061,7 @@ def test_replay_window_rejects_unusable_wheel_before_ordinary_provisioning(
         )
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
-    assert "managed ingress" in result.stdout.lower() or "replay_window" in result.stdout
+    assert "artifact-unavailable" in result.stdout
     assert "VPNGW_AGENT_WHEEL" in result.stdout
     assert "Traceback" not in result.output
     assert effects == []

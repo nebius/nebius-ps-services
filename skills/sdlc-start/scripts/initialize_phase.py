@@ -100,7 +100,7 @@ def _state(run, objective, checkpoint_id, timestamp):
         "state_version": 2, "project_id": run["project_id"], "run_id": run["run_id"],
         "iteration": 0, "checkpoint_id": checkpoint_id, "current_execution": None,
         "current_phase": "sdlc-start", "status": "running", "blocked_reason": None,
-        "needs_human": False, "iteration_count": 0, "max_iterations": 200,
+        "needs_human": False, "iteration_count": 0, "checkpoint_interval_iterations": 200,
         "retry_counts": dict.fromkeys(RETRIES, 0), "last_successful_phase": None,
         "next_recommended_skill": "sdlc-create-requirements", "repair": None,
         "execution": None, "updated_at": timestamp,
@@ -152,13 +152,15 @@ def _admit(project, home, session, run_dir):
 
 def _admit_registration_only(run_dir, run, objective):
     allowed = {"run.json", "objective.json", "objectives", "git-promotion.json",
-               "history", "checkpoints", "current-state.json", "execution"}
+               "history", "checkpoints", "current-state.json", "execution", "statistics"}
     entries = _entries(run_dir)
     if set(entries) - allowed:
         _blocked()
     for name, metadata in entries.items():
-        if name not in {"objectives", "history", "checkpoints", "execution"}:
+        if name not in {"objectives", "history", "checkpoints", "execution", "statistics"}:
             _regular(metadata)
+    from workflow_statistics import admit_initial_storage
+    admit_initial_storage(run_dir)
     if set(_entries(run_dir / "objectives")) != {Path(objective["revisions"][0]["snapshot"]).name}:
         _blocked()
     from workflow_interop import ExecutionInteropError, inspect_anchor, load, validate_contract_lease
@@ -263,6 +265,8 @@ def initialize(project: Path) -> dict:
         write(run_dir / "checkpoints/latest.json", _pointer(current))
         write(run_dir / "current-state.json", current)
         _write_history(run_dir, current)
+        from workflow_statistics import safe_record
+        safe_record(run_dir, "initialize", initial=True)
         return {"status": "RECOVERED" if snapshots else "INITIALIZED", "run_id": run_dir.name,
                 "checkpoint_id": current["checkpoint_id"]}
 

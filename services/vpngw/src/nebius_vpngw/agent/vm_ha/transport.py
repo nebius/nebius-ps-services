@@ -62,11 +62,13 @@ class PeerTransport(Protocol):
 
 
 class ReplayStateStore(Protocol):
-    """Durable replay-state port required by the authenticated exchange."""
+    """Durable accepted-heartbeat and replay publication port."""
 
     def load_replay_state(self, peer_node_id: str) -> ReplayState | None: ...
 
-    def save_replay_state(self, peer_node_id: str, state: ReplayState) -> None: ...
+    def save_accepted_peer_heartbeat(
+        self, peer_node_id: str, heartbeat: PeerHeartbeat, *, replay_state: ReplayState
+    ) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -388,6 +390,11 @@ class PeerStateExchange:
             expected_node_id=self.peer_node_id,
         )
         self._require_fresh_timestamp(message.heartbeat)
-        self.replay_store.save_replay_state(self.peer_node_id, replay_state)
+        # Consume validated messages even when publication fails. This floor
+        # preserves sequences and retired boots across partial writes or local
+        # file loss; only successful durable publication returns accepted parity.
         self.replay_guard = candidate
+        self.replay_store.save_accepted_peer_heartbeat(
+            self.peer_node_id, message.heartbeat, replay_state=replay_state
+        )
         return message.heartbeat, replay_state

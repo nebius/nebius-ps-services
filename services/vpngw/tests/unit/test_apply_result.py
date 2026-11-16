@@ -1,4 +1,5 @@
 import json
+import shlex
 from types import SimpleNamespace
 
 import pytest
@@ -62,9 +63,16 @@ def test_pending_authority_is_visible_through_wrapped_public_apply(monkeypatch, 
         assert payload["outcome"] == "pending"
         assert payload["authority"] == "unknown"
         assert payload["pending_reason"] == "waiting-for-authority"
-        assert payload["next_command"] == "nebius-vpngw apply"
+        assert shlex.split(payload["next_command"])[:3] == [
+            "nebius-vpngw",
+            "apply",
+            "--local-config-file",
+        ]
+        assert payload["recovery"]["reason_code"] == "waiting-for-authority"
+        assert payload["next_command"] == payload["recovery"]["resume_command"]
     else:
-        assert "pending: waiting for authority" in result.stdout
+        assert "operation is pending" in result.stdout
+        assert "waiting-for-authority" in result.stdout
 
 
 def test_json_separates_diagnostics_and_explicit_evidence(monkeypatch):
@@ -98,7 +106,8 @@ def test_failure_preserves_exit_contract_and_does_not_assert_remote_inhibition(
     assert payload["outcome"] == expected
     assert payload["inhibition_retained"] is None
     assert payload["authority"] == "unknown"
-    assert payload["next_command"] == "nebius-vpngw status"
+    assert payload["next_command"] == payload["recovery"]["resume_command"]
+    assert "status" in payload["recovery"]["next_action"]
 
 
 def test_preview_keeps_effects_pending_without_execution_or_readiness():
@@ -156,7 +165,9 @@ def test_writer_lock_refusal_is_one_json_result_without_health_claims(monkeypatc
     payload = json.loads(result.stdout)
     assert payload["outcome"] == "blocked"
     assert payload["authority"] == "unknown"
-    assert "another writer" in result.stderr
+    assert payload["recovery"]["reason_code"] == "deployment-writer-active"
+    assert payload["recovery"]["repair_prerequisite"]
+    assert not result.stderr
 
 
 def test_configuration_refusal_is_structured_before_any_execution(monkeypatch):

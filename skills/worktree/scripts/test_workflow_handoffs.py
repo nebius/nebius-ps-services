@@ -64,7 +64,7 @@ class HandoffTests(unittest.TestCase):
                     return execution._build_incoming_handoff(
                         run,
                         "FEAT-001",
-                        {},
+                        {"owner": "implement"},
                         "WAVE-002",
                         selected,
                         "a" * 40,

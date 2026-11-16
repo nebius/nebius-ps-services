@@ -29,7 +29,7 @@ from nebius_vpngw.vm_ha_managed_credentials import (
     vm_ha_service_account_name,
 )
 from nebius_vpngw.vpngw_sa import (
-    ServiceAccountTokenIdentity,
+    ServiceAccountIdentity,
     VMHAIAMReconciliationPlan,
 )
 
@@ -178,7 +178,7 @@ class _KeyService:
         self.fail_create = False
         self.operations: list[_Operation] = []
 
-    def list_by_account(self, _request: object) -> SimpleNamespace:
+    def list_by_account(self, _request: object, **_options: object) -> SimpleNamespace:
         return SimpleNamespace(
             wait=lambda: SimpleNamespace(items=list(self.items), next_page_token="")
         )
@@ -206,7 +206,7 @@ class _KeyService:
 def test_authorized_key_inventory_reads_every_page() -> None:
     tokens: list[str] = []
 
-    def list_by_account(request: object) -> SimpleNamespace:
+    def list_by_account(request: object, **_options: object) -> SimpleNamespace:
         token = str(request.page_token)  # type: ignore[attr-defined]
         tokens.append(token)
         suffix = "one" if not token else "two"
@@ -236,7 +236,7 @@ def _identity_ensurer(
     verified_role_ids: tuple[str, ...],
     ownership_labels: dict[str, str],
     reconciliation_plan: VMHAIAMReconciliationPlan,
-) -> ServiceAccountTokenIdentity:
+) -> ServiceAccountIdentity:
     assert name == "gateway-a-vm-ha"
     assert project_id == "project-a"
     assert verified_role_ids == ("editor",)
@@ -244,8 +244,7 @@ def _identity_ensurer(
         project_id="project-a", gateway_name="gateway-a"
     )
     assert reconciliation_plan.project_id == "project-a"
-    return ServiceAccountTokenIdentity(
-        token="bounded-token",
+    return ServiceAccountIdentity(
         service_account_id="service-account-a",
         service_account_name=name,
     )
@@ -423,7 +422,7 @@ def test_approved_creation_publishes_one_private_source_and_reuses_cloud_key(
             preflight=preflight,
         )
 
-    assert result.token_identity.token == "bounded-token"
+    assert result.identity.service_account_id == "service-account-a"
     assert result.credentials.service_account_id == "service-account-a"
     assert len(key_service.create_requests) == 1
     assert key_service.operations[0].sync_wait_calls

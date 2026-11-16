@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import json
 import shutil
 import sys
 import tempfile
@@ -11,20 +12,33 @@ from pathlib import Path
 from unittest.mock import patch
 
 from verify_implement import (
-    DEFAULT_SUITE_TIMEOUT_SECONDS,
+    OBSERVATION_INTERVAL_SECONDS,
     HARNESS_TEST_SCRIPTS,
     TEST_SCRIPTS,
     contract,
     dependency_parity,
     main,
-    run_harness_tests,
     verify,
 )
 
 
 class VerifyTests(unittest.TestCase):
-    def test_default_suite_timeout_covers_full_worktree_regression(self) -> None:
-        self.assertEqual(DEFAULT_SUITE_TIMEOUT_SECONDS, 900)
+    def test_completed_inventory_survives_later_verifier_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary) / "report.md"
+            row = {"id": "complete", "status": "PASS", "inventory": ["fixture.Case.test_ok"],
+                   "outcomes": {"fixture.Case.test_ok": "passed"}}
+            def failed(*args, **kwargs):
+                kwargs["on_result"](row)
+                raise RuntimeError("later verifier failure")
+            with (patch.object(sys, "argv", ["verify_implement.py", "--report", str(report)]),
+                  patch("implement_catalog.snapshot", return_value={"files": {}}),
+                  patch("verify_implement.verify", side_effect=failed), redirect_stdout(StringIO())):
+                self.assertEqual(main(), 1)
+            self.assertEqual(json.loads(report.with_suffix(".inventory.json").read_text())["groups"], [row])
+
+    def test_default_observation_interval_does_not_expire_healthy_suites(self) -> None:
+        self.assertEqual(OBSERVATION_INTERVAL_SECONDS, 30)
 
     def make_skill(self, root: Path, failing: str | None = None) -> Path:
         skill = root / "implement"
@@ -38,6 +52,7 @@ class VerifyTests(unittest.TestCase):
             "$implement\n"
             "$implement <implementation request>\n"
             "$implement continue [project-folder]\n"
+            "$implement status [project-folder]\n"
             "$implement -h\n"
             "$implement --help\n",
             encoding="utf-8",
@@ -49,7 +64,7 @@ class VerifyTests(unittest.TestCase):
             exit_code = 1 if name == failing else 0
             (skill.parent / name).parent.mkdir(parents=True, exist_ok=True)
             (skill.parent / name).write_text(
-                f"raise SystemExit({exit_code})\n", encoding="utf-8"
+                f"import unittest\nclass Fixture(unittest.TestCase):\n def test_result(self): self.assertEqual({exit_code}, 0)\n", encoding="utf-8"
             )
         return skill
 
@@ -78,6 +93,18 @@ class VerifyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             source = self.make_skill(Path(temp))
             suite = "worktree/scripts/test_workflow_security.py"
+            (source.parent / suite).write_text("raise SystemExit(1)\n", encoding="utf-8")
+            result = verify(source, source, 10)
+            self.assertEqual(result["deterministic"], "FAIL")
+            self.assertEqual(
+                [row["status"] for row in result["stages"] if row["name"] == suite],
+                ["FAIL"],
+            )
+
+    def test_readiness_suite_failure_blocks_deterministic_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            source = self.make_skill(Path(temp))
+            suite = "worktree/scripts/test_workflow_readiness.py"
             (source.parent / suite).write_text("raise SystemExit(1)\n", encoding="utf-8")
             result = verify(source, source, 10)
             self.assertEqual(result["deterministic"], "FAIL")
@@ -162,13 +189,19 @@ class VerifyTests(unittest.TestCase):
             scripts.mkdir(parents=True)
             for name in HARNESS_TEST_SCRIPTS:
                 (scripts / name).write_text("", encoding="utf-8")
-            with patch("verify_implement.subprocess.run") as run:
-                run.return_value.returncode = 1
-                check = run_harness_tests(harness, 10)
-            self.assertEqual(check["status"], "FAIL")
-            with patch("verify_implement.run_harness_tests", return_value=check):
-                result = verify(source, source, 10, harness)
+            # Empty discovered modules cannot produce a successful exact inventory.
+            result = verify(source, source, 10, harness)
             self.assertEqual(result["deterministic"], "FAIL")
+
+    def test_prerequisite_failure_launches_no_tests(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = self.make_skill(Path(temp))
+            (source / "agents/openai.yaml").write_text("policy:\n  allow_implicit_invocation: true\n")
+            with patch("verify_implement.run_profile") as run:
+                result = verify(source, source, 10)
+            run.assert_not_called()
+            self.assertEqual(result["deterministic"], "FAIL")
+            self.assertTrue(any(row["status"] == "NOT_RUN" for row in result["stages"]))
 
     def test_default_report_initializes_owned_private_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -204,10 +237,13 @@ class VerifyTests(unittest.TestCase):
                 patch.dict(os.environ, {"CODEX_HOME": str(root / "codex-home")}),
                 patch.object(sys, "argv", arguments),
                 patch(
-                    "verify_implement.run_harness_tests",
-                    return_value=harness_pass,
+                    "verify_implement.run_profile",
+                    return_value=([harness_pass], []),
                 ),
                 redirect_stdout(StringIO()),
+                patch("implement_catalog.snapshot", return_value={"schema": "test", "files": {}}),
+                patch("implement_catalog.validate_record"),
+                patch("implement_catalog.publish_preflight"),
             ):
                 self.assertEqual(main(), 0)
             private = root / "codex-home" / "implement-test"

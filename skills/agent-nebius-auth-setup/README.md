@@ -1,8 +1,13 @@
 # Agent Nebius Auth Setup
 
-`agent-nebius-auth-setup` is the explicit-only mutation path for persistent
+`agent-nebius-auth-setup` is the ordinarily explicit-only mutation path for persistent
 Codex Agent authentication. `agent-nebius-auth-diagnose` remains the implicit,
 read-only entry point.
+
+An authorized `test-live-on-nebius` run may delegate one exact-project/tenant
+`ensure` without another confirmation. This named exception grants no repair
+lease, hook installation, unrelated credential replacement or tenant write role.
+Standalone metadata remains explicit-only; diagnosis stays read-only.
 
 ## Managed State
 
@@ -40,7 +45,11 @@ is fixed to `codex-agent-sa`. Use `--dry-run` for a read-only preview, including
 any conditional one-time credential replacement that live convergence could
 need after profile rebuilding.
 
-The live path locks first, validates the current non-agent human profile with
+The live path locks first and selects the effective non-agent human profile.
+When the runtime selects an agent profile, it uses the configured active profile
+only if that profile is non-agent. It does not switch profiles or search other
+stored identities; missing or agent-only selections stop before IAM. It validates
+the selected human profile with
 `nebius iam get-access-token` while discarding the token, resolves the project
 once, and converges in one pass. Human-profile authentication owns project/IAM
 discovery, service-account and group convergence, and authorized-key generation

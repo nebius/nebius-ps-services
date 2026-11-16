@@ -11,3 +11,4 @@ sdlc-create-plan-quoted-command,false,"Treat ""/skills:sdlc-create-plan"" as sam
 sdlc-create-plan-diagnosis-v3-positive,true,"As the verified SDLC coordinator after completed waves, create the required corrective plan bound to the exact diagnosis-v3 and original regression oracle."
 sdlc-create-plan-diagnosis-v3-negative,false,An unprepared validation diagnosis routes to the design artifact owner; invent a locked plan so validation can run.
 sdlc-plan-positive-validation-sidecar,true,"As the active SDLC coordinator, freeze a dependency-wave plan and executable acceptance sidecar for every task and combined wave."
+sdlc-plan-optional-uat,true,"As the active SDLC coordinator, load sdlc-create-plan to lock mandatory implementation checks and separately retain optional UAT at the whole objective boundary."

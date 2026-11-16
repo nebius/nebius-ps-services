@@ -38,3 +38,11 @@ selected and preserves only workflow-state expectations.
 | Explicit live ensure encounters an expired human session | Permit one CLI browser sign-in with a three-minute bound; continue bootstrap without a second approval or manual terminal handoff. Suppress tokens and raw auth diagnostics. |
 | Preview or repair-lease encounters an expired human session | Keep browser disabled and fail before IAM; do not turn a preview into interactive setup. |
 | Managed group has an unexpected or duplicate member and lacks a required permit | Reject the complete membership before adding any permit or membership. |
+
+## Authorized live-test delegation
+
+An authorized test-live-on-nebius run may call one ensure for its exact tenant and
+project. Preserve fixed IAM and credentials, and require no extra confirmation.
+Reject a target mismatch, missing live authority, diagnosis-only delegation,
+tenant write escalation, or lease/hook installation through this exception.
+Standalone implicit auth failure must still route to read-only diagnosis.

@@ -2,11 +2,13 @@
 import json
 import hashlib
 import os
+import sys
 import tempfile
 import subprocess
 from pathlib import Path
 import unittest
 import threading
+import venv
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 from datetime import datetime, timedelta, timezone
@@ -14,9 +16,208 @@ from datetime import datetime, timedelta, timezone
 import workflow_execution as engine
 import workflow_capacity as capacity
 import workflow_validation as validation
+import workflow_process
 import test_workflow_execution as fixture_module
 from test_workflow_execution import finish_task, write_private, git  # noqa: E402
 from test_workflow_fixture import seed_validation  # noqa: E402
+
+
+class ValidationInvocationTests(unittest.TestCase):
+    def test_incomplete_stream_overrides_nominal_group_cleanup(self):
+        observation = workflow_process.run_owned([sys.executable, "-c", "pass"])
+        observation["stdout"]["complete"] = False
+        check = {"id": "check", "argv": ["{python}", "-c", "pass"],
+                 "execution_policy": {"observation_interval_seconds": 30, "deadline": None}, "environment_keys": []}
+        with mock.patch.object(validation, "run_owned", return_value=observation):
+            with self.assertRaises(workflow_process.ProcessCleanupError) as error:
+                validation._run_check(check, Path.cwd())
+        self.assertFalse(error.exception.observation["local_group_quiescent"])
+
+    def test_virtualenv_interpreter_keeps_its_environment(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = root / "environment"
+            venv.EnvBuilder(with_pip=False, symlinks=True).create(environment)
+            python = environment / "bin/python"
+            self.assertTrue(python.is_symlink())
+            discovered = subprocess.run(
+                [str(python), "-B", "-c",
+                 "import sysconfig; print(sysconfig.get_path('purelib'))"],
+                check=True, capture_output=True, text=True,
+            )
+            (Path(discovered.stdout.strip()) / "validation_venv_probe.py").write_text("VALUE = 41\n")
+            probe = ("import sys; from validation_venv_probe import VALUE; "
+                     "assert VALUE == 41; assert sys.prefix != sys.base_prefix")
+            for executable in (str(python), "environment/bin/python", "{python}", "python"):
+                with self.subTest(executable=executable), \
+                        mock.patch.object(validation.sys, "executable", str(python)), \
+                        mock.patch.dict(os.environ, {"PATH": str(python.parent)}):
+                    result = validation._run_check(
+                        {"id": "venv-import", "argv": [executable, "-c", probe],
+                         "execution_policy": {"observation_interval_seconds": 30, "deadline": None}, "environment_keys": ["PATH"]}, root,
+                    )
+                    self.assertEqual(result["outcome"], "passed")
+                    self.assertEqual(result["executable_sha256"],
+                                     hashlib.sha256(python.read_bytes()).hexdigest())
+
+
+class CandidateCheckpointTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = fixture_module.GitLifecycleTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.tearDown)
+        self.run = self.fixture.run_dir
+        # One real completed wave is sufficient for checkpoint ownership; the
+        # independent verifier composition test covers multiple wave lineage.
+        self.fixture.plan.write_text(self.fixture.plan.read_text().split("### TASK-002")[0])
+        self.fixture.complete_first_wave()
+        self.coordinator = engine._load_coordinator(self.run, "FEAT-001")
+        self.integration = Path(self.coordinator["integration_worktree"])
+        self.parent = engine.head(self.integration)
+        self.waves = {p: p.read_bytes() for p in (self.run / "execution/FEAT-001/waves").glob("*.json")}
+        self.publish()
+
+    def publish(self):
+        from project_specs_lib.transaction import publish_spec_pair
+        from project_specs_lib.impact import statement_inventory
+        from workflow_publication import _basis
+        from workflow_refinement import refinement, settle
+        from workflow_impact import CLAIM_SCHEMA, settle_execution
+        from workflow_state import read
+        original = {k: (self.integration / "docs" / f"{k}.md").read_bytes()
+                    for k in ("requirements", "design")}
+        objective = read(self.run / "objective.json")["revisions"][-1]
+        self.operation = "candidate-authoring-fixture"
+        with mock.patch("agent_runtime.native_session_id", return_value="deterministic-coordinator"):
+            publish_spec_pair(self.integration, requirements_candidate=original["requirements"],
+                design_candidate=original["design"].replace(b"delivery=not-started", b"delivery=implemented"),
+                expected_git_head=self.parent,
+                expected_requirements_sha256=hashlib.sha256(original["requirements"]).hexdigest(),
+                expected_design_sha256=hashlib.sha256(original["design"]).hexdigest(),
+                expected_objective_sha256=objective["sha256"], expected_basis_sha256=_basis(self.run, "FEAT-001"),
+                operation_id=self.operation)
+        refined = refinement(self.run)
+        claim = {"schema": CLAIM_SCHEMA, "objective_id": refined["objective_id"],
+                 "revision": refined["revision"], "intent_sha256": refined["intent_sha256"],
+                 "declared_effects": [], "declared_plan_action": "retain_plan",
+                 "dispositions": [{"statement": row["key"], "disposition": "existing_contract",
+                    "requirements": ["REQ-001"], "design": ["FEAT-001"], "effects": [],
+                    "reason": None}
+                    for row in statement_inventory(refined["extracted"])]}
+        settle(self.run, claim)
+        settle_execution(self.run, "FEAT-001", self.coordinator["plan_digest"], self.fixture.project)
+
+    def checkpoint(self):
+        from workflow_candidate import checkpoint
+        return checkpoint(self.run, "FEAT-001", self.operation, "Document implemented delivery",
+                          session="deterministic-coordinator")
+
+    def test_checkpoint_validation_preserves_waves_and_blocks_early_seal(self):
+        result = self.checkpoint()
+        self.assertNotEqual(result["head"], self.parent)
+        self.assertEqual(self.checkpoint(), result)
+        self.assertEqual(engine._load_coordinator(self.run, "FEAT-001")["status"], "integrated")
+        with self.assertRaises(Exception):
+            engine.seal_feature(self.run, "FEAT-001", "checks", "Final seal")
+        with self.assertRaisesRegex(Exception, "combined wave target drifted"):
+            validation.produce(self.run, "FEAT-001", "WAVE-001", session="deterministic-coordinator")
+        receipt = validation.produce(self.run, "FEAT-001", None, session="deterministic-coordinator")
+        self.assertEqual(receipt["outcome"], "passed")
+        self.assertEqual(validation.produce(self.run, "FEAT-001", None,
+                                          session="deterministic-coordinator"), receipt)
+        sealed = engine.seal_feature(self.run, "FEAT-001", "checks", "Final seal")
+        self.assertEqual(sealed["integration_head"], result["head"])
+        self.assertEqual({p: p.read_bytes() for p in self.waves}, self.waves)
+
+    def test_unrelated_dirt_and_wrong_coordinator_are_rejected(self):
+        from workflow_candidate import checkpoint
+        before = engine.head(self.integration)
+        (self.integration / "README.md").write_text("unrelated change\n")
+        with self.assertRaisesRegex(Exception, "unrelated dirty"):
+            self.checkpoint()
+        with self.assertRaises(Exception):
+            checkpoint(self.run, "FEAT-001", self.operation, "Wrong caller", session="other")
+        self.assertEqual(engine.head(self.integration), before)
+        self.assertEqual((self.integration / "README.md").read_text(), "unrelated change\n")
+
+    def test_interrupted_commit_recovers_only_exact_journaled_child(self):
+        import workflow_candidate as candidate
+        save = candidate._save
+        def interrupt(path, value):
+            if path.name == "sealed.json":
+                raise KeyboardInterrupt("synthetic crash after Git commit")
+            return save(path, value)
+        with mock.patch.object(candidate, "_save", side_effect=interrupt), self.assertRaises(KeyboardInterrupt):
+            self.checkpoint()
+        committed = engine.head(self.integration)
+        self.assertNotEqual(committed, self.parent)
+        self.assertEqual(engine._load_coordinator(self.run, "FEAT-001")["integration_head"], self.parent)
+        self.assertEqual(self.checkpoint()["head"], committed)
+        self.assertEqual(engine.head(self.integration), committed)
+
+    def test_unjournaled_commit_and_tampered_history_are_rejected(self):
+        git(self.integration, "add", "-A")
+        git(self.integration, "commit", "-m", "Unjournaled authoring")
+        with self.assertRaises(Exception):
+            self.checkpoint()
+        self.assertEqual(engine._load_coordinator(self.run, "FEAT-001")["integration_head"], self.parent)
+
+    def test_candidate_rejects_receipt_tampering_and_dirty_bytes(self):
+        self.checkpoint()
+        sealed = next((self.run / "execution/FEAT-001/authoring-checkpoints").glob("*/sealed.json"))
+        original = sealed.read_bytes()
+        value = json.loads(original)
+        value["tree"] = "a" * 40
+        write_private(sealed, value)
+        with self.assertRaisesRegex(Exception, "receipt is invalid"):
+            validation.produce(self.run, "FEAT-001", None, session="deterministic-coordinator")
+        sealed.write_bytes(original)
+        (self.integration / "README.md").write_text("dirty\n")
+        with self.assertRaisesRegex(Exception, "clean recorded"):
+            validation.produce(self.run, "FEAT-001", None, session="deterministic-coordinator")
+
+    def test_checkpoint_rejects_active_owners_and_material_contract_review(self):
+        from workflow_state import read
+        from workflow_refinement import settle
+        from workflow_impact import settle_execution
+        operation = self.run / "execution/FEAT-001/validation/operations/active-fixture.json"
+        write_private(operation, {"status": "running", "target": {}})
+        with self.assertRaisesRegex(Exception, "not quiescent"):
+            self.checkpoint()
+        operation.unlink()
+        wave_path = engine.wave_path(self.run, "FEAT-001", "WAVE-001")
+        wave = read(wave_path)
+        write_private(wave_path, {**wave, "active_task_ids": ["TASK-001"]})
+        with self.assertRaisesRegex(Exception, "outstanding workers"):
+            self.checkpoint()
+        write_private(wave_path, wave)
+        claim = read(self.run / "objective-impact-claim.json")
+        claim.update(declared_effects=["design"], declared_plan_action="replan_required")
+        claim["dispositions"][0].update(disposition="changed_contract", effects=["design"])
+        settle(self.run, claim)
+        settle_execution(self.run, "FEAT-001", self.coordinator["plan_digest"], self.fixture.project)
+        with self.assertRaisesRegex(Exception, "nonmaterial update"):
+            self.checkpoint()
+        self.assertEqual(engine.head(self.integration), self.parent)
+
+    def test_cli_preserves_structured_publication_rejection_without_effects(self):
+        import contextlib
+        import io
+        import sys
+        import workflow_transition
+        output = io.StringIO()
+        args = ["workflow_transition.py", "checkpoint-authoring", "--run-dir", str(self.run),
+                "--execution", "FEAT-001", "--operation-id", "../unsafe", "--message", "Checkpoint docs"]
+        with (mock.patch.object(sys, "argv", args),
+              mock.patch.object(workflow_transition, "runtime_session_identity", return_value="deterministic-coordinator"),
+              contextlib.redirect_stdout(output)):
+            code = workflow_transition.main()
+        result = json.loads(output.getvalue())
+        self.assertNotEqual(code, 0)
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["code"], "SPEC_TRANSACTION_INVALID")
+        self.assertEqual(engine.head(self.integration), self.parent)
+        self.assertNotIn("Traceback", output.getvalue())
 
 
 class WaveContractTests(unittest.TestCase):
@@ -37,10 +238,10 @@ class WaveContractTests(unittest.TestCase):
 
     def test_output_allocation_failure_does_not_launch_process_group(self):
         check = {"id": "fixture", "argv": ["{python}", "-c", "pass"],
-                 "timeout_seconds": 10, "environment_keys": []}
-        with mock.patch.object(validation.tempfile, "TemporaryFile", side_effect=OSError("fixture")), \
-                mock.patch.object(validation, "OwnedProcessGroup") as owner:
-            with self.assertRaises(OSError):
+                 "execution_policy": {"observation_interval_seconds": 30, "deadline": None}, "environment_keys": []}
+        with mock.patch.object(workflow_process, "_Stream", side_effect=MemoryError("fixture")), \
+                mock.patch.object(workflow_process, "OwnedProcessGroup") as owner:
+            with self.assertRaises(MemoryError):
                 validation._run_check(check, self.fixture.project)
             owner.assert_not_called()
 
@@ -58,7 +259,7 @@ class WaveContractTests(unittest.TestCase):
                 os.chdir(coordinator)
                 with mock.patch.dict(os.environ, {"PATH": "bin"}):
                     result = validation._run_check({"id": "target-check", "argv": ["check"],
-                        "timeout_seconds": 5, "environment_keys": ["PATH"]}, target)
+                        "execution_policy": {"observation_interval_seconds": 30, "deadline": None}, "environment_keys": ["PATH"]}, target)
             finally:
                 os.chdir(previous)
             self.assertEqual(result["outcome"], "passed")
@@ -88,11 +289,11 @@ class WaveContractTests(unittest.TestCase):
         self.fixture.start_assignment(peer, "WAVE-001")
         entered, release = threading.Event(), threading.Event()
         original = validation._run_check
-        def delayed(check, cwd):
+        def delayed(check, cwd, **options):
             entered.set()
             if not release.wait(10):
                 raise RuntimeError("test evaluator release timed out")
-            return original(check, cwd)
+            return original(check, cwd, **options)
         with mock.patch.object(validation, "_run_check", side_effect=delayed), ThreadPoolExecutor(max_workers=2) as pool:
             finishing = pool.submit(finish_task, self.run, "FEAT-001", "WAVE-001", first["task_id"],
                                     "fixture acceptance", "fixture review", "", summary="Already accepted",
@@ -126,11 +327,11 @@ class WaveContractTests(unittest.TestCase):
         entered, release = threading.Event(), threading.Event()
         original = validation._run_check
 
-        def delayed(check, cwd):
+        def delayed(check, cwd, **options):
             entered.set()
             if not release.wait(20):
                 raise RuntimeError("test evaluator release timed out")
-            return original(check, cwd)
+            return original(check, cwd, **options)
 
         with mock.patch.object(validation, "_run_check", side_effect=delayed), ThreadPoolExecutor(max_workers=1) as pool:
             producing = pool.submit(validation.produce, self.run, "FEAT-001", "WAVE-001", session="deterministic-coordinator")
@@ -155,23 +356,27 @@ class WaveContractTests(unittest.TestCase):
 
     def test_unproven_evaluator_cleanup_retains_ownership(self):
         self.finish_wave()
-        original = validation._run_check
-
-        def failed_start(check, cwd):
-            with mock.patch("workflow_process.selectors.DefaultSelector") as selector, \
-                    mock.patch("workflow_process.subprocess.Popen") as spawn, \
-                    mock.patch.object(validation.OwnedProcessGroup, "close", side_effect=subprocess.TimeoutExpired("anchor", 5)):
-                selector.return_value.__enter__.return_value.select.return_value = []
-                try:
-                    return original(check, cwd)
-                finally:
-                    spawn.assert_called_once()
-
-        with mock.patch.object(validation, "_run_check", side_effect=failed_start):
-            with self.assertRaises(validation.ProcessCleanupError):
+        failure = workflow_process.ProcessCleanupError("termination unproven")
+        failure.observation = {"local_group_quiescent": False}
+        with mock.patch.object(validation, "run_owned", side_effect=failure):
+            with self.assertRaises(workflow_process.ProcessCleanupError):
                 validation.produce(self.run, "FEAT-001", "WAVE-001", session="deterministic-coordinator")
         with self.assertRaisesRegex(Exception, "validation.*quiescent"):
             validation.require_quiescent(self.run)
+
+    def test_incomplete_evaluator_stream_retains_ownership_without_receipt(self):
+        self.finish_wave()
+        receipts = self.run / "execution/FEAT-001/validation/receipts"
+        before = set(receipts.glob("*.json"))
+        observation = workflow_process.run_owned([sys.executable, "-c", "pass"])
+        observation["local_group_quiescent"] = False
+        observation["stdout"]["complete"] = False
+        with mock.patch.object(validation, "run_owned", return_value=observation):
+            with self.assertRaises(workflow_process.ProcessCleanupError):
+                validation.produce(self.run, "FEAT-001", "WAVE-001", session="deterministic-coordinator")
+        with self.assertRaisesRegex(Exception, "validation.*quiescent"):
+            validation.require_quiescent(self.run)
+        self.assertEqual(set(receipts.glob("*.json")), before)
 
     def test_old_coordinator_cannot_start_or_replay_validation(self):
         self.finish_wave()
@@ -187,15 +392,16 @@ class WaveContractTests(unittest.TestCase):
         receipt_root = self.run / "execution/FEAT-001/validation/receipts"
         before = set(receipt_root.glob("*.json"))
 
-        def changed(check, cwd):
-            result = original(check, cwd)
+        def changed(check, cwd, **options):
+            result = original(check, cwd, **options)
             run = engine.read_json(self.run / "run.json")
             write_private(self.run / "run.json", {**run, "coordinator_session_sha256": "b" * 64})
             return result
 
         with mock.patch.object(validation, "_run_check", side_effect=changed):
-            with self.assertRaisesRegex(Exception, "coordinator.*changed"):
+            with self.assertRaises(engine.ExecutionError) as changed_owner:
                 validation.produce(self.run, "FEAT-001", "WAVE-001", session="deterministic-coordinator")
+            self.assertEqual(changed_owner.exception.code, "OWNERSHIP_INVALID")
         self.assertEqual(set(receipt_root.glob("*.json")), before)
 
     def test_zero_unknown_stale_and_other_session_capacity(self):

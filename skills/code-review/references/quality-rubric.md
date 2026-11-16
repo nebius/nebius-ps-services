@@ -139,6 +139,24 @@ After all attempted fixes:
 - prefer validator no-write and no-cache settings, then remove only exact
   task-created caches, reports, or generated artifacts and confirm none remain
 
+Choose checks with documented exit semantics before execution. Plain
+`git diff --check` covers unstaged tracked changes; `git diff --cached --check`
+checks already staged changes within the review scope. Neither inspects
+untracked files. Do not stage files to make a review check work. For new
+files, prefer existing file linters. If a Git whitespace check is needed,
+copy only the reviewed files into a separately owned disposable directory,
+initialize Git there, use `git add --intent-to-add -- .` only in that copy,
+then run `git diff --check -- .` there. Preserve the actual checkout and index,
+and remove only the exact task-owned copy when finished.
+
+Never combine `git diff --no-index` with `--check`, including comparisons
+against `/dev/null`. The [Git diff documentation](https://git-scm.com/docs/git-diff)
+states that `--no-index` implies `--exit-code`, which is incompatible with
+`--check`; exit 1 can mean differences rather than a whitespace error. Do not
+hide nonzero exits or retrospectively redefine an unexpected failure as an
+expected result. Preserve the command, output and failure evidence, diagnose
+the check, and follow the owning workflow's recovery rules before retrying.
+
 Classify failures before changing disposition:
 
 - If the focused proof still fails, or a broader check fails because of the

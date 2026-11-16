@@ -6,6 +6,18 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Reject native component `bindings` in preconfigured static mode and reject
+  FIFO credential paths without waiting for a writer.
+
+- Add explicit preconfigured static authentication for bounded CPU VM trials:
+  verify the supplied account/project, reject mixed or renewable identities,
+  require an existing backend, and prohibit managed-key issuance, export,
+  bootstrap-ci and WireGuard/operator authentication fallback.
+
+- Remove the project-local release script and maintainer README/development procedures; retain the publish-release skill and shared Actions publisher as the release workflow.
+
+- Route releases through the shared Actions coordinator with immutable semver fragments, exact merged-result CI and one reservation for laptop/runner requests. Retire local release prep/tag/push.
+
 - Validate router tags immediately in both Tailscale wizards, retrying missing
   `tag:` prefixes, invalid names and duplicate entries. Report specific config
   errors with examples instead of calling every invalid tag a duplicate.

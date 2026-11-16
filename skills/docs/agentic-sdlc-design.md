@@ -1,5 +1,11 @@
 # Agentic SDLC Design
 
+Independent project objectives use automatic outers on eligible feature branches,
+shared logical-scope admission and selected-home worker capacity. Original-folder
+status/continuation resolves their durable ownership; users need not track generated
+worktree names. See the [architecture presentation](parallel-project-workflow.html)
+and [automatic project contract](../worktree/references/automatic-projects.md).
+
 Prepared active-task design corrections use the shared Worktree revision owners:
 prove existing classifier/dispatch authority, retain terminated unmerged work,
 publish through `maintain-project-specs`, seal the exact pair, then refresh impact
@@ -33,28 +39,73 @@ execution-phase Git evidence use the exact registered integration worktree, with
 matching project, run, feature, Git directory, branch and recorded HEAD. The target must be clean except while the root checkpoint explicitly records
 active `sdlc-tdd`, `sdlc-update-documents` or `align`; those authoring phases may
 run validation on uncommitted integration work before coordinator sealing.
-Shipping and UAT always require a clean promoted checkout. After completed promotion,
-Compose uses the exact promoted primary checkout and requires integration
-resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
+Shipping and UAT always require a clean promoted checkout. Inner promotion uses
+the automatic outer app folder after integration resource cleanup. Final automatic
+delivery maps back to the original application folder and retains distinct inner
+and aggregate commit identities. The verifier preserves inner UAT, proves unchanged
+application content, rebuilds the final aggregate and repeats acceptance there. Caller-selected paths and unrecorded descendants are rejected.
 
-Read-only classifier observations have a separate explicit target purpose. While
-the bound root coordinator is running `sdlc-classify-failure`, it may observe
-unsealed integration files without committing them or changing phase. Exact
-worktree, objective, basis, branch, HEAD, ownership and ancestry checks remain.
-This purpose is never used by Compose, runtime inventory, build certification,
-browser acceptance or test execution; explicit clean-target requests still win.
-Worker selectors and dirty promoted checkouts remain rejected.
+Read-only phase observations have named private target purposes. Classification
+may observe unsealed integration at its running checkpoint; TDD also admits its
+`tests_red` and `tests_ready` outputs before sealing. These are `current_phase`
+values with root `status: running`, mirrored in the immutable checkpoint; they
+are not run statuses. Initial TDD remains uncommitted until the implementation
+owner seals it. Pending design/test revisions use the existing Worktree revision
+owner; pending test TDD requires its exact reviewed test-only scope and retained
+quiescent writers. Typed reconciliation releases exact stopped scheduler slots;
+after sealing and reviewed replanning, fresh wave preparation verifies private
+candidate archives before retiring owned checkouts and releasing physical claims.
+Promotion rechecks archive integrity. Original failed evidence remains immutable;
+archives cannot supply unadmitted product code or acceptance proof. See the
+[shared retirement contract](../worktree/references/revision-retirement.md).
+Classification after native `wave-fail` may observe the clean
+`repair_required` integration before replanning. The exact unresolved failed wave,
+classified and counted authority, frozen validation binding and quiescent
+workers, validators and runtime leases must all verify. A suspended parent is
+observable only through the repair owner's read-only query: its exact pending
+dispatch must link through the bounded immutable suspension chain to the current
+counted child, with unchanged integration commit, carried obligations and budgets.
+Missing, reordered, tampered, exhausted or terminal lineage is rejected. The
+query never restores parent mutation authority or changes repair state. Corrective preparation
+observes a clean `repair_required` boundary at the running preparation phase or
+`execution_prepared` only after completed owner replan, active failed-wave
+identity, corrective-first tasks and exact reviewed plan/spec proofs. Subsequent
+TDD observation at `sdlc-tdd`, `tests_red` or `tests_ready` reuses those proofs while
+execution remains `repair_required`. It requires the clean failed commit and
+existing sealed tests; test changes still require the typed revision owner. Observation
+never performs the correction or changes coordinator state. Exact worktree,
+objective, basis, branch, HEAD, ownership and ancestry checks remain. These
+purposes never reach Compose, inventory, build, browser or test execution;
+explicit clean requests, worker rejection and promoted cleanliness remain intact.
 
 Pre-commit runtime testing may select a worker only through the private helper's
 `run-compose --worker-task TASK-NNN --assignment-digest DIGEST -- <action>`.
 Both identifiers are required. The resolver admits only an assignment holding
 the exclusive runtime lease in an active scheduler slot during
-`sdlc-implement-plan`, with a registered worktree,
+`sdlc-implement-plan`, or during `sdlc-validate-codes` for a current counted
+same-assignment `VALIDATION_DEFECT` recovery. The latter requires the recovery
+owner's read-only proof of the blocked receipt, active dispatch, exact fresh
+worker and prior termination. Both paths require a registered worktree,
 unchanged assignment base, and an `ACTIVE` result from the execution owner's
 live scope guard. Uncommitted changes must stay inside its write claims. This
 selection never changes phase evidence or UAT targeting; after integration, rerun
 the original oracle using the normal integration target. The shared runtime must
 not serve concurrent worker tests.
+
+SDLC execution additionally freezes a mandatory task-acceptance policy, runs
+applicable checks before worker success, and records explicit deferred criteria.
+The [task acceptance contract](../worktree/references/task-acceptance.md) owns
+schema, producer evidence, isolated container trials, dependency gates and final
+debt reconciliation. Immutable dependency layers may be reused; writable trials
+are fresh. Task checks retain combined-wave validation and final promoted and
+aggregate UAT. Provider live tests remain a separately invoked optional workflow.
+Physical-host memory monitoring belongs to the declared active caller or outer
+owner, including for sandboxed workers without host visibility. The adapter owns
+client process supervision and exact container cleanup; it distinguishes a
+container that never started from a completed failing test.
+Exported snapshot directories and inventory remain readable to the nonroot
+container independently of the native private umask; the outer temporary
+directory, logs and receipts remain private on the host.
 
 ## Table Of Contents
 
@@ -104,6 +155,9 @@ not serve concurrent worker tests.
 - [Guarded Git Actions](#guarded-git-actions)
 - [Resume And Idempotency](#resume-and-idempotency)
 - [Boundaries](#boundaries)
+  - [Successive repair obligations](#successive-repair-obligations)
+- [Verifier Alignment And Evidence Boundaries](#verifier-alignment-and-evidence-boundaries)
+- [Factual execution statistics](#factual-execution-statistics)
 
 ## Purpose
 
@@ -130,7 +184,13 @@ report. During implementation, every safe `TASK-*` uses one fresh task agent
 with its own branch and private Git worktree. A task agent owns only its
 immutable assignment, declared write claims, focused evidence, review, and
 uncommitted implementation. The shared Worktree launch contract configures
-fresh assignment-only workers for both Implement and SDLC. Coordinator-owned
+fresh assignment-only workers for both Implement and SDLC. Its prompt includes
+the assigned task's exact executable checks, timeouts, allowed environment keys
+and Git-checkout-root working directory, read from the assignment's immutable
+basis and digest-bound validation plan. Workers need not discover sidecar paths;
+missing, changed or unsafe evidence rejects launch. Historical assignments use
+their own basis, and independent coordinator acceptance remains required.
+Coordinator-owned
 `task-result` validates full native output and independent termination into an
 immutable per-attempt receipt; `task-finish --receipt` creates the one direct-child
 task commit from its implemented evidence. Task agents never select SDLC phases or mutate shared
@@ -207,7 +267,7 @@ current unambiguous plan or the same native session's bound run; a new session
 continues explicitly. Readable project/objective descriptions resolve ambiguity.
 The coordinator never infers session ownership from a sole active run.
 
-Private `workflow/run-v2`, `workflow/accepted-objective-v2` and
+Private `workflow/run-v4`, `workflow/accepted-objective-v3` and
 `workflow/session-binding-v1` records live under `<agent-home>/sdlc-runs/`.
 The normalized objective contains outcome, scope, constraints, acceptance
 criteria, clarifications, provenance digests and revision ancestry. Do not store
@@ -588,7 +648,7 @@ The preflight must verify and record:
 - the troubleshooting skill's link to its canonical workflow-handoff reference
   and the diagnostic authority rules in that reference
 - a composed real-Git test that selects a nested folder in a managed outer
-  worktree, runs the current execution-basis contract through promotion, proves the v4 outer
+  worktree, runs the current execution-basis contract through promotion, proves the v5 outer
   lease blocks outer integration, releases after final evidence, integrates
   the child locally, and records exact source proof
 - duplicate SDLC skill-name detection
@@ -789,6 +849,13 @@ Build-time downloads are limited to the fixed public base images and pinned
 public Python packages from PyPI and the pinned verifier Playwright packages
 from npm, including transitive dependencies. Application
 behavior depends only on the local runtime after the build.
+The independent public Implement companion shares the isolated native home and
+declares its launch choice before intake: use available native agent tools for
+the single fresh assignment-only worker, consuming the same admitted envelope
+and support directories. Sequential CLI dispatch is only a supported-host
+fallback when native tools are unavailable; one ready task does not select it.
+Neither path changes sandbox or approval controls, and a failed launch cannot
+be retried without the owning workflow's recovery admission.
 The lifecycle freezes a pinned independent Playwright Test oracle at preparation.
 Its completion action clicks once and uses a bounded locator assertion for the
 saved checked state, including asynchronous confirmation and DOM replacement.
@@ -839,8 +906,8 @@ Worker observations consume assignment leases but never certify acceptance;
 canonical inventory binds a clean target and matching build. Cleanup retains
 safe predicate summaries and digests; earlier failures remain immutable.
 
-Lifecycle state uses `agentic-sdlc/three-tier-lifecycle-v7`; semantic evidence
-uses `agentic-sdlc/three-tier-results-v3` and phase receipts use
+Lifecycle state uses `agentic-sdlc/three-tier-lifecycle-v9`; semantic evidence
+uses `agentic-sdlc/three-tier-results-v4` and phase receipts use
 `agentic-sdlc/phase-result-v5` bound to the objective and execution basis.
 Phase input files live at `<run-root>/evidence/phases/<phase>.json`; only the
 recorder creates immutable attempt archives. Its help and rejected-path errors
@@ -1049,6 +1116,18 @@ coordinator continues.
 
 ### `sdlc-auto-steering`
 
+Coordinator-owned readiness binds accepted objective, canonical specs, applicable
+feature context, plan/sidecars and decision evidence before planning, preparation
+and new dispatch. Its deterministic input projection excludes checkpoints,
+timestamps and steering outputs. Missing/stale readiness returns pending owning
+work without charging a repair. Hooks guard; the verifier only observes.
+The readiness command's working directory comes from the authorized run's selected
+project, preserving the same owned Git scope as the coordinator's invocation.
+Immediate scalar clock fields on recognized owner JSON records and Markdown
+frontmatter `created_at`/`updated_at` are excluded. Nested schema fields, examples,
+unknown JSON records and substantive dates remain bound; a field name alone does
+not make decision content volatile.
+
 Refreshes private runtime steering for the active run. It records every accepted
 accepted objective revision in `STEERING.md`, linked by objective ID, revision, digest,
 and snapshot, with only a compact redacted summary and never raw prompt text,
@@ -1062,6 +1141,12 @@ classifies entries with exact disposition values such as `runtime-only`,
 does not edit committed project-truth docs.
 
 ### `sdlc-create-plan`
+
+Each locked plan also has a mandatory `.acceptance.json` sidecar covering every
+task's applicable checks, justified N/A criteria and deferred prerequisites.
+The execution basis freezes that policy before dispatch. The shared task
+acceptance owner records checks before worker success and verifies the tested
+Git tree at task completion and admission.
 
 Creates a private, locked execution plan for exactly one ready feature. Plans
 live under the local run directory, not in the repository. The lock marker
@@ -1085,6 +1170,19 @@ specification succession must remain non-material. New phase submissions and
 later acceptance evidence still require the current basis. Missing or ambiguous
 lineage fails closed and never licenses rewriting historical receipts.
 
+A proven active-task test defect uses the shared typed revision owner after
+native writer termination, validator quiescence and runtime lease release. The
+classifier's counted localized dispatch binds the exact specs, plan, basis and
+integration tip. Preparation retains the unmerged failed wave and freezes exact
+existing tracked test/fixture files; TDD reviews their corrected bytes against
+unchanged acceptance criteria. Canonical specs, project instructions and frozen
+independent acceptance harnesses are excluded. The execution owner rejects
+unrelated dirt before root staging and journals the exact commit for safe replay.
+Original TDD sealing remains immutable. An appended corrective plan produces
+fresh assignments and basis; repeat preparation/TDD observations and every
+invalidated downstream gate before acceptance. This is an active unmerged-wave
+transition, not authority to rewrite integrated or promoted history.
+
 The same corrective route covers an integrated wave whose combined checks
 failed before completion. Classifier lifecycle `integrated_wave` binds that
 exact commit. After proven diagnosis and counted dispatch, `wave-fail` retires
@@ -1095,6 +1193,21 @@ original failure, immutable dispatch, task oracle proofs and integration
 ancestry. Failure history remains visible; sealing rejects unresolved or
 tampered resolution evidence. Complete the dispatch after wave completion,
 then run the deterministic invalidated-gate sequence.
+
+Integrated plan-command defects use the same retirement and correction owners
+with a proven `plan_defect` diagnosis. Preserve the exact failed producer
+receipt and original validation plan. A private, digest-bound review permits
+only corrected combined-check argv while preserving check identities, bounds,
+environment keys, prior task checks and accepted criteria. Recheck the review
+at corrective dispatch and resolution. Append corrective tasks before untouched
+future work; command-only repair may return independently validated no-change
+without a cosmetic commit. Validation commands always start at the Git root,
+so nested projects select their directory explicitly.
+
+Terminal cancellation retains quiescent unresolved integration and its exact
+wave bytes in the resource inventory. It does not change wave status or basis,
+remove recovery resources, or certify failed validation. Nonterminal replanning
+continues to reject unresolved integration journals.
 
 ### `sdlc-prepare-execution`
 
@@ -1109,7 +1222,7 @@ selected at objective acceptance is enforced as the claim, worker-cwd, and
 changed-path boundary even in a monorepo. It records current execution-basis private
 execution state, supports confirmed interrupted-worker transfer and
 confirmed-stopped prestart requeue by exact dispatch compare-and-swap,
-resource-free future-wave replanning, and acquires an `agentic-sdlc` v4 lease
+resource-free future-wave replanning, and acquires an `agentic-sdlc` v5 lease
 when nested in an ordinary managed outer worktree. An obsolete Implement
 lane is rejected without state conversion or deletion.
 
@@ -1136,20 +1249,16 @@ when unavailable, one fresh sequential `codex exec` process runs with exact
 scope cwd, `workspace-write`, `--ephemeral`, stdin assignment, and structured
 output. Prepare the bounded handoff before arming a real worker slot, spawn
 immediately afterward, and persist launch observations after dispatch. The
-shared startup window is 300 seconds from arming to successful `task-start`;
-repeated arming does not reset it. The coordinator invokes read-only
-`task-watch` every 30 seconds. Each worker must call `task-start` before editing
-and emit direct bounded `task-heartbeat` transitions targeting 30 seconds;
-background heartbeat loops are forbidden. Record actual cadence gaps; ACTIVE
-proves only the enforced liveness guards, not each target heartbeat interval.
-Prestart scope violations outrank
-allowed in-claim mutation; prestart timeout, read-only, stale-heartbeat, and
-maximum-runtime violations interrupt the worker while retaining its recovery
-resources. The shared execution and dispatcher policy allows 3600 wall-clock
-seconds per attempt, including external waits, builds, tests, review and handoff.
-An active worker receives `WORKER_DEADLINE_NEAR` in its final 300 seconds; neither
-progress nor heartbeats extend its deadline. The 240-second stale-heartbeat
-guard stays independent. Old assignment limits are rejected, not migrated.
+shared progress-aware policy binds assignment v4 and launch v3 to direct
+30-second heartbeat targets. A 240-second observation gap, 300-second startup
+review or 3600-second progress review triggers diagnosis without expiring healthy
+work. Read-only duration and SDLC iteration/unchanged-state checkpoints likewise
+never prove failure. Retain unknown-health ownership until reconciliation;
+prestart mutation, scope violations, cancellation, confirmed native failure and
+resource safety remain enforceable. Confirmed-failure repair budgets are unchanged.
+The [shared health contract](../worktree/references/execution-health.md) defines
+bounded streaming, independently admitted deadlines, target reservations and exact
+verifier inventory/concurrency. Old assignment fields are rejected, not migrated.
 The native output schema uses supported provider keywords. Authoritative local
 validation separately requires empty spec gaps for implemented or blocked results, nonempty
 gaps for replan results, and unique typed requirement/design IDs. Unsupported
@@ -1182,10 +1291,17 @@ separate from transport validation and test claims.
 Native adapters use the existing `task-arm` or `authorize-recovery` CLI admission
 before spawning. It verifies the selected home, registered project/run, current
 coordinator and canonical assignment, then applies existing arm/recovery checks
-before preparing required support storage. The common `worker-launch-v2` envelope
+before preparing required support storage. The common `worker-launch-v3` envelope
 declares the project-state directory and, for runtime tasks or recovery, the shared
-runtime lease directory in `support_write_roots`. Both hosts grant those existing
-directories while preserving sandbox, approval and launch-mode policy. A pure
+runtime lease directory in `support_write_roots`. Adapters verify effective
+coverage, including existing inherited grants, while preserving sandbox, approval
+and launch-mode policy. Before arming, verify fresh-context support and explicit
+command cwd control. A spawn-level cwd setter is unnecessary when the execution
+tool establishes the actual command cwd checked by startup and heartbeat owners.
+Recheck every returned support path after admission and before spawning.
+Worker prompts name that assigned scope, keep frozen validation's Git-root cwd
+separate, and require scoped absolute product edits and applicable project instructions.
+Missing spawn setters alone do not require sequential fallback. A pure
 launch builder is not native admission; unavailable host support blocks launch.
 These directory grants include sibling run state and other leases, so the shared
 helpers retain assignment, ownership and resource guards as the finer boundary.
@@ -1286,7 +1402,7 @@ evidence routes back to the responsible phase.
 
 Post-promotion documentation assessment is read-only. Necessary edits return
 `DOCUMENTATION_DRIFT` through classification for a corrective run from the exact
-promoted commit; fresh gates and UAT precede publication.
+promoted commit; fresh core gates and an honest optional UAT disposition precede publication.
 
 ### `sdlc-gui-test`
 
@@ -1346,16 +1462,26 @@ It records worker, merge, final, promoted, and cleanup evidence and never pushes
 
 ### `sdlc-uat-tests`
 
-Runs product-level UAT after the current delivery slice is sealed and promoted.
-Its matrix covers every mandatory slice criterion and inherited regression
-obligation, including cross-feature user journeys and negative criteria. It may
-use the confirmed safe Live Experiment Environment within its
-recorded allowed operations and reset rules, records evidence, and marks the
-slice ready for handoff only on pass. Future slices stay pending; feature and
-phase completion require their complete source acceptance obligations. Accepted
-non-runtime slices may use reviewed live N/A with an executed qualification
-harness. For a managed outer worktree, final
-alignment, UAT, and documentation evidence plus a clean exact promoted head and
+Apply the shared [optional UAT contract](../worktree/references/optional-uat.md).
+No UAT is requested by default. Requested UAT runs against the complete accepted
+objective or an explicitly selected coherent milestone once its implementation,
+dependencies, scenarios, access and runtime prerequisites are ready. A supplied
+environment alone does not request a campaign. Container and Nebius testing
+skills require explicit invocation; an existing target uses its project harness.
+
+Mandatory implementation debt resolves before its consumer or delivery and
+remains independent of UAT. Missing optional prerequisites produce `pending`,
+retain a candidate-bound late-test handoff and allow implementation and otherwise
+eligible PR/merge. Active campaigns, real assertion failures and unresolved
+cleanup retain their obligations. Executed UAT uses exact candidate evidence;
+not-requested or unavailable UAT never manufactures PASS, N/A or runtime hashes.
+Phase and slice publication consume implementation admissions. Keep
+merge-before-next-slice scheduling, and defer whole-objective UAT until the full
+scope is ready. A later human test or explicit campaign does not reopen a
+terminal implementation run.
+
+For a managed outer worktree, final
+alignment, an eligible optional UAT disposition, and documentation evidence plus a clean exact promoted head and
 zero internal resources release the Agentic SDLC lease into
 `outer-integration-pending`. The coordinator returns the recorded primary path
 plus the exact `$worktree integrate` command and stops for a fresh explicit user
@@ -1365,7 +1491,10 @@ workflow records exact source-integration proof. The child is never published.
 ### `create-pr`
 
 Reuses the existing PR creation skill only for an unmanaged final source
-branch. In that SDLC publication-only mode, it publishes only after UAT passes.
+branch. In that SDLC publication-only mode, core admission must pass. UAT is
+not requested by default; requested but unavailable UAT remains pending and
+does not block otherwise eligible publication. Observed assertion failures and
+unresolved trial cleanup retain their owners and block affected publication.
 Current clean `HEAD`, commit/execution evidence, the exact promoted
 SHA, and any existing remote PR head must agree. It does not stage, edit,
 commit, merge the base, resolve conflicts, repair checks, switch branches, or
@@ -1411,6 +1540,18 @@ policy, or PR step is routed through `sdlc-classify-failure` so the state
 records the immutable failure, stable blocker, responsible phase, repair
 history, invalidations, budgets, next skill, and any human blocker.
 
+First honor only the canonical owner's bounded pre-effect structural feedback:
+two correction submissions within 300 active seconds under one logical operation.
+Preserve candidates and feedback; changed hashes, workers and restarts do not renew
+it. Missing content, semantics, permissions, executed checks and uncertain effects
+remain ordinary failures. Canonical syntax proof covers headings, unambiguous
+missing record terminators and literal HTTP route code formatting. The current
+checkpoint binds the active authoring phase or a completed phase's recorded next
+owner. Classified failures retain their original accounting. Reserve an eligible
+rejected pair through the publisher before editing; after a read-only candidate
+check returns valid, run remaining Markdown checks before publication. See the
+[input correction contract](../sdlc-classify-failure/references/input-correction.md).
+
 Before execution preparation, a proven mechanical `VALIDATION_DEFECT` returns
 to its exact requirements, context, design, steering, planning or preparation
 phase with corrective mode `phase_artifact_repair`. Unsupported phase names
@@ -1426,7 +1567,7 @@ The normalized records are:
   and requirements/design/plan fingerprints.
 - `diagnosis-v3`: causal proof, confidence, remedy scale, regression oracle,
   evidence references, and proposed classification.
-- `repair-control-v2`: the atomic active-blocker projection with route history,
+- `repair-control-v3`: the atomic active-blocker projection with route history,
   attempts, active time, feature dispatches, invalidations, and status.
 - `repair-journal`: append-only intent/commit transitions used for crash-safe
   replay.
@@ -1496,13 +1637,30 @@ The coordinator establishes an authorized bounded remedy and new evidence,
 consumes a localized dispatch, preserves the blocked result and independently
 observes termination and runtime release. The shared engine transfers only the
 unchanged assignment to a fresh identity. The worker reruns the original failed
-operation and assigned checks; normal task/wave completion precedes the repair
-outcome and downstream revalidation. Policy/human blockers, unknown causes and
+operation and assigned checks; normal task completion precedes the repair
+outcome. Complete an intervening repair before the original corrective wave,
+then preserve its downstream revalidation. Policy/human blockers, unknown causes and
 other active phases receive no new route. Known permission prerequisites use
 supported native approvals before execution; neither approval requests nor
 workflow recovery grant permissions. Implement follows the same shared handoff
 under its own diagnosis and authorization policy.
 Acceptance criteria cannot be weakened to make a repair pass.
+
+For every blocked SDLC worker, the failure event binds
+`evidence_digests.worker_result` to `sha256:` plus the canonical result receipt
+digest. The shared `workflow/recovery-authorization-v2` carries the exact active
+counted dispatch, classification, blocked receipt, integration commit and current
+fingerprints. Authorization and ownership transfer both recheck this binding
+before mutation. Same-assignment recovery permits implementation/environment
+`existing_task_attempt` and validation repair routed to `sdlc-validate-codes`;
+test, plan and design defects use their revision owners. Completed, superseded or
+unclassified repairs cannot authorize transfer, and a new blocked attempt needs
+its own failure classification. Runtime consumers recheck that same current
+authority after transfer; ordinary validation and completed repairs grant no
+worker runtime access. Redemption does not increment a dispatch twice.
+Interrupted workers without results and ordinary Implement retain their existing
+recovery contracts. Worker prompts discover existing project instruction files
+before reading them, so absent optional files do not become required artifacts.
 
 A successful remediation with invalidations enters
 `revalidation_required`, not terminal `resolved`. The authoritative
@@ -1549,6 +1707,23 @@ direct repair that fails with the same blocker requires troubleshooting before
 attempt two. The same blocker after design remediation, semantic A-to-B-to-A
 cycling, or phase churn without new evidence stops immediately.
 
+A counted pending repair interrupted by an independent blocker is retained in
+immutable suspended context under `repair-control-v3`. Successful intervening
+completion restores the most recently suspended dispatch only when its parent
+gates cover all remaining invalidations. Preserve full attempt/time history,
+feature totals, child completion and deferred cursor; never grant authority by
+reading an old receipt. The coordinator refreshes checkpoint pointers from the
+returned `resumed_dispatch_id` before the parent's phase continues. A corrective
+wave still needs active authority, fresh combined proof and separate resolution.
+Failed, changed, exhausted or broader obligations prevent restoration. Replayed
+completion never rewinds later state. Old v2 controls are rejected without a shim.
+If intervening completion reaches the time ceiling, persist its consumed time
+and exhausted status before rejecting it. Keep both the pending child and
+suspended parent; a retry cannot erase time or restore authority.
+Keep the canonical completion journal unchanged. Recovery observers also consume
+the owner's immutable completed-child context and bind its digest as evidence;
+they cannot reactivate historical authority or advance a deferred cursor.
+
 Exact duplicate events, classification replays, permission denials, and crash
 recovery consume no attempt. A causally independent blocker receives a fresh
 blocker budget but continues to consume the feature total. Only a new explicit
@@ -1572,11 +1747,11 @@ Git actions are intentionally split:
 - `sdlc-commit` seals final integration changes, performs exact ff-only local
   promotion, and never pushes.
 - In active Agentic SDLC mode, `create-pr` only publishes the clean exact
-  promoted SHA after UAT passes; it never changes that SHA.
+  promoted SHA after core admission and an eligible UAT disposition; it never changes that SHA.
 - In active Agentic SDLC mode, `review-pr` is findings-and-readiness-only and
   never changes the PR head.
 - `sdlc-merge-pr` merges only within explicit accepted run-level authority and
-  while remote head, promotion, review, qualification and current base agree.
+  while remote head, promotion, review, implementation admission and current base agree.
 
 The optional PreToolUse hook can require short-lived local authorization files
 under the active run's `permissions/` directory:
@@ -1589,7 +1764,8 @@ These files are written immediately before the guarded action, scoped to the
 branch or PR, include an expiry, and are removed or allowed to expire after the
 attempt. PR authorization additionally binds `phase: "create-pr"`, the exact
 branch, `expected_head` equal to the clean promoted SHA, and
-`uat_status: "passed"`; it guards active-run Git pushes, `gh pr create`, and
+`uat_status: <owner-reported status>` and
+`uat_policy_sha256: <frozen policy digest>`; it guards active-run Git pushes, `gh pr create`, and
 GitHub PR-creation MCP calls without blocking GitHub PR reads. The guarded push
 allows exactly `origin` plus one `HEAD:<authorized-branch>` refspec, and CLI/MCP
 PR creation must name that same head branch. Sensitive shell actions use one
@@ -1695,6 +1871,22 @@ identity. Native correlation binds actual command execution items to their threa
 turn and hook event. Cleanup of incomplete startup independently validates product
 ownership, writer quiescence and released leases; it creates no acceptance receipt.
 
+After both fixture classes are removed, aggregate cleanup preserves the terminal
+native process ledger in an immutable archive and retires its unchanged active
+file. Fresh absence checks precede retirement; active or uncertain identities,
+archive conflicts and changed paths remain blocked. Interrupted retirement
+reuses the exact archive. The 64-invocation bound applies within each trial,
+while historical identities remain available without consuming future capacity.
+
+Validate existing fixture ownership before authoring. Changed source or design
+preserves the previous verification context and requires aggregate cleanup before
+fresh preflight. Failed static or fixture prerequisites skip regression launches.
+An already replaced context can be restored only through the workspace owner with
+original bytes matching the recorded hash, unchanged remaining scope and identity,
+clean owned Git and no active native/live work, live manifest or cleanup checkpoint.
+Retain immutable replacement evidence and support interrupted restoration without
+adopting a new generation, weakening normal admission or creating passing results.
+
 The live lifecycle pins the physical installed catalog and runtime closure during
 preparation. Native launch, complete runtime operations and cleanup use that same
 catalog in fresh processes. Source code with matching bytes cannot replace the
@@ -1705,3 +1897,19 @@ then checks the canonical result digest; evidence never selects executable code.
 Qualification uses a frozen source/install snapshot, deterministic gates, a fresh
 Codex three-tier trial and independent cleanup verification. Seven-lane readiness
 remains partial when its other required live profiles have not been exercised.
+
+## Factual execution statistics
+
+The shared [statistics owner](../worktree/references/statistics.md) projects
+source-bound architecture, revision-bound task and attempt history, monotonic
+intervals and explicit gaps before/during/after execution. Reports and status
+never change scheduling, independent acceptance, readiness or repair allowance.
+Known architecture remains visible before task decomposition; component grouping
+does not split vertical delivery slices or remove serial wave barriers.
+The private inventory/checkpoint entry point loads the canonical trusted runtime
+itself; its correctness does not depend on earlier imports in another helper.
+Canonical result receipts end observed worker intervals and expose submitted or
+blocked work separately from acceptance and scheduler slot reservations. Current
+and retired task summaries retain prior results without accepting replacement
+tasks or double counting logical identities. Counted repair dispatches remain
+visible before a worker recovery completes, without changing repair authority.

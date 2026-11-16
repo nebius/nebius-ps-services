@@ -8,7 +8,6 @@ from unittest.mock import Mock
 import pytest
 
 from nebius_vpngw.deploy.route_manager import NebiusSDKRouteBackend
-from nebius_vpngw.deploy.vm_ha_cloud import vm_ha_request_kwargs
 from nebius_vpngw.schema import VMHARouteTarget
 
 
@@ -65,7 +64,63 @@ def test_exact_effective_attachment_is_authorized(binding, default):
     assert binding.clients["Network"].get.call_count == int(default)
     for client in binding.clients.values():
         for call in client.get.call_args_list:
-            assert call.kwargs == vm_ha_request_kwargs()
+            assert call.kwargs["retries"] == 1
+            assert 0 < call.kwargs["timeout"] <= 10
+
+
+@pytest.mark.parametrize("foreign_target", [False, True])
+def test_route_target_gateway_error_retries_only_failed_read_and_revalidates_identity(
+    binding, monkeypatch, foreign_target
+):
+    from grpc import StatusCode
+    from nebius.aio.service_error import RequestError, RequestStatusExtended
+
+    from nebius_vpngw.deploy import route_manager, vm_ha_cloud
+
+    now = [0.0]
+    error = RequestError(
+        RequestStatusExtended(
+            code=StatusCode.UNKNOWN,
+            message="Received http2 header with status: 520",
+            details=[],
+            service_errors=[],
+            request_id="",
+            trace_id="",
+        )
+    )
+    table = binding.clients["RouteTable"]
+    table.get.return_value.wait.side_effect = [error, binding.table]
+    if foreign_target:
+        binding.table.metadata.id = "foreign-table"
+    monkeypatch.setattr(
+        route_manager,
+        "vm_ha_observation_budget",
+        lambda: vm_ha_cloud.vm_ha_observation_budget(seconds=1, clock=lambda: now[0]),
+    )
+    monkeypatch.setattr(
+        route_manager,
+        "read_vm_ha_cloud",
+        lambda read: vm_ha_cloud.read_vm_ha_cloud(
+            read,
+            clock=lambda: now[0],
+            sleep=lambda delay: now.__setitem__(0, now[0] + delay),
+            jitter=lambda: 0.0,
+        ),
+    )
+    if foreign_target:
+        with pytest.raises(RuntimeError, match="route target membership"):
+            binding.backend.verify_target(binding.target)
+    else:
+        binding.backend.verify_target(binding.target)
+    assert binding.clients["Subnet"].get.call_count == 1
+    assert binding.clients["Network"].get.call_count == 0
+    assert table.get.call_count == 2
+    assert all(call.args[0].id == "table-a" for call in table.get.call_args_list)
+    assert all(call.kwargs["retries"] == 1 for call in table.get.call_args_list)
+    assert (
+        table.get.call_args_list[1].kwargs["timeout"]
+        < table.get.call_args_list[0].kwargs["timeout"]
+    )
 
 
 @pytest.mark.parametrize("default", [False, True])

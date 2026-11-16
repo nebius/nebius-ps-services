@@ -17,6 +17,11 @@ Implicit selection, nested workflow use, and explicit no-write requests such as
 review-only, audit-only, or report-only stay non-mutating and restore the exact
 initial worktree state. Priority and auto-fix safety remain independent.
 
+Validation establishes exit semantics before running a check. Untracked files
+use existing file linters or a separate disposable Git copy for whitespace
+checks; the reviewed index stays unchanged. Do not combine Git's `--no-index`
+and `--check` options or suppress unexpected failures.
+
 ## Files
 
 - `SKILL.md`: runtime review contract, workflow, guardrails, and output shape.
@@ -26,6 +31,7 @@ initial worktree state. Priority and auto-fix safety remain independent.
   standards, and approval bar.
 - `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
 - `evals/process-cases.md`: supplemental invocation and runtime-check cases.
+- `evals/evals.json`: clean-new-file and whitespace-fault quality cases.
 - `scripts/test_code_review_contract.py`: deterministic contract checks for
   invocation modes, remediation safety, focused validation, reporting, and
   isolated installation.

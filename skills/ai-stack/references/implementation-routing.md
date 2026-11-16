@@ -91,7 +91,7 @@ Recommend a thin vertical slice:
 
 1. Freeze the approved workload and acceptance gates.
 2. Establish reproducible fixtures, evaluation data, and baseline.
-3. Define the application runtime facade, Pydantic AI model/provider boundary,
+3. Define the application runtime facade, selected SDK model/provider boundary,
    typed tools, canonical state, routing policy, and telemetry required by the
    slice.
 4. Implement one minimum path with the fewest new components.
@@ -107,7 +107,7 @@ Examples:
 
 - RAG: one authoritative source, authorization before retrieval, labeled
   retrieval evaluation, and one answer path before hybrid or agentic retrieval.
-- Agent: one in-process Pydantic AI loop, application-owned state, and read-only
+- Agent: one in-process OpenAI Agents SDK loop unless explicitly overridden, application-owned state, and read-only
   domain tools before a service facade, graph, durability, mutating tools,
   memory, native runtime escape, or multi-agent topology.
 - Inference: one exact model and engine defaults before quantization, custom

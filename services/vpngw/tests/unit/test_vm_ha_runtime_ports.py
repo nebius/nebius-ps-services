@@ -10,7 +10,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from nebius_vpngw.agent.vm_ha.models import DigestSet, HeartbeatEvidence, PeerHeartbeat, ReplayState
+from nebius_vpngw.agent.vm_ha.models import (
+    DigestSet,
+    HeartbeatEvidence,
+    PeerHeartbeat,
+    RepairDisposition,
+    ReplayState,
+)
 from nebius_vpngw.agent.vm_ha.mtls import MTLSSnapshot, PeerLeaf
 from nebius_vpngw.agent.vm_ha.runtime import (
     BGPExportState,
@@ -62,6 +68,7 @@ from nebius_vpngw.deploy.vm_ha_routes import (
     RouteMutation,
     RouteMutationKind,
     RouteMutationPhase,
+    RouteOccupancySnapshot,
     RouteReconciliationContext,
     RouteReconciliationReceipt,
     RouteRollbackSnapshot,
@@ -79,8 +86,11 @@ class MemoryReplayStore:
     def load_replay_state(self, peer_node_id: str) -> ReplayState | None:
         return self.values.get(peer_node_id)
 
-    def save_replay_state(self, peer_node_id: str, state: ReplayState) -> None:
-        self.values[peer_node_id] = state
+    def save_accepted_peer_heartbeat(
+        self, peer_node_id: str, heartbeat: PeerHeartbeat, *, replay_state: ReplayState
+    ) -> None:
+        assert heartbeat.sequence == replay_state.highest_sequence
+        self.values[peer_node_id] = replay_state
 
 
 @pytest.mark.parametrize(
@@ -131,7 +141,9 @@ def test_runtime_treats_malformed_bgp_fsm_state_as_unknown(tmp_path, state, expe
     )
 
 
-def test_peer_runtime_heals_replay_advanced_before_heartbeat_cache(tmp_path: Path) -> None:
+def test_peer_runtime_heals_replay_advanced_before_heartbeat_cache(
+    tmp_path: Path, monkeypatch
+) -> None:
     store = AtomicGenerationStore(tmp_path / "generation-store")
     heartbeat = PeerHeartbeat(
         cluster_id="cluster-a",
@@ -151,9 +163,22 @@ def test_peer_runtime_heals_replay_advanced_before_heartbeat_cache(tmp_path: Pat
         auto_healing_policy_state="enabled",
         auto_healing_policy_digest="e" * 64,
     )
-    store.save_replay_state("node-b", ReplayState("boot-b", 7))
-    store.save_accepted_peer_heartbeat("node-b", heartbeat)
-    store.save_replay_state("node-b", ReplayState("boot-b", 8))
+    store.save_accepted_peer_heartbeat("node-b", heartbeat, replay_state=ReplayState("boot-b", 7))
+    from nebius_vpngw.agent.vm_ha import store as state_store
+
+    write = state_store.atomic_write_json
+
+    def fail_cache_write(path, value):
+        if path.name == "accepted-heartbeat.json":
+            raise OSError("injected cache publication failure")
+        write(path, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(state_store, "atomic_write_json", fail_cache_write)
+        with pytest.raises(OSError, match="injected cache publication failure"):
+            store.save_accepted_peer_heartbeat(
+                "node-b", replace(heartbeat, sequence=8), replay_state=ReplayState("boot-b", 8)
+            )
 
     replacement = replace(heartbeat, sequence=9)
 
@@ -161,7 +186,7 @@ def test_peer_runtime_heals_replay_advanced_before_heartbeat_cache(tmp_path: Pat
         def receive(self, *, timeout_seconds: float) -> tuple[PeerHeartbeat, ReplayState]:
             assert timeout_seconds == 2.0
             replay = ReplayState("boot-b", 9)
-            store.save_replay_state("node-b", replay)
+            store.save_accepted_peer_heartbeat("node-b", replacement, replay_state=replay)
             return replacement, replay
 
         def send(self, _heartbeat: PeerHeartbeat) -> None:
@@ -345,6 +370,21 @@ def test_static_cold_readiness_accepts_empty_frr_bgp_summary(
     tmp_path: Path,
 ) -> None:
     config = _runtime_config(tmp_path)
+    config["connections"] = [
+        {
+            "name": "site-a",
+            "routing_mode": "static",
+            "tunnels": [
+                {
+                    "name": "static-tunnel",
+                    "remote_public_ip": "192.0.2.10",
+                    "inner_cidr": "169.254.1.0/30",
+                    "inner_local_ip": "169.254.1.1",
+                    "inner_remote_ip": "169.254.1.2",
+                }
+            ],
+        }
+    ]
     static_json = json.dumps(
         [{"connection": "site-a", "remote_prefixes": ["10.20.0.0/16"]}],
         sort_keys=True,
@@ -385,6 +425,8 @@ def test_static_cold_readiness_accepts_empty_frr_bgp_summary(
             }:
                 return CommandResult(0, "")
             return CommandResult(0, "[]")
+        if "--configuration" in argv:
+            return CommandResult(0, '{"connections":[],"shared_keys":[]}')
         if argv[0] == DataPlaneCommandSet().swanctl or "nebius_vpngw.ipsec_observation" in argv:
             return CommandResult(
                 0, '{"schema":"nebius-vpngw.ipsec-inventory.v1","complete":true,"sas":[]}'
@@ -430,6 +472,20 @@ def test_static_cold_readiness_accepts_empty_frr_bgp_summary(
     assert observed.cold_standby_ready is True
     assert observed.transfer_ready is True
     assert observed.promotion_ready is False
+    # A healthy BGP session never substitutes for Static absence in mixed mode.
+    ports.routes.bgp_policies = [{"remote_prefixes": []}]
+    for proof in (None, False, True):
+        ports.data_plane.observe = lambda proof=proof: replace(
+            local,
+            static_suspended=proof,
+            configured_bgp_sessions=frozenset({"peer"}),
+            established_bgp_sessions=frozenset({"peer"}),
+            observed_bgp_policy_digest=ports.routes.expected_import_policy_digest,
+            established_ike_sa_count=1,
+        )
+        mixed = ports.routes.readiness()
+        assert mixed.bgp_ready
+        assert mixed.cold_standby_ready is (proof is True)
     ports.close()
 
 
@@ -1343,6 +1399,7 @@ def test_daemon_configuration_loss_is_a_local_defect_and_reload_is_bounded(
         monotonic_clock=lambda: 10.0,
         routing_lock_path=tmp_path / "routing.lock",
     )
+    runtime.ipsec_reload_preparer = lambda action, deadline: None
     runtime.ipsec_configuration_provider = lambda: ConfigurationInventory(
         frozenset({"edge"}), frozenset({"ike-psk-1"})
     )
@@ -1452,7 +1509,9 @@ def test_passive_reload_preserves_fence_and_consumed_attempt(tmp_path, case):
         monotonic_clock=lambda: 20 if case == "expired" else 10,
         routing_lock_path=tmp_path / "routing.lock",
     )
-    runtime.state_path.write_text('{"schema":"nebius-vpngw/vm-ha-data-plane-v1","mode":"passive"}')
+    runtime.state_path.write_text(
+        '{"schema":"nebius-vpngw/vm-ha-data-plane-v1","mode":"passive","boot_id":"boot-a"}'
+    )
     runtime.guard_path.write_text(
         json.dumps(
             {
@@ -1461,6 +1520,7 @@ def test_passive_reload_preserves_fence_and_consumed_attempt(tmp_path, case):
             }
         )
     )
+    runtime.ipsec_reload_preparer = lambda action, deadline: None
     runtime.ipsec_configuration_provider = lambda: (
         None
         if case == "policy"
@@ -1523,6 +1583,7 @@ def test_component_effect_requires_fresh_exact_cloud_owner(tmp_path, drift):
         cloud = replace(cloud, ownership_epoch="8")
     elif drift == "unknown":
         cloud = replace(cloud, authoritative=False)
+    ports.peer_runtime.clock = lambda: 10
     reads, effects = [], []
     ports.cloud.observe = lambda: reads.append(True) or cloud
     ports.data_plane.current = DataPlaneMode.PASSIVE if drift == "passive" else DataPlaneMode.ACTIVE
@@ -1854,6 +1915,171 @@ def test_route_plan_adopts_peer_authored_cloud_authority_route(tmp_path: Path) -
         ports.close()
 
 
+@pytest.mark.parametrize("omit_adoption", [False, True])
+def test_two_real_route_runtimes_reconcile_peer_successors_on_reverse_takeover(
+    tmp_path, monkeypatch, omit_adoption
+):
+    """Independent durable ledgers, real planning/effects/receipts, one cloud view."""
+    from nebius_vpngw.agent.vm_ha.runtime import BoundRouteRuntime
+
+    cloud = SimpleNamespace(owner="node-a", epoch="1", routes={}, mutations=[], serial=0)
+    now = [0.0]
+
+    class SharedBackend(FakeRouteBackend):
+        def list_routes(self, _target, _ledger):
+            return tuple(cloud.routes.values())
+
+        def stably_absent_ledger_route_ids(self, ledger):
+            return frozenset(set(ledger) - set(cloud.routes))
+
+        def synchronize_authority_labels(self, ledger):
+            for route_id, route in cloud.routes.items():
+                if route_id in ledger:
+                    assert ledger[route_id] == route.ownership
+
+        def apply_mutation(self, mutation):
+            cloud.mutations.append((cloud.owner, mutation))
+            if mutation.kind is RouteMutationKind.DELETE:
+                assert cloud.routes[mutation.route_id].ownership == ManagedRouteOwnership(
+                    mutation.cluster_id, mutation.route_kind, mutation.route_target
+                )
+                del cloud.routes[mutation.route_id]
+                return None
+            assert mutation.kind is RouteMutationKind.CREATE
+            cloud.serial += 1
+            route_id = f"{cloud.owner}-route-{cloud.serial}"
+            cloud.routes[route_id] = ManagedRouteSnapshot(
+                route_id,
+                mutation.prefix,
+                mutation.allocation_id,
+                ManagedRouteOwnership(
+                    mutation.cluster_id, mutation.route_kind, mutation.route_target
+                ),
+            )
+            return route_id
+
+    ports = {}
+    try:
+        for node in ("node-a", "node-b"):
+            root = tmp_path / node
+            root.mkdir()
+            config = _runtime_config(root)
+            config["node"] = {"node_id": node, "role": "active" if node == "node-a" else "passive"}
+            policy = json.dumps([{"connection": "site", "remote_prefixes": []}])
+            policy_digest = hashlib.sha256(policy.encode()).hexdigest()
+            config["generation"]["logical_manifests"]["bgp_policy_json"] = policy
+            config["generation"]["digests"]["bgp_policy"] = policy_digest
+            config["readiness"]["digests"]["bgp_policy"] = policy_digest
+            config["runtime_binding"]["bgp_policy_digest"] = policy_digest
+            config["gateway"] = {"local_prefixes": ["10.96.0.0/13"]}
+            config["connections"] = [
+                {
+                    "name": "site",
+                    "routing_mode": "bgp",
+                    "tunnels": [
+                        {"name": "site-a", "inner_remote_ip": "169.254.10.2", "ha_role": "active"}
+                    ],
+                }
+            ]
+            runtime = build_runtime_ports(
+                config,
+                state_dir=root / "state",
+                replay_store=MemoryReplayStore(),
+                sdk_factory=lambda **_kwargs: FakeSDK(),
+                credential_bundle_factory=_fake_credential_bundle,
+                route_backend_factory=lambda _sdk: SharedBackend(),
+                data_plane_factory=FakeDataPlane,
+            )
+            ports[node] = runtime
+            runtime.routes.clock = lambda: now[0]
+            runtime.cloud.observe = lambda: CloudObservation(
+                authoritative=True,
+                allocation_id="allocation-a",
+                observed_owner_node_id=cloud.owner,
+                former_owner_node_id="node-b" if cloud.owner == "node-a" else "node-a",
+                former_owner_compute_state=ComputeState.STOPPED,
+                former_attachment_absent=True,
+                candidate_attachment_exact=True,
+                ownership_re_read_exact=True,
+                ownership_epoch=cloud.epoch,
+            )
+            observed = replace(
+                runtime.data_plane.observe(),
+                configured_bgp_sessions=frozenset({"peer"}),
+                established_bgp_sessions=frozenset({"peer"}),
+                learned_bgp_prefixes=frozenset(
+                    {"10.30.0.0/16" if node == "node-a" else "10.40.0.0/16"}
+                ),
+                usable_xfrm_prefixes=frozenset({"10.30.0.0/16", "10.40.0.0/16"}),
+                observed_bgp_policy_digest=runtime.routes.expected_import_policy_digest,
+            )
+            runtime.data_plane.observe = lambda observed=observed: observed
+            assert runtime.routes.store.load_ledger() == {}
+        if omit_adoption:
+            monkeypatch.setattr(BoundRouteRuntime, "_adopt_cloud_authority_routes", lambda *_: None)
+
+        def reconcile_owner(node, epoch):
+            cloud.owner, cloud.epoch = node, str(epoch)
+            runtime = ports[node]
+            # Preserve the actual hold-down and three-observation withdrawal rule.
+            for tick in range(5):
+                now[0] += 31
+                action = ControllerAction(
+                    ActionKind.RECONCILE_ROUTES,
+                    f"{node}:{epoch}:{tick}",
+                    f"boot-{node}",
+                    node,
+                    "allocation-a",
+                    cloud.epoch,
+                    "a" * 64,
+                    DigestSet(
+                        "a" * 64,
+                        runtime.binding.static_routes_digest,
+                        runtime.binding.bgp_policy_digest,
+                    ),
+                    ownership_incarnation=epoch,
+                    takeover_fence_required=True,
+                )
+                runtime.routes.reconcile(action)
+                receipt = runtime.routes.store.load_route_reconciliation_receipt()
+                assert receipt["context"] == runtime.routes._context(action, "cluster-a").to_dict()
+                assert runtime.routes.store.load_pending_mutation() is None
+
+        reconcile_owner("node-a", 1)
+        original = next(iter(cloud.routes))
+        assert original.startswith("node-a-")
+        assert ports["node-b"].routes.store.load_ledger() == {}
+        if omit_adoption:
+            with pytest.raises(RuntimeError, match="exact durable receipt"):
+                reconcile_owner("node-b", 2)
+            assert original in cloud.routes
+            pending = ports["node-b"].routes.store.load_pending_mutation()
+            assert pending.mutation.route_id == original
+            assert pending.mutation.kind is RouteMutationKind.DELETE
+            assert original not in ports["node-b"].routes.store.load_ledger()
+            assert not any(m.kind is RouteMutationKind.DELETE for _, m in cloud.mutations)
+            return
+        reconcile_owner("node-b", 2)
+        assert len(cloud.routes) == 1
+        successor = next(iter(cloud.routes))
+        assert successor.startswith("node-b-") and original not in cloud.routes
+        assert successor not in ports["node-a"].routes.store.load_ledger()
+        reconcile_owner("node-a", 3)
+        assert len(cloud.routes) == 1 and successor not in cloud.routes
+        assert next(iter(cloud.routes)).startswith("node-a-")
+        assert [
+            (node, mutation.route_id)
+            for node, mutation in cloud.mutations
+            if mutation.kind is RouteMutationKind.DELETE
+        ] == [
+            ("node-b", original),
+            ("node-a", successor),
+        ]
+    finally:
+        for runtime in ports.values():
+            runtime.close()
+
+
 def test_cloud_authority_adoption_ignores_foreign_cluster_routes(tmp_path: Path) -> None:
     # Only routes whose cloud labels prove *this* cluster's authority are adopted;
     # a foreign-cluster route is never pulled into the local ledger.
@@ -1894,8 +2120,14 @@ def test_cloud_authority_adoption_ignores_foreign_cluster_routes(tmp_path: Path)
         ports.close()
 
 
+@pytest.mark.parametrize(
+    ("routing_mode", "progress_at"),
+    [("static", None), ("bgp", None), ("bgp", 2), ("bgp", 3)],
+)
 def test_route_reconcile_uses_same_cycle_adopted_migration_ledger(
     tmp_path: Path,
+    routing_mode: str,
+    progress_at: int | None,
 ) -> None:
     config = _runtime_config(tmp_path)
     static_json = json.dumps(
@@ -1916,10 +2148,22 @@ def test_route_reconcile_uses_same_cycle_adopted_migration_ledger(
     assert isinstance(generation_digests, dict)
     assert isinstance(readiness_digests, dict)
     static_digest = hashlib.sha256(static_json.encode()).hexdigest()
-    manifests["static_routes_json"] = static_json
-    generation_digests["static_routes"] = static_digest
-    readiness_digests["static_routes"] = static_digest
-    runtime_binding["static_routes_digest"] = static_digest
+    manifest_kind = "static_routes" if routing_mode == "static" else "bgp_policy"
+    manifests[manifest_kind + "_json"] = static_json
+    generation_digests[manifest_kind] = static_digest
+    readiness_digests[manifest_kind] = static_digest
+    runtime_binding[manifest_kind + "_digest"] = static_digest
+    if routing_mode == "bgp":
+        config["gateway"] = {"local_prefixes": ["10.96.0.0/13"]}
+        config["connections"] = [
+            {
+                "name": "site-a",
+                "routing_mode": "bgp",
+                "tunnels": [
+                    {"name": "peer", "inner_remote_ip": "169.254.10.2", "ha_role": "active"}
+                ],
+            }
+        ]
     target = VMHARouteTarget.model_validate(runtime_binding["route_targets"][0])
     runtime_binding["migration_routes"] = [
         {
@@ -1936,15 +2180,20 @@ def test_route_reconcile_uses_same_cycle_adopted_migration_ledger(
         def __init__(self) -> None:
             super().__init__()
             self.successor = False
+            self.effects = []
+            self.adoptions = 0
 
         def verify_migration_route(self, _binding: object) -> bool:
+            self.adoptions += 1
             return not self.successor
 
         def list_routes(self, _target, ownership):
             route_id = "route-new" if self.successor else "route-old"
             owner = ownership.get(route_id)
             if owner is None:
-                return ()
+                return (
+                    RouteOccupancySnapshot(route_id, "10.20.0.0/16", "ordinary-allocation", target),
+                )
             return (
                 ManagedRouteSnapshot(
                     route_id=route_id,
@@ -1971,6 +2220,7 @@ def test_route_reconcile_uses_same_cycle_adopted_migration_ledger(
         def apply_mutation(self, mutation: RouteMutation) -> str | None:
             assert mutation.kind is RouteMutationKind.REPLACE
             assert mutation.route_id == "route-old"
+            self.effects.append(mutation)
             self.successor = True
             return "route-new"
 
@@ -2011,13 +2261,39 @@ def test_route_reconcile_uses_same_cycle_adopted_migration_ledger(
         takeover_fence_required=False,
     )
 
-    ports.routes.reconcile(action)
+    if routing_mode == "bgp":
+        baseline = ports.data_plane.observe()
+        samples = 0
+
+        def observe():
+            nonlocal samples
+            samples += 1
+            ready = progress_at is None or samples >= progress_at
+            prefixes = frozenset({"10.20.0.0/16"}) if ready else frozenset()
+            return replace(
+                baseline,
+                configured_bgp_sessions=frozenset({"peer"}),
+                established_bgp_sessions=frozenset({"peer"}),
+                learned_bgp_prefixes=prefixes,
+                usable_xfrm_prefixes=prefixes,
+                observed_bgp_policy_digest=ports.routes.expected_import_policy_digest,
+            )
+
+        ports.data_plane.observe = observe
+    if progress_at is not None:
+        assert ports.routes.reconcile(action) is RepairDisposition.DEFERRED
+        assert backend.effects == [] and backend.adoptions == 0
+        assert ports.routes.store.load_ledger() == {}
+        assert ports.routes.store.load_pending_mutation() is None
+        assert ports.routes.store.load_route_reconciliation_receipt() is None
+    assert ports.routes.reconcile(action) is None
 
     assert backend.successor is True
+    assert len(backend.effects) == 1 and backend.adoptions > 0
     assert ports.routes.store.load_ledger() == {
         "route-new": ManagedRouteOwnership(
             "cluster-a",
-            ManagedRouteKind.STATIC,
+            ManagedRouteKind.STATIC if routing_mode == "static" else ManagedRouteKind.BGP,
             target,
         )
     }
@@ -3658,10 +3934,12 @@ def test_static_passive_rearm_finishes_with_no_loaded_connection_or_ike_sa(
     calls: list[tuple[str, ...]] = []
     forwarding = "1"
     ike_ids = [7]
+    loaded = {"static-tunnel", "bgp-tunnel"}
 
     def raw_sas() -> str:
         return Inventory.from_events(
             [{"static-tunnel": {"uniqueid": str(uid), "state": "ESTABLISHED"}} for uid in ike_ids]
+            + [{"bgp-tunnel": {"uniqueid": "99", "state": "ESTABLISHED"}}]
         ).json()
 
     def runner(argv: tuple[str, ...], _timeout: float) -> CommandResult:
@@ -3670,7 +3948,7 @@ def test_static_passive_rearm_finishes_with_no_loaded_connection_or_ike_sa(
         calls.append(command)
         if argv[0] == DataPlaneCommandSet().systemctl:
             if argv[1:3] == ("reload-or-restart", "nebius-vpngw-agent"):
-                ike_ids[:] = [8]
+                loaded.discard("static-tunnel")
             return CommandResult(0)
         if argv[-1] == "net.ipv4.ip_forward":
             return CommandResult(0, forwarding)
@@ -3679,6 +3957,8 @@ def test_static_passive_rearm_finishes_with_no_loaded_connection_or_ike_sa(
             return CommandResult(0)
         if argv[0] == DataPlaneCommandSet().python and "nebius_vpngw.ipsec_observation" not in argv:
             return CommandResult(0)
+        if "--configuration" in argv:
+            return CommandResult(0, json.dumps({"connections": sorted(loaded), "shared_keys": []}))
         if argv[0] == DataPlaneCommandSet().swanctl or "nebius_vpngw.ipsec_observation" in argv:
             if "nebius_vpngw.ipsec_observation" in argv:
                 return CommandResult(0, raw_sas())
@@ -3703,6 +3983,7 @@ def test_static_passive_rearm_finishes_with_no_loaded_connection_or_ike_sa(
         expected_bgp_policy_digest="c" * 64,
         runner=runner,
         tunnel_cold_passive=True,
+        static_tunnel_names=("static-tunnel",),
         inactive_static_reconciler=cleanup,
     )
     action = ControllerAction(
@@ -3726,7 +4007,9 @@ def test_static_passive_rearm_finishes_with_no_loaded_connection_or_ike_sa(
     assert cleaned == [ActionKind.ENTER_PASSIVE]
     assert forwarding == "0"
     assert ike_ids == []
-    assert sum("--terminate" in argv for argv in calls) == 2
+    assert sum("--terminate" in argv for argv in calls) == 1
+    assert not any("--load-conns" in argv or "99" in argv for argv in calls)
+    assert loaded == {"bgp-tunnel"}
     assert not any("--load-all" in argv for argv in calls)
 
 
@@ -3780,6 +4063,7 @@ def test_static_candidate_tunnel_activation_keeps_forwarding_fenced(
         expected_bgp_policy_digest="c" * 64,
         runner=runner,
         tunnel_cold_passive=True,
+        static_tunnel_names=("static-tunnel",),
         inactive_static_reconciler=cleanup,
     )
     passive = ControllerAction(
@@ -5434,3 +5718,180 @@ def configuration_payload(value):
     if value == "missing-key":
         return ConfigurationInventory(frozenset({"edge"})).json()
     return value
+
+
+def test_pending_repair_verification_port_fences_before_lock_or_cloud(tmp_path: Path) -> None:
+    from nebius_vpngw.agent.local_commands import CURRENT, CommandBudget
+    from nebius_vpngw.agent.vm_ha_controller import RepairAttempt
+
+    ports = build_runtime_ports(
+        _runtime_config(tmp_path),
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **_kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        mtls_snapshot_provider=_fake_mtls_snapshot,
+        route_backend_factory=lambda _sdk: FakeRouteBackend(),
+        data_plane_factory=FakeDataPlane,
+    )
+    calls = []
+
+    def run(argv, timeout):
+        calls.append((tuple(argv), timeout))
+        return CommandResult(0, "0" if "-n" in argv else "")
+
+    plane = SystemDataPlaneRuntime(
+        state_path=tmp_path / "data-plane.json",
+        guard_path=tmp_path / "guard.json",
+        routing_lock_path=tmp_path / "routing.lock",
+        configured_bgp_sessions=(),
+        expected_bgp_policy_digest="c" * 64,
+        runner=run,
+        monotonic_clock=lambda: 104,
+    )
+    ports = replace(ports, data_plane=plane)
+    ports.cloud.observe = lambda: pytest.fail("emergency fencing must not await cloud authority")
+    repair = RepairAttempt(
+        operation_id="boot-a:1:repair-local-dataplane:node-a",
+        owner_node_id="node-a",
+        allocation_id="allocation-a",
+        ownership_epoch="7",
+        ownership_incarnation=0,
+        generation_id="a" * 64,
+        boot_id="boot-a",
+        failure_fingerprint=("daemon-failed:frr",),
+        started_at=100,
+        deadline_at=105,
+    )
+    descriptor = os.open(tmp_path / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    token = CURRENT.set(CommandBudget(103))
+    try:
+        ports.fence_repair_verification(repair)
+    finally:
+        CURRENT.reset(token)
+        os.close(descriptor)
+        ports.close()
+    assert calls == [
+        ((DataPlaneCommandSet().sysctl, "-w", "net.ipv4.ip_forward=0"), 0.75),
+        ((DataPlaneCommandSet().sysctl, "-n", "net.ipv4.ip_forward"), 0.2),
+    ]
+    guard = json.loads((tmp_path / "guard.json").read_text())
+    assert guard["data_plane_mode"] == "blocked" and guard["guard_boot_id"] == "boot-a"
+    assert guard["generation_id"] == ports.binding.generation_id
+
+
+@pytest.mark.parametrize(
+    "loaded,sas,complete,expected",
+    [
+        (["bgp"], ["bgp"], True, True),
+        (["bgp", "static"], ["bgp"], True, False),
+        (["bgp"], ["bgp", "static"], True, False),
+        ([], [], False, None),
+    ],
+)
+def test_static_cold_inventory_distinguishes_responders_sessions_and_unknown(
+    tmp_path, loaded, sas, complete, expected
+):
+    def runner(argv, timeout):
+        assert "--configuration" in argv
+        return CommandResult(
+            0, json.dumps({"connections": loaded, "shared_keys": []}) if complete else "{}"
+        )
+
+    runtime = SystemDataPlaneRuntime(
+        state_path=tmp_path / "state.json",
+        guard_path=tmp_path / "guard.json",
+        routing_lock_path=tmp_path / "routing.lock",
+        configured_bgp_sessions=(),
+        expected_bgp_policy_digest="c" * 64,
+        runner=runner,
+        tunnel_cold_passive=True,
+        static_tunnel_names=("static",),
+    )
+    raw = Inventory.from_events(
+        [{name: {"uniqueid": str(i + 1), "state": "ESTABLISHED"}} for i, name in enumerate(sas)]
+    ).json()
+    assert runtime._static_suspension(raw) is expected
+
+
+@pytest.mark.parametrize("static_state", [None, "CONNECTING", "ESTABLISHED"])
+def test_candidate_wait_never_accepts_only_bgp_or_negotiating_static(tmp_path, static_state):
+    from dataclasses import replace
+
+    calls = []
+    sas = [{"bgp": {"uniqueid": "42", "state": "ESTABLISHED"}}]
+    if static_state:
+        sas.append({"static": {"uniqueid": "7", "state": static_state}})
+
+    def runner(argv, timeout):
+        calls.append(argv)
+        if "nebius_vpngw.ipsec_observation" in argv:
+            return CommandResult(0, Inventory.from_events(sas).json())
+        if argv[-1] == "net.ipv4.ip_forward":
+            return CommandResult(0, "0")
+        return CommandResult(0)
+
+    runtime = SystemDataPlaneRuntime(
+        state_path=tmp_path / "state.json",
+        guard_path=tmp_path / "guard.json",
+        routing_lock_path=tmp_path / "routing.lock",
+        configured_bgp_sessions=(),
+        expected_bgp_policy_digest="c" * 64,
+        runner=runner,
+        tunnel_cold_passive=True,
+        static_tunnel_names=("static",),
+        passive_materialization_attempts=2,
+        passive_materialization_interval=0,
+    )
+    action = ControllerAction(
+        ActionKind.ENTER_PASSIVE,
+        "passive",
+        "boot-a",
+        "node-a",
+        "allocation-a",
+        "9",
+        "a" * 64,
+        DigestSet("a" * 64, "b" * 64, "c" * 64),
+    )
+    runtime._write_state(action, DataPlaneMode.PASSIVE)
+    runtime._write_guard(action, DataPlaneMode.PASSIVE)
+    action = replace(action, kind=ActionKind.PREPARE_CANDIDATE_DATAPLANE, operation_id="prepare")
+    if static_state == "ESTABLISHED":
+        runtime.prepare_candidate(action)
+    else:
+        with pytest.raises(RuntimeError, match="IKE SA establishment"):
+            runtime.prepare_candidate(action)
+    assert not any("net.ipv4.ip_forward=1" in argv for argv in calls)
+
+
+def test_static_names_use_canonical_inheritance_and_disabled_tunnel_projection(tmp_path):
+    config = _runtime_config(tmp_path)
+    config["defaults"] = {"routing": {"mode": "static"}}
+    config["connections"] = [
+        {
+            "name": "site",
+            "tunnels": [
+                {"name": "inherited", "remote_public_ip": "192.0.2.10"},
+                {"name": "disabled", "remote_public_ip": "192.0.2.11", "ha_role": "disable"},
+                {"name": "bgp-override", "remote_public_ip": "192.0.2.12", "routing_mode": "bgp"},
+            ],
+        }
+    ]
+    captured = {}
+
+    def factory(**kwargs):
+        captured.update(kwargs)
+        return FakeDataPlane(**kwargs)
+
+    ports = build_runtime_ports(
+        config,
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        route_backend_factory=lambda sdk: FakeRouteBackend(),
+        data_plane_factory=factory,
+    )
+    assert captured["static_tunnel_names"] == ("inherited",)
+    ports.close()

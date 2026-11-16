@@ -9,10 +9,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 from contextvars import ContextVar
 from pathlib import Path
 
 from ..package_worker import digest, identity
+from .apply_diagnostics import PackageReservationConflict
 from .operator_guest import publish, read_file
 from .operator_keys import protected_directory
 
@@ -72,10 +74,49 @@ def metadata(request: dict) -> dict:
     return {key: value for key, value in request.items() if key != "staged_package"}
 
 
+def handoff_approval(
+    reservation: dict | None, *, proposed: str, lifecycle_approval: str | None
+) -> str:
+    """Reattach an admitted takeover to its still-current lifecycle authority."""
+    if reservation is None:
+        return proposed
+    request = reservation["request"]
+    if (
+        request.get("action") != "reserve"
+        or lifecycle_approval is None
+        or request.get("approval") != lifecycle_approval
+    ):
+        raise PackageReservationConflict(
+            "package reservation approval differs from the active VM-HA transaction"
+        )
+    # Compute progress can change a new preview digest. It cannot change the
+    # approval of this already admitted worker. bind() still checks every other
+    # immutable request field and the exact worker source before reattachment.
+    return lifecycle_approval
+
+
 def path_for(root: Path, execution: str, host: str) -> Path:
     if re.fullmatch(r"[a-f0-9]{32}", execution) is None:
         raise ValueError("package reservation execution is invalid")
     return root / "package-reservations" / execution / (digest(host) + ".json")
+
+
+def require_unreserved(root: Path, execution: str) -> None:
+    """Prove no child request was published for an unused command execution."""
+    import stat
+
+    directory = path_for(root, execution, "").parent
+    try:
+        info = directory.lstat()
+    except FileNotFoundError:
+        return
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or info.st_mode & 0o077
+        or any(directory.iterdir())
+    ):
+        raise RuntimeError("Unused command has package reservation evidence")
 
 
 def read(root: Path, execution: str, authority: str, host: str) -> dict | None:
@@ -100,6 +141,34 @@ def read(root: Path, execution: str, authority: str, host: str) -> dict | None:
     return value
 
 
+def for_host(root: Path, host: str) -> list[dict]:
+    """Read original protected admissions; reconstruction does not invent one."""
+    directory = root / "package-reservations"
+    if not directory.exists() and not directory.is_symlink():
+        return []
+    info = directory.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077):
+        raise RuntimeError("Package reservation directory is unsafe")
+    result = []
+    for entry in sorted(directory.iterdir()):
+        info = entry.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077):
+            raise RuntimeError("Package reservation execution directory is unsafe")
+        path = path_for(root, entry.name, host)
+        raw = read_file(path)
+        if raw is None:
+            continue
+        stored = json.loads(raw["content"])
+        if (not isinstance(stored.get("authority"), str)
+                or re.fullmatch(r"[a-f0-9]{64}", stored["authority"]) is None):
+            raise RuntimeError("Package reservation approval identity is invalid")
+        value = read(root, entry.name, stored["authority"], host)
+        if value is None:
+            raise RuntimeError("Package reservation changed during inspection")
+        result.append(value)
+    return result
+
+
 def admit(request: dict, source: str) -> dict | None:
     scope = SCOPE.get()
     if scope is None:
@@ -119,7 +188,7 @@ def admit(request: dict, source: str) -> dict | None:
     if old is not None:
         # Fresh peer/observation evidence does not rewrite frozen admission.
         if old["identity"] != value["identity"] or old["source"] != source:
-            raise RuntimeError("package reservation differs from approved execution")
+            raise PackageReservationConflict("package reservation differs from approved execution")
         return old
     path = path_for(root, execution, host)
     protected_directory(path.parent)

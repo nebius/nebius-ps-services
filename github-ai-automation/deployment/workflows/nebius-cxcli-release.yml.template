@@ -1,0 +1,160 @@
+# Trusted reusable build profile. Remote tags and publication belong to github-ai-release.yml.
+name: nebius-cxcli-release-publish
+'on':
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      tag:
+        required: true
+        type: string
+permissions:
+  contents: read
+env:
+  APP_DIR: services/nebius-cxcli
+  TAG_PREFIX: nebius-cxcli
+  PACKAGE_IMPORT_NAME: nebius_cxcli
+  MAIN_BRANCH: main
+  ASSET_GLOB: dist/*.whl
+  NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
+jobs:
+  release:
+    name: nebius-cxcli-release
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ env.APP_DIR }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        fetch-depth: 0
+        ref: ${{ inputs.tag }}
+        persist-credentials: false
+    - name: Verify admitted source identity
+      env:
+        EXPECTED_SOURCE: ${{ inputs.source_sha }}
+      run: test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE"
+    - name: Resolve release version from tag
+      id: version
+      env:
+        REF_NAME: ${{ inputs.tag }}
+      run: python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/publication.py" version --tag "$REF_NAME" --prefix
+        "$TAG_PREFIX"
+    - name: Resolve tagged commit
+      id: revision
+      run: 'set -euo pipefail
+
+        echo "commit=$(git rev-list -n 1 "${{ steps.version.outputs.tag }}")" >> "$GITHUB_OUTPUT"
+
+        '
+    - name: Ensure tag commit belongs to main history
+      env:
+        RELEASE_COMMIT: ${{ steps.revision.outputs.commit }}
+      run: python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/publication.py" ancestry --commit "$RELEASE_COMMIT"
+        --branch "$MAIN_BRANCH"
+    - name: Set up Python
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+      with:
+        python-version: '3.12'
+    - name: Install pinned uv
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      with:
+        version: 0.13.5
+        enable-cache: true
+        cache-dependency-glob: services/nebius-cxcli/uv.lock
+    - name: Set up Helm
+      uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e
+    - name: Verify source-checkout runtime version
+      env:
+        EXPECTED_VERSION: ${{ steps.version.outputs.version }}
+      run: "set -euo pipefail\nif ! resolved_version=\"$(\n  PYTHONPATH=src python - \"${EXPECTED_VERSION}\" \"${PACKAGE_IMPORT_NAME}\"\
+        \ <<'PY'\nimport importlib\nimport sys\n\nexpected = sys.argv[1]\nmodule_name = sys.argv[2]\npackage = importlib.import_module(module_name)\n\
+        resolved = getattr(package, \"__version__\", \"\")\n\nif resolved != expected:\n    print(resolved, end=\"\")\n  \
+        \  raise SystemExit(1)\n\nprint(resolved, end=\"\")\nPY\n)\"; then\n  echo \"::error::Source checkout resolved runtime\
+        \ version '${resolved_version:-unknown}' instead of '${EXPECTED_VERSION}'\"\n  exit 1\nfi\necho \"Verified source-checkout\
+        \ runtime version ${resolved_version}.\"\n"
+    - name: Install service dependencies
+      env:
+        SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.version.outputs.version }}
+      run: 'set -euo pipefail
+
+        make env
+
+        '
+    - name: Prepare Terraform CLI for service tests
+      run: "set -euo pipefail\nterraform_output=\"$(\n  uv run --locked --no-sync --no-python-downloads python - <<'PY'\n\
+        from nebius_cxcli.managed_tools import resolve_terraform_binary\n\nprint(resolve_terraform_binary())\nPY\n)\"\nterraform_bin=\"\
+        $(printf '%s\\n' \"${terraform_output}\" | tail -n 1)\"\nif [[ ! -x \"${terraform_bin}\" ]]; then\n  echo \"::error::Resolved\
+        \ Terraform binary is not executable: ${terraform_bin}\"\n  exit 1\nfi\ndirname \"${terraform_bin}\" >> \"${GITHUB_PATH}\"\
+        \n\"${terraform_bin}\" version\n"
+    - name: Prepare pinned Tailscale policy helper toolchain
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      with:
+        go-version: 1.27.3
+        cache: false
+    - name: Verify service with local make contract
+      env:
+        DIFF_BASE: ${{ steps.revision.outputs.commit }}^
+        RELEASE_REF: ${{ steps.version.outputs.tag }}
+        RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.version.outputs.version }}
+      run: 'set -euo pipefail
+
+        CXCLI_BUILD_TAILSCALE_HELPER=1 make ci-quality verify-wheel-cli
+
+        '
+    - name: Qualify pinned Grafana charts, API and PostgreSQL persistence
+      run: 'set -euo pipefail
+
+        uv run --locked --no-sync --no-python-downloads python scripts/verify_grafana_postgres.py
+
+        uv run --locked --no-sync --no-python-downloads python scripts/verify_grafana_api.py
+
+        uv run --locked --no-sync --no-python-downloads python scripts/verify_grafana_persistence.py
+
+        '
+    - name: Validate active component sources catalog
+      env:
+        NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE: portable
+      run: "set -euo pipefail\nuv run --locked --no-sync --no-python-downloads \\\n  python -m nebius_cxcli validate-sources\
+        \ component_sources.yaml\n"
+    - name: Resolve and verify release assets
+      id: asset
+      env:
+        RELEASE_REF: ${{ steps.version.outputs.tag }}
+      run: "set -euo pipefail\nmapfile -t assets < <(compgen -G \"${ASSET_GLOB}\" | sort)\nif [[ \"${#assets[@]}\" -eq 0 ]];\
+        \ then\n  echo \"::error::No release asset found with glob ${ASSET_GLOB}\"\n  exit 1\nfi\nasset=\"${assets[0]}\"\n\
+        \nwheel_version=\"$(python - \"${asset}\" <<'PY'\nimport sys\nimport zipfile\nfrom email import message_from_bytes\n\
+        \nwheel = sys.argv[1]\nwith zipfile.ZipFile(wheel) as zf:\n    metadata_names = [n for n in zf.namelist() if n.endswith(\"\
+        METADATA\")]\n    if not metadata_names:\n        raise SystemExit(\"No METADATA found in wheel\")\n    metadata =\
+        \ message_from_bytes(zf.read(metadata_names[0]))\n    print(metadata.get(\"Version\", \"\"))\nPY\n)\"\n\nif [[ \"\
+        ${wheel_version}\" != \"${{ steps.version.outputs.version }}\" ]]; then\n  echo \"::error::Wheel version (${wheel_version})\
+        \ does not match tag version (${{ steps.version.outputs.version }})\"\n  exit 1\nfi\n\nuv run --locked --no-sync --no-python-downloads\
+        \ \\\n  python -m nebius_cxcli.release_catalog verify-wheel \\\n  --wheel \"${asset}\" \\\n  --release-ref \"${RELEASE_REF}\"\
+        \n\nrelease_dir=\"release-assets\"\ncatalog_asset=\"${release_dir}/component_sources.yaml\"\nrm -rf \"${release_dir}\"\
+        \nmkdir -p \"${release_dir}\"\nuv run --locked --no-sync --no-python-downloads \\\n  python -m nebius_cxcli.release_catalog\
+        \ render \\\n  --input component_sources.yaml \\\n  --output \"${catalog_asset}\" \\\n  --release-ref \"${RELEASE_REF}\"\
+        \n\nuv run --locked --no-sync --no-python-downloads \\\n  python -m nebius_cxcli.release_catalog verify-catalog \\\
+        \n  --catalog \"${catalog_asset}\" \\\n  --release-ref \"${RELEASE_REF}\"\n\necho \"path=${asset}\" >> \"$GITHUB_OUTPUT\"\
+        \necho \"catalog_path=${catalog_asset}\" >> \"$GITHUB_OUTPUT\"\n"
+    - name: Stage build outputs without publication credentials
+      env:
+        WHEEL: ${{ steps.asset.outputs.path }}
+        CATALOG: ${{ steps.asset.outputs.catalog_path }}
+      run: "python3 - <<'PYTHON'\nfrom pathlib import Path\nimport os, shutil\nroot = Path.cwd().resolve()\nout = Path(os.environ[\"\
+        RUNNER_TEMP\"]) / \"ai-release-assets\"\nout.mkdir(exist_ok=False)\nfor value in (os.environ[\"WHEEL\"], os.environ.get(\"\
+        CATALOG\", \"\")):\n    if not value:\n        continue\n    path = root / value\n    if path.is_symlink() or not\
+        \ path.is_file() or not path.resolve().is_relative_to(root):\n        raise SystemExit(\"Unsafe build asset\")\n \
+        \   shutil.copyfile(path, out / path.name)\nPYTHON\n"
+    - name: Retain exact build bytes
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: release-assets-nebius-cxcli-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/ai-release-assets
+        retention-days: 90
+        if-no-files-found: error
+    permissions:
+      contents: read

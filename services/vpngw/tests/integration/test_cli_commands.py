@@ -37,8 +37,8 @@ def test_create_config_no_interactive_explicitly_writes_same_template(tmp_path: 
     assert "Configuration Wizard" not in result.output
 
 
-def test_vm_ha_help_exposes_idempotent_convergence_contract() -> None:
-    result = CliRunner().invoke(app, ["vm-ha", "--help"])
+def test_apply_help_exposes_consolidated_ha_contract() -> None:
+    result = CliRunner().invoke(app, ["apply", "--help"], env={"COLUMNS": "160", "LINES": "200"})
     output = unstyle(result.output)
 
     assert result.exit_code == 0, result.output
@@ -51,6 +51,9 @@ def test_vm_ha_help_exposes_idempotent_convergence_contract() -> None:
     assert "--approve" in output
     assert "--output-format" in output
     assert "--rotate-mtls" in output
+    assert "--convert-to-ha" in output
+    assert "--standby-auto-healing" in output
+    assert "--repair" in output
     assert "--target" not in output
     assert "idempotently" in output
     assert "default-No" in output

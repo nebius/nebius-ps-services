@@ -1,0 +1,274 @@
+name: GitHub AI automation
+run-name: ${{ inputs.dispatch_nonce != '' && format('ai-evaluation-{0}', inputs.dispatch_nonce) || format('ai-pr-{0}-{1}',
+  inputs.pr_number, inputs.operation) }}
+'on':
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number in this repository
+        required: true
+        type: string
+      request_id:
+        description: Internal active request ID; empty for a manual request
+        required: false
+        type: string
+      dispatch_nonce:
+        description: Internal scheduler nonce; empty for a manual request
+        required: false
+        type: string
+      operation:
+        description: Authorized lifecycle or report review
+        type: choice
+        options:
+        - process
+        - review
+        - retire-legacy
+        default: process
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  actions: read
+concurrency:
+  group: ai-pr-${{ github.repository }}-${{ inputs.pr_number }}
+  cancel-in-progress: false
+  queue: max
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: github-ai-automation
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      with:
+        version: 0.13.7
+        enable-cache: false
+    - name: Resolve the selected runtime identity
+      id: image
+      if: vars.AI_AUTOMATION_PR_REVIEW != '' && vars.AI_AUTOMATION_PR_REVIEW != 'disabled' && inputs.operation !=
+        'retire-legacy'
+      env:
+        IMAGE_REF: ${{ vars.AI_AUTOMATION_AGENT_IMAGE_REF }}
+      run: 'set -euo pipefail
+
+        [[ "$IMAGE_REF" =~ ^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$ ]]
+
+        docker pull "$IMAGE_REF"
+
+        printf ''id=%s\n'' "${IMAGE_REF##*@}" >> "$GITHUB_OUTPUT"
+
+        printf ''ref=%s\n'' "$IMAGE_REF" >> "$GITHUB_OUTPUT"'
+    - name: Prepare bounded worker input
+      id: prepare
+      env:
+        GH_TOKEN: ${{ github.token }}
+        AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+        AI_AUTOMATION_PR_REVIEW: ${{ vars.AI_AUTOMATION_PR_REVIEW || 'disabled' }}
+        AI_AUTOMATION_MERGE_FORK_CONTRIBUTION: ${{ vars.AI_AUTOMATION_MERGE_FORK_CONTRIBUTION || 'false' }}
+        AI_AUTOMATION_STATE_BUCKET: ${{ secrets.AI_AUTOMATION_STATE_BUCKET }}
+        AI_AUTOMATION_STATE_ENDPOINT: ${{ secrets.AI_AUTOMATION_STATE_ENDPOINT }}
+        AI_AUTOMATION_STATE_ACCESS_KEY_ID: ${{ secrets.AI_AUTOMATION_STATE_ACCESS_KEY_ID }}
+        AI_AUTOMATION_STATE_SECRET_ACCESS_KEY: ${{ secrets.AI_AUTOMATION_STATE_SECRET_ACCESS_KEY }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        OPERATION: ${{ inputs.operation }}
+        REQUEST_ID: ${{ inputs.request_id }}
+        DISPATCH_NONCE: ${{ inputs.dispatch_nonce }}
+        AI_AUTOMATION_AGENT_IMAGE: ${{ steps.image.outputs.id }}
+        AI_AUTOMATION_AGENT_IMAGE_REF: ${{ vars.AI_AUTOMATION_AGENT_IMAGE_REF }}
+        TF_MODEL_REVIEW: ${{ vars.TF_MODEL_REVIEW }}
+        TF_MODEL_FIX: ${{ vars.TF_MODEL_FIX }}
+        AI_AUTOMATION_IMAGE_QUALIFICATION_RUN_ID: ${{ vars.AI_AUTOMATION_IMAGE_QUALIFICATION_RUN_ID }}
+      run: uv run --locked --project github-ai-automation github-ai-automation execution prepare "$PR_NUMBER" "$RUNNER_TEMP/input.json"
+        --operation "$OPERATION" --request-id "$REQUEST_ID" --dispatch-nonce "$DISPATCH_NONCE"
+    - if: steps.prepare.outputs.ready == 'true'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evaluation-input-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/input.json
+        if-no-files-found: error
+        retention-days: 30
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    outputs:
+      ready: ${{ steps.prepare.outputs.ready }}
+      image_ref: ${{ steps.image.outputs.ref }}
+  evaluate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    environment: github-ai-evaluation
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      with:
+        version: 0.13.7
+        enable-cache: false
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evaluation-input-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/input
+    - name: Pull exact prepared image
+      env:
+        IMAGE_REF: ${{ needs.prepare.outputs.image_ref }}
+      run: 'set -euo pipefail
+
+        [[ "$IMAGE_REF" =~ ^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$ ]]
+
+        docker pull "$IMAGE_REF"'
+    - name: Evaluate without state or cloud credentials
+      env:
+        GH_TOKEN: ${{ github.token }}
+        AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+        AI_AUTOMATION_TF_API_KEY: ${{ secrets.AI_AUTOMATION_TF_API_KEY }}
+      run: uv run --locked --project github-ai-automation github-ai-automation execution evaluate "$RUNNER_TEMP/input/input.json"
+        "$RUNNER_TEMP/worker.json"
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: evaluation-output-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/worker.json
+        if-no-files-found: error
+        retention-days: 30
+    needs:
+    - prepare
+    if: needs.prepare.outputs.ready == 'true'
+  supervise:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    environment: github-ai-automation
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      with:
+        version: 0.13.7
+        enable-cache: false
+    - name: Supervise exact evaluator ownership
+      env:
+        GH_TOKEN: ${{ github.token }}
+        AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+        AI_AUTOMATION_PR_REVIEW: ${{ vars.AI_AUTOMATION_PR_REVIEW || 'disabled' }}
+        AI_AUTOMATION_MERGE_FORK_CONTRIBUTION: ${{ vars.AI_AUTOMATION_MERGE_FORK_CONTRIBUTION || 'false' }}
+        AI_AUTOMATION_STATE_BUCKET: ${{ secrets.AI_AUTOMATION_STATE_BUCKET }}
+        AI_AUTOMATION_STATE_ENDPOINT: ${{ secrets.AI_AUTOMATION_STATE_ENDPOINT }}
+        AI_AUTOMATION_STATE_ACCESS_KEY_ID: ${{ secrets.AI_AUTOMATION_STATE_ACCESS_KEY_ID }}
+        AI_AUTOMATION_STATE_SECRET_ACCESS_KEY: ${{ secrets.AI_AUTOMATION_STATE_SECRET_ACCESS_KEY }}
+      run: uv run --locked --project github-ai-automation github-ai-automation execution supervise
+    needs:
+    - prepare
+    if: needs.prepare.outputs.ready == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
+  accept:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: github-ai-automation
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      with:
+        version: 0.13.7
+        enable-cache: false
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: evaluation-output-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/input
+    - name: Validate and retain worker evidence
+      id: accept
+      env:
+        GH_TOKEN: ${{ github.token }}
+        AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+        AI_AUTOMATION_PR_REVIEW: ${{ vars.AI_AUTOMATION_PR_REVIEW || 'disabled' }}
+        AI_AUTOMATION_MERGE_FORK_CONTRIBUTION: ${{ vars.AI_AUTOMATION_MERGE_FORK_CONTRIBUTION || 'false' }}
+        AI_AUTOMATION_STATE_BUCKET: ${{ secrets.AI_AUTOMATION_STATE_BUCKET }}
+        AI_AUTOMATION_STATE_ENDPOINT: ${{ secrets.AI_AUTOMATION_STATE_ENDPOINT }}
+        AI_AUTOMATION_STATE_ACCESS_KEY_ID: ${{ secrets.AI_AUTOMATION_STATE_ACCESS_KEY_ID }}
+        AI_AUTOMATION_STATE_SECRET_ACCESS_KEY: ${{ secrets.AI_AUTOMATION_STATE_SECRET_ACCESS_KEY }}
+      run: uv run --locked --project github-ai-automation github-ai-automation execution accept "$RUNNER_TEMP/input/worker.json"
+    needs:
+    - prepare
+    - evaluate
+    - supervise
+    if: needs.prepare.outputs.ready == 'true'
+    outputs:
+      live: ${{ steps.accept.outputs.live }}
+  live:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    environment: github-ai-live-test
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      with:
+        version: 0.13.7
+        enable-cache: false
+    - name: Run admitted native trial and cleanup
+      env:
+        GH_TOKEN: ${{ github.token }}
+        AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+        AI_AUTOMATION_PR_REVIEW: ${{ vars.AI_AUTOMATION_PR_REVIEW || 'disabled' }}
+        AI_AUTOMATION_MERGE_FORK_CONTRIBUTION: ${{ vars.AI_AUTOMATION_MERGE_FORK_CONTRIBUTION || 'false' }}
+        AI_AUTOMATION_STATE_BUCKET: ${{ secrets.AI_AUTOMATION_STATE_BUCKET }}
+        AI_AUTOMATION_STATE_ENDPOINT: ${{ secrets.AI_AUTOMATION_STATE_ENDPOINT }}
+        AI_AUTOMATION_STATE_ACCESS_KEY_ID: ${{ secrets.AI_AUTOMATION_STATE_ACCESS_KEY_ID }}
+        AI_AUTOMATION_STATE_SECRET_ACCESS_KEY: ${{ secrets.AI_AUTOMATION_STATE_SECRET_ACCESS_KEY }}
+        AI_AUTOMATION_NEBIUS_CREDENTIALS: ${{ secrets.AI_AUTOMATION_NEBIUS_CREDENTIALS }}
+        AI_AUTOMATION_TEST_TENANT_ID: ${{ secrets.AI_AUTOMATION_TEST_TENANT_ID }}
+        AI_AUTOMATION_TEST_PROJECT_ID: ${{ secrets.AI_AUTOMATION_TEST_PROJECT_ID }}
+        AI_AUTOMATION_TEST_REGION: ${{ secrets.AI_AUTOMATION_TEST_REGION }}
+      run: uv run --locked --project github-ai-automation github-ai-automation execution live
+    needs:
+    - accept
+    if: needs.accept.outputs.live == 'true'
+    concurrency:
+      group: ai-live-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
+  finalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: github-ai-automation
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      with:
+        version: 0.13.7
+        enable-cache: false
+    - name: Finalize exact candidate evidence
+      env:
+        GH_TOKEN: ${{ github.token }}
+        AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+        AI_AUTOMATION_PR_REVIEW: ${{ vars.AI_AUTOMATION_PR_REVIEW || 'disabled' }}
+        AI_AUTOMATION_MERGE_FORK_CONTRIBUTION: ${{ vars.AI_AUTOMATION_MERGE_FORK_CONTRIBUTION || 'false' }}
+        AI_AUTOMATION_STATE_BUCKET: ${{ secrets.AI_AUTOMATION_STATE_BUCKET }}
+        AI_AUTOMATION_STATE_ENDPOINT: ${{ secrets.AI_AUTOMATION_STATE_ENDPOINT }}
+        AI_AUTOMATION_STATE_ACCESS_KEY_ID: ${{ secrets.AI_AUTOMATION_STATE_ACCESS_KEY_ID }}
+        AI_AUTOMATION_STATE_SECRET_ACCESS_KEY: ${{ secrets.AI_AUTOMATION_STATE_SECRET_ACCESS_KEY }}
+      run: uv run --locked --project github-ai-automation github-ai-automation execution finalize "$RUNNER_TEMP/result.json"
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: automation-result-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/result.json
+        if-no-files-found: error
+        retention-days: 30
+    needs:
+    - accept
+    - live
+    if: always() && needs.accept.result == 'success'

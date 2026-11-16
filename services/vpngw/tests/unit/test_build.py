@@ -88,9 +88,10 @@ def test_build_binary_invokes_pyinstaller_with_systemd_assets(tmp_path, monkeypa
     assert (systemd_dir / "nebius-vpngw-vm-ha-rearm.service").exists()
     assert (systemd_dir / "nebius-vpngw-vm-ha.service").exists()
     from nebius_vpngw.handoff_bootstrap import SOURCES
+    from nebius_vpngw.repair_bootstrap import SOURCES as REPAIR_SOURCES
 
     data = {cmd[index + 1] for index, arg in enumerate(cmd) if arg == "--add-data"}
-    for _module, relative in SOURCES:
+    for _module, relative in (*SOURCES, *REPAIR_SOURCES):
         source = Path(build.__file__).parent / relative
         destination = str(Path("nebius_vpngw") / Path(relative).parent)
         assert f"{source}{build.os.pathsep}{destination}" in data
@@ -153,6 +154,7 @@ def test_ci_runs_project_mypy_and_one_build_per_execution_lane() -> None:
     packaging_job = workflow["jobs"]["packaging"]
     assert build_job["if"] == (
         "(github.event_name != 'workflow_dispatch') || needs.merge-inputs.outputs.post_merge == 'true'"
+        " || needs.merge-inputs.outputs.candidate == 'true'"
     )
     manual_only = "github.event_name == 'workflow_dispatch' && needs.merge-inputs.outputs.post_merge != 'true'"
     for name in ("packaging", "integration-tests", "coverage"):

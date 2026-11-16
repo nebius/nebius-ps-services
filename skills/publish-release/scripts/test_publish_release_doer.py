@@ -282,6 +282,26 @@ class PublishReleaseDoerTests(unittest.TestCase):
 
         self.for_each_helper(check)
 
+    def test_live_enrollment_blocks_stale_laptop_checkout(self):
+        def check(f, helper):
+            f.git(f.work, "switch", "-c", "feature/current")
+            head = f.git_output(f.work, "rev-parse", "HEAD")
+            index = f.git_output(f.work, "write-tree")
+            before = (f.work / "CHANGELOG.md").read_bytes()
+            (f.seed / ".github").mkdir()
+            (f.seed / ".github/ai-automation.json").write_text('{"authority":"actions"}')
+            f.git(f.seed, "add", ".github/ai-automation.json")
+            f.git(f.seed, "commit", "-m", "Enroll hosted authority")
+            f.git(f.seed, "push", "origin", "main")
+            self.assertFalse((f.work / ".github/ai-automation.json").exists())
+            result = f.run_helper(helper, "prep", "1.2.3")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("enrolled Actions coordinator", result.stderr)
+            self.assertEqual(f.git_output(f.work, "rev-parse", "HEAD"), head)
+            self.assertEqual(f.git_output(f.work, "write-tree"), index)
+            self.assertEqual((f.work / "CHANGELOG.md").read_bytes(), before)
+        self.for_each_helper(check)
+
     def test_default_and_detached_prep_refused(self):
         def check(f, helper):
             before = (f.work / "CHANGELOG.md").read_bytes()

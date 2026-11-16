@@ -1,0 +1,222 @@
+name: GitHub AI image
+'on':
+  workflow_dispatch: {}
+  schedule:
+  - cron: 17 * * * *
+  push:
+    branches:
+    - main
+    paths:
+    - github-ai-automation/**
+    - skills/**
+    - .github/workflows/github-ai-image.yml
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: github-ai-image-${{ github.repository }}
+  cancel-in-progress: false
+  queue: max
+jobs:
+  resolve:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.resolve.outputs.changed }}
+      version: ${{ steps.resolve.outputs.codex_version }}
+      integrity: ${{ steps.resolve.outputs.codex_integrity }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      with:
+        version: 0.13.7
+        enable-cache: false
+    - id: resolve
+      env:
+        GH_TOKEN: ${{ github.token }}
+        AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+        TF_MODEL_REVIEW: ${{ vars.TF_MODEL_REVIEW }}
+        TF_MODEL_FIX: ${{ vars.TF_MODEL_FIX }}
+        AI_AUTOMATION_CODEX_VERSION: ${{ vars.AI_AUTOMATION_CODEX_VERSION || 'latest' }}
+        AI_AUTOMATION_IMAGE_PUBLISH: ${{ vars.AI_AUTOMATION_IMAGE_PUBLISH || 'false' }}
+      run: uv run --locked --project github-ai-automation github-ai-automation image resolve "$RUNNER_TEMP/input.json"
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: image-input-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/input.json
+        if-no-files-found: error
+        retention-days: 30
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: image-input-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/image
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+      with:
+        context: github-ai-automation
+        file: github-ai-automation/Dockerfile
+        platforms: linux/amd64
+        outputs: type=oci,dest=${{ runner.temp }}/image.oci
+        build-args: 'CODEX_VERSION=${{ needs.resolve.outputs.version }}
+
+          CODEX_INTEGRITY=${{ needs.resolve.outputs.integrity }}'
+        provenance: mode=max
+        sbom: true
+        labels: 'org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+          org.opencontainers.image.revision=${{ github.sha }}'
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: image-archive-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/image.oci
+        if-no-files-found: error
+        retention-days: 7
+  qualify:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: github-ai-evaluation
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      with:
+        version: 0.13.7
+        enable-cache: false
+    - name: Install OCI transport
+      run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends skopeo
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: image-input-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/image
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: image-archive-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/image
+    - env:
+        GH_TOKEN: ${{ github.token }}
+        AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+        TF_MODEL_REVIEW: ${{ vars.TF_MODEL_REVIEW }}
+        TF_MODEL_FIX: ${{ vars.TF_MODEL_FIX }}
+        AI_AUTOMATION_TF_API_KEY: ${{ secrets.AI_AUTOMATION_TF_API_KEY }}
+      run: uv run --locked --project github-ai-automation github-ai-automation image qualify "$RUNNER_TEMP/image/image.oci"
+        "$RUNNER_TEMP/image/input.json" "$RUNNER_TEMP/qualification.json"
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: image-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/qualification.json
+        if-no-files-found: error
+        retention-days: 90
+  publish:
+    needs: qualify
+    if: vars.AI_AUTOMATION_IMAGE_PUBLISH == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: github-ai-image-publish
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      with:
+        version: 0.13.7
+        enable-cache: false
+    - name: Install OCI transport
+      run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends skopeo
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: image-archive-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/image
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: image-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/image
+    - env:
+        GH_TOKEN: ${{ github.token }}
+        AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+        AI_AUTOMATION_IMAGE_PUBLISH: ${{ vars.AI_AUTOMATION_IMAGE_PUBLISH || 'false' }}
+      run: uv run --locked --project github-ai-automation github-ai-automation image publish "$RUNNER_TEMP/image/image.oci"
+        "$RUNNER_TEMP/image/qualification.json" "$RUNNER_TEMP/pushed.json"
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: image-pushed-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/pushed.json
+        if-no-files-found: error
+        retention-days: 90
+  verify:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      with:
+        version: 0.13.7
+        enable-cache: false
+    - name: Install OCI transport
+      run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends skopeo
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: image-pushed-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/image
+    - env:
+        GH_TOKEN: ${{ github.token }}
+        AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+      run: uv run --locked --project github-ai-automation github-ai-automation image verify "$RUNNER_TEMP/image/pushed.json"
+        "$RUNNER_TEMP/publication.json"
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: image-publication-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/publication.json
+        if-no-files-found: error
+        retention-days: 90
+  retain:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: github-ai-automation
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      with:
+        version: 0.13.7
+        enable-cache: false
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: image-publication-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/image
+    - env:
+        GH_TOKEN: ${{ github.token }}
+        AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+        AI_AUTOMATION_STATE_BUCKET: ${{ secrets.AI_AUTOMATION_STATE_BUCKET }}
+        AI_AUTOMATION_STATE_ENDPOINT: ${{ secrets.AI_AUTOMATION_STATE_ENDPOINT }}
+        AI_AUTOMATION_STATE_ACCESS_KEY_ID: ${{ secrets.AI_AUTOMATION_STATE_ACCESS_KEY_ID }}
+        AI_AUTOMATION_STATE_SECRET_ACCESS_KEY: ${{ secrets.AI_AUTOMATION_STATE_SECRET_ACCESS_KEY }}
+      run: uv run --locked --project github-ai-automation github-ai-automation image retain "$RUNNER_TEMP/image/publication.json"

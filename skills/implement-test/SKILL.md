@@ -87,14 +87,15 @@ public alternate-root flag that would permit multiple instances.
 
 ## Writes
 
-The no-flag verifier may write only its private sanitized report and temporary
-test fixtures. Create modes may additionally write one owned lifecycle under:
+The no-flag verifier may write only its private sanitized report, a successful
+deterministic preflight receipt, and temporary test fixtures. Create modes may additionally write one owned lifecycle under:
 
 ```text
 <agent-home>/implement-test/
 ├── owner.json
 ├── active.json
 ├── report.md
+├── preflight.json
 ├── archive/<generation>/
 └── runs/<generation>/
     ├── project/
@@ -121,30 +122,42 @@ evidence, and exact owned runtime resources do not.
 
    It validates explicit-only metadata, the direct-objective public surface,
    source-installed parity, and all current Implement contract,
-   objective/basis, specification ownership, ready-slot scheduler, and temporary-Git lifecycle
+   objective/basis, specification ownership, readiness, statistics, ready-slot scheduler, and temporary-Git lifecycle
    suites, plus the verifier's own helper/lifecycle/semantic suites. It must not
    call Docker, create workers, or touch a real project.
-   The bounded default is 900 seconds per suite so the complete disposable
-   linked-worktree crash matrix is not cut off by the worker's shorter
-   per-assignment runtime budget.
+   The shared verifier freezes exact test IDs and runs at most two audited
+   independent groups; other groups are exclusive. Healthy suites have no
+   duration-only deadline. Required failure stops admission and preserves
+   completed, interrupted and not-run evidence with exact owned cleanup.
    Report the deterministic profile independently; absence of live evidence is
    `NOT_RUN`, not synthetic live PASS.
 3. For `--destroy`, invoke the lifecycle helper's `destroy` action. A missing
    active lifecycle returns `ALREADY_DESTROYED`. Preserve the latest sanitized
    report and archive.
-4. For either create mode, run the no-flag verifier first. Any deterministic
-   FAIL blocks mutation and preserves a retained instance.
+4. For either create mode, run the installed no-flag verifier first, checking
+   source/install parity across its complete dependency catalog. Any deterministic
+   FAIL blocks replacement and preserves a retained instance. Preparation freezes
+   the successful receipt and physical catalog hashes. Revalidate before native
+   launch, continuation, admission and cleanup; drift requires restoration of the
+   exact frozen bundle, never patching an active trial.
 5. Invoke lifecycle `prepare`. While holding its private lock, it validates
    ownership, destroys and archives the previous exact active generation, and
-   only then creates a fresh seeded local-only brownfield Git fixture with an
+   only then creates a fresh seeded local-only brownfield monorepo fixture with an
    owned bare `origin`, configured `origin/HEAD`, and non-default source branch. If
    cleanup or ownership is ambiguous, stop; never create a second instance.
 6. Retain the immutable generation ID returned by `prepare`. Pass it to every
    later lifecycle mutation so a superseded invocation cannot modify its
    replacement.
-7. Render `assets/app-objective.md.template` as a direct conversation objective
-   using `scripts/render_app_objective.py`. Invoke the PUBLIC workflow in a fresh
-   native session rooted at the fixture, with its isolated agent home:
+7. Establish the outer verifier as the physical-host memory owner:
+   record a fresh reliable observation, keep its bounded monitor active and
+   consume it throughout both native invocations, and stop exact owned work at
+   the existing floor or unknown visibility. If this cannot be established,
+   report the capability gap before native launch. The trial controller's
+   environment handoff describes this required setup; it does not create a
+   monitor or prove that one exists. Preserve that handoff in worker assignments.
+   Render `assets/app-objective.md.template` as a direct conversation objective
+   using `scripts/render_app_objective.py`. Invoke the PUBLIC workflow through the trial controller in two fresh concurrent
+   native sessions, rooted at project-a and project-b in one isolated agent home:
 
    ```text
    $implement <rendered implementation request>
@@ -169,7 +182,9 @@ evidence, and exact owned runtime resources do not.
    Codex uses the owning stdio App Server for ephemeral public invocations and
    bounded metadata-only child snapshots. Reject samples crossing native status
    transitions; never infer live overlap from stale events or worker prose.
-8. Require disjoint frontend, API, and database tasks in the first dependency
+8. Require both automatic objective deliveries and original-folder continuations,
+   sampled cross-project admission overlap and shared-capacity compliance.
+   Require disjoint frontend, API, and database tasks in the first dependency
    wave and a dependent integration task. Repeat the container-port-80 contract
    and each canonical tier contract from `references/live-app-test.md` in its
    assignment. Reject planning before dispatch when a worker lacks its inputs.
@@ -181,14 +196,17 @@ evidence, and exact owned runtime resources do not.
    final alignment, automatic local delivery and exact worker cleanup.
    Workers use embedded helper/workspace paths and pass their assignment
    digest unchanged; ad hoc JSON recomputation is forbidden. Observe liveness
-   every 30 seconds. An armed worker must reach task-start within 60 seconds;
-   stop the trial at a 240-second stale heartbeat, its standard 300-second or
-   dependent integration 420-second read-only budget, or total timeout. Reject
-   background heartbeat loops and out-of-claim progress. Native termination is
-   independent of a worker's result text. Do not repair/retry an affected trial.
+   every 30 seconds through the installed owner's read-only `task-watch`.
+   `QUEUED` and `PENDING_START` are waiting states. Follow the shared
+   contract in `../worktree/references/execution-health.md`:
+   elapsed time and stale telemetry request diagnosis without expiring ownership.
+   Stop on confirmed failure, cancellation, authority/scope violations or safety.
+   Reject background heartbeat loops and out-of-claim progress. Native termination
+   is independent of result text. Do not repair/retry an affected frozen trial.
    Invoke `$implement continue <project-folder>` in a fresh native session after
    delivery and require ALREADY_COMPLETE with unchanged Git/objective identity.
-   Record stage outcomes immediately with generation-fenced `record-stage`.
+   Record observer-owned stage outcomes immediately with generation-fenced
+   `record-stage`. Lifecycle actions record their own stages.
 9. Implement must not start Docker or containers. After it promotes and
    cleans its worktrees, invoke lifecycle `validate-compose` and then
    `compose-up` with the same generation ID; the helper records live ownership
@@ -204,6 +222,11 @@ evidence, and exact owned runtime resources do not.
     PostgreSQL data, and persistence after an API restart through lifecycle
     `collect-application`; repeat the health check after restart and do not call
     the collector directly. Write
+    the HTTP evidence, then invoke lifecycle `collect-browser`. Its pinned
+    Playwright collector exercises the declared accessible UI, correlates the same
+    record with API/PostgreSQL, restarts the API through the lifecycle owner, and
+    verifies persistence in a fresh isolated browser. Require hashed assertions,
+    trace and screenshot artifacts plus exact process cleanup. Write
     `evidence/live-results.json` using the strict schema, then invoke lifecycle
     `validate-results` with the isolated run, immutable public invocation receipt, and current
     Worktree scripts. The helper directly validates canonical orchestration,
@@ -214,7 +237,19 @@ evidence, and exact owned runtime resources do not.
     final owner specification reconciliation. Verify that historical basis,
     admission binding and hash-linked reconciliation ancestry to the current
     basis; objective, plan, helpers, inputs and ownership must remain identical.
-11. Build the sanitized report with a complete ordered stage matrix. It must
+    Final coverage may fulfill the same statements with no new effects. Bind
+    each basis's plan action to its own receipt. Preserve authorized worker
+    recovery histories with exact native exits and failure receipts; every
+    attempt requires a fresh session distinct from all other task histories.
+11. Require shared reporting evidence for both objective deliveries: immutable
+    initial architecture before specification bootstrap, during execution history,
+    terminal aggregation/cleanup outcomes and unchanged continuation. The semantic
+    validator replays preserved history through the shared projector; missing
+    telemetry is unavailable, never synthetic proof. Only `validate-results`
+    records workflow-statistics PASS after semantic replay; do not pre-record
+    that stage through `record-stage`. Only `collect-browser` may record
+    browser-uat PASS; prose, HTTP checks or a hand-written stage cannot.
+    Build the sanitized report with a complete ordered stage matrix. It must
     show bounded evidence for every deterministic, fixture, direct intake,
     planning, tier-worker, wave-integration, finalization, rerun, Compose,
     runtime, application, semantic-validation, reporting, and cleanup stage.
@@ -237,7 +272,10 @@ evidence, and exact owned runtime resources do not.
 
 ## Idempotency
 
-- No-flag reruns replace only the sanitized lightweight report.
+- No-flag reruns replace the sanitized report and successful preflight receipt.
+- The private root marker is exactly version 1; active generation state is
+  exactly version 2. Historical archives remain unchanged. Unsupported markers
+  or active generations fail; there is no conversion or adoption path.
 - Each live stage is generation-fenced and terminal once recorded. An exact
   repeat is idempotent; conflicting status or detail fails closed.
 - There is at most one active generation. Every create is replace-on-create,
@@ -261,7 +299,8 @@ evidence, and exact owned runtime resources do not.
 - Classify unavailable Docker, Git, Implement runtime, or local service
   capability before an attempted action as `PARTIAL`.
 - Classify a failed attempted worker, Git, application, database, or runtime
-  action as `FAIL`.
+  action as `FAIL`. FAIL takes precedence over an incomplete peer; PARTIAL
+  must not downgrade an observed failure.
 - Classify wrong owner, symlink, path escape, remote Git repository, marker
   mismatch, generation mismatch, an external linked worktree, or Docker
   ownership ambiguity as `OWNERSHIP_BLOCKED` and stop without cleanup or
@@ -314,3 +353,8 @@ status, report path, stage totals, failed-stage analysis, not-run stages,
 cleanup or retention result, and the minimum next action. For kept mode,
 include the exact project path and the `$implement-test --destroy`
 command.
+
+Before native launch, bind the isolated home’s exact reviewed hook payload and
+canonical host registrations. Reject missing, changed, symlinked or unexpected
+importable payloads and disabled hooks. Recheck before continuation, admission
+and cleanup; PASS requires this binding. Authentication remains outside reports.

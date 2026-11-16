@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Remove the legacy project-local release script and maintainer README procedure. GitHub Release publication belongs to publish-release; shared-coordinator enrollment remains deferred.
+
 ## [nebius-acc-v0.1.1] - 2026-01-23
 
 - Add `--version` CLI flag and ensure installed wheels report the package version.

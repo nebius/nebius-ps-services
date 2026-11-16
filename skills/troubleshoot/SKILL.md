@@ -56,7 +56,7 @@ requested. Domain skills own known platform implementation.
 - Expected behavior, actual symptom, target identity, time window, affected and
   unaffected cases, prior interventions, permitted actions, and success criteria.
 - In Agentic SDLC: immutable `failure-event-v2`, exact integration commit and
-  worktree, accepted criteria, fingerprints, `repair-control-v2`, and route.
+  worktree, accepted criteria, fingerprints, `repair-control-v3`, and route.
 
 ## Required Reads
 
@@ -106,6 +106,13 @@ injected private task-state surface for concise continuation and the existing
 Do not persist raw logs, secrets, customer data, or private endpoints.
 
 ## Process
+
+In SDLC diagnostic mode, use the bounded shared admission and reconciliation
+contract in [workflow handoffs](references/workflow-handoffs.md). Unsupported
+native tool restriction controls require serial diagnosis, regardless of role names.
+Diagnostic observation identity, exact time charge and exhaustion outcome persist
+atomically; malformed time and changed replay are rejected, and overlapping helper
+intervals are charged as a union. Never add overlapping parent time again.
 
 Preserve the existing states; revisit an earlier state when evidence invalidates it:
 

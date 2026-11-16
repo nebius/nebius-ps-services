@@ -1,0 +1,61 @@
+{
+  "schema": "merge-policy/v1",
+  "ci_workflows": [
+    {
+      "file": "vpngw-ci.yml",
+      "paths": [
+        "services/vpngw/**",
+        ".github/workflows/vpngw-ci.yml",
+        ".github/workflows/vpngw-release.yml"
+      ]
+    },
+    {
+      "file": "nebius-cxcli-ci.yml",
+      "paths": [
+        ".github/helm-chart-publish.json",
+        "services/nebius-cxcli/**",
+        "services/nccl-test/**",
+        "helm-charts/nccl-test/**",
+        "platform-infra/modules/**",
+        ".github/workflows/nebius-cxcli-ci.yml",
+        ".github/workflows/nebius-cxcli-release.yml"
+      ]
+    },
+    {
+      "file": "nebius-cxcli-nsight.yml",
+      "paths": [
+        "services/nebius-cxcli/src/nebius_cxcli/nsight*.py",
+        "services/nebius-cxcli/src/nebius_cxcli/flux_render.py",
+        "services/nebius-cxcli/scripts/verify_nsight*.py",
+        "services/nebius-cxcli/tests/test_nsight*.py",
+        ".github/workflows/nebius-cxcli-nsight.yml"
+      ]
+    },
+    {
+      "file": "skills-project-specs-ci.yml",
+      "paths": [
+        "skills/**",
+        ".github/workflows/skills-project-specs-ci.yml",
+        ".agents/plugins/marketplace.json",
+        ".claude-plugin/marketplace.json"
+      ]
+    },
+    {
+      "file": "courses-ci.yml",
+      "paths": [
+        "courses/**",
+        ".github/workflows/courses-ci.yml"
+      ]
+    },
+    {
+      "file": "merge-automation-ci.yml",
+      "paths": [
+        "**"
+      ]
+    }
+  ],
+  "merge_workflow": "skills-merge-pr.yml",
+  "completion_workflow": "merge-completion.yml",
+  "pages_enabled": true,
+  "automation_required": true
+}

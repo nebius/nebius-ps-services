@@ -5,6 +5,8 @@ It is not a universal stack and does not replace workload contracts, official
 source verification, compatibility tests, target evaluation, or owner review.
 
 Baseline date: 2026-08-16
+Agent-framework preference reviewed: 2026-11-13; other dated claims must be
+revalidated when selected.
 
 ## Contents
 
@@ -71,73 +73,42 @@ Read `pytorch-training-stack.md` for the complete decision tree.
 
 ## Model Access
 
-| Capability | Baseline | Starting status | Switch condition |
+| Capability | Baseline | Starting status | Adoption trigger |
 | --- | --- | --- | --- |
-| Portable Python direct-call behavior | Pydantic AI direct model API for `ModelResponse` control, or a no-tools single-request `Agent` for typed parsing, validation retries, or typed dependencies | Conditional | One request is sufficient and the model does not own continuation; select the primitive from required runtime services. |
-| Intentionally provider-specific direct access | Official provider SDK and exact task API | Conditional | A named provider feature or workload is required and portability is not a goal. |
-| Capability-aware multi-provider routing | Pydantic AI execution contract plus application-owned functional, operational, and governance catalog | Conditional | More than one eligible route, self-hosting, regional policy, fallback, or shared governance exists. |
-| OpenAI | Pydantic AI OpenAI model for the portable path; official OpenAI SDK for intentionally native task APIs | Conditional | OpenAI is an approved target and the exact required capabilities pass conformance. |
-| Anthropic | Pydantic AI Anthropic model for the portable path | Conditional | Anthropic is an approved target and provider-specific settings are explicit. |
-| Google | Pydantic AI Google model for the portable path | Conditional | Google is an approved target and provider-specific settings are explicit. |
-| Nebius Token Factory | Verified Pydantic AI OpenAI-compatible provider path and exact capability profile | Conditional | The selected model, endpoint, and adapter pass the same conformance suite. |
-| Self-hosted runtime | Verified adapter for the selected inference endpoint | Conditional | Open weights, data boundary, custom kernels, capacity, or economics justify ownership. |
-| Shared traffic and policy plane | Existing gateway, Pydantic AI Gateway, or `agentgateway` after comparison | Conditional | Several applications, providers, MCP servers, or agent services would otherwise duplicate routing and policy controls. |
+| Direct request | Official task API or existing qualified adapter | Conditional | One bounded call satisfies the workload |
+| Agent model access | Preferred SDK provider seams with exact capability profile | Conditional | Agentic behavior requires model calls |
+| Multi-provider routing | Application eligibility policy plus qualified adapters | Conditional | Several routes, regions or providers are required |
+| Self-hosted inference | Verified adapter to the selected endpoint | Conditional | Data, model control, capacity or economics justify ownership |
+| Shared gateway | Existing qualified gateway or evaluated alternative | Conditional | Shared policy/credential/traffic ownership warrants a service |
 
-Changing only API key, base URL, and model name proves connectivity, not
-semantic compatibility. Record modalities, tool behavior, JSON Schema subset,
-streaming events, limits, reasoning controls, caching, safety metadata,
-residency, retention, errors, and rate limits per exact target.
-
-Automatic fallback is a separate evaluated deployment route, not a retry. It
-must preserve required semantics and pass quality, safety, latency, tool,
-structured-output, data-policy, and replay-safety gates. Persist the complete
-route plan and assign one retry owner per failure class.
-
-Read `model-provider-contract.md` for multi-provider conformance, routing, or a
-proven cross-runtime contract. Read `provider-agnostic-agent-platform.md` for
-the portable application boundary.
+OpenAI Agents SDK preference does not select a provider. Qualify every required
+provider/model/endpoint/protocol combination, including non-OpenAI routes.
+Do not infer Responses, tools, structured outputs or retention from API shape.
+Read `model-provider-contract.md` for exact-route gates and conditional shared
+contracts; read `openai-agents-sdk-integration.md` for supported SDK seams.
 
 ## Agent Applications And Durability
 
-Do not select an agent component until the workload rejects a direct model call
-and a deterministic workflow. A known sequence remains application code even
-when several steps call a model or tool.
-
-| Capability | Baseline | Starting status | Switch condition |
+| Capability | Baseline | Starting status | Adoption trigger |
 | --- | --- | --- | --- |
-| Portable Python agent kernel | Pydantic AI `Agent` | Conditional | A bounded typed agent using any supported approved provider is required. |
-| Portable specialist capability | Pydantic AI capability | Conditional | Reusable context, tool filtering, model selection, delegation, or instrumentation needs a composable runtime extension. |
-| Portable specialist harness | Pydantic AI Harness | Conditional | A Coder, Researcher, or custom specialist needs a richer portable workspace and lifecycle than one bounded agent. |
-| Provider-native agent runtime | OpenAI Agents SDK, Claude Agent SDK, Managed Agents, or another exact harness | Conditional | A named unique harness feature defeats the portable path and the separate runtime retains platform controls. |
-| Coding-focused engineering specialist | Codex SDK | Conditional | Engineering work needs coding-focused threads, repository operations, or programmatic Codex automation. |
-| Deep Codex product client | Codex app-server | Conditional | Product integration needs Codex authentication, conversation history, approvals, or streamed events; ordinary CI or jobs remain on the SDK path. |
-| Integration components | Selected LangChain packages | Conditional | Their maintained integrations remove more code than they add. |
-| Conventional model-tool loop | Pydantic AI `Agent` | Conditional | The workload is genuinely agentic; switch only when a required integration or native harness measurably reduces total complexity. |
-| Explicit state graph | LangGraph | Conditional | Nodes, edges, typed state, branches, bounded cycles, checkpoints, interrupts, replay, or graph recovery must be first-class. |
-| Durable cross-service workflow | Temporal, DBOS, Prefect, Restate, or the existing qualified owner around Pydantic AI activities | Conditional | Timers, long approvals, external side effects, compensation, or process/infrastructure recovery are required. |
+| General agent kernel | OpenAI Agents SDK | Conditional | Model-owned actions/continuation are required; honor explicit overrides and fixed stacks |
+| Alternative general kernel | Pydantic AI or another qualified framework | Conditional | Explicit user override or accepted fixed project choice |
+| Bounded specialist | Selected kernel with scoped tools and budgets | Conditional | A separate responsibility improves accepted outcomes |
+| Coding specialist | Codex SDK | Conditional | Coding-harness behavior is required |
+| Deep Codex client | App-server integration | Conditional | Product client needs the lower-level integration surface |
+| Integration library | Selected maintained integrations | Conditional | They reduce total complexity without adding a second kernel |
+| Explicit state graph | LangGraph | Conditional | First-class graph semantics are required |
+| Durable execution | Existing qualified owner, Temporal, DBOS, Prefect or Restate | Conditional | Recovery, long waits, timers or effects require durability |
 
-Choose Pydantic AI as the primary portable kernel for each genuinely agentic
-Python capability. A provider-native harness is a separate runtime escape and
-must not be wrapped by Pydantic AI.
-LangChain and LangGraph are not competing whole-stack choices: current
-`create_agent` uses the LangGraph runtime, while direct LangGraph use is
-justified only when the application owns explicit graph semantics. Codex is a
-separate engineering specialist rather than the default kernel for general AI
-tasks.
+A failed hard gate blocks the preferred SDK; present alternatives and seek an
+explicit override. Never silently select another framework or infer universal
+SDK superiority. Keep one primary agent loop and one owner per retry, effect
+and checkpoint boundary. Graphs and durability may wrap deterministic or
+agentic work. No optional layer becomes mandatory because an SDK is preferred.
 
-Keep the application runtime facade, canonical state, domain tools,
-authorization, route policy, budgets, telemetry, and evaluation outside the
-framework. Begin in-process; a shared platform service requires a scale,
-ownership, or policy trigger. Read `provider-agnostic-agent-platform.md` for
-the complete boundary and adoption sequence.
-
-LangGraph may checkpoint deterministic or agent execution state. One selected
-qualified workflow engine owns durable business-process state and side effects
-around direct calls, deterministic workflows, agents, or mixtures. Compare
-Temporal, DBOS, Prefect, Restate, and any existing qualified owner against the
-workload. Assign each retry, timeout, idempotency, and recovery responsibility
-to one layer; graph or durability requirements do not independently justify an
-agent.
+Use the application-owned facade, state, tools, policy, budgets and evaluation
+boundaries in `provider-agnostic-agent-platform.md`. Start in-process and add
+services only for a demonstrated workload or ownership trigger.
 
 ## Capabilities And Interoperability
 

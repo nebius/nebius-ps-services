@@ -80,11 +80,14 @@ def test_interrupted_creation_retains_exact_request_and_key_without_private_data
         return SimpleNamespace(wait=lambda: accepted)
 
     monkeypatch.setattr(
-        compute_api, "InstanceServiceClient", lambda _: SimpleNamespace(create=replay)
-    )
-    monkeypatch.setattr(
-        "nebius.api.nebius.common.v1.OperationServiceClient",
-        lambda _: SimpleNamespace(get=lambda *a, **kw: SimpleNamespace(wait=lambda: accepted)),
+        compute_api,
+        "InstanceServiceClient",
+        lambda _: SimpleNamespace(
+            create=replay,
+            operation_service=lambda: SimpleNamespace(
+                get=lambda *a, **kw: SimpleNamespace(wait=lambda: accepted)
+            ),
+        ),
     )
     with ProvisioningJournal("project-a", "gateway", root=tmp_path / "state") as journal:
         journal.begin(desired, approval="e" * 64, execution_id="f" * 32)

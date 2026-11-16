@@ -8,6 +8,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ContractTests(unittest.TestCase):
+    def test_liveness_uses_owner_status_without_a_second_start_deadline(self):
+        for name in ("SKILL.md", "README.md", "references/live-app-test.md", "references/verification-checklist.md"):
+            with self.subTest(name=name):
+                text = " ".join((ROOT / name).read_text().split())
+                for contract in ("task-watch", "QUEUED", "PENDING_START"):
+                    self.assertIn(contract, text)
+                self.assertNotIn("WORKER_PRESTART_TIMEOUT", text)
+                self.assertRegex(text, r"without (?:expiring|duration-only)|no duration-only|do not expire|never expires")
+                self.assertNotRegex(text, r"(?:within|misses) 60 seconds|60-second dispatch-to-start")
+
     def test_modes_and_explicit_policy(self) -> None:
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         metadata = (ROOT / "agents" / "openai.yaml").read_text(encoding="utf-8")

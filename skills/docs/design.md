@@ -3573,199 +3573,161 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-017 -->
 
-<!-- FEATURE: FEAT-018 reqs=REQ-019 status=ready delivery=unassessed priority=P0 version=4 -->
-### FEAT-018: PydanticAI-first portable agent application architecture
+<!-- FEATURE: FEAT-018 reqs=REQ-019 status=ready delivery=implemented priority=P0 version=5 -->
+### FEAT-018: Preferred SDK with provider-portable application boundaries
 
 #### Requirements Covered
 
-- REQ-019: Select the least-agentic sufficient architecture and use a PydanticAI-first portable runtime without surrendering application-owned controls.
+- REQ-019: Prefer the least-agentic sufficient architecture and OpenAI Agents SDK for general agents unless explicitly overridden, preserving application control and qualified provider portability.
 
 #### Context Evidence
 
-The repository separates whole-product design, agent-subsystem design, and AI
-component selection across `design`, `ai-agent-design`, and `ai-stack`.
-`ai-stack` applies typed boundaries, hard gates, replaceability, and
-conditional infrastructure after it receives a frozen workload contract. Its
-existing vendor mapping, however, treats Pydantic AI mainly as the non-OpenAI
-agent option and maps OpenAI-native agents directly to a provider runtime. That
-fragments the default application model and understates Pydantic AI's current
-direct model, provider profile, capability, Agent Spec, Harness, durable
-execution, instrumentation, MCP, and evaluation surfaces.
-
-Current official Pydantic AI documentation describes model-agnostic access
-over provider SDKs, a direct model request API, typed agents and dependencies,
-model profiles, capabilities, MCP, fallback and concurrency primitives,
-declarative Agent Specs, optional Harness specialists, durable workflow
-integrations, OpenTelemetry instrumentation, and Pydantic Evals. Current
-OpenAI Agents SDK and Anthropic managed-agent documentation describe
-higher-level provider harnesses, supporting their classification as
-specialized runtimes rather than ordinary model adapters.
+The prior catalog made Pydantic AI the portable default across the entrypoint,
+references, metadata and quality rubric. Accepted user intent changes the
+preferred general agent framework to OpenAI Agents SDK while retaining the
+separation between behavior design, component selection and implementation.
+Current official SDK documentation describes application-hosted execution,
+provider extension points, history strategies, approvals, streaming and tracing.
+Those documented features do not constitute target qualification.
 
 #### Design Details
 
-Consume the capability-level classification frozen by `ai-agent-design`:
-deterministic code, direct calls, deterministic workflows containing model
-calls, and agents remain separate choices. For a direct stack-only request,
-`ai-stack` may perform the minimum provisional least-agentic check needed to
-avoid selecting an agent runtime unnecessarily, but routes any disputed
-behavior, topology, policy, or contract decision to `ai-agent-design`. During
-an active handoff it never re-enters that skill. A direct call describes
-one-request control flow, not a prohibition on the Pydantic AI `Agent`
-primitive. For portable Python direct calls, use the low-level direct model API
-when the
-caller needs `ModelResponse` control, or a no-tools single-request `Agent` when
-typed output parsing, validation retries, typed dependencies, or similar
-request services are required. Use a Pydantic AI model-directed `Agent` loop
-for portable agent behavior. Intentionally provider-specific task APIs remain
-valid for specialized direct workloads. Provider-specific model settings are
-adapter-owned extensions and must not change domain tool contracts or
-authorization semantics.
+Consume the frozen four-class behavior/policy contract from `ai-agent-design`.
+Direct stack-only classifications remain provisional; disputed behavior returns
+once to the design owner without recursive stack selection. Deterministic code
+needs no model; direct requests use a task API or existing qualified adapter;
+ordinary code owns deterministic workflows. Prefer OpenAI Agents SDK only for
+model-owned actions or continuation.
 
-Put Pydantic AI behind a small application-owned `AgentRuntime` facade for
-run, stream, resume, cancel, and normalized events. Treat the facade as a
-logical library boundary by default, not an automatically separate platform
-service. The application owns canonical state, identities, prompts and agent
-versions, tools, authorization, budgets, routing governance, telemetry,
-evaluation, and release records. Pydantic AI owns portable provider
-translation and the model/tool interaction loop. Resume and cancel accept
-typed mutation requests containing verified principal and tenant context, run
-identity, expected state version, and idempotency identity. Resume additionally
-binds the exact approval receipt or external event when applicable; the facade
-reauthorizes and uses compare-and-swap state transitions.
+An explicit user override or accepted fixed project stack wins over the default.
+Do not silently migrate existing applications. A preferred-SDK hard-gate failure
+blocks the recommendation; explain the failure and request an explicit override
+before selecting another general kernel. Override does not waive acceptance or
+security gates. SDK preference does not select OpenAI models, hosted execution,
+a language, a new service or a database.
 
-Use Pydantic AI `Model`, provider implementations, and resolved model profiles
-as the execution contract. Supplement them with platform-owned functional,
-operational, and governance metadata. Hard policy filters run before scoring,
-and the complete primary/fallback route plan is persisted. Do not build a
-parallel custom provider/message/tool protocol unless a proven cross-runtime
-contract requires it.
+Use the SDK standard loop and supported provider seams inside an application
+facade. Qualify exact SDK language/release, provider, endpoint, model/revision,
+protocol, structured output, tools, streaming, usage and data policy. Keep
+provider extensions explicit. Add a custom cross-runtime model protocol only
+when proven shared consumers require it; never nest agent kernels.
 
-All meaningful tools pass through typed domain APIs or a tool gateway that
-enforces authorization, approval, idempotency, audit, time and output bounds,
-and side-effect rules. MCP remains an allowlisted interoperability boundary.
-Routing, retry, and fallback have distinct owners; fallback occurs only for
-classified replay-safe failures and never repeats an irreversible side effect
-without durable idempotency evidence.
+Application code owns identity, tools, authority, canonical state, route policy,
+budgets, recovery, normalized events, telemetry and independent verification.
+Keep the facade in-process until a real deployment/ownership trigger exists.
+Resume/cancel bind verified principal and tenant, expected state revision,
+idempotency and the applicable exact approval/event receipt. Reauthorize each
+mutation and effect dispatch.
 
-Pydantic AI capabilities and Harness are conditional options for portable
-specialists that need reusable context, tools, lifecycle hooks, or delegation.
-Each specialist receives a bounded schema, toolset, security scope, cost and
-step budget, and evaluation suite. Codex remains the preferred coding-focused
-specialist when its coding harness is the requirement. OpenAI Agents SDK,
-Anthropic managed agents, and other provider-native harnesses are admitted only
-through a written escape decision and retain the same platform controls.
+Choose one history strategy. SDK sessions may implement application-owned
+storage; do not add a competing writer to an existing history compiler.
+Persisted SDK state requires integrity, compatibility, fencing and current
+rights, or reconstruct from canonical checkpoints and receipts. An unknown
+effect cannot be replayed to fill a missing tool result. Cancellation requires
+independent descendant containment; bounded cleanup survives normal expiry.
 
-Control-flow autonomy remains orthogonal to graphs and durability. A graph or
-durable workflow may wrap direct calls, deterministic steps, agents, or native
-runtime activities. PostgreSQL, Redis, vector search, object storage,
-gateways, workflow engines, Kubernetes, and multi-agent topologies are
-conditional components selected only by workload and operational triggers.
-When a durable workflow is required, select one qualified owner from Temporal,
-DBOS, Prefect, Restate, or an existing engine based on workload and operational
-evidence.
+Set finite cumulative execution budgets, tool concurrency and intermediate
+output limits. Model parallel-call emission is separate from tool execution
+admission. SDK hooks and guardrails supplement deterministic enforcement;
+review path coverage and blocking semantics. Configure trace export before the
+first run and qualify upgrades with tenant, approval, stream and failure cases.
+
+Agents-as-tools, conversational handoffs and distributed children have distinct
+ownership semantics. Use Codex SDK for a coding-harness requirement behind an
+explicit bounded capability. Graphs and durability remain independent of agent
+autonomy; select one qualified durable owner from the existing platform or
+workload-matched alternatives. Optional infrastructure stays conditional.
 
 #### Selected Option
 
-Adopt Pydantic AI as the default portable Python execution boundary while
-preserving the behavior and policy contract frozen by `ai-agent-design` and
-application ownership above it. Add a focused provider-agnostic runtime
-reference, then align the skill core, architecture, provider, baseline,
-evaluation, metadata, README, source map, root catalog, project specs, and
-changelog.
+Use OpenAI Agents SDK as the preferred general kernel under the explicit
+selection/override policy. Keep provider-neutral application contracts and
+SDK-specific mechanics in separate references. Align both skills, their
+metadata, evals, README entries, canonical specs and changelog together.
 
 #### Alternatives Considered
 
-A provider-agent-SDK-per-vendor abstraction was rejected because different
-harnesses own incompatible loop, state, tool, event, and delegation semantics.
-Making the Pydantic AI abstraction the business application model was rejected
-because state, policy, and domain logic must remain replaceable. A mandatory
-network facade, gateway, durable engine, and four-store persistence topology
-was rejected because small applications can satisfy the same contracts
-in-process. A lowest-common-denominator model API was rejected because explicit
-provider extensions preserve useful differentiated capabilities.
+Retaining the Pydantic-first default conflicts with accepted user intent;
+Pydantic AI remains a valid explicit override or fixed project stack.
+Requiring OpenAI models conflates provider and framework decisions. A kernel
+per provider, nested loops, duplicated provider protocols and mandatory shared
+infrastructure add unjustified ownership and compatibility burdens.
 
 #### Implementation Boundaries
 
-Owned surfaces are `ai-stack/SKILL.md`, its focused architecture, provider,
-baseline, compatibility, evaluation, source-map, README, metadata, and eval
-references; the adjacent `design` and `ai-agent-design` routing contracts; the
-root README; canonical specs; and the `[Unreleased]` changelog. No provider,
-service, infrastructure, credential, or production mutation is part of this
-source change.
+Limit edits to ai-stack and ai-agent-design sources and directly affected
+catalog, changelog and canonical spec sections. Do not install the skills,
+change provider accounts, mutate runtime configuration or deploy a product.
 
 #### Test-First Success Criteria
 
-- TDD-001: A provider-neutral direct request uses the Pydantic AI direct API
-  for low-level response control or a no-tools single-request `Agent` for typed
-  parsing, validation retries, or typed dependencies; neither primitive makes
-  a known sequence agentic.
-- TDD-002: Portable OpenAI, Anthropic, Google, and compatible-model agent
-  scenarios select Pydantic AI by default and keep provider settings explicit.
-- TDD-003: A native runtime is selected only when a named harness feature is a
-  requirement and remains behind the runtime, state, policy, and tool facade.
-- TDD-004: Router tests separate hard eligibility from scoring, persist route
-  reasons, and distinguish pre-execution routing from replay-safe fallback.
-- TDD-005: Tool tests prove model-visible adapters cannot bypass authorization,
-  approval, idempotency, output bounds, or exact approved arguments.
-- TDD-006: A portable specialist uses bounded Pydantic AI capability or Harness
-  contracts; a coding-harness requirement may select Codex explicitly.
-- TDD-007: Small-app scenarios keep state and the runtime facade in-process;
-  scale, durability, retrieval, or team boundaries trigger extra components.
-- TDD-008: Provider-side sessions, caches, and compaction are optional
-  optimizations and never the sole canonical workflow representation.
-- TDD-009: Resume and cancel reject a wrong tenant or principal, a stale
-  expected state version, a duplicate or conflicting idempotency identity, and
-  a mismatched approval receipt before changing canonical run state.
-- TDD-010: Whole-product work follows `design` to `ai-agent-design` to
-  `ai-stack` exactly once; direct stack-only work marks any local
-  classification provisional and routes disputed behavior or policy decisions
-  to `ai-agent-design` without recursive delegation.
+- TDD-001: Direct extraction with code-owned continuation adds no agent kernel.
+- TDD-002: A general agent with multiple providers prefers Agents SDK and
+  requires exact-route compatibility evidence without forcing OpenAI models.
+- TDD-003: An explicit Pydantic AI fixed stack remains unchanged.
+- TDD-004: Failed preferred-SDK hard gates block selection pending explicit
+  override; no silent protocol, model, framework or feature substitution occurs.
+- TDD-005: Tools and resume/cancel cannot bypass current authority, exact
+  arguments, state revisions, idempotency or observation bounds.
+- TDD-006: Coding specialists remain distinct from the general kernel.
+- TDD-007: Small applications avoid mandatory services, gateways and stores.
+- TDD-008: History has one owner; restored SDK state is not authority.
+- TDD-009: Uncertain effects and cancellation require independent reconciliation
+  and containment, preserving reservations and cleanup responsibility.
+- TDD-010: Design/stack handoffs preserve the frozen contract and select once.
 
 #### Validation Plan
 
-Run focused skill-structure and project-spec validation, Markdown lint, static
-trigger and metadata inspection, changed-scope review, security review, and
-final cross-surface alignment. Verify volatile vendor claims from current
-official Pydantic, OpenAI, Anthropic, Google, MCP, and durable-runtime sources.
+Run changed-scope skill structure, Markdown, JSON/CSV, cross-reference,
+canonical spec, instruction-quality and security checks. Verify changed SDK
+claims against current official sources. Distinguish static checks, fresh
+trigger behavior, native output quality and deployed product qualification.
 
 #### Test Plan
 
-Add representative scenarios for portable direct access, a portable agent, a
-provider-native escape, a bounded specialist, router/fallback separation, tool
-authorization, and small-to-large platform escalation. Check for stale
-provider-native defaults, duplicated provider abstractions, mandatory optional
-infrastructure, missing source-map links, and README or metadata drift.
+Use public synthetic cases for default selection, fixed-stack override, direct
+calls, incompatible provider gates, unsafe SDK integration and coding specialists.
+Compare relevant outputs with captured working-byte baselines when a clean
+runner is available. Report unavailable authentication or runtime separately.
 
 #### Evaluation Plan
 
-Walk a multi-provider application with read tools, side effects, approvals,
-durable waits, and specialist agents through the decision tree. Confirm the
-portable path can change providers without changing domain contracts, native
-escapes remain deliberate, and all selected optional infrastructure has an
-owner, trigger, acceptance gate, and rollback plan.
+Check outcomes and ownership invariants rather than keyword matching. A
+preferred framework is policy, not a measured performance claim. Require exact
+provider conformance and independent target acceptance before runtime promotion.
 
 #### Rollout And Rollback
 
-Land source documentation, metadata, evals, specs, catalog, and changelog in
-one reviewable change. Roll back the complete aligned change if static
-validation or official-source review finds a contradiction; do not retain a
-partial vendor mapping.
+Deliver the aligned source package together. Installed distribution and native
+activation are separate actions/evidence; source changes do not prove either.
+Rollback restores the coherent package, not a partial old framework default.
 
 #### Done Definition
 
-The skill selects technology for the behavior and policy contract frozen by
-`ai-agent-design`, uses Pydantic AI as its portable Python default, preserves
-differentiated provider features, keeps application controls and state outside
-provider runtimes, justifies every specialist or native escape, and
-distinguishes source readiness from installed or fresh-runtime behavior.
+The source package applies the preferred SDK and override rule consistently,
+preserves simpler behavior and application authority, and clearly separates
+static readiness from runtime and live qualification.
 
 #### Implementation Evidence
 
-No implementation evidence was recorded before schema v2 migration.
+Source entrypoints, references, metadata where affected, quality scenarios,
+trigger cases, README entries and changelog were updated together. The stack
+preference and provider-neutral design lessons remain separate owners.
+Installed personal skills and deployed products were not changed.
 
 #### Verification Evidence
 
-No independent verification evidence was recorded before schema v2 migration.
+2026-11-13: Both target skills passed strict structure/frontmatter and canonical
+trigger checks for Codex and Claude, changed Markdown lint, local-reference
+checks, scoped diff hygiene and paired-spec validation. Disposable pinned
+installer checks passed discovery, complete copy parity, repeat installation
+and isolation for both hosts. Independent read-only instruction/security review
+closed both findings. Four stack scenarios were compared with the captured
+prior source; two additional design scenarios exercised resource and recovery
+policies. These checks establish source evidence, not live product behavior.
+The isolated native Codex quality check timed out at 180 seconds; native
+trigger/output qualification remains incomplete. Delivery is implemented,
+not runtime-verified.
 
 <!-- /FEATURE: FEAT-018 -->
 
@@ -4303,7 +4265,7 @@ No real push or native model classification was exercised.
 
 <!-- /FEATURE: FEAT-021 -->
 
-<!-- FEATURE: FEAT-022 reqs=REQ-023 status=ready delivery=unassessed priority=P1 version=3 -->
+<!-- FEATURE: FEAT-022 reqs=REQ-023 status=ready delivery=implemented priority=P1 version=4 -->
 ### FEAT-022: Provider-neutral AI agent design workflow
 
 #### Requirements Covered
@@ -4357,10 +4319,11 @@ returns a complete logical subsystem architecture without performing
 implementation.
 
 Keep the always-loaded entrypoint focused on routing, workflow, guardrails,
-validation, and output. Put detailed guidance in six topic references:
+validation, and output. Put detailed guidance in focused topic references:
 classification and patterns; runtime architecture and sessions; contracts,
 context, and memory; tools, authority, and security; durability, failures, and
-effects; and evaluation, observability, and governance. Keep technology
+effects; evaluation, observability, and governance; and conditional resource
+safety/admission. Keep technology
 choices dated and replaceable by routing volatile selection to `ai-stack` and
 `research` rather than freezing one provider framework in this skill.
 
@@ -4389,6 +4352,16 @@ component's status, evidence, requirement, owner, acceptance gate, and revisit
 trigger. `ai-agent-design` integrates that table with control flow, contracts,
 security, recovery, evaluation, and rollout decisions.
 
+Extend the existing context, authority and durability guidance with trustworthy
+resource measurements, intermediate allocation bounds, lifetime delegation
+limits, disjoint child reservations, semantic helper identity and atomic parent
+submission closure. Scope cleanup separately from expired task authority;
+distinguish action approval, access provisioning and evidence disclosure.
+Restore current denial/deletion barriers before serving old context and retain
+independent evidence cuts across source owners. SDK helpers and opaque state
+cannot become distributed admission or recovery authority. These rules remain
+provider-neutral; ai-stack owns the preferred SDK and override policy.
+
 #### Selected Option
 
 Use a provider-neutral agent-design coordinator with explicit adjacent-skill
@@ -4408,7 +4381,7 @@ vendor.
 
 #### Implementation Boundaries
 
-Owned surfaces are the new skill entrypoint, metadata, README, six focused
+Owned surfaces are the new skill entrypoint, metadata, README, focused
 references, trigger/process/quality evaluations, adjacent `design` and
 `ai-stack` routing contracts, root catalog, changelog, and canonical specs.
 Shared validators, installed copies, runtime configuration, provider accounts,
@@ -4477,6 +4450,15 @@ implementation.
   handoff, and leaves component selection to execute exactly once in the
   originating workflow.
 
+- TDD-013: Oversized intermediate results, missing host visibility and repeated
+  child replanning cannot bypass resource or lifetime budgets.
+- TDD-014: Lost helper acknowledgments do not repeat semantic work; parent
+  settlement requires closed submissions and independently quiescent children.
+- TDD-015: Expiry preserves exact cleanup without expanding ordinary authority;
+  disclosure and access grants remain distinct from action approval.
+- TDD-016: Restored summaries remain denied until current revocations and source
+  entitlements reconcile; incompatible evidence dependencies are explicit.
+
 #### Validation Plan
 
 Run portable quick validation and the repository's strict target validator;
@@ -4487,7 +4469,7 @@ alignment; and finish with `git diff --check`.
 #### Test Plan
 
 Use at least eight positive and eight negative trigger prompts, process cases
-for classification and routing, and eight output-quality cases covering the
+for classification and routing, and output-quality cases covering the
 direct-call lower bound, a deterministic-code lower bound, a deterministic
 approval-aware workflow, one bounded diagnostic agent, a durable
 orchestrator-worker design, controlled effect recovery, and governed memory
@@ -4523,11 +4505,24 @@ implementation authority.
 
 #### Implementation Evidence
 
-No implementation evidence was recorded before schema v2 migration.
+Source entrypoints, references, metadata where affected, quality scenarios,
+trigger cases, README entries and changelog were updated together. The stack
+preference and provider-neutral design lessons remain separate owners.
+Installed personal skills and deployed products were not changed.
 
 #### Verification Evidence
 
-No independent verification evidence was recorded before schema v2 migration.
+2026-11-13: Both target skills passed strict structure/frontmatter and canonical
+trigger checks for Codex and Claude, changed Markdown lint, local-reference
+checks, scoped diff hygiene and paired-spec validation. Disposable pinned
+installer checks passed discovery, complete copy parity, repeat installation
+and isolation for both hosts. Independent read-only instruction/security review
+closed both findings. Four stack scenarios were compared with the captured
+prior source; two additional design scenarios exercised resource and recovery
+policies. These checks establish source evidence, not live product behavior.
+The isolated native Codex quality check timed out at 180 seconds; native
+trigger/output qualification remains incomplete. Delivery is implemented,
+not runtime-verified.
 
 <!-- /FEATURE: FEAT-022 -->
 
@@ -6872,7 +6867,7 @@ restart-UAT certification. Both failed trials were retained and cleaned; neither
 is rehabilitated. Complete acceptance on a fresh trial remains pending.
 
 <!-- /FEATURE: FEAT-034 -->
-<!-- FEATURE: FEAT-035 reqs=REQ-036 status=ready delivery=implemented priority=P1 version=1 -->
+<!-- FEATURE: FEAT-035 reqs=REQ-036 status=ready delivery=implemented priority=P1 version=4 -->
 ### FEAT-035: Classified integrated-wave correction
 
 #### Requirements Covered
@@ -6904,9 +6899,81 @@ resolution separate; require validated resolution before normal continuation,
 feature sealing and promotion. Replays cannot rewind integration or overwrite
 failure evidence. Cleanup ambiguity retains resources and blocks dispatch.
 
+The same correction path admits a proven plan_defect diagnosis for an
+integrated validation-command failure. The execution owner binds the exact
+failed producer receipt and its archived plan before retiring the wave.
+A replacement validation sidecar preserves all prior task checks and wave
+check identities, bounds and environment keys; only reviewed wave argv changes
+are admitted. A private validation-plan review binds the old and new plan
+digests, classification, charged dispatch, failed receipt, objective, canonical
+spec digests and unchanged acceptance. Freeze that review in owner evidence;
+recheck it before corrective dispatch and resolution. The review records
+semantic equivalence; it is not an executed-test receipt.
+
+Append corrective tasks without changing historical definitions. Schedule
+diagnosis-bound corrective tasks immediately after the retained prefix and
+before untouched future tasks, preserving their dependency graph and capacity
+limits. A command-only repair may use a real verified_no_change worker result
+and independent task acceptance; it must not create a cosmetic product commit.
+The corrected wave obtains fresh producer validation and a separate resolution,
+then all invalidated gates run again. Further counted command corrections
+retain every failed receipt and review; resolution verifies the complete plan
+revision chain to the final successful producer receipt.
+
+Cancellation has a separate terminal purpose. After the cancelled fence,
+writer/validator quiescence and released runtime leases, retain unresolved
+integration wave bytes and resources in the cancellation inventory. Never
+mark them superseded, done or repaired. Objective-change replanning continues
+to reject unresolved integration journals.
+
 The existing Python, Git, private JSON, repair budgets and native worker model
 remain fixed. All new decisions are deterministic owner transitions. No new
 agent subsystem, technology choice or public command is introduced.
+
+An independent failure can interrupt an already counted corrective repair.
+The previous implementation retained only a blocker summary, so successful
+worker recovery left the original wave authority unreachable. Version 3 uses
+one repair-control-v3 projection with bounded suspended-context references.
+Before replacing a pending counted repair, the repair owner stores its full
+blocker, current identities and invalidation lineage in immutable digest-bound
+private evidence. A new independent blocker still consumes the same feature
+budget. Neither suspended identities nor duplicate events grant fresh budgets.
+
+On successful intervening completion, the owner resumes the most recently
+suspended pending dispatch only if all carried obligations are covered by the
+parent classification. Preserve the child's completion and deferred cursor,
+all invalidation references, both attempt histories and active time. Restore
+only the parent context, never feature counters or global history. Missing,
+tampered, failed, exhausted or broader obligations stop without restoration.
+The original wave still requires active authority and fresh combined proof;
+its later repair completion starts the ordinary ordered revalidation cursor.
+Completion replay is idempotent and cannot rewind a subsequently active owner.
+The coordinator refreshes checkpoint repair pointers from the returned control
+before continuing the original phase. No new public command or schema shim.
+Canonical completion journal entries retain their existing shape. Read-only
+inventory recovery consumes owner-validated completed-child context from the
+resumption records, binds its digest, and leaves active authority unchanged.
+Reaching the child time ceiling persists consumed time and exhaustion before
+rejecting completion; retries cannot erase that accounting.
+
+The verifier may observe a suspended integrated-wave parent only through a
+read-only repair-owner query. Validate the unchanged failed-wave binding and
+its exact pending parent dispatch, then walk the bounded immutable suspension
+chain to the current classified, counted child. Each interruption must bind
+the same failed integration commit, valid carried obligations and increasing
+feature counts within the unchanged limit. Reject missing or reordered lineage,
+tampering, exhausted/terminal children and unrelated historical dispatches.
+The query never resumes repairs, advances cursors or writes state. Existing
+active-authority checks still govern preparation and corrective execution;
+clean integration, quiescent writers/validators and released runtime leases
+remain required. Observation grants no Compose, browser or acceptance access.
+
+A fresh native trial exposed the observer calling the active mutation-authority
+check while a legitimate validation-authoring repair suspended its parent. A
+real-Git regression reproduces the same rejection. A blanket historical-authority
+fallback would admit unrelated or completed repairs, so it is rejected. Reuse
+the repair owner for bounded lineage validation rather than duplicating its
+private state protocol in the verifier. No new public action or schema is needed.
 
 #### Selected Option
 
@@ -6932,6 +6999,13 @@ Keep fixture application configuration repairs inside its normal worker lane.
 - TDD-003: Failed records survive cleanup/replay and unresolved failure blocks seal.
 
 #### Validation Plan
+
+Add a failing parent/child completion reproducer and real-Git corrective-wave
+regression. Cover tampering, failed children, wider invalidations, nested and
+repeated interruptions, exact replay, crash publication, unchanged counters,
+fourth-dispatch recovery and stale schema rejection. Add read-only classifier
+observation of suspended integrated parents, nested lineage and mutation/runtime
+rejection; tampering, unrelated history and live writers must still fail.
 
 Run focused real-Git execution and repair-control tests, lint changed code,
 review ownership and replay boundaries, then align affected source skills.
@@ -6960,11 +7034,53 @@ through its owners, and downstream tests determine the final workflow outcome.
 
 #### Implementation Evidence
 
+Version 4 adds the repair owner's read-only integrated-repair observation query
+and connects the verifier's failed-wave observer to it. The original real-Git
+regression reproduced the inactive-parent rejection before repair. It passes
+afterward without changing any workflow state or admitting parent mutation or
+runtime access. All 76 repair-control tests pass, including bounded nested and
+fourth-dispatch observations, forged/missing/reordered lineage, changed commits,
+exhaustion and completed-history rejection. Six focused real-Git observer,
+quiescence, reviewed-preparation and corrective-TDD checks pass. Five new tests
+are required verifier capabilities. Scoped Python, Markdown and whitespace
+checks pass. The failed native trial and clean cancellation are retained as
+failure evidence; installed and fresh native qualification of this repair remain
+pending, including the original worker-retirement transition and complete UAT.
+
+Version 3 continuation is implemented in the repair owner, with immutable
+suspension/resumption evidence, budget-preserving restoration, idempotent
+completion replay and a restored route-history entry for the Stop consumer.
+The isolated parent/child reproducer failed before repair and passes afterward.
+All 73 classifier tests pass, including nested/fourth-dispatch restoration,
+failed/wider/tampered/time-limit rejection and interrupted publication. Three
+real-Git revision tests pass; the new case completes a corrective wave after an
+intervening repair, retains the failed receipt and admits the untouched next
+task. Five focused hook tests, five evaluator-contract tests and 15 verifier
+catalog/execution tests pass. Five inventory-recovery tests pass, including
+completed-child observation, completion replay, orphan rejection and tamper
+rejection. Ruff and Markdown checks pass on changed scope.
+Version 3 passed installed deterministic preflight. Its fresh native trial
+reached suspended repair state but failed at the observation gap addressed by
+version 4; complete native continuation remains unqualified.
+Earlier version evidence below remains historical.
+
 Implemented classified failed-wave retirement, immutable dispatch authority,
 guarded correction admission, separate resolution receipts and promotion
 checks. Original task and failed-wave history remain unchanged.
 
 #### Verification Evidence
+
+The plan-command extension and terminal cancellation refinement are implemented.
+All ten real-Git plan-revision regressions pass, including repeated counted
+corrections, preserved failed receipts, unchanged prior task checks, review
+identity and drift guards, no-change workers, terminal cancellation retention
+and nonterminal steering rejection. Six existing integration, replanning and
+cancellation regressions, 62 repair-control tests and 14 verifier catalog tests
+pass. The catalog checks actual unittest collection against every declared
+execution capability; the new check reproduced and closed an omitted module
+in the explicit execution suite. Scoped Python and Markdown lint pass. Installed preflight and fresh native
+qualification of this extension remain pending. Earlier live evidence below
+qualifies the prior implementation-defect path only.
 
 The missing transition failed first. All 86 execution, 33 repair-control,
 96 verifier and six corrective-plan tests pass. Scoped code review found no
@@ -7934,7 +8050,7 @@ implemented; source and installation evidence do not establish native behavior.
 
 <!-- /FEATURE: FEAT-040 -->
 
-<!-- FEATURE: FEAT-041 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=3 -->
+<!-- FEATURE: FEAT-041 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=4 -->
 ### FEAT-041: Resumable end-to-end GitHub Release publication
 
 #### Requirements Covered
@@ -8010,6 +8126,14 @@ CI owns artifact publication; success requires matching workflow and complete
 published assets. Missing assets or failed checks remain blocked, never repaired
 through tag replacement or silent workflow reruns.
 
+The publish-release skill is the sole supported maintainer entry point. Enrolled
+repositories retain their shared Actions effect owner; automatic intake and the
+skill use the same reservations and proof. Project-local wrappers are retired
+by the approved repository cleanup. Setup must not regenerate them or use local
+publication for an unregistered project. Generic primitives/templates remain
+private resources for the non-enrolled profile. Maintainer procedures stay in
+skill documentation, with shared-client regressions in its existing CI test lane.
+
 #### Selected Option
 
 Reuse the fixed Git, gh, Bash, Python standard library and existing skill owners.
@@ -8026,7 +8150,8 @@ introduced by FEAT-042 now supplies protected approval and merge. Latest-default
 
 publish-release source/templates/tests/docs/metadata/evals, create-pr caller
 contract, GitHub workflow guidance, catalog/changelog and this canonical pair.
-No existing project helper migration. Distribute reviewed skill changes through
+Project helper removal is limited to explicitly approved cleanup scope. Distribute
+reviewed skill changes through
 the existing installer; resume an explicitly authorized release separately.
 
 #### Test-First Success Criteria
@@ -8066,6 +8191,10 @@ Report native/live lanes as unverified until independently observed.
 
 #### Implementation Evidence
 
+The approved cleanup removed three project-local entry points, consolidated
+release dispatch tests and updated setup/README boundaries. Installed skills
+and live releases are unchanged.
+
 The three-hour update uses independent 10,800-second observation budgets. Release
 checkpoints own post-merge verification timing through a private budget action;
 repeated checks, gate changes, canonical repairs and reruns retain deadlines.
@@ -8090,6 +8219,11 @@ permission changed. Existing project helper copies and installed skills were not
 updated during this source-review task.
 
 #### Verification Evidence
+
+Release-entry cleanup: all 64 release-skill tests passed, including direct shared
+client dispatch, explicit repository identity, invalid/unregistered requests and
+retired/incomplete commands. Workflow/documentation checks and scoped lint passed;
+read-only review found no serious issue. No installed or live activation was run.
 
 Three-hour source validation: 57 release tests and 86 merge/completion/publication
 helper tests pass. Simulated clocks prove waiting after one hour, exact three-hour
@@ -8594,7 +8728,7 @@ evaluations, installed-hook activation, Claude runtime, locked-screen
 continuity and hosted publication remain unverified.
 
 <!-- /FEATURE: FEAT-044 -->
-<!-- FEATURE: FEAT-045 reqs=REQ-046 status=ready delivery=implemented priority=P0 version=7 -->
+<!-- FEATURE: FEAT-045 reqs=REQ-046 status=ready delivery=implemented priority=P0 version=9 -->
 ### FEAT-045: Shared objective and run execution boundary
 
 #### Requirements Covered
@@ -8606,6 +8740,137 @@ continuity and hosted publication remain unverified.
 The replaced implementation used persistent lanes; SDLC already retained one feature integration checkout. Worktree owns promotion/lease/recovery primitives and spec publication already validates the integration boundary.
 
 #### Design Details
+
+Version 9 preserves the outer/integration separation and changes only automatic
+feature-branch admission. Extract the committed-input validator into the shared
+Worktree owner. The coordinator supplies a complete base-commit-bound declaration
+before excluding unrelated sibling dirt. Protect the entire selected scope,
+canonical specs, effective ancestor instruction candidates and input-selection
+configuration, declared external reads and writes. Root scope protects all paths.
+Manual Worktree and final aggregate promotion still require a clean original.
+Validate both rename endpoints, unresolved operations, exact source identity and
+protected dirt before allocation and under the creation lock. Never copy dirt.
+New external claims are checked before plan freezing; later changes use replanning.
+
+Private intake accepts an input-declaration candidate. Archive its unchanged v1
+payload by canonical digest and bind execution verification to that immutable
+archive, not a mutable run-wide file. Queued source advancement requires a fresh
+matching declaration; a frozen execution never silently adopts it. No public
+allow-dirty flag, background watcher, migration or compatibility shim is added.
+
+A shared read-only delivery projection generates owner-specific continuation
+messages from original-project identity and authoritative Git/journal evidence.
+Normalize dirty-source commit-required preflight into an automatic delivery wait;
+cover later races without changing the original failure. Do not infer unpromoted
+state from the registry alone: promotion may precede delivery recording. Report
+finalization or verification pending when appropriate. Both coordinator final
+responses include the generated message while pending; successful completion has
+no continuation instruction. Status remains non-mutating.
+
+Extend the existing portable HTML guide with the ownership flowchart, compact
+outer/integration comparison, return flow through validated execution and a
+separate aggregate candidate, dirty-source waits and exact continue commands.
+Update skill guidance, shared references, README links, trigger cases and
+Unreleased notes. Preserve existing offline, no-JavaScript, keyboard and print
+behavior. Test automatic admission for both owners, source/index preservation,
+shared-input rejection, declaration history, races and crash-safe final guidance.
+Validate through focused real-Git tests, isolated installation and Playwright;
+source evidence does not certify native-agent activation. Install shared helpers
+only after active-run safety checks.
+
+Version 9 implementation is present in the shared Worktree owner and both public
+coordinator instructions. Focused verification passed 37 real-Git regression
+cases covering both owners, dirty sibling preservation, protected/ignored inputs,
+queued source advancement, creation races, crash reuse, immutable declaration
+history, finalization guidance and unchanged manual creation/promotion rules.
+Read-only code/security review identified and closed the crash-reuse base mismatch
+and missing historical declaration verification; evidence records remain separate
+from delivery response envelopes.
+
+Two disposable full-catalog installation tests passed for Codex and Claude,
+including repeat installation and shared-runtime resolution. Pinned npx checks
+passed discovery, copied payload parity, repeat installation and isolation for
+Worktree, Implement and SDLC Start. Both-host structure/eval checks, focused Ruff,
+Markdown lint and whitespace checks passed. Playwright verified the portable guide
+at desktop and narrow widths, all nine sections without JavaScript or network
+resources, navigation and print output. Actual installed helpers were retained
+because an existing SDLC run is still marked running; no active-run migration was
+attempted. Fresh native coordinator runs, model output-quality comparisons and
+live application qualification were not run; local tests and installation parity
+do not certify those evidence tiers.
+
+Follow-up alignment closes the shared-submodule input boundary. Git reports
+nested modifications at the gitlink; dirty-path overlap therefore includes
+ancestors while write-ownership containment stays directional. Scoped input
+observation includes submodule dirt even when local Git display settings hide it.
+Declared reads crossing a gitlink in either the frozen commit or current index
+fail with `UNSUPPORTED_SUBMODULE_INPUT`: parent snapshots cannot certify those
+contents, including ignored nested files. This matches the existing unsupported
+write boundary and adds no recursive submodule execution path. Manual status
+semantics remain unchanged; unrelated dirty siblings can still be excluded.
+
+Independent review reproduced each gap with disposable Git fixtures. Negative
+controls failed before repair. The final scoped admission/basis suite passed 18
+cases, two manual creation regressions passed, and a separate hidden-status
+observation check passed. Review, scoped Ruff/Markdown checks, both-host skill
+validation and canonical-pair validation completed without a remaining blocker.
+Installed helpers and native/live workflow qualification remain unchanged from
+the evidence boundary above.
+
+Version 8 adds automatic per-objective outer worktrees and concurrent logical
+projects to the existing deterministic execution owner. The hierarchy is
+aggregate branch -> objective outer -> coordinator integration -> task workers;
+linked checkouts are physically separate, not nested filesystem repositories.
+Independent project sessions retain distinct coordinators. No supervisor or
+background service is added; stopped sessions require public continuation.
+
+A common-repository registry binds the relative project scope, original source,
+objective/run/session and owned checkouts. Reserve equal/prefix scopes and shared
+write claims before effects. Stable continuation and read-only status resolve
+original folders, including after cleanup. Private automation reuses Worktree
+owners; public manual Worktree remains explicit and externally owned.
+
+Shared selected-home admission defaults to four retained objectives, four active
+task workers and sixteen worker worktrees. Per-run wave policy remains intact.
+Queue additional objectives without checkout allocation and rotate eligible
+runs at completed wave boundaries. Account coordinator and candidate overhead,
+unknown native capacity and existing host-memory limits. Journal intents and use
+conditional updates without holding registry locks across owner operations.
+
+Automatic delivery fences the child at aggregation-ready, freezes current source
+and child heads, builds and validates an exact candidate, promotes through the
+existing Git owner, persists integration proof, releases leases and removes only
+owned quiescent resources. Manual integration still requires its terminal lease
+receipt. A failed candidate retains evidence and can return to active only before
+release; corrective execution receives a new immutable revision based on the
+frozen combined state. Never reopen sealed execution. Persist a maximum of two
+automatic drift rebuilds after the initial candidate across continuation.
+
+Commit, synchronization, push and PR effects share aggregate admission with
+integration. Source dirt or branch switching waits without modification; source
+identity/ancestry loss blocks. Remote publication retains existing explicit
+authority. Source retirement checks dependent objectives. Proof survives cleanup;
+replay cannot merge twice or reinterpret removed checkout paths as authority.
+
+Deliver docs/parallel-project-workflow.html as one portable offline presentation
+with embedded SVG/CSS/JS, readable no-JavaScript content, keyboard/fragment
+navigation, responsive text, reduced-motion support and complete print output.
+Show separate project-a/project-b sessions, waves, current-source candidate
+validation, failure recovery, cleanup and separately authorized publication.
+
+Extend verifier generations to one monorepo with two logical projects sharing
+one isolated native home. Implement live runs two Implement objectives; SDLC live
+runs its full application alongside an Implement objective. Preserve all existing
+application oracles and record independent objective/aggregation/cleanup receipts.
+Cover two SDLC coordinators deterministically. Execute requested suites in order,
+with exact cleanup between them. Failure diagnosis uses Troubleshoot and fresh
+trials after repairs; never rehabilitate failed acceptance evidence.
+
+Version 8 is implemented. Complete native application qualification remains
+unverified; passing deterministic and installed checks are recorded separately.
+Earlier version evidence below does not qualify this multi-project extension.
+Version 8 supersedes earlier unchanged-source/manual-outer completion behavior
+only for automatically owned outers; explicit manual ownership remains intact.
 
 Version 7 shares the frozen worker/wave/resource policy and producer-owned
 acceptance contracts in FEAT-055 and FEAT-071 across Implement and Agentic SDLC.
@@ -8637,7 +8902,7 @@ That version 6 repair introduced no public command, state schema, migration,
 compatibility path or new coordinator. Version 7 below supersedes its task-result
 and internal schema contracts.
 
-Share normalized accepted objectives and explicit session bindings. Coordinators own objectives, plans and completion; Global Context Management owns continuity/delegation; Maintain Project Specs owns paired interpretation/publication. Reuse and extract existing execution machinery without invoking one coordinator from the other. Freeze objective/spec/plan/base/helper/instruction/assignment evidence; stale effects fail before mutation. Fence steering/cancellation, then prove writer quiescence before replanning. Use ordered slot refill over frozen waves with resource leases and stable integration. Implement delivers automatically to an unchanged clean non-default checkout or retains a verified feature checkout for default/unknown-default starts. Retire prompt capture and lane state rather than converting it.
+Share normalized accepted objectives and explicit session bindings. Coordinators own objectives, plans and completion; Global Context Management owns continuity/delegation; Maintain Project Specs owns paired interpretation/publication. Reuse and extract existing execution machinery without invoking one coordinator from the other. Freeze objective/spec/plan/base/helper/instruction/assignment evidence; stale effects fail before mutation. Fence steering/cancellation, then prove writer quiescence before replanning. Use ordered slot refill over frozen waves with resource leases and stable integration. Automatic outer delivery uses the latest clean aggregate candidate; inner execution and manual outer delivery still require their unchanged source. Default/unknown-default starts retain a verified feature checkout. Retire prompt capture and lane state rather than converting it.
 
 Fresh SDLC objective registration and phase initialization are separate. The currently bound coordinator initializes the first phase checkpoint and current state only after proving a newly accepted run has no prior phase or downstream execution evidence. Its initial phase is sdlc-start/running with zero retry counters and no completed-phase evidence; accepted objective provenance remains intact. Follow the existing checkpoint write order before observation or routing. An active pointer alone is not phase initialization. Reconcile existing or interrupted history without discarding partial artifacts or resetting counters. Shared intake, hooks and verifier observers never create or advance this phase state.
 
@@ -8751,7 +9016,7 @@ One breaking direct-input path, shared Worktree execution primitives, workflow-s
 
 #### Alternatives Considered
 
-Prompt adapters, aliases, lane generations and history conversion preserve multiple authorities and are rejected. Nested coordinators and duplicated Git transactions are rejected.
+Prompt adapters, aliases, lane generations and history conversion preserve multiple authorities and are rejected. A supervisor spawning nested coordinators and duplicated Git transactions are rejected; independent project sessions are supported.
 
 #### Implementation Boundaries
 
@@ -8796,6 +9061,17 @@ Update source first, then owned Codex/Claude payloads/hooks. Preserve customized
 Renamed skills are discoverable, capture hooks and obsolete commands are absent, both verifiers exercise current contracts, and fresh live or exact unavailable evidence is recorded.
 
 #### Implementation Evidence
+
+Version 8 implements the shared project registry, objective admission, original-
+folder status and continuation, automatic outer ownership, whole-wave fairness,
+current-source candidate validation, guarded aggregation and durable cleanup.
+Both workflow adapters and their verification generations use these owners.
+Separate inner and aggregate gate reviews and executed receipts preserve failed
+observations. Public documentation includes the two-project examples and offline
+HTML presentation. The canonical producer encoding now validates execution bases
+and plans; initial specification publication omits absent workflow identity when
+only a sibling project has registered ownership. Registered publication guards
+remain enforced.
 
 Version 6 implements the completion and seal-message contracts at their
 existing owners. Managed SDLC completion requires separately recorded exact
@@ -8883,6 +9159,61 @@ worker replay for this repair remain pending. Implement's usage and input sectio
 explicit-only public interface while satisfying the stateful skill profile.
 
 #### Verification Evidence
+
+Version 8 deterministic preflights passed all thirteen Implement checks and all
+eighteen SDLC suites on their recorded snapshots. The portable HTML passed
+direct-file, offline, renamed-file, no-JavaScript, mobile, navigation, print and
+browser-error checks. Scoped code/security review, lint, both-host structure,
+installer discovery/copy/repeat/isolation and installed-byte checks passed.
+These checks do not establish native application qualification.
+
+The first two full Implement trials were stopped by a stale verifier-only
+sixty-second startup predicate. The product owner allowed three hundred seconds;
+the verifier now consumes its immutable pending/terminal liveness statuses.
+The next fresh trial reached real worker startup, then stopped before edits
+because its tool wrapper tried to retain an absent monitor session handle.
+The worker preserved a blocked result; a later owner observation timed out that
+uncompleted task. A separate same-profile diagnostic reproduced immediate
+host-memory visibility failure, which supplies no running session handle. The
+original tool output was lost, so its precise exit status remains unobserved.
+Setup guidance now preserves immediate results and requires an actual outer
+physical-host monitor, with the ownership handoff repeated in assignments.
+Focused regressions pass; native completion on this latest bundle is pending.
+
+The third full SDLC trial passed startup and native hook activation, canonical
+authoring, plan preparation, TDD, real worker start and runtime lease operations.
+Its sibling Implement objective passed automatic aggregation, cleanup and fresh
+public continuation. The app reached healthy startup after counted repairs,
+but actual web-port inventory failed. A later bounded normal/internal/normal
+bridge comparison reproduced publication suppression on the internal bridge
+and successful loopback HTTP on both normal-bridge controls. The fixture now
+requires the normal project-owned bridge while retaining database privacy and
+the actual numeric-port acceptance gate. Native app replay is pending. The
+original four repair dispatches remain exhausted and its failed evidence is
+preserved. Canonical application classes, browser evaluation, UAT and final
+aggregate application delivery were not reached in that trial.
+
+The next fresh SDLC trial, after all eighteen installed preflight suites passed,
+again passed startup, native hook activation, requirements and context. Both
+objectives were admitted concurrently, and the companion assignment carried the
+outer memory-monitor handoff. Its sequential native worker exited before
+registering task start; the dispatcher rejected a result with a mismatched
+assignment identity. No companion implementation or aggregation occurred.
+The rejected payload was discarded, so its precise mismatch remains unknown.
+A bounded read-only probe with the same assignment, native launch settings and
+output schema returned the correct identity; this excludes persistent assignment
+read or output inability only within that probe. It does not explain the original
+failure, establish worker execution or justify changing the identity guard.
+The trial remains failed and full application, browser/UAT and final aggregate
+qualification remain unverified. Cancellation and retained-slot reconciliation
+use the existing native ownership path before exact lifecycle cleanup.
+
+Distinct adapter, digest, reporting and sibling-publication defects received
+owner repairs and focused regressions, including real producer and registered-
+owner negative controls. Each completed live trial was independently quiesced
+and exactly cleaned; repeat cleanup confirmed absence. Earlier failed trials
+remain failed. Requirement REQ-046 remains active and delivery is implemented,
+not verified. Historical successes below apply only to their recorded versions.
 
 Version 6 source and installed verification passed on 2026-11-06. The
 original negative controls reproduced missing completion rejection, inconsistent
@@ -9137,6 +9468,99 @@ hook, repair-control, ordinary Implement and three-tier historical consumers.
 Disposable Codex and Claude installation and payload checks are separate from
 native execution. Earlier native evidence above applies to its recorded version;
 this worker/wave change has not received a fresh native or hosted-scale trial.
+
+The shared sensitive-content screen now normalizes exactly one trailing
+argument comma or existing statement semicolon before parsing a dynamic
+lookup. A native commit-admission failure was reproduced through the real
+Git finish-task path before the repair. Ten focused checks pass afterward,
+including unchanged rejection of credential-like literals, malformed or
+multi-value expressions and neighboring sensitive assignments. This restores
+the existing dynamic-code exemption without bypassing screening, reopening
+successful worker receipts or changing recovery authority. Source evidence
+remains separate from installed and fresh native qualification.
+
+A later installed native trial passed both objective deliveries, unchanged
+continuations, native worker overlap and slot refill, but independent runtime
+startup exposed an image-permission contract gap. The native private umask
+correctly produced private source files; the generated API image preserved
+mode 0600 while selecting another runtime user, which could not read its code.
+The fixture now carries image-local read/traversal permission requirements into
+frontend, API and integration assignments, with offline checks and mandatory
+live acceptance. Preserve private host modes, native candidates and nonroot
+execution. A fresh installed trial passed both native deliveries and unchanged
+continuations, image startup, API/database correlation and persistence, and
+Playwright acceptance before and after API restart. Final semantic admission
+still failed, so that trial remains failed and its exact resources were cleaned.
+
+The semantic verifier now follows receipt-bound plan classification through
+final owner reconciliation. Coverage may fulfill the same statement identities
+without new effects while objective, plan, base, helper, input and ownership
+identities remain frozen. It also validates authorized recovery histories using
+preserved blocked-result receipts when present, exact native exits, coordinator
+authorization and fresh successor identities. Interruption recovery may lack a
+worker result; it cannot lack termination or authority proof. All attempt
+histories remain disjoint across tasks. Real-Git owner regressions reproduced
+both original false rejections; successful and tampered reconciliation,
+blocked recovery and interruption recovery checks pass after the repair.
+Source proof remains separate from complete installed and fresh live admission.
+
+The next fresh installed trial passed the deterministic gate and delivered its
+companion project, but the application coordinator allocated its integration
+checkout before applying the requested two-worker policy. Allocation correctly
+froze default limits and the owner rejected later replacement. This failed
+trial remains preserved and cleaned. Implement now resolves requested limits
+before its first allocation, with the fixture repeating that ordering. Real-Git
+owner checks confirm early two-worker configuration and exact replay succeed,
+while late policy replacement remains rejected. This instruction repair adds no
+compatibility path or execution loop; fresh installed live qualification remains
+pending.
+
+The following fresh trial proved the requested policy was configured before
+allocation and delivered both projects, but failed strict native slot-refill
+coverage and lacked the companion fresh-session continuation binding. Native
+metadata does not establish why that binding was absent. Both failures remain
+recorded and the exact fixture was cleaned. The fixture now orders database,
+API and frontend tasks to exercise a real refill without artificial delays,
+and declares initially absent tier paths to avoid unnecessary discovery errors.
+Implement instructions explicitly require canonical continuation even after
+terminal delivery. These are instruction and fixture refinements; the strict
+native oracle, runtime guards and recovery authority are unchanged. Fresh
+complete installed qualification remains pending.
+
+The subsequent trial delivered both projects and canonically bound both fresh
+continuations, retaining two authorized worker recoveries. It still failed the
+then-declared refill oracle: the API's first worker stopped on unguarded discovery,
+and the database worker terminated before the recovered API started. The recovered
+API was nevertheless active before database result admission and continuously
+through frontend startup. The shared admission owner removes the occupied wave
+slot and releases shared worker capacity only after independent admission; native
+termination alone does not release it. The evaluator's earlier continuity anchor
+therefore rejected a valid admission-based refill during supported recovery.
+
+The current evaluator preserves native departure evidence and requires a matching
+active peer immediately before and at admission, then continuous identity until
+a replacement first appears in a later observation. It rejects pre-admission or
+same-snapshot replacements, absent peers and post-admission disappearance/restart.
+Two fail-before regression cases cover the recovered peer and ambiguous ordering;
+all five focused cases pass afterward. Replaying unchanged native artifacts keeps
+the earlier batch completion negative and recognizes the recovered-peer admission
+interval. Both original trials remain FAIL and were owner-cleaned. This repairs
+the verifier contract without changing product execution, capacity or recovery
+controls; fresh installed and complete live qualification remain separate.
+
+A fresh installed Codex 0.167.1 trial on 2026-11-15 passed all 17 deterministic
+checks and all 19 live stages. Both projects delivered locally and both fresh
+continuations canonically returned ALREADY_COMPLETE. All four application workers
+passed on their first attempt; two dependency waves, native overlap, admission-based
+slot refill, shared capacity, immutable execution/reconciliation evidence and
+before/during/after reporting passed. The actual three-service runtime and two fresh
+Playwright contexts passed API/database correlation and restart persistence.
+Independent semantic admission succeeded. The lifecycle owner removed the fixture,
+isolated state and exact Docker resources; subsequent inspection found none left.
+All four native process groups and the outer observer/controller were absent.
+Earlier failed trials remain failed, preserved and cleaned; observer sampling gaps
+remain recorded. This establishes functional qualification for this frozen installed
+candidate and host, without a controlled end-to-end performance claim.
 
 <!-- /FEATURE: FEAT-045 -->
 
@@ -10133,7 +10557,7 @@ The original closed-initialize warning was not reproduced or causally explained.
 
 <!-- /FEATURE: FEAT-050 -->
 
-<!-- FEATURE: FEAT-051 reqs=REQ-052 status=ready delivery=verified priority=P1 version=1 -->
+<!-- FEATURE: FEAT-051 reqs=REQ-052 status=ready delivery=implemented priority=P1 version=3 -->
 ### FEAT-051: Foreground human bootstrap and fail-closed IAM preflight
 
 #### Requirements Covered
@@ -10152,10 +10576,23 @@ Keep one human token validation call. For live ensure, let the CLI open its
 browser with a three-minute authentication bound; discard token stdout and
 provider stderr and return a stable blocked-admin-auth diagnostic on failure.
 Other actions retain the short non-browser check. Do not add a login command,
-fallback identity, credential store or retry layer. Preflight full group
+new identity, credential store or retry layer. Preflight full group
 membership before permit convergence, then retain exact membership readback after permit writes. Use the supported
 IAM v2 project get for both human ancestry discovery and agent verification;
 other IAM commands keep their existing supported API versions.
+
+The live-test owner may delegate one authorized exact-target ensure. This is a
+contract exception, not a new runtime authorization receipt or hook bypass. Keep
+ordinary native implicit selection disabled and diagnosis read-only.
+
+Resolve the administrative profile from the effective CLI selection when it is
+non-agent. If the runtime selects an agent profile, read the configured active
+profile and accept it only when non-agent. Validate that existing human session
+with the same bounded token call before IAM; never switch the active profile or
+search arbitrary stored profiles. Missing and agent-only selections fail closed.
+Cover this boundary with an old-source failing control, positive ensure and
+preview controls, rejected human authentication, missing/agent active selection,
+and explicit human override precedence. The selection repair is implemented.
 
 #### Selected Option
 
@@ -10247,6 +10684,20 @@ quality cases per skill. These are STATIC_PASS definitions; fresh native model
 triggering and comparative quality remain UNAVAILABLE because isolated runner
 authentication was absent. The current session used the supplied skills and
 live helpers, which is separate from fresh model evaluation.
+
+Live-test delegation source, help, process cases and metadata policy are aligned.
+Thirteen focused auth contract tests pass. The owner ensure created and verified
+the canonical identity for an authorized live-test project; fresh native model
+delegation remains a separate qualification lane.
+
+The administrative-profile selection regression failed with the previous source
+for both live ensure and preview. After repair, all 85 setup cases, 13 contract
+cases and six runtime cases passed, including rejected human login, missing or
+agent-only active profiles and explicit human override precedence. Bash syntax,
+ShellCheck, Ruff and changed skill Markdown passed. Selected installation matched
+24 source files and left hook bytes unchanged. The corrected installed ensure
+completed on the authorized exact live-test target. This does not establish
+fresh model selection, deployment health or unrelated authorization paths.
 
 <!-- /FEATURE: FEAT-051 -->
 
@@ -10923,76 +11374,149 @@ All 104 offline behavioral tests pass from source and installed payload, includi
 
 <!-- /FEATURE: FEAT-058 -->
 
-<!-- FEATURE: FEAT-059 reqs=REQ-060 status=ready delivery=implemented priority=P0 version=4 -->
-### FEAT-059: Shared worker lifetime and bounded harness diagnostics
+<!-- FEATURE: FEAT-059 reqs=REQ-060 status=ready delivery=implemented priority=P0 version=6 -->
+### FEAT-059: Shared health policy for long-running execution
 
 #### Requirements Covered
 
-- REQ-060: Bound productive worker execution and preserve failure diagnostics.
+- REQ-060: Preserve healthy long-running execution and failure diagnostics.
 
 #### Context Evidence
 
-The shared owner now supplies the implemented 3600-second attempt limit and bounded Compose diagnostics. A fresh native worker independently passed its environment check but reached task-start about 79 seconds after arming, exceeding the existing 60-second startup window. Roughly 54 seconds elapsed before native spawn while the coordinator serialized its handoff. The worktree remained unchanged. Deterministic replay reproduces the rejection through both SDLC and Implement fixtures.
-
-A fresh native trial passed startup through expected-red TDD, then its sequential worker exited zero before task-start with no identity, heartbeat or product changes. The adapter checked final liveness before parsing captured stdout and discarded any structured result. No ephemeral worker transcript remained. The coordinator classified missing evidence and stopped; the failed trial was closed and exactly cleaned. The worker exit cause remains unknown.
+The pre-change baseline froze a one-hour worker limit in both workflows. Shared guards
+also expire startup, read-only work and heartbeat gaps, while SDLC continuation
+has an iteration window. These are engineering policies, not proof of failure.
+Native dispatch captures lifetime output in memory; qualification holds a
+coordinator lock during external commands. Both require repair before multi-day
+healthy execution can be supported safely.
 
 #### Design Details
 
-Use canonical startup and work limits from workflow_liveness.py in the shared Worktree execution, assignment validation and native dispatcher owners. Allow 300 seconds from arming to task-start; the unchanged 3600-second attempt clock begins on successful task-start. Start and watch reject at the exact startup boundary, and prestart scope or mutation violations retain precedence. Include the startup limit in the canonical launch envelope and worker prompt. Prepare the bounded handoff before arming, then spawn immediately; persist launch observations afterward. Neither arming replay nor heartbeat renews either clock. Reject old 60-second assignments before effects instead of migrating them. Preserve exact native identity and full result validation. Return WORKER_DEADLINE_NEAR while an otherwise active worker has at most 300 seconds remaining. Keep scope and terminal timeout/stall/read-only checks authoritative. Warning does not renew time or authorize late admission. Apply the policy to new assignments after quiescence; old limits fail closed without conversion. Retain all existing repair counters and fresh-session recovery requirements.
+Use one canonical health policy: direct-heartbeat target 30 seconds, observation
+review after 240 seconds, startup review after 300 seconds and progress review
+after 3600 seconds. Reviews are advisory. Preserve native/assignment identity and
+scope checks; remove total/read-only duration expiry. Unknown observation retains
+ownership and triggers bounded diagnosis/watch, without failure charging,
+replacement or acceptance. Fresh authenticated observations reconcile the gap.
+SDLC iteration and unchanged-checkpoint thresholds checkpoint and request
+observation; real failure repair limits remain unchanged.
 
-Compose remains generation-locked and assignment-leased. On command failure, retain its actual nonzero result and expose at most a bounded diagnostic tail after removing known runtime credential values and screening credential-like material. Withhold unsafe output rather than printing or persisting it. Diagnostics are not semantic acceptance receipts. The outer verifier batches only the declared operations of each frozen request and returns actual results promptly, preserving source identity and original failures. Wait time remains counted; long tasks should be decomposed instead of silently renewing their clocks.
+Version task records to v4, worker assignment to v4 and launch to v3. Version validation plan to v2,
+task acceptance policy to v3 and qualification plan to v3. Replace ambiguous
+command timeout fields with an execution policy: 30-second observation interval
+and no deadline by default. Any deadline is explicitly bound to an accepted timed
+criterion, declared negative control or trusted backend constraint. A terminal
+call does not prove its remote effect stopped. Preserve unresolved effect identity
+and cleanup responsibility; never release capacity before reconciliation.
+Dispatch, start and authenticated heartbeat stamps use the existing clock owner.
+Bind observations to assignment, native session, operation and heartbeat sequence.
+Compare compatible monotonic clocks only; wall-clock changes cannot create age
+expiry. A restarted or unavailable clock leaves the lost interval unknown.
 
-Direct heartbeats target a 30-second cadence, with calls at available work and
-waiting boundaries and short yielding waits where supported. The existing
-240-second stale-heartbeat guard is the enforced limit. Record actual cadence
-gaps honestly; an ACTIVE guard does not prove every 30-second interval was met.
-Never synthesize heartbeats, create a background loop or renew either deadline.
-This clarifies guidance versus enforcement without changing timing constants.
-
-On zero exit and exact PENDING_START, retain WORKER_FAILED but optionally attach a distinct prestart_result for blocked/replan outcomes. Bound input UTF-8 bytes before decoding and canonical output to 65536 bytes. Reuse existing native-host envelope extraction and complete result validation, including assignment/task identities and sensitive screening. Malformed or deeply nested JSON, oversized data, invalid envelopes/fields, sensitive text and implemented outcomes expose fixed reasons only. Preserve terminal/budget precedence, raw-output exclusion and every task-start admission check. Both coordinators treat this payload only as diagnostic evidence; no result receipt, task recovery or spec-gap admission is authorized by it. Leave launch mode unchanged until evidence establishes its role in the startup failure.
+Use the existing process owner for streaming/hash capture, bounded sanitized
+diagnostics and strict final structured results. Record activity separately from
+verified progress. Both browser owners drain stdout and stderr incrementally,
+keeping bounded hash/count metadata without raw runner logs. Browser assertion,
+trace and screenshot artifacts remain separate. Execution Git and seal-message
+commands share this process owner without a total-duration cutoff; ordinary hook
+descendants must be quiescent before return or recovery. Incomplete EOF cannot qualify
+a successful stage. Protocol truncation cannot pass acceptance. Operation owners
+persist reservations under short coordinator locks, release those locks during
+external waits and recheck identity, cancellation and source before acceptance.
+Retain target leases. Cleanup authority is independent of expired acceptance
+limits. Host/provider interruption uses existing durable continuation, never a
+fabricated heartbeat or unverified successor.
 
 #### Selected Option
 
-A fixed five-minute launch window and one-hour per-attempt deadline with a five-minute warning and unchanged four-minute stall detection. This is an engineering policy, not a vendor-prescribed number: it gives the observed development-and-validation workload headroom without introducing per-task tuning, paused clocks or unbounded workers. Five startup minutes cover the observed native launch with bounded headroom; this is not a measured percentile or vendor startup guarantee. Revisit if repeated independent launch measurements exceed the bound.
+Select observed health and explicit failure/acceptance boundaries. Larger fixed
+worker budgets still stop legitimate work; repeated worker recycling destroys
+continuity. Removing limits without streaming, ownership and observation is unsafe.
+No new runtime, coordinator, model or reasoning configuration is required.
 
 #### Alternatives Considered
 
-Keeping thirty minutes truncates legitimate combined implementation and validation. Multi-hour or unlimited single attempts enlarge the failure/cost window. Per-task limits and wait exclusion require new planning and trusted accounting surfaces without sufficient local duration data. Prefer bounded tasks and revisit the fixed policy only with representative measured duration distributions. Keeping a 60-second launch guard assumes near-immediate host/model startup despite observed latency. An unbounded launch guard leaks slots; a new queue/handshake protocol adds lifecycle complexity without evidence that it is needed. The selected change increases the maximum idle launch-slot retention by four minutes while preserving all pre-edit guards.
+Reject increasing or renewing arbitrary worker lifetimes. Keep explicit acceptance
+and real-failure repair boundaries; add no daemon or new model/runtime.
 
 #### Implementation Boundaries
 
-Shared Worktree execution/dispatch constants and tests; SDLC/Implement worker guidance; owned Compose diagnostic handling and tests; verifier process references; repository documentation and this canonical pair. Preserve concurrent unrelated changes and ordinary native configuration. Do not change repair-budget ceilings or active-task recovery authority.
+Shared Worktree process, health, assignment, launch and acceptance owners plus
+both workflow callers and SDLC continuation hooks. Preserve existing authority,
+resource leases, semantic review and public command syntax.
 
 #### Test-First Success Criteria
 
-- TDD-001: A progressing, heartbeating worker remains active after 1800 seconds, warns in the final 300 seconds and times out exactly at 3600 seconds.
-- TDD-002: Stalls, scope violations, stale assignment policy and post-exit timeout still fail closed.
-- TDD-004: Both coordinators admit a clean startup at 79 and 299 seconds, reject at 300 seconds, preserve scope/mutation precedence, and reject obsolete startup-policy assignments before dispatch.
-- TDD-003: A real command failure remains nonzero and its safe causal detail is available without a diagnostic rerun; known secrets and credential-like output never appear in diagnostics.
-
-- TDD-007: Both native hosts retain exact safe blocked/replan diagnostics on zero exit plus PENDING_START; malformed, deep, oversized, sensitive, mismatched or implemented results never leak payload. Nonzero, terminal and other non-active states preserve existing failure gates and cannot return a pre-start diagnostic.
+- TDD-001: Healthy five-day, read-only and silent-command fixtures remain active.
+- TDD-002: Missing/replayed observations cannot kill, pass or replace a worker.
+- TDD-003: Actual failure, scope/safety violations and cancellation still contain
+  exact owned resources; uncertain external effects retain their reservations.
+- TDD-004: Bounded streaming preserves full digests and strict complete results.
 
 #### Validation Plan
 
-Run focused execution/dispatch/owned-runtime tests, security review, lint and paired-spec validation, then install only the approved source payloads.
+Validate schemas, all consumers, source/installed parity and bounded output.
+Review scope, identity, effect uncertainty, cancellation and exact cleanup.
 
 #### Test Plan
 
-Use deterministic clocks and real disposable assignments for timeout boundaries and consumers. Exercise safe, sensitive, control-character and oversized failure output without printing secret fixtures. Keep existing generation, lease, image and acceptance tests.
+Simulate healthy execution through 120 hours, silent/read-only work, observation
+outages and replay; exercise confirmed failure, explicit deadlines, scope/memory
+safety, cancellation, external uncertainty and full final result admission.
 
 #### Evaluation Plan
 
-Run the installed preflight and a fresh native three-tier workflow with the independent browser oracle. Preserve earlier failed reports. Source tests do not prove native wall-clock duration, browser acceptance or all seven live profiles.
+Fresh native Implement and SDLC qualification follows source checks. Separate
+simulated long-duration policy proof from observed native runtime and completion.
 
 #### Rollout And Rollback
 
-Finish and clean the prior trial before installation. New runs freeze the new helper and assignment policy; old state is retained as historical evidence and not migrated. Revert reviewed source and reinstall only after writer quiescence if regressions arise.
+Install only after affected old runs finish or are explicitly stopped. New runs
+freeze the new contract; retain old histories without conversion or aliases.
+Rollback uses a quiescent installation boundary and a new run, never a hot-swap.
 
 #### Done Definition
 
-Policy consumers, diagnostics, docs and focused checks agree; installation and a new live trial have factual outcomes with remaining gaps explicit.
+All new health contracts and consumers agree; regressions and installation pass;
+fresh native Implement and SDLC trials complete with exact owned cleanup.
 
 #### Implementation Evidence
+
+Version 6 adds task-v4 clock provenance and bounded browser diagnostic capture
+to assignment-v4/launch-v3 observations, validation-plan-v2,
+task-acceptance-v3 and qualification-plan-v3. Shared process supervision streams
+and hashes output, separates observations from authority, and retains unknown
+cleanup. Qualification reservations release coordinator locks during external
+work and revalidate authority after cleanup. Native coordinators, Compose builds,
+product tests and browser stages use observation checkpoints without a total
+healthy-work expiry. Confirmed-failure repair budgets remain unchanged.
+Earlier version evidence below is historical.
+
+#### Verification Evidence
+
+Earlier frozen full deterministic checks passed 597 Implement cases and 1622
+SDLC cases; those results do not qualify subsequent final source changes. The
+latest native Implement trial completed both deliveries, fresh continuations,
+application checks and browser checks, but failed final lifecycle reporting.
+Its failed record remains preserved; a source guard now reserves statistics PASS
+for canonical semantic validation. Fresh complete native qualification for both
+workflows remains outstanding. Simulated five-day policy checks do not prove
+continuous native availability.
+
+Final scoped regression checks passed the four Git-ownership cases and the
+shared Implement startup boundary. Earlier unchanged browser adapters and the
+shared observation baseline passed their focused suites. The final broad execution
+run completed 99 cases and the final shared-observation run completed 54 cases
+before explicit testing cancellation; neither interrupted suite is a full pass.
+Core/Codex/Claude structure, changed Python lint and Markdown checks pass.
+All 217 payload files and modes in the four refreshed installed skills match
+source. Pinned npx discovery/copy/repeat/isolation checks pass for Codex and Claude;
+these do not execute either native runtime. Final-version complete preflights
+and native qualification remain outstanding.
+
+#### Historical Evidence
+
+The following records describe the prior bounded-lifetime policy only.
 
 Version 4 preserves only bounded, validated pre-start diagnostics on WORKER_FAILED. Both coordinator contracts distinguish this evidence from result admission. JSON decoder failures, including oversized integer tokens, return fixed errors. No launch-mode or task-start policy changed.
 
@@ -11000,7 +11524,7 @@ Version 3 clarifies a 30-second heartbeat target versus the unchanged enforced 2
 
 Version 1 implemented the canonical shared lifetime module, execution warning and dispatcher policy validation. Failed Compose actions retain their command exit code and a bounded diagnostic tail; known runtime values are redacted, and encoded, oversized or credential-like output is withheld. Updated both workflow owners and the live harness guidance. Existing attempt, lease, scope, stall and repair limits remain unchanged. Version 2 implements the shared 300-second startup constant, strict assignment validation, canonical launch field/prompt and immediate-dispatch guidance for both coordinators. Existing active assignments are not migrated.
 
-#### Verification Evidence
+##### Prior Verification Evidence
 
 Version 4: all 29 sequential dispatcher tests pass, with explicit host launch assertions for safe blocked/replan diagnostics, input and canonical-output limits, malformed/deep/large-integer JSON, identity and sensitive screening, and unchanged terminal/nonzero precedence. Changed Python lint, skill structure and actual Codex/Claude installer parity pass. Read-only code/security review found and verified the numeric-decoder edge repair. Installed preflight passed. A fresh native trial retained the blocked pre-start environment diagnostic through the shared dispatcher without admitting a worker result or completed task; the failed trial was preserved and destroyed after quiescence.
 
@@ -11968,8 +12492,9 @@ Closes references in an owned PR-body section. Preserve other content. Reassess
 on head or issue drift and remove stale owned references before new publication.
 GitHub closes eligible linked issues when the PR merges into the default branch;
 merge-pr verifies actual states separately from result CI. Disabled or unknown
-capability remains explicit. No additional scheduler or issue-write broker is
-needed. Neither a plan nor this receipt grants publication or merge authority.
+native capability remains explicit. The existing continuation owner may complete
+separately authorized issue closure after fresh assessment; no new service or
+merge-broker permission is needed. Neither a plan nor this receipt grants publication or merge authority.
 
 #### Selected Option
 
@@ -12568,7 +13093,7 @@ native trials do not qualify this changed execution contract.
 
 <!-- /FEATURE: FEAT-071 -->
 
-<!-- FEATURE: FEAT-072 reqs=REQ-073 status=ready delivery=implemented priority=P1 version=1 -->
+<!-- FEATURE: FEAT-072 reqs=REQ-073 status=ready delivery=implemented priority=P1 version=4 -->
 ### FEAT-072: Owner-aligned SDLC verifier and complete workspace teardown
 
 #### Requirements Covered
@@ -12582,6 +13107,9 @@ sealed Git profile. A fan-in fixture omitted current result fields; three-tier
 fixtures supplied the wrong coordinator session; dispatch passed independently
 in 259 seconds against a 120-second verifier timeout. Startup observation invokes
 the source state loader, which alone cannot prove native hook activation.
+Later repeated cleaned trials exhausted the bounded native registration ledger:
+cleanup retained terminal rows indefinitely, preventing a fresh companion from
+initializing after its process-registration callback reached the limit.
 
 #### Design Details
 
@@ -12600,6 +13128,21 @@ to exact validated paths, serialized with fixed lock ordering, and journaled
 before ownership material disappears. Retain reports and minimal cleanup records;
 never delete a whole root or adopt incomplete ownership. Create cleans previous
 owned fixtures before preflight; final cleanup covers both classes unless kept.
+After both fixture classes are absent and native absence is freshly proven,
+archive the full terminal ledger with its source digest and root identity. Verify
+the immutable private archive, recheck native absence and unlink only the exact
+unchanged active ledger through the existing no-follow cleanup owner. Reuse a
+matching archive after interrupted retirement; preserve conflicting or unsafe
+records. Registration retains its per-trial bound and active-process guards.
+
+Validate existing receipts before fixture authoring. Source/design drift preserves
+the original context and requires cleanup before fresh preflight. Static or fixture
+prerequisite failures skip regression launches. Private context restoration admits
+only original archive bytes matching the recorded hash, unchanged remaining scope
+and target identities, clean owned Git and no active native/live fixture, live
+manifest or cleanup checkpoint. Retain immutable prior receipt/replacement evidence,
+restore only the original context and its file identity, and replay interruptions.
+Normal admission remains strict; restoration creates no passing result.
 
 Separate source state discovery from native activation evidence. Version changed
 receipt contracts together without historical conversion. Refresh changed skill
@@ -12624,14 +13167,24 @@ installed file bytes against that source closure. Changed or missing helpers
 fail, including matching source/private drift against the frozen catalog. Keep
 the existing native receipt schema and entrypoint-only hash meanings.
 
-Observe a pending design revision only at the running classifier checkpoint.
-Reuse read-only Worktree validation of the active counted design dispatch,
+Observe a pending design or test revision at the running classifier checkpoint.
+Reuse read-only Worktree validation of the active counted typed dispatch,
 immutable preparation, exact objective/plan/basis and integration parent,
 retained native termination/reconciliation proofs, superseded unmerged wave and
 writer/resource/validation quiescence. Observation neither borrows coordinator
 identity nor enables runtime execution. Mutation owners retain coordinator
 authorization. Material design replanning invalidates affected phase evidence;
 retain old attempts and require fresh observations after owner revalidation.
+
+Pending test-revision TDD uses that same read-only owner at running `sdlc-tdd`,
+`tests_red` or `tests_ready`; only the exact retained test-file set may change.
+The preparation purpose observes a clean `repair_required` integration at running
+`sdlc-prepare-execution` or `execution_prepared`. Require a completed owner replan
+journal, current failure authority, unchanged failed integration head, corrective
+planned tasks before untouched work, and writer/resource/validation quiescence.
+For plan-command recovery, revalidate the retained review against the current
+plan, validation sidecar, objective and specs. Never change coordinator state,
+seal tests, dispatch tasks or extend runtime admission from an observation.
 
 #### Selected Option
 
@@ -12666,6 +13219,23 @@ No public flags, external publication or unrelated production behavior changes.
 - TDD-005: A proven pending design revision permits read-only classifier
   observation without identity adoption; runtime, stale authority and changed
   proofs remain rejected. Material replanning requires fresh phase evidence.
+
+- TDD-006: Changed catalogs preserve context bytes and cleanup ownership; failed
+  prerequisites skip fixture or regression launches. Original-hash restoration
+  succeeds and replays interruptions; wrong hashes, changed scope/identities,
+  active/live state, dirty Git and unsafe paths remain rejected.
+
+- TDD-007: Real-owner corrective preparation and pending test-revision TDD admit
+  phase identity and receipt collection without changing underlying bytes.
+  Wrong checkpoints, active writers, changed reviews, incomplete replan history,
+  unrelated file edits and runtime execution remain rejected. Required capability
+  registration is checked against actual execution and three-tier collection.
+
+- TDD-008: A full terminal native ledger is archived by completed cleanup and
+  a fresh launch registers normally. Active or unmeasurable processes, archive
+  failure or corruption, conflicting history, file drift and unsafe paths retain
+  the active ledger. Interrupted retirement replays without changing history;
+  over-bound registration in one trial remains rejected.
 
 #### Validation Plan
 
@@ -12761,6 +13331,35 @@ process-group verification, helper modification/deletion, unterminated file
 changes and coordinated source/private drift. Combined fixtures reuse one
 canonical lifecycle import so cleanup mocks reach the actual owner. These are
 source/fixture checks after teardown, not new native qualification evidence.
+
+Context preservation, original-hash restoration and prerequisite launch gating
+passed all 187 verifier-suite tests without skips. The installed owner restored
+the actual affected fixture from independently proven original context bytes,
+then aggregate cleanup and repeated destroy verified both fixture types absent.
+Source/installed parity and ordinary-home preservation also passed. Full renewed
+preflight and fresh native qualification remain pending.
+
+A fresh native replay exposed an observation gap after successful owner-reviewed
+plan recovery: the coordinator correctly retained `repair_required`, but the
+verifier rejected preparation identity. Two real-owner regressions reproduced
+that predicate, including the adjacent pending test-revision TDD boundary.
+Seven focused recovery and historical-observation regressions pass after the
+verifier repair. Broader checking exposed an overstrict historical preparation
+read during ordinary document authoring; restoring the existing inspection
+checkpoints preserves fresh-receipt cleanliness and material-history rejection.
+All fourteen suite-runner tests pass, including actual collection of required
+execution and three-tier cases. No native workflow state changes to satisfy
+observation. The original failed trial and exact cleanup remain preserved.
+Renewed full preflight and native qualification of this candidate remain pending.
+
+Terminal native-ledger cleanup now passes its original failing capacity
+regression and eight adjacent safety/replay checks, including a real active
+process. Workspace and suite-runner checks pass; the required capability catalog
+collects the new cases. The installed owner then archived every entry in the
+actual full terminal ledger, retired only its active file and returned
+ALREADY_DESTROYED on repetition. Source-installed parity and ordinary/private
+hook preservation passed. A renewed full native profile remains pending; this
+repair does not qualify the failed trial.
 
 <!-- /FEATURE: FEAT-072 -->
 
@@ -12971,6 +13570,1613 @@ repeated for this receipt-validation/documentation correction. Python's official
 subprocess contract independently confirms the signed signal representation.
 
 <!-- /FEATURE: FEAT-073 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-074 reqs=REQ-075 status=ready delivery=implemented priority=P1 version=2 -->
+### FEAT-074: Scenario-driven live Nebius test ownership
+
+#### Requirements Covered
+
+- REQ-075: Infer, provision, verify and clean bounded Nebius live environments.
+
+#### Context Evidence
+
+The existing cxcli catalog contains generic VM and managed Kubernetes components.
+Its generic VM lifecycle is Terraform-owned and uses a remote object-storage
+backend. Auth setup owns persistent project Admin plus tenant Viewer identity.
+Before this change, the SDK mutation helper returned receipts only after waiting.
+Official quota documentation exposes the human web-console request workflow.
+
+#### Design Details
+
+Create test-live-on-nebius with implicit selection enabled. The host agent derives
+and freezes a scenario; deterministic helpers journal scope, hashes, resource
+ownership, accepted operations, outcomes and cleanup. Public actions are plan,
+run, resume and cleanup, with pure help. Defaults are current source, automatic
+cxcli-first routing, sixty minutes active execution and thirty minutes cleanup.
+Resolve project ancestry and region before creating resources. Generated SDK
+adapters are privileged reviewed code, not an isolation boundary.
+
+Bind the helper closure and declared dependencies to a SHA256 manifest and the
+interpreter/package identity. Retain private source bytes for explicit recovery;
+check drift before callbacks and never restore shared files implicitly. A parent
+liveness pipe terminates owned subprocess groups after runner death; resume
+proves group absence without signaling a potentially reused PID. Lost delete
+receipts can resolve through authoritative absence of the exact ledger target.
+
+Use canonical auth setup through a named exact-project delegation exception;
+standalone setup remains explicit-only. Quota reads use the selected agent;
+authorized requests use Playwright with verified human tenant-admin identity,
+fixed deltas, duplicate reconciliation and effective allowance readback. After
+ten minutes awaiting approval, preserve a resumable awaiting-quota state.
+
+Persist the complete operation descriptor and stable mutation identity atomically
+before dispatch, and operation receipts before
+waiting. Hold an exclusive run lock and reconcile accepted operations and owned
+writers before destruction. Preserve cxcli generated files through native destroy;
+use a dedicated trial backend bucket and purge it only after verified teardown.
+Prefer private connectivity, otherwise scoped temporary SSH access with verified
+public host keys. Always clean owned resources, retain reusable IAM and approved
+quota increases, and report incomplete cleanup explicitly.
+
+#### Selected Option
+
+Existing host-agent orchestration with bounded local helpers, native cxcli
+ownership and official typed SDK adapters. No additional agent framework.
+
+#### Alternatives Considered
+
+A private quota client, agent tenant Admin, automatic cross-engine recovery,
+shared trial state buckets and universal service qualification are rejected.
+
+#### Implementation Boundaries
+
+New skill, SDK helper, auth delegation documentation/evals, catalogs and this
+canonical pair. Preserve unrelated work and existing persistent identities.
+
+#### Test-First Success Criteria
+
+- TDD-001: Crashes after acceptance cannot lose operation identity or duplicate creates.
+- TDD-002: Foreign resource deletion and concurrent run writers are rejected.
+- TDD-003: Both VM routes independently prove guest behavior and resource absence.
+
+#### Validation Plan
+
+Focused helper/auth tests, portable skill/eval checks, security/code review,
+align-skill and align; install only reviewed affected skills.
+
+#### Test Plan
+
+Synthetic crash, timeout, quota, identity, scope and cleanup failure cases;
+sequential live VM trials with SDK fixtures distinguished from product ownership.
+
+#### Evaluation Plan
+
+Positive and negative triggers plus comparative quality scenarios; distinguish
+static definitions, installed parity and fresh native model execution.
+
+#### Rollout And Rollback
+
+Publish source first, install reviewed selected skills, run bounded trials and
+retain protected resumable state until cleanup is independently verified.
+
+#### Done Definition
+
+Skill/source/docs agree; focused tests pass, both requested VM trials are reported
+with exact proof boundaries and all run-owned resources are removed or identified.
+
+#### Implementation Evidence
+
+Implemented the skill, protected single-writer journal, exact-byte adapter
+loading, bounded stages, accepted SDK receipts, private VM adapter and native
+cxcli cleanup ownership. Added auth delegation, plugin/catalog and CI wiring.
+Quota inspection now recognizes validated unconfigured project dimensions.
+
+#### Verification Evidence
+
+Thirty-nine focused lifecycle/adapter/recovery/acceptance tests, fifty-five pinned SDK tests
+and thirteen auth contract tests pass. The current alignment pass also fixes
+cxcli failure-digest handling, uses canonical native-home resolution, rejects
+all recovery overrides and requires a declared source identity. Crash-boundary,
+subprocess failure and guest-evidence acceptance/rejection regressions pass.
+Code/security review has no remaining reported blocker. Both-host structure checks and installed payload byte/mode
+parity pass for the refreshed files; all thirty-nine installed live-skill tests
+and ten applicable installed auth checks pass. Three repository-catalog README
+checks cannot run in a skills-only install; all thirteen auth checks pass at
+source. The initial installed invocation reported those three missing-file
+errors, rather than an auth runtime defect. Disposable npx discovery/copy checks pass independently of runtime
+activation. Fresh native triggering and comparative quality remain unavailable
+because the isolated evaluator lacks authentication.
+
+The earlier cxcli and SDK trials independently created a running VM with four vCPUs,
+sixteen GiB RAM and a forty-GiB SSD. Owner-native cleanup and independent SDK
+readback confirm all nine temporary resources across the two trials and an
+initial pre-deploy fixture failure are absent. The failed fixture trial remains
+recorded. Project defaults and reusable identities were retained. Effective
+quota was sufficient; no quota increase was submitted.
+
+Authenticated guest-log retrieval was unavailable, so both trial runners report
+incomplete workload acceptance despite successful control-plane and cleanup
+checks. Browser quota submission and services beyond this simple VM remain
+unqualified. No cloud mutation was performed during the subsequent alignment pass. These
+offline repairs do not add live qualification. The feature remains implemented,
+not fully live verified.
+
+<!-- /FEATURE: FEAT-074 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-075 reqs=REQ-076 status=ready delivery=implemented priority=P0 version=3 -->
+### FEAT-075: SDLC task acceptance with isolated runtime trials
+
+#### Requirements Covered
+
+- REQ-076: Enforce task evidence and explicit deferred obligations under FEAT-080.
+
+#### Context Evidence
+
+Shared Worktree execution freezes validation plans and validates combined waves.
+Before this change, task results contained textual validation; independent task
+checks applied to no-change proposals. SDLC final UAT targets promoted source. Container
+skill helpers validate evidence but do not execute arbitrary project harnesses.
+
+#### Design Details
+
+Freeze a separate mandatory SDLC task-acceptance policy in each execution basis.
+An owner-supervised adapter executes reviewed project checks before worker success,
+records immutable attempt evidence, binds complete source inputs and verifies
+process and resource cleanup. Root completion checks tested bytes against the
+staged and committed tree; admission and historical replay revalidate producer
+proof. Native worker result JSON and ordinary Implement behavior stay unchanged.
+
+Reuse existing container evidence assessment and project harnesses. Cache immutable
+base/dependency layers, with fresh task-specific writable state and runtime leases.
+Keep the default two-case concurrency bound and host-memory supervision. Preserve
+state only within an explicitly declared persistence trial.
+
+Physical-host monitoring belongs to the caller or declared active outer owner,
+with a fresh successful observation, continuous monitoring and exact cancellation
+on critical or unknown visibility. Sandboxed workers rely on that owner instead
+of launching an unavailable local host probe. The adapter retains client process
+supervision and exact container cleanup. A container that never started reports
+launch failure before receipt retrieval; completed failing tests retain their
+structured evidence.
+Exported directories use `0755`, copied inventory uses `0644`, and source files
+retain their Git executable modes so the nonroot container can read them after
+Docker copy. Their enclosing host temporary directory stays `0700`; the native
+private umask, logs and receipts remain unchanged.
+
+Coordinator-owned deferred obligations record missing prerequisites, criterion IDs,
+resolution stage and blocked consumers. No runnable assertion failure is deferrable.
+Preserve obligations across corrections, promotion and aggregation; independently
+reconcile implementation obligations before publication. Task receipts never certify
+the combined product. Retain wave checks; FEAT-080 governs optional UAT.
+
+#### Selected Option
+
+A small SDLC acceptance owner integrated with existing execution, evidence,
+resource and publication boundaries; no replacement workflow or container engine.
+
+#### Alternatives Considered
+
+A single mutable container risks contamination and serializes assignments. Optional
+UAT coverage is now declared separately under FEAT-080. Post-finish test execution requires a separate
+failed-admission recovery lifecycle, so tests remain inside worker verification.
+
+#### Implementation Boundaries
+
+SDLC planning/execution/UAT, shared-core conditional admission, container evidence
+reuse, verifier fixture and semantics, catalogs, docs, both-host installation.
+No changes to ordinary Implement acceptance policy or remote publication.
+
+#### Test-First Success Criteria
+
+- TDD-001: Missing, stale, fabricated or incomplete evidence cannot admit a task.
+- TDD-002: Deferred implementation prerequisites block their consumers and
+  publication; optional UAT follows FEAT-080.
+- TDD-003: Verified bases are reused without sharing writable trial state.
+
+#### Validation Plan
+
+Focused owner/real-Git/hook/container evidence regressions, source verifier, code
+and security review, lint, paired-spec validation and final align.
+
+#### Test Plan
+
+Policy coverage, source drift, process failure, skipped inventory, interrupted
+cleanup, lease isolation, correction/replay, debt preservation and final-gate bypass.
+
+#### Evaluation Plan
+
+Extend the owned three-tier fixture with early task tests and deferred criteria,
+retain Implement companion and all final browser/persistence/aggregate oracles.
+
+#### Rollout And Rollback
+
+Drain owned resources before replacing pinned catalogs. Install all skills for
+Codex and Claude, verify parity, then run a fresh installed Codex live trial.
+Preserve unsupported historical state without conversion. Restore source only
+within exact task-owned edits; never reset unrelated work or external effects.
+
+#### Done Definition
+
+Scoped deterministic checks, both-host installation parity, fresh Codex task and
+final-UAT evidence and owned-resource cleanup pass. Unavailable proof stays explicit.
+
+#### Implementation Evidence
+
+Implemented `worktree/references/task-acceptance.md` and its shared acceptance
+owner: frozen task policy, pre-finish command/container supervision, exact source
+receipts, isolated collection/execution, runtime leases and verified cleanup.
+Deferred subsets retain failed trials and consume existing classified repair
+budgets. Evidence-dependent consumers and final publication gates require resolved
+proof; historical qualification retains its original obligation set. Existing
+infrastructure-only phase qualification and ordinary Implement policy remain intact.
+
+The verifier seeds an independent domain harness, pins one dependency image,
+requires two admitted task trials with separate containers, verifies final harness
+bytes and reconciles deferred criteria on both final candidates. Phase contracts,
+verifier coverage, README, changelog and SDLC design are aligned.
+
+Alignment closes catalog-owner wiring, preserves undispatched historical debt
+through the existing replan journal and forbids same-plan policy mutation.
+Docker receipt streams are bounded before host storage, and uncertain client
+cleanup retains ownership. Historical original-TDD observation validates frozen
+acceptance sidecars and unchanged retained criteria across additive replans.
+
+#### Verification Evidence
+
+Changed-scope acceptance, shared-task, hook, qualification, aggregation,
+design-revision, dependency and verifier regressions have focused coverage.
+The follow-up alignment passed the 26-test acceptance suite, 17 focused
+cleanup/history/qualification checks, 121 hook checks and the updated Docker
+adapter's three actual product assertions with separate containers and proven cleanup.
+
+The broad verifier run recorded 249 passing cases and 14 historical-TDD failures.
+Its failure history remains preserved. After repairing the historical policy
+consumer, all 14 failed cases and the new frozen-policy tamper regression passed.
+This is scoped revalidation; the earlier broad run is not relabelled as passing.
+Ruff, Markdownlint and skill metadata checks passed.
+All 76 skill trees were refreshed for Codex and Claude and matched their source.
+Read-only source/configuration checks passed on both hosts (56 Codex, 55 Claude).
+Existing unmanaged Claude folders remain preserved from the initial installation.
+
+This proves source behavior, local adapter execution and installed-file parity.
+It does not prove fresh native SDLC activation or final UAT. The requested Codex
+live trial remains pending a fresh verification-root selection because safe cleanup
+refused older fixtures lacking current ownership receipts. The feature is
+implemented, not fully live verified.
+
+<!-- /FEATURE: FEAT-075 -->
+
+<!-- FEATURE: FEAT-076 reqs=REQ-077 status=ready delivery=implemented priority=P0 version=3 -->
+### FEAT-076: Guarded test revision during active worker execution
+
+#### Requirements Covered
+
+- REQ-077: Correct test fixtures without weakening execution evidence.
+
+#### Context Evidence
+
+A native worker found defective test-only settings after TDD sealing. The classifier
+selected TDD, but original sealing is one-time and started assignments are immutable.
+Existing design revision already supplies writer retirement and resumable Git sealing.
+A fresh native trial also exposed a stopped worker retaining a shared scheduler
+slot. An isolated real-Git replay proved its dirty retained checkout would block
+commit revalidation after successful replacement promotion. Both gaps belong to
+the shared typed-revision lifecycle, rather than the test fixture or acceptance.
+
+#### Design Details
+
+Generalize the existing revision owner into one typed design/test implementation.
+Preserve design commands and receipts. Private prepare-test-revision and
+seal-test-revision consume current localized TEST_DEFECT authority for an active
+unmerged wave. Proven events and diagnoses retain classifier budget ownership.
+
+Bind objective, canonical pair, plan, basis and integration HEAD; require validator
+quiescence, exact native termination and released leases. Retain failed candidates
+through existing reconciliation owners. Freeze bounded explicit existing tracked
+regular files inside project scope, including Git modes and hashes. TDD chooses
+semantic test/fixture scope; guards reject specs, instructions, frozen independent
+acceptance harnesses, symlinks and out-of-scope paths.
+
+TDD authors only those files in registered integration. A private review binds the
+prepare receipt, exact before/after identities and a bounded unchanged-criteria
+explanation. Hashes detect drift, not semantic correctness. Before root staging,
+the Git owner rejects unrelated dirty/staged paths; it journals parent, tree,
+subject and review, commits with normal hooks, and replays only the exact clean
+direct child. No duplicate commits or original TDD reopening.
+
+A new locked plan retains all started definitions and appends replacement tasks
+without dependencies on superseded work. Existing replanning establishes a fresh
+basis. Reacquire preparation and TDD evidence, then implementation, validation,
+tests, evaluation, documentation, alignment and commit. Never import failed
+candidate code or treat fixture repair as product acceptance. This transition
+grants no authority over integrated or promoted candidates.
+
+After immutable termination/reconciliation publication, release only that exact
+shared worker slot and complete the retired wave's fairness turn. Physical
+worktree capacity remains occupied until the execution owner proves removal.
+Before preparing a new wave from the sealed revision and reviewed new basis,
+the shared owner automatically archives its superseded candidates. No caller
+path, extra public action, raw-capacity repair or manual cleanup is required.
+
+A bounded private archive preserves the complete working tree, empty directories,
+file modes and symlink text, raw index plus a binary staged patch, all staged
+and resolve-undo blob objects, and a self-contained Git branch bundle. Reject
+split indexes, unresolved merges, gitlinks and sparse-directory index entries
+without deleting the retained candidate. Never follow archived symlinks or capture
+nested repositories, special files or multiply linked files. Refuse oversized,
+ambiguous or changed content while retaining ownership. The archive is recovery
+evidence only, never an admitted implementation or acceptance result.
+
+Bind the immutable archive receipt to assignment, retention, exact native
+termination, sealed revision and Git identity. Verify archive readback and fresh
+candidate identity before removing the exact owned checkout. Delete only the
+expected branch tip; verify path, registration and ref absence before releasing
+physical capacity and publishing terminal retirement. Resume interruptions from
+the verified immutable archive; never recreate missing evidence or remove a
+replacement identity. Original assignments, failed results and retention records
+remain unchanged. Apply this one path to both test and design revisions.
+
+#### Selected Option
+
+Reuse revision, reconciliation, planning and Git owners; semantic test review stays
+in TDD and counted authority stays in the classifier.
+
+#### Alternatives Considered
+
+Reopening TDD erases its one-time meaning. Worker recovery cannot change immutable
+scope. Design misclassification falsifies cause. A second orchestrator duplicates authority.
+
+#### Implementation Boundaries
+
+Shared Worktree revision and private parser, classifier, TDD/planning/preparation
+contracts, verifier wiring and real-Git regression coverage. No public command changes.
+
+#### Test-First Success Criteria
+
+- TDD-001: Retain failed worker bytes through an exact test commit and fresh assignment.
+- TDD-002: Reject wrong class, stale basis, live writers, leases, partial merges,
+  protected paths and review drift without accepting repair.
+- TDD-003: Resume exact interrupted commits; preserve design and original TDD behavior.
+- TDD-004: At a one-worker ceiling, admit the replacement and finish promotion
+  with no retained worker blocker; recover original staged and candidate bytes.
+- TDD-005: Reject live writers, leases, archive tampering, ownership drift and
+  unsafe file types; resume interruption without data loss or duplicate effects.
+
+#### Validation Plan
+
+Focused owner/classifier/design regressions, verifier preflight, lint, security and align.
+
+#### Test Plan
+
+Typed admission, scope, unchanged criteria, retention, new basis, stale replay and interruption.
+
+#### Evaluation Plan
+
+Run a fresh installed native trial; report late-repair observation separately from
+final product acceptance if that path is not exercised.
+
+#### Rollout And Rollback
+
+Quiesce and clean prior trials before scoped installation and a new generation.
+Preserve pre-repair copies and unrelated user changes; never resume with catalog drift.
+
+#### Done Definition
+
+Original transition and adversarial deterministic checks pass, followed by fresh
+native product validation and cleanup; absent native repair coverage remains explicit.
+
+#### Implementation Evidence
+
+The shared typed revision owner, private transitions and classifier admission
+are implemented. TDD and planning describe exact reviewed-file sealing and fresh
+assignments; verifier observation and required capability wiring use the same owner.
+
+#### Verification Evidence
+
+The original missing transition failed a new real-Git reproducer before repair.
+Nine focused recovery tests and fourteen existing design tests passed, as did
+62 classifier checks. Fresh focused verifier checks passed for material design
+replanning and pending test observation. A broader target run passed 50 cases;
+one case correctly rejected a catalog edited during fixture setup. That run
+is preserved and its affected case requires a frozen-input rerun. Additional
+missing-file rejection and pending-path guards are included for final checks.
+Source lint, Markdown checks, preserved headings and recovery links passed.
+Full preflight, installed parity and a fresh native trial remain pending; these
+source checks do not establish native late-repair or final product acceptance.
+The candidate-retirement extension is implemented at the shared execution owner.
+The stopped-worker slot and retained-checkout regressions failed before repair.
+An additional independent recovery test exposed missing resolve-undo objects;
+that original failure is preserved and the repaired archive restores them.
+All 37 focused real-Git retirement, test-revision and design-revision checks pass.
+They cover one-worker replacement through promotion and commit revalidation,
+archive reconstruction, interrupted publication/removal/release, tampering, live
+writers, split-index retention and unsafe file rejection. Source lint and scoped
+contract alignment pass. Installed parity, full preflight and the new native
+trial remain pending; deterministic recovery is not live product acceptance.
+The failed trial and its original repair budget remain unchanged.
+
+<!-- /FEATURE: FEAT-076 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-077 reqs=REQ-078 status=ready delivery=implemented priority=P0 version=4 -->
+### FEAT-077: Unified PR lifecycle and verified issue completion
+
+#### Requirements Covered
+
+- REQ-078: Unified PR lifecycle and verified issue completion.
+
+#### Context Evidence
+
+Existing usefulness, isolated review/repair, candidate CI, live lifecycle and
+protected merge owners are present. Dispositions, adoption, live remediation
+and hosted linked-issue reconciliation need explicit connected contracts.
+
+#### Design Details
+
+Keep deterministic admission, budgets, publication and completion owners. Agents
+return typed assessments and patches without credentials. Reuse the state store,
+effect journal, trusted publisher and broker; add no service or model dependency.
+
+A shared status publisher reconciles the named lifecycle label family and concise
+comments. Terminal completion records carry only frozen reporting and issue
+obligations, preserve successful merge truth and cannot resume candidate execution.
+
+Live applicability and sanitized failure evidence bind the candidate and scenario.
+Diagnose before repair; design proven contract-changing remedies; preserve failed
+trials and quiesce/clean before fresh testing. A waiver never overrides a known
+failure or contamination. Unavailable testing can yield manual-merge only when
+review/CI have no known correctness blockers.
+
+Large conflicts use one attributed replacement PR with an independently reviewed
+full-diff feature ledger, separate feature commits and one verified complete
+publication. Each adopted feature maps to independently reviewed live assertions. Preserve original
+origin/authority and one budget owner. Replacement creation cannot automatically
+admit another request. Transfer remaining execution once; explicit manual renewal
+reuses the same replacement and journals both records. Preserve current fork and
+report-only restrictions at every effect. Finish only after full merged-result coverage; material
+source drift or uncovered features keeps the original open.
+
+Issue assessment owns complete identities, scope/discussion and state-event
+watermarks, criterion evidence and closure authority. Native closure is preferred;
+explicit fallback requires fresh resolution proof and verified rationale. Later
+human reopening or objection stops closure. Cross-repository access is never
+assumed and the merge broker receives no extra issue permissions.
+
+#### Selected Option
+
+Extend existing owners with typed bounded handoffs and one status vocabulary.
+
+#### Alternatives Considered
+
+Prose-only alignment leaves hosted behavior inconsistent. Closing every linked
+issue loses unresolved work. Unbounded adaptation and additional credential
+providers expand authority and cost without need.
+
+#### Implementation Boundaries
+
+PR/issue/live skill contracts, hosted stages and effects, shared resolution
+helpers, trusted bundle and workflow wiring, tests and operational guidance.
+
+#### Test-First Success Criteria
+
+- TDD-001: No label, replacement or waiver can broaden admitted authority.
+- TDD-002: Repeated and interrupted effects converge without duplicate work.
+- TDD-003: Unresolved defects, omitted features and human reopening block closure.
+
+#### Validation Plan
+
+Run focused pytest and issue handoff tests, then affected full local suites,
+Ruff, workflow contracts, canonical validation, explicit align and install parity.
+
+#### Test Plan
+
+Cover the complete status matrix, sanitized failure transport, repair/retest,
+adoption inheritance and coverage, terminal reconciliation, issue drift and races.
+
+#### Evaluation Plan
+
+Local fixtures establish source behavior only. Qualify exact hosted source,
+policy, skills and runtime in controlled trials before enabling new effects.
+
+#### Rollout And Rollback
+
+Keep disabled defaults. Quiesce old writers and reconcile pending effects before
+coordinated schema cutover; preserve historical evidence and require fresh
+admission when incompatible. Do not add compatibility shims or reset active budgets.
+
+#### Done Definition
+
+Scoped implementation, regression tests and alignment pass; installed and live
+qualification are reported separately, with remaining access limitations explicit.
+
+#### Implementation Evidence
+
+The shared review-pr lifecycle reference aligns review-pr, review-github-issues,
+merge-pr, test-live-on-nebius and the existing local issue handoff without
+fabricating Implement authority. README/changelog and hosted bundle references
+are aligned. Controller contracts/stages now bind applicability, causal diagnosis, feature
+inventory/live coverage and independent issue decisions. Adoption publishes one
+replacement with verified feature/aggregate trees, inherited ceilings and budgets,
+and explicit manual renewal. Completion uses the canonical lock and heartbeat,
+typed authority, current-policy guards, actual merged-tree evidence and separate
+issue comment/closure journals. Later human reopening and objections block old
+effects. Evaluation wire v2 has no compatibility adapter; the continuation owns
+completion writes and the merge broker gains issue-read access only.
+Completion effects intersect retained/current capabilities with current mode and
+exact rollout permits, including expiry. Known non-submissions remain retryable;
+lost successful issue-close responses settle through observation without another
+close request. Execution expiry alone does not revive or erase these obligations.
+
+#### Verification Evidence
+
+Local full controller suite: 247 tests passed, including loss/replay, status,
+issue scope/reopening/merged-tree, fork adoption, manual renewal, failed-live waiver,
+failure retention before finalization, inconsistent-pass rejection,
+feature live coverage, current-policy downgrade and lease-loss regressions.
+Alignment also covers expired/restricted canary permits, removed request
+capabilities, policy changes before submission, permission restoration, lost
+issue-close response reconciliation and completion after execution expiry.
+Existing issue handoff: 20 tests passed. Protected merge owner: 73 tests passed.
+Ruff and scoped Markdown pass. Continuation/protected-merge Actionlint passes;
+local Actionlint does not recognize pre-existing concurrency.queue in the main
+automation workflow (the unchanged baseline reproduces the same two errors).
+The canonical publisher validates both pairs; the standalone tracked-file check
+for automation reports SPEC_REQUIRED because that pre-existing project is
+untracked. The skills tracked-file validation passes.
+Five skill structures pass with existing host-extension/test-directory warnings.
+Eight disposable Codex/Claude installs preserve source skill/lifecycle bytes.
+Playwright local guide check found no page overflow or broken internal anchors.
+These are source/disposable-install proofs, not hosted, native-trigger or Nebius
+live qualification. No remote PR/issue/cloud changes or actual user-skill
+installation occurred. Disabled deployment defaults are preserved.
+
+<!-- /FEATURE: FEAT-077 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-078 reqs=REQ-079 status=ready delivery=implemented priority=P0 version=4 -->
+### FEAT-078: Owner-bound SDLC correction, steering and diagnostics
+
+#### Requirements Covered
+
+- REQ-079: Reliable bounded recovery, readiness and within-wave concurrency.
+
+#### Context Evidence
+
+The classifier owns repair-control-v3 and diagnosis-v3. Shared worktree execution,
+capacity, worker results and transitions own admission and integration. Prior
+experiment accounting charged exhaustion before storing observation identity.
+Auto-steering previously lacked an enforced convergent readiness receipt.
+
+#### Design Details
+
+Use existing owners and their serialized private state. Structural validators
+issue narrow typed feedback before publication/effects and retain candidate bytes.
+The logical operation ledger permits two correction submissions and 300 active
+seconds without resetting on replacement or changed input. Semantic and effectful
+failures retain the normal classifier and four-dispatch ceiling. Known syntax
+includes heading depth/spacing, unambiguous missing record terminators and inline
+code around literal HTTP routes. Complete canonical validation proves the known
+transformation; no acceptance content, IDs or mappings are invented. The unchanged
+rejected pair reserves its allowance through publication before correction; after
+read-only candidate acceptance, remaining Markdown gates precede final publication.
+
+Bind the active authoring phase or recorded next owner of a completed phase to
+matching current state and latest checkpoint. Startup requirements use the same
+initialized handoff. Classified failures keep their existing repair accounting.
+Native verifier launch owners set a child-only private file mask so worker-created
+result files satisfy the unchanged private-state reader. Never chmod historical
+failed results to qualify delivery.
+
+Expose canonical read-only candidate and worker-result validation with complete
+owner-generated invocation context. Keep ingestion and acceptance independent.
+The coordinator produces readiness from a deterministic projection of objective,
+specs, context, applicable plan and decision evidence, excluding volatile state
+and steering outputs. Filter only immediate scalar clock metadata on recognized
+owner JSON records and steering entries; nested schema definitions, examples and
+unknown records remain decision evidence even when their fields are named
+updated_at or timestamp. Preparation and dispatch require a current owned receipt;
+missing readiness returns pending steering without invoking repair control.
+The readiness command uses the selected project from the authorized run as its
+working directory, retaining the existing owned Git scope enforcement.
+
+Reuse shared capacity for bounded diagnostic reservations and enforce effective
+read-only capability evidence before launch. Helpers have no worktrees or repair
+assignments. Coordinator reconciliation retains contradictions, verifies terminal
+states and returns one diagnosis-v3. Store diagnostic observation identity,
+charged interval union and exhaustion together under the existing transition lock.
+
+Retain serial waves, current write/runtime ownership and 4/8/16 defaults. Expose
+bounded timing and capacity idle reasons through current status/observability;
+measure real overlap and completed duration without claiming unmeasured speedups.
+
+After all waves are satisfied and writers, validators and runtime leases are
+quiescent, the execution owner checkpoints only a paired canonical publication
+whose current objective-impact review retains the plan with no material effects.
+The publication must bind the recorded Git parent, exact predecessor/current pair,
+accepted objective and frozen publication basis. Journal the staged tree before
+commit, recover only that clean direct child, and retain immutable checkpoint
+receipts. Replays require identical operation, message, bytes and basis. Reject
+unrelated dirt, stale authority and changes after revalidation has begun. Leave
+execution integrated; final sealing and promotion still follow all required gates.
+A separate candidate validation target binds the current checkpoint, basis, head,
+tree and completed waves, reusing frozen combined checks without changing historical
+wave receipts. Preserve symlink interpreter invocation paths while hashing bytes.
+
+The browser owner retains an ordered append-only stage history: capability,
+one or more evaluations, then the two restart UAT stages. An additional evaluation
+requires the current counted repair's evaluation cursor, a distinct clean candidate
+and exact workflow fingerprints. Record immutable repair binding with that attempt;
+independently verify its historical authority during final qualification. Never
+repeat capability/UAT, reuse a repair cursor, or retry a failed browser attempt.
+The fourth dispatch may finish its required checks; no checkpoint or evaluation
+renews correction or repair allowances. Source tests cover crashes, stale receipts,
+active writers, unrelated paths, historical evidence and exhausted-budget boundaries.
+
+#### Selected Option
+
+Extend existing semantic, execution and capacity owners. Preserve their authority
+and failure history while distinguishing pre-effect input correction from repair.
+
+#### Alternatives Considered
+
+Unbounded retries hide failures; charging every formatting rejection wastes repair
+capacity. Cross-wave execution changes dependency and integration contracts and
+has no supporting measurement. Role-only read-only promises cannot prove isolation.
+Requiring a fresh delivery trial for every successful authoring repair would avoid
+new checkpoint state but defeats bounded recovery. Rewriting completed wave heads
+or carrying old gate success to a new revision loses proof. The selected design
+adds narrow private owner operations, retaining immutable history and existing gates;
+no migration or new orchestrator is needed. Revisit scope only with a demonstrated
+non-canonical authoring need; code repairs remain worker-owned.
+
+#### Implementation Boundaries
+
+Classifier, phase candidate validators, steering/coordinator, shared Worktree
+capacity/results/transition helpers, tests, verifier capability checks and docs.
+No new orchestrator, public lifecycle flags, compatibility wrappers or remote writes.
+
+#### Test-First Success Criteria
+
+- TDD-001: Replay at exhaustion preserves charged time and original outcome.
+- TDD-002: Structural correction cannot bypass missing acceptance or effects.
+- TDD-003: Stale/fabricated readiness cannot admit planning or workers.
+- TDD-004: Independent tasks overlap and refill only within a validated wave.
+- TDD-005: Checkpoint replay cannot adopt an unjournaled commit or unrelated dirt.
+- TDD-006: Revalidation binds a fresh candidate without changing wave history;
+  repeated browser evaluation needs counted authority and cannot erase a failure.
+
+#### Validation Plan
+
+Run focused source tests, affected shared Implement regressions, full deterministic
+preflight, nested review/security/lint alignment and installed parity.
+
+#### Test Plan
+
+Cover counts, deadlines, restart/replacement, malformed values, tampering, races,
+contradictory helpers, termination and serial fallback plus existing repair limits.
+
+#### Evaluation Plan
+
+Separate source, installed and live evidence. A frozen fresh live trial must
+observe native phases, application/API/database, browser acceptance, persistence,
+promotion, companion aggregation and exact-owned cleanup. Exercise intentional
+repair, nested recovery and budget exhaustion as separate declared scenarios.
+
+#### Rollout And Rollback
+
+Preserve dirty source and historical failed archives. Install reviewed changes
+before freezing the next trial; never patch a live workflow mid-run. Cleanup must
+prove exact ownership and quiescence. Unsupported state fails without conversion.
+
+#### Done Definition
+
+Automatic admissible correction, enforced readiness and bounded recovery pass
+source and fresh live validation; measurements and remaining limits are explicit.
+
+#### Implementation Evidence
+
+Implemented in `workflow_corrections.py`, `workflow_readiness.py`,
+`workflow_diagnostics.py`, `workflow_timing.py` and their existing spec, execution,
+capacity, result, classifier and hook owners. Current native capabilities cannot
+prove per-helper passive-tool enforcement, so the supported host adapter returns
+serial diagnosis without reserving or launching helpers. No speedup is claimed.
+
+#### Verification Evidence
+
+The prior installed snapshot passed all 19 deterministic preflight suites and
+exact parity. Its fresh delivery trial completed all five tasks in three serial
+waves, independent checks, application/API/database behavior and browser evaluation,
+then stopped PARTIAL after four counted repairs. Clean-candidate validation and
+single-attempt evaluation policy prevented required revalidation. Owner cancellation
+and exact cleanup passed; the trial remains PARTIAL and its evidence is archived.
+Observed native worker intervals overlap within independent waves; no completed
+comparative duration or speedup is claimed. The virtualenv invocation regression
+reproduced the observed interpreter defect and passes the local fix. Canonical
+checkpoint, candidate validation and counted browser re-evaluation are implemented.
+Focused real-Git checks pass for replay, interruption, unrelated dirt, active owners,
+material-review rejection and preservation of wave history. Verifier composition
+observes the candidate before promotion and after cleanup. Repair-owner tests prove
+fourth-dispatch evaluation, unchanged accounting, fifth refusal and historical gate
+verification; browser execution is mocked in these checks. A later snapshot passed
+all 19 deterministic suites and installed parity, but a fresh native trial stopped
+before steering because the generated command
+used the installed skills directory outside the owned Git scope. The guard
+correctly rejected it; zero repairs or workers were dispatched. The command owner
+now returns its authorized selected project. A negative regression reproduced the
+rejection before and after planning; the corrected command passes the same sealed
+profile and executes readiness. All 14 readiness and 38 Git-environment tests pass.
+Fresh installed and native qualification of this command repair remains pending.
+Deterministic checks do not qualify native helper isolation or delivery.
+
+<!-- /FEATURE: FEAT-078 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-079 reqs=REQ-080 status=ready delivery=implemented priority=P1 version=3 -->
+### FEAT-079: Shared owner-observed workflow statistics and retained reports
+
+#### Requirements Covered
+
+- REQ-080: Factual workflow statistics throughout execution.
+
+#### Context Evidence
+
+Shared Worktree intake, execution and private state own revisions and transitions.
+Existing inclusive timing counters lose individual launch/worker attempt history.
+Phase checkpoints are coordinator-authored; task planning can be incremental.
+
+#### Design Details
+
+Extend existing context/design/intake owners with an explicit source-bound
+architecture inventory before initial phase publication. Inventory facts have
+stable layer/component IDs, readable names, declared or observed origin and
+relative source references with digests. References distinguish project files
+from owner-validated immutable accepted objective revisions. New declared facts
+can cite the current objective before project documents exist; existing facts
+require project evidence. Retain conflicting observations and
+unresolved gaps. Refresh through the same owners after design/code changes.
+Task definitions carry readable names, a primary component and touched components;
+application identities include execution and task IDs. Planned definitions use
+the execution owner's canonical fingerprint, so preparation of an unchanged plan
+does not report a task scope change. Reporting metadata does not regroup vertical
+slices or change dependency waves.
+
+A Worktree-owned statistics package captures owner transition observations under
+the existing project lock. Preserve append-only revision-bound snapshots and
+separate dispatch and worker attempts, including failed pre-start launches and
+recovery. Phase publication explicitly checkpoints statistics after coherent
+checkpoint/current-state publication. Reporting is best effort and grants no
+workflow authority. Intake, execution, pause/recovery and terminal transitions
+invoke the same observational implementation.
+
+Canonical worker-result receipts distinguish submitted or blocked work from a
+running worker and from its still-reserved scheduler slot. Capture the result
+observation separately from independent acceptance and integrated delivery.
+Current and retired task summaries preserve earlier accepted results; the union
+of their logical identities counts replacements once. Retired acceptance never
+accepts a replacement. Read counted repair dispatch receipts separately from
+worker recovery operations and their elapsed time. Fenced or terminal runs expose
+no available launch slots; reporting never changes the underlying fence.
+Refresh resolved inventory gap statements after accepted planning and recovery.
+
+Use monotonic nanoseconds with an opaque machine/boot/clock identity and UTC
+presentation timestamps. Incompatible clocks, missing beginnings/endings and
+interrupted intervals produce explicit gaps. Calculate duration and overlap from
+intervals, never by adding concurrent durations into workflow elapsed. Inclusive
+stage counters remain supplemental. Peak observed worker count comes from coherent
+owner states, including the current status snapshot; it does not require compatible
+clocks or count reserved, blocked or submitted slots as running workers. A lone
+zero-duration sample cannot supply missing duration measurements. Fully measured
+zero-length attempts retain a known zero duration. Counts do not predict time or
+useful effort.
+
+A pure projector renders immutable initial, current and immutable terminal
+Markdown/JSON reports under private statistics storage. Checkpoint identities
+suppress repeated notifications. Public SDLC status obtains an existing shared
+lock without creating files, validates checkpoint coherence and returns unavailable
+on contention or changed observations. Implement uses the same read-only projector,
+with its own phase mapping and continuation command. Its workers count is observed
+running workers; reserved_worker_slots is separate. No new public flags are added.
+The original scope remains immutable across replanning; report revisions and
+undecomposed slices explicitly. Reporting files are excluded by location from
+readiness/evidence/plan digests. Initializer admission allows only the validated
+statistics tree. Automatic checkout cleanup preserves run-private reports;
+verifier cleanup archives sanitized statistics before removing disposable homes.
+
+Implement uses this journal and inventory validator with explicit owner authorization.
+Capture its initial inventory after intake and before specification bootstrap; a
+late inventory refresh cannot invent a missing initial boundary. Bootstrap records,
+accepted plans, worker/wave state, validation/sealing, promotion and automatic
+aggregation receipts determine its phases. No SDLC checkpoint or program is
+required. Task completeness describes the accepted Implement objective, with
+unplanned scope before plan acceptance. Include delivery/candidate/validation
+receipts in coherent snapshots; integrated tasks alone prove neither aggregation
+nor cleanup. Retain sanitized initial/current/terminal reports before verifier
+cleanup removes the isolated home.
+
+Return and reuse a freshly verified basis only through private calls inside the
+same protected transition. Never retain it across lock release, external checks,
+relevant mutation or another transition. Keep readiness, authority and full
+history integrity checks. Skip heartbeat-only reporting and duplicate nested
+observations of one completed operation; preserve distinct launch, result,
+acceptance, recovery and delivery events. Reuse the checkpoint projection for its
+summary. Persistent caches, mtime shortcuts, incremental indexes and background
+reporting remain deferred.
+
+Measure frozen baseline, reporting-enabled and optimized versions on identical
+fixtures with repeated unprofiled transition/status latency, verification counts,
+bytes hashed and lock duration. Separate reporting cost from optimization gains;
+profiling only locates costs. Fresh installed Implement verification requires
+before/during/after evidence alongside native overlap/refill, application/API/DB,
+Playwright UAT, restart, promotion, aggregation, continuation and exact cleanup.
+
+Version 3 aligns the verifier itself with these evidence requirements. Its
+lifecycle owns a pinned Playwright browser assertion bundle and generation-bound
+receipts, using the existing shared browser process-ownership primitives without
+starting an SDLC coordinator. Browser mutation occurs only after product delivery.
+Record UI create/update/reload, independent API/database correlation and the same
+record after an owner-executed API restart. Bind artifacts to generation, frontend
+origin, promoted head and frozen catalog; verify content hashes and browser cleanup
+before semantic PASS. Generic stage recording cannot assert browser success.
+
+Freeze the physical installed catalog and successful deterministic preflight,
+including verifier payload, execution dependency closure, hooks and browser
+lockfiles. Recompute at launch, continuation, admission and cleanup. Evidence may
+name identities but never select executable paths. Missing/changed bundles preserve
+the trial; restore the matching bundle before owned cleanup. No persistent cache
+or background verifier is introduced. Preserve native FAIL precedence across the
+two projects; missing observation is independently PARTIAL.
+
+Root ownership has unchanged owner/version fields, while generation version 2 adds
+multi-project state. Use separate exact integer constants: root version 1 and
+active generation version 2. The former is the sole canonical root contract, not
+an old-run compatibility path. Reject boolean versions, other root versions,
+active version-1 generations, pending deletion and unreferenced run directories.
+Existing terminal archives remain byte-identical. No marker rewriting or root
+retirement command is needed.
+
+#### Selected Option
+
+Extend Python/private-state owners with one projector and an observational journal.
+
+#### Alternatives Considered
+
+Aggregate counters cannot reconstruct attempts. A dashboard or telemetry service
+adds deployment and authority scope without improving factual local reporting.
+
+#### Implementation Boundaries
+
+Worktree intake/execution/status, SDLC initialization/context/design/planning and
+checkpoint instructions, verifier retention/evidence, tests and documentation.
+No scheduling, acceptance, repair allowance or public command syntax changes.
+Implement status gains statistics and reserved-slot counts as explicitly requested.
+
+#### Test-First Success Criteria
+
+- TDD-001: Initial architecture survives absent plans and later scope revisions.
+- TDD-002: Cross-component tasks count once; submitted results are not accepted.
+- TDD-003: Dispatch retries and worker recovery preserve earlier intervals.
+- TDD-004: Missing/discontinuous clocks are gaps; real overlap uses interval union.
+  Peak observed workers survive incompatible clocks and zero-duration samples;
+  partial point samples do not turn unavailable duration totals into zero.
+- TDD-005: Status cannot write; report failures cannot affect owner transitions.
+- TDD-006: Cleanup retains sanitized before/during/after evidence.
+
+#### Validation Plan
+
+Run focused tests, shared Implement regressions, full deterministic preflight,
+changed-scope review/security/lint and installed parity.
+
+#### Test Plan
+
+Add negative controls for missing/changed/wrong-generation browser artifacts,
+forged PASS, wrong target/head, failed cleanup, source/install drift and FAIL
+precedence. Exercise stable-root/new-generation creation while archived bytes
+remain unchanged; reject malformed markers, unsupported active runs and orphans.
+
+Exercise immutable baseline, task-definition revisions, concurrent observation,
+clock changes/reboot, pause/resume, restart, retention, recovery and wave barriers.
+
+#### Evaluation Plan
+
+Freeze a fresh installed native trial. Independently verify reporting along with
+application, API/database, browser UAT, persistence, promotion and cleanup. Preserve
+prior interrupted outcomes; local/source checks are not native qualification.
+
+#### Rollout And Rollback
+
+Cleanup exact owned prior fixtures first. Preserve dirty source and historical
+outcomes. Install reviewed source before freezing a new trial; never patch a frozen
+trial. Unsupported state is unavailable rather than converted into authority.
+
+#### Done Definition
+
+Source, installed and live evidence substantiate the reporting contract, or exact
+remaining qualification gaps are reported without claiming completion.
+
+#### Implementation Evidence
+
+Version 3 implements separate exact root ownership and active generation schemas,
+frozen successful preflight/catalog binding, actual isolated-home hook payload and
+registration checks, and native FAIL precedence. Lifecycle-owned Playwright
+acceptance binds UI assertions, trace and screenshot hashes to the generation,
+promoted head and loopback origin. It correlates required typed task fields with
+API/PostgreSQL, awaits updates, verifies persistence in a fresh browser after an
+owner API restart, and proves exact browser cleanup. Additional valid API metadata
+is permitted; duplicate IDs and missing evidence remain failures.
+The following Version 2 and Version 1 evidence is historical.
+
+Version 2 extends the shared journal, inventory and projector to Implement.
+Initial architecture precedes specification bootstrap; actual owner records supply
+phases, accepted-objective scope, worker versus reserved-slot counts, correction
+history and independent aggregation/cleanup outcomes. Coherent status reads use
+existing locks and fail to unavailable. The verifier independently replays reports
+and retains sanitized immutable initial/terminal and current artifacts before
+owned cleanup. Reporting failures cannot reverse owner transitions.
+
+Execution reuses a freshly verified basis only within protected arm, start,
+admission and refill transitions. Post-allocation verification remains intact;
+heartbeats skip reporting scans and refill avoids duplicate nested observation.
+Mandatory helper and instruction identities still invalidate subsequent
+transitions. No scheduling limits, acceptance gates or recovery budgets changed.
+
+Version 1 SDLC implementation evidence follows. It is historical and does not
+qualify the Version 2 Implement extension.
+
+Implemented in Worktree statistics inventory, observational history and pure
+report projection modules. Existing intake, execution, initialization, checkpoint
+and public status owners share that implementation. The verifier independently
+checks reporting evidence at completion and read-only canonical admission, and
+retains sanitized reports before owned cleanup. Component feature summaries
+combine declared and observed references while preserving origin-specific rows.
+
+#### Verification Evidence
+
+Version 3 source verification passed the 131-test helper aggregate, then focused
+catalog and browser checks after final oracle refinements. Skill structure,
+code/security review, syntax and lint checks passed. The 13-package dependency
+bundle was installed through the repository script for both hosts; all 390
+functional files match the frozen source. Full installed deterministic preflight
+passed all 15 applicable stages. Claude evidence is structural and installed;
+only Codex was exercised natively.
+
+The first fresh create stopped before product launch because the verifier treated
+an installer-generated empty hook event list as a registration mismatch. Its failed
+archive was preserved and its fixture cleaned. The verifier now treats valid empty
+event lists as no registrations; both real host installer probes, regression
+checks and a new full installed preflight passed before the next frozen create.
+
+The next fresh Codex create accepted both objectives and the required application
+plan. Two application workers overlapped, but the frontend worker stopped after
+assuming an absent directory and the database worker failed to parse its final
+tool script after passing four offline tests. Those failed attempts and observed
+product recovery attempts remain auditable. The verifier ended the failed trial;
+application refill, integration, delivery, runtime, API/database and Playwright
+qualification were not reached. The companion completed delivery, aggregation,
+cleanup and a fresh-session ALREADY_COMPLETE continuation. Independent replay
+validated both initial/current reports and the companion terminal report. Five
+sanitized reports survived exact lifecycle cleanup; no active fixture remains.
+The final stage matrix records 6 PASS, 2 FAIL, 3 PARTIAL and 8 NOT_RUN. Delivery
+remains implemented, not verified. Earlier failed and interrupted attempts remain
+preserved; none establishes full application qualification or a speedup.
+
+Version 2 Implement deterministic preflight passed all 15 applicable stages;
+live application evidence remains unavailable. The complete verifier helper
+aggregate passed 115 tests. The affected SDLC deterministic preflight passed all
+19 suites with zero failures; live readiness remains partial. Reporting regressions cover owner phases, initial
+capture, scope revisions, contention, receipt identity, missing telemetry,
+report-failure isolation and sanitized retention. A completed synthetic direct
+fixture retained three reports with no retention gaps; it is not native proof.
+
+Changed-scope review, security, syntax and lint checks passed. Structural checks
+for the three changed skills passed for core, Codex and Claude profiles. Native
+invocation-control frontmatter extensions remain intentional. Actual npx copying,
+repeat installation and isolation checks passed for both hosts. The selected
+12-package functional payloads match source on Codex and Claude. Copy parity and
+static trigger fixtures do not prove runtime activation or native model behavior.
+
+Seven randomized-order repetitions after one excluded warmup compared frozen
+baseline, reporting-enabled and optimized catalogs on identical three-task
+fixtures. Paired median optimization savings were 63 ms for arm, 49 ms for start,
+16 ms for heartbeat, 66 ms for admission and 95 ms for refill; all seven repetitions
+favored the optimized version for those transitions. Added reporting cost for
+status was 19 ms; preparation and status had no consistent optimization gain.
+Verification calls fell from two to one for arm/start/admission and three to two
+for refill. Separate instrumented lock/hash counts and profiling support cost
+attribution but are not unprofiled latency measurements. Small histories and a
+potentially warm filesystem limit these results; no native or whole-workflow
+speedup is established.
+
+A fresh frozen Implement native trial remains blocked before creation: the
+existing private verifier root has an unsupported ownership-marker version.
+The current lifecycle owner refuses it. Historical state is preserved without
+conversion, adoption or an alternate-root bypass. Complete native overlap/refill,
+application/API/database, Playwright UAT, restart, promotion, aggregation,
+continuation and cleanup qualification remain outstanding. REQ-080 stays active
+and Version 2 delivery is implemented, not verified.
+
+Version 1 SDLC verification evidence follows; it does not qualify Version 2.
+The implemented projector and shared automatic-status behavior passed 43 focused
+regressions. Seven independent statistics admission and retention checks passed.
+The revised implementation passed all 19 deterministic suites, including shared
+Implement regressions, with unchanged installed Codex and Claude catalogs.
+Source, installed-process and native observations remain separate evidence.
+
+Earlier frozen native trials exposed defects in runtime loading, recovery
+inputs, steering command context, planned/prepared task fingerprints and peak
+worker reporting. Each proven source repair has focused regression evidence;
+failed and interrupted trials remain preserved and do not qualify later code.
+The peak-worker correction derives concurrency from observed owner states and
+keeps incomplete duration totals unavailable when only point samples exist.
+Its negative controls reproduced the defect before the repair and passed after it.
+
+A subsequent frozen native trial observed the initial three layers and four
+components before planning, six tasks across four waves, stable task identities
+through preparation, and two concurrent workers. The corrected peak was two.
+One task was accepted and later retired; no task was integrated. Three worker
+attempts and one counted repair remained in its partial terminal history.
+The trial failed because corrective execution preceded the independent classifier
+observation. That failure did not establish a new source defect.
+
+The next frozen trial observed five tasks across three waves with stable plan
+and preparation identities. Its documentation task had an unavailable primary
+component and was counted once as unassigned. No worker started. Three counted
+repairs preceded rejection of stale classifier evidence that omitted the prepared
+execution basis. The native coordinator cancelled the run; its failed observation
+and partial outcome remain preserved. No complete application delivery was proven.
+
+Both later trials retained byte-identical initial reports and sanitized terminal
+reports through owned cleanup. Public status agreed with saved task counts and
+worker observations without changing statistics. Native sessions exited normally,
+companion verification completed, and aggregate cleanup verified owned resource
+absence. These observations establish reporting behavior at the reached boundaries;
+they do not erase the trials' failures or supply unperformed acceptance evidence.
+
+Three separately declared native control cases passed on the unchanged source.
+The intentional repair preserved its rejected input, completed one counted repair
+and published the exact valid pair through the canonical owner. Nested recovery
+completed two repairs, resumed the exact original parent and verified it without
+redispatch. The budget case completed four repairs and refused the fifth at the
+existing feature ceiling. Independent before/after observations proved no fifth
+dispatch or corrective candidate effect. All successful repairs passed the
+original whole-pair validator; expected failures and immutable history remain.
+
+An evidence-index label and a refusal transport label each required a metadata
+correction before final observation. Original inputs and requests are retained;
+independent comparisons proved no product transition, owner retry or frozen
+harness change for those corrections. These are scoped control results, not
+complete application qualification. Each case retained before/during/after
+reports with byte-identical initial files. Native cancellation, normal exit,
+quiescence and owned cleanup passed; final aggregate cleanup removed both fixture
+types. Timing unavailable after a denied native clock probe remains explicit.
+
+Successful native slot refill with an active peer, quantitative cross-process
+timing, complete application/API/database/browser/UAT delivery, promotion and
+aggregation remain unverified. Failed full-application trials and the earlier
+interrupted preflight remain preserved. Requirement REQ-080 remains active and
+delivery remains implemented, not verified.
+
+<!-- /FEATURE: FEAT-079 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-080 reqs=REQ-081 status=ready delivery=implemented priority=P0 version=2 -->
+### FEAT-080: Separate UAT campaigns from implementation delivery
+
+#### Requirements Covered
+
+- REQ-081: Optional meaningful-scope UAT and nonblocking unavailability.
+
+#### Context Evidence
+
+Before this change, qualification receipts executed pinned live harnesses and
+observed them again during publication. Slice, phase, outer aggregation and local
+PR hooks assumed mandatory UAT PASS, which could prevent later implementation.
+The container and Nebius skills already disable implicit invocation in metadata.
+
+#### Design Details
+
+Introduce one normalized UAT policy owner and one implementation delivery-admission
+receipt owner. Default policy is not requested. Requested policy binds backend,
+objective or explicit milestone scope, criteria and timing. Store policy and digest
+in immutable execution bases and assignments. Root steering changes authority via
+existing objective revisions; workers cannot broaden it.
+
+Classify acceptance criteria as implementation or UAT. Required development tests
+and consumer prerequisites stay mandatory; optional UAT criteria never masquerade
+as core debt. Retain all attempts and unresolved UAT independently of eligibility.
+The qualification owner continues to produce strict executed evidence only.
+Delivery admission binds actual implementation validation, source tree, objective,
+basis and honest UAT disposition without fabricated runtime artifact identifiers.
+Local hooks verify core task acceptance and the current UAT policy/disposition.
+Remote merge attestations and phase exits consume implementation admissions; final
+aggregation verifies its own core checks and independent UAT disposition. Keep all CI/review/authority checks and prior-slice merge proof.
+
+Requested campaigns run only at the meaningful accepted scope. Check software and
+dependency readiness before costly setup, then runtime prerequisites. Existing
+environments use their harness directly; explicitly selected container/Nebius
+owners manage their authorized resources. Unavailable prerequisites produce a
+pending handoff rather than a repair loop. Failed assertions remain failures;
+uncertain execution/cleanup is incomplete and preserves resource ownership.
+A nonzero harness exit without valid failed-assertion results is incomplete.
+Original-campaign cleanup recovery appends evidence without reintroducing a defect
+already resolved by a later covering PASS.
+Final aggregate admission permits the coordinator to test the frozen candidate
+while worker dispatch remains fenced. Evidence never survives a changed target.
+
+Preserve a durable late-test handoff before cleanup/terminal completion. A later
+explicit request starts a new campaign. Pending acceptance cannot automatically
+close an issue whose criteria require that evidence. Cut over strict schemas;
+unsupported frozen runs remain intact with restart guidance.
+
+#### Selected Option
+
+Small shared owners integrated with current validation, qualification, publication
+and recovery boundaries; no replacement orchestrator or public command expansion.
+
+#### Alternatives Considered
+
+Always-on final UAT prevents phased delivery without infrastructure. Per-task UAT
+runs too early and adds repeated setup cost. Weakening qualification receipts would
+misrepresent unexecuted tests. A separate all-slices-before-merge mode is unnecessary
+once publication admission is independent of optional testing.
+
+#### Implementation Boundaries
+
+Worktree objectives, assignments, acceptance, delivery, program and aggregation;
+Implement/SDLC skills, hooks, local PR and remote merge contracts; testing skills'
+prose and evals; documentation, regression fixtures and canonical specifications.
+No installation, cloud resources, live campaigns, commit or publication actions.
+
+#### Test-First Success Criteria
+
+- TDD-001: Default implementation and otherwise eligible delivery never launch UAT.
+- TDD-002: Explicit requests persist but partial scope/missing prerequisites defer.
+- TDD-003: Core failures, tampered evidence and real UAT defects cannot become PASS.
+- TDD-004: Aggregate testing does not reopen workers or rely on deleted checkouts.
+- TDD-005: Old frozen contracts fail clearly without rewriting historical evidence.
+
+#### Validation Plan
+
+Run focused unit, real-Git and hook/remote contract tests under host-memory
+supervision. Review security and changed-scope alignment; validate canonical pair.
+
+#### Test Plan
+
+Cover policy normalization/steering, backend selection, task classification,
+readiness, strict executed receipts, nonruntime delivery evidence, phase and outer
+completion, stale identities, late handoff and preserved issue-closure boundaries.
+
+#### Evaluation Plan
+
+Update deterministic and native verifier expectations without weakening their
+explicitly requested browser, persistence, final-candidate and cleanup oracles.
+Report local/source validation independently from installed or native proof.
+
+#### Rollout And Rollback
+
+Deploy the coherent catalog and publication-contract update together in a later
+explicit installation. Retain unsupported active state and cleanup ownership;
+restart with the new schema instead of adding compatibility branches.
+
+#### Done Definition
+
+Source behavior, documentation and deterministic regressions satisfy REQ-081;
+remaining installed/native/live qualification gaps are stated explicitly.
+
+#### Implementation Evidence
+
+Implemented the shared `workflow_uat` policy/readiness/outcome owner and separate
+`workflow_delivery_admission` receipt producer. Program source criteria map to
+frozen required checks; delivery executes them on the exact final candidate.
+Campaign selection cannot remove mandatory source coverage or correctness debt.
+Objective, run, basis, assignment, task policy, program, qualification, aggregation
+and remote delivery contracts use one coordinated schema cutover without shims.
+Hooks recognize the new objective and retain fail-closed handling for an unsupported
+bound run without blocking unrelated work.
+
+Requested campaigns use ready whole-objective or explicit milestone scope,
+verified observations, exact cleanup and retained per-campaign failure history.
+Cleanup recovery, immutable-plan verification, stale-candidate handling and
+late-test handoffs preserve the accepted policy. Testing skills retain explicit-only
+Codex controls and the corresponding Claude control. Skills, reports, README,
+changelog, trigger/output cases and explicit live-verifier fixtures are aligned.
+
+#### Verification Evidence
+
+Focused deterministic checks passed after correcting the discovered source and
+fixture defects and rerunning the affected cases: policy/readiness/debt selection
+(15), executed qualification and cleanup recovery (20), delivery admission (7),
+program coverage (15), task acceptance (30), automatic aggregation (16), document
+publication (9), objective intake (21), worker dispatch (39), issue-resolution
+boundaries (20), merge broker (73), hook contracts (126), intake/start contracts
+(36), and verifier contracts (113). Broad runs exposed source and fixture defects; subsequent targeted runs passed
+the corrected cases. These focused results do not claim a new full installed run.
+Negative regressions cover UAT attempts to erase core coverage, final candidate
+failure after prior passed waves, stale policy and candidate identity, unready
+scope, missing infrastructure, malformed assertions, cleanup uncertainty and old
+cleanup recovery after a later successful repair.
+
+Changed-scope Python syntax/Ruff and Markdown checks passed. Thirteen affected
+skill folders pass strict repository validation for Codex and Claude with their
+trigger suites. The pre-existing create-pr size warning remains (523 to 529
+logical lines); the six-line addition is core publication policy and the shared
+reference owns the details. The unchanged 577-line external verifier also retains its existing warning;
+its workflow instructions were not rewritten. The Nebius tests directory is
+intentionally retained. Comparable native token/timing measurements are unavailable.
+Code and security review covered ownership, bounded subprocesses, sensitive-data
+handling, exact source evidence, failure retention and publication guards.
+
+No installed activation, native model trigger/output evaluation, cloud/container
+campaign, full installed preflight, commit, push or PR operation was performed.
+These results establish source behavior, not live application acceptance. A
+coherent catalog and broker-policy installation remains a separately requested
+rollout.
+
+#### Post-Implementation Alignment Evidence
+
+Alignment repaired six confirmed inconsistencies: PR discovery metadata implied
+mandatory UAT; the explicitly selected three-tier verifier omitted its container
+owner from the frozen catalog; objective targeting treated execution IDs as
+delivery order; default objective coverage omitted phase-only acceptance criteria;
+late-testing handoffs lost source-program criterion IDs; and a replacement
+criterion with the same ID could clear a failure of different requirements.
+
+Candidate selection proves coverage of selected outputs through promotion ancestry
+or the protected delivery owner's verified merge result, including squash/rebase.
+Retained feature checkouts remain usable, and automatic aggregation keeps its
+own authoritative candidate. Uncombined scope remains pending UAT without a
+synthetic product failure or delivery gate. Campaign and handoff share criterion
+selection, including phase-only/regression coverage and explicit milestone scope.
+Handoff validates the immutable program digest without requiring runtime setup.
+
+UAT event v2 retains each criterion's native identity: a direct-objective digest
+or the structured source-document and coverage hashes. Covering PASS evidence
+must match the failed identities; cleanup recovery preserves them. Unsupported
+prior histories remain intact without compatibility shims or implicit migration.
+
+Negative regressions reproduced the discovered defects before repair. Current
+focused cases cover UAT policy and handoff (21), executed qualification and
+candidate selection (28), delivery admission (7), protected delivery (9), program
+coverage (15), objective lifecycle (21), and physical catalog binding (2).
+The 101-case workflow run exposed overly narrow criterion-identity validation;
+the 49 affected policy/qualification cases passed after correcting it to preserve
+both native identity forms. The other workflow cases and both catalog cases
+passed. Earlier alignment also passed hook contracts (126) and merge broker (73).
+
+Changed Python syntax/Ruff, Markdown and whitespace checks passed. Three affected
+skill folders pass Codex/Claude repository structure and trigger-suite validation;
+existing skill-size warnings remain. Final nested code and security review found
+no remaining confirmed high/medium defect in these repairs. These are local/source
+results; installed activation, native evaluation, live/container qualification and
+publication were not performed.
+
+<!-- /FEATURE: FEAT-080 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-081 reqs=REQ-082 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-081: Safe implementation workflow overhead reduction
+
+#### Requirements Covered
+
+- REQ-082: Reduce coordinator overhead with behavior-preservation gates.
+
+#### Context Evidence
+
+Shared Worktree statistics repeatedly projects loaded history and reads duplicate
+source references. Automatic aggregation and intake both observe successful
+transitions. SDLC hook logging reloads the state used for its decision. Readiness
+materializes recursive paths and counts directories against its input bound.
+Blocked-worker failure recording currently requires manual fingerprint copying.
+Existing same-transition basis reuse, exact-target replay, bounded repair and
+optional UAT already form the baseline; preserve them.
+
+#### Design Details
+
+Keep the existing Python/Git/native-agent stack, deterministic lifecycle owners
+and agent implementation/review responsibilities. Remove the redundant intake
+observation only when aggregation already owns its finally observation. Build
+per-call report lookups preserving first-match attribution and complete history.
+Deduplicate architecture source reads per coherent observation, validating every
+reference and checking changed sources before returning. Never cache authorization
+across transitions or Git/external effects; reuse only within a proven protected
+read segment. Read the immutable objective snapshot once where safe.
+
+Pass the current hook observation into logging. Enumerate readiness inputs through
+bounded no-follow traversal: 256 distinct files, 4096 visited entries, existing
+safe-file byte limits. Reject overflow and unsafe nodes without truncation.
+Capture new blocked-worker failures through the repair owner with full current
+fingerprints and canonical worker evidence; retain pure historical reconstruction
+and generic early-phase recording. Recheck stale identity before charging repair.
+
+Keep a compact shared workflow core and exact conditional detail routes. Bind new
+references into execution dependency identities. Fresh workers and resumed contexts
+load required instructions; unchanged in-context instructions may be reused.
+Retain essential guardrails and phase-specific responsibilities, Help and Learning
+Loop sections. Separate the UAT Inputs and Required Reads headings and extract
+verifier-only detail without removing verification scenarios.
+
+#### Selected Option
+
+Small reversible changes to existing owners with baseline regression and measured
+operation-count gates, followed by independent qualification.
+
+#### Alternatives Considered
+
+Keeping all duplicate work loses measurable efficiency opportunities. Persistent
+caches, cross-phase receipt reuse, broader checkpoint rewrites and scheduling
+redesign add stale-evidence or recovery risk and remain deferred.
+
+#### Implementation Boundaries
+
+Implement, SDLC and shared Worktree instructions/helpers, their direct tests,
+verifier dependency manifests and catalog docs. Public commands and persisted
+schemas remain unchanged. No global installation, remote publication or active
+workflow conversion is authorized by this source implementation.
+
+#### Test-First Success Criteria
+
+- TDD-001: Reproduce duplicate observations/reads and readiness false blockers;
+  corrected cases pass without weakening their adversarial rejection paths.
+- TDD-002: Baseline and candidate reports match for equal clocks, revisions,
+  retired attempts, missing boundaries, reboot and long histories.
+- TDD-003: Capture/replay preserves immutable failure identity and budgets;
+  stale state and wrong worker evidence cannot authorize a dispatch.
+
+#### Validation Plan
+
+Run focused source tests after each group, then affected deterministic suites,
+syntax/lint, pair validation and changed-scope align/align-skill review lanes.
+Validate core/Codex/Claude structure and disposable npx payloads separately.
+
+#### Test Plan
+
+Cover partial promotion/cleanup failures, telemetry exceptions, tampered history,
+concurrent replacement, conflicting source references, 256/257 files and
+4096/4097 traversal entries, nested trees, symlinks and owner changes. Preserve
+continuation, cancellation, capacity, isolation, serial waves and optional UAT.
+
+#### Evaluation Plan
+
+Freeze current working bytes and compare identical small, multi-wave, long-history,
+status and recovery fixtures. Seven randomized paired repetitions follow one
+excluded warmup; record timing separately from read/hash/process counts. Compare
+material skill behavior with a clean prior-version runner when available. Missing
+native or quality evidence stays unavailable rather than inferred from source tests.
+
+#### Rollout And Rollback
+
+Land one verified behavior group at a time; preserve unrelated changes. Installed
+catalogs and active frozen workflows remain unchanged. Revert only a failing group
+using its captured working-byte baseline. Remove task-owned temporary baselines
+after comparison and rollback needs end, or report owner and retention deadline.
+
+#### Done Definition
+
+Source changes and affected regression/alignment checks pass with reduced targeted
+work. Report source, installation, native and output-quality qualification as
+separate states; no unsupported end-to-end speed or safety claim.
+
+#### Implementation Evidence
+
+Implemented indexed history/task projection, coherent per-observation source reuse,
+aggregation-owned final observation and hook decision-state reuse. Public program
+checks and settlement retain fresh validation across archival and external effects.
+Readiness bounds traversal separately from accepted files and rejects unsafe or
+excess input without truncation.
+
+The repair owner atomically derives initial blocked-worker failure identity from
+native coordinator authority, current checkpoint, full fingerprints, exact receipt
+and integration HEAD. New recording, stale recapture and repair charging recheck
+that binding; immutable historical replay remains pure and idempotent.
+
+Shared invariants and conditional detailed references preserve distinct Implement
+and SDLC ownership, native invocation controls, required checks, optional UAT,
+serial barriers, recovery limits and cleanup. New references enter frozen catalog
+identities. Verifier detail moved into required references without losing its
+sixteen-phase sequence. Execution-basis identities exclude the benchmark-only
+harness; verifier catalogs continue to bind the complete payload.
+README, changelog, quality cases, regression tests and verifier wiring are aligned.
+
+#### Verification Evidence
+
+All 23 execution-suite modules passed in bounded groups: 121 core, 109 revision
+and recovery, 103 remaining, 46 readiness/program/aggregation and 41 statistics
+and overhead case executions. The original combined run reached its existing
+900-second limit; retain that timeout instead of relabeling it as a pass.
+The verifier's hook-timeout test still expected the prior single-file command.
+Baseline passed and the candidate reproduced that assertion failure. Updating
+only its discovery-path expectation preserved the existing 600-second policy;
+the full final verifier passed all 199 cases with unchanged source bytes.
+
+The frozen broad preflight attempted all 19 suites; 16 passed. Its three-tier
+run exposed an obsolete fixture field also rejected by the untouched baseline.
+Removing that field preserved strict production validation; the material replan
+and two neighboring revision cases passed. The original timeout and failed
+trials remain recorded separately from the passing follow-up checks. No full
+native-readiness pass is inferred from these source results.
+
+Negative controls and adversarial regressions cover repeated-clock attribution,
+observation counts, source replacement and conflicting references, traversal
+limits and unsafe nodes, stale worker/checkpoint/HEAD identity, recapture, repair
+charging and immutable replay. Independent reviews found two capture gaps;
+checkpoint identity and stale-recapture guards were repaired and retested.
+
+Seven randomized paired measurements on frozen working-byte catalogs showed
+long-history projection medians of 29.653 to 17.933 ms and repeated-source
+inventory of 13.536 to 2.258 ms. Single-source inventory rose from 0.089 to
+0.156 ms because coherence requires a reread. Planned status rose from 4.898
+to 5.695 ms in this sample; separate profiling found identical read/validation
+counts. Full history and per-reference checks remain. These measurements do
+not establish total implementation, native, lock-held or model-token savings.
+
+Changed Python syntax/Ruff and Markdown checks passed. All 23 affected skills
+passed core, Codex and Claude structure checks without warnings. Disposable
+skills CLI installation passed discovery, payload parity, repeated copy and
+isolation for both hosts, including final Worktree and verifier rechecks.
+Native controls are unchanged. Model-quality attempts were unavailable because
+the isolated runners lacked authentication; live native qualification was not
+performed. Global installation, active frozen workflows and publication remain
+separate. Delivery is recorded as implemented, without a full native-readiness
+claim. Unrelated initial working bytes were preserved and an owned rollback
+patch was checked against that exact baseline.
+
+Post-change alignment corrected the verifier quality cases to preserve its
+external-only role, including rejection of in-run phase use. This restores the
+existing instruction contract without changing runtime behavior or authority.
+
+Implement preflight now includes the readiness integration suite as its own
+900-second-bounded check. A negative control proved the omitted suite could
+fail without failing preflight; the repaired failure-propagation regression
+and all eleven verifier tests pass. This closes a qualification coverage gap
+without changing worker budgets or live acceptance. Fresh installed and native
+qualification are recorded separately from these source checks.
+
+The subsequent 2026-11-15 installation copied all 76 skills and 1871 payloads
+through the repository installer, with exact source/installed hash and executable
+mode parity. The fresh Implement verification passed all 17 deterministic checks
+and all 19 live stages on Codex 0.167.1, including both objective deliveries,
+fresh continuations, observed native overlap and slot refill, canonical reporting,
+three-tier application/Playwright acceptance, semantic admission and exact cleanup.
+All four application tasks passed on their first attempt. Earlier failed trials
+and measured sampling gaps remain preserved. This closes the fresh installed
+Implement functional qualification gap for that candidate; it does not establish
+controlled before/after native performance gains, Claude native qualification or
+Agentic SDLC live qualification.
+
+<!-- /FEATURE: FEAT-081 -->
+
+<!-- FEATURE: FEAT-082 reqs=REQ-083 status=ready delivery=implemented priority=P1 version=2 -->
+### FEAT-082: Shared execution and verifier performance improvements
+
+#### Requirements Covered
+
+- REQ-083: Optimize shared workflow execution and complete verification.
+
+#### Context Evidence
+
+The historical deterministic suite durations sum to roughly 56 minutes; this
+is not a measured whole-preflight wall time. Execution and three-tier suites
+account for about 69 percent of that sum. One profiled lifecycle case spends
+25.6 of 28.9 seconds in 1316 subprocess calls, including 53 private Worktree helper
+calls. These scoped observations identify candidates, not whole-workflow gains.
+Earlier helper optimizations and native Implement functional qualification do not
+establish a controlled SDLC performance improvement.
+
+#### Design Details
+
+Factor one typed private dispatcher at the Worktree owner. CLI and library calls
+share argument validation, allowlist, explicit cwd/environment, trusted source,
+locks and owner functions. Preserve reconciliation even for nominal inspection.
+Propagate observed operation health into Git and lock waits rather than keeping
+an undocumented elapsed-only subprocess kill. Resolve repeated repository/spec
+identity once per protected no-effect segment, preserving current checks before
+and after effects, lock release and external evaluation. No persistent cache.
+
+Extend existing observational timing with attributable spans and clock provenance;
+keep gaps unknown and overlaps explicit. Timing-v2 batches per-transition tool
+and coordination-wait counters, records first/last clock provenance and counts
+incomparable samples. Lock timing covers acquisition, never the protected body.
+Inclusive counters are not additive whole-workflow elapsed time; unobserved
+native-tool intervals remain unknown. Preflight receipts retain their own timing. Batch mechanical receipt/identity checks
+at their owner without transferring semantic acceptance to transport code.
+
+Both verifiers run cheap prerequisites first and retain exact required coverage.
+Use separately owned process groups for audited independent module groups with
+at most two active groups. Native/browser/Docker/installation/unaudited work is
+exclusive. Isolate temporary roots, native homes and Git environment. Parent-only
+reports preserve stable ordering and complete capability attribution. On required
+failure stop queue admission, cancel owned peers, verify cleanup and retain
+completed/interrupted/not-run outcomes. REQ-060 controls healthy long operations.
+
+#### Selected Option
+
+Select shared owner improvements and bounded process concurrency. Threaded tests
+share mutable environment/modules; persistent caches weaken freshness. Raising
+timeouts or changing models does not repair the measured process overhead.
+
+#### Alternatives Considered
+
+Reject persistent caches, threaded mutable fixtures, dropped coverage, model
+changes and deadline increases presented as performance improvements.
+
+#### Implementation Boundaries
+
+Shared private Worktree dispatcher, protected Git/spec observations, observational
+timing, both verifier runners, affected docs/evals and installation checks.
+
+#### Test-First Success Criteria
+
+- TDD-001: CLI and library actions have equivalent outputs and durable effects.
+- TDD-002: Every mutation/lock-release boundary invalidates reused observations.
+- TDD-003: Parallel groups retain exact coverage, exclusive resources and cleanup.
+- TDD-004: Required failures cancel owned peers and preserve incomplete outcomes.
+- TDD-005: Paired fixtures reduce targeted work and latency without weaker checks.
+
+#### Validation Plan
+
+Run focused source checks, negative controls, skill/project alignment and exact
+installed payload verification before fresh native qualification of both workflows.
+
+#### Test Plan
+
+Compare CLI/library results and effects for both owners. Inject Git/spec/lease
+changes, concurrent resource collisions, prerequisite failures, cancellation,
+output pressure and incomplete cleanup. Assert unchanged full test inventories.
+
+#### Evaluation Plan
+
+Seven randomized paired short unprofiled fixtures compare frozen baseline and
+candidate work counts and median latency after excluded warmup. Profile separately.
+Run full preflights once on the final candidate and a fresh complete native trial
+for each workflow. Do not compare failed and completed native runs as speed proof.
+
+#### Rollout And Rollback
+
+Preserve unrelated changes and all failed evidence. Install only at quiescence;
+keep user model/reasoning settings and public commands. Roll back only between
+runs. Update README, changelog, references, evals and canonical delivery evidence.
+
+#### Done Definition
+
+Measured targeted work and median latency improve, all required source and
+installation checks pass, and both fresh native workflows qualify independently.
+
+#### Implementation Evidence
+
+One typed private Worktree dispatcher serves CLI and library callers. Four
+protected Git configuration reads are one snapshot, with fresh observations
+retained at ownership boundaries. One pinned group contains each operation.
+Both verifier adapters share exact unittest collection, explicitly audited
+concurrency capped at two, exclusive remaining groups, first-failure admission
+stop and parent-owned reports. Receipts bind inventory, outcomes, queue wait,
+collection and disjoint process timings with monotonic clock provenance.
+Timing-v2 integrates observed Git/tool and lock acquisition counters with the
+existing statistics owner; measurement failure cannot replace product outcomes.
+
+#### Verification Evidence
+
+Seven randomized paired short trials on frozen candidate H measured median
+anchor inspection 138.919 to 78.648 ms (43.39 percent less time) and protected
+configuration observation 33.798 to 9.877 ms (70.78 percent less time). Config Git
+calls fell from four to one. Each sample used ten iterations after excluded
+warmup, with equivalent outputs and seven faster pairs. Earlier failed trials
+remain retained. These helper measurements do not establish whole-workflow or
+native speedup, and the percentages must not be added.
+
+Earlier frozen preflights passed 597 Implement and 1622 SDLC deterministic cases.
+Final scoped regressions passed four Git-ownership checks and the shared Implement
+startup boundary. User-directed testing cutoffs interrupted the broader final
+execution and shared-observation suites after 99 and 54 completed cases; those
+runs are retained as cancelled, not full passes. Core/Codex/Claude structure and
+changed Python/Markdown checks pass. Final-version full preflights, native
+qualification and an end-to-end performance comparison remain outstanding.
+All 217 selected installed payload files and modes match source, and pinned npx
+portability checks pass for Codex and Claude without native runtime qualification.
+Earlier helper benchmarks do not measure the final Git-supervision overhead.
+Retained failed or interrupted trials cannot satisfy the remaining gates.
+
+<!-- /FEATURE: FEAT-082 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

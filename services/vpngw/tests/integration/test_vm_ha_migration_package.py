@@ -135,9 +135,9 @@ def migration_guest(monkeypatch, tmp_path, ordinary_operation_guest, runtime_mig
     monkeypatch.setattr(
         ordinary_apply,
         "remote",
-        lambda *args: {
-            "observation": ordinary_remote.inspect(args[-1]["manifest"], runtime_admission=False)
-        },
+        lambda *args: ordinary_remote.inspect_for_plan(
+            args[-1]["manifest"], runtime_admission=False
+        ),
     )
     state = {"agent": "active", "installs": 0}
 
@@ -218,6 +218,7 @@ def migration_guest(monkeypatch, tmp_path, ordinary_operation_guest, runtime_mig
         "initialize_unstarted_checkpoint",
         lambda **kwargs: original_initialize(state_dir=ha_state, **kwargs),
     )
+    original_writer_locks = ha_repair.writer_locks
     monkeypatch.setattr(ha_repair, "writer_locks", lambda **kwargs: contextlib.nullcontext())
     monkeypatch.setattr(
         ha_repair,
@@ -237,6 +238,9 @@ def migration_guest(monkeypatch, tmp_path, ordinary_operation_guest, runtime_mig
         peers=[],
         operation_id=None,
     )
+    from nebius_vpngw.agent.vm_ha.mtls import ManagedMTLSStore
+
+    ManagedMTLSStore(ha_state / "mtls")
     publish(ha_state / "mtls/active.json", json.dumps(active).encode())
     credential = root / "credentials.json"
     publish(credential, b"{}")
@@ -261,6 +265,7 @@ def migration_guest(monkeypatch, tmp_path, ordinary_operation_guest, runtime_mig
         ha_state=ha_state,
         credential=credential,
         units=units,
+        writer_locks=original_writer_locks,
     )
     plan.close()
 
@@ -353,6 +358,109 @@ def test_real_plan_reservation_and_package_accept_expected_handoff(monkeypatch, 
     assert ops.Journal().read()["state"] == "complete"
 
 
+@pytest.mark.parametrize("layout", ["absent", "partial", "unsafe", "symlink", "started"])
+def test_conversion_prepares_real_writer_locks_before_package_verification(
+    monkeypatch, migration_guest, layout
+):
+    """Single guests have no HA state; verification must not pre-create it."""
+    fixture = migration_guest
+    messages = requests(fixture)[:2] + [{"action": "verify-prepared"}]
+    (fixture.ha_state / "mtls/active.json").unlink()
+    (fixture.ha_state / "mtls/writer.lock").unlink()
+    for name in ("identities", "peers", "transactions"):
+        (fixture.ha_state / "mtls" / name).rmdir()
+    (fixture.ha_state / "mtls").rmdir()
+    (fixture.ha_state / "apply.lock").unlink()
+    fixture.ha_state.rmdir()
+    if layout != "absent":
+        fixture.ha_state.mkdir(mode=0o755)
+    if layout == "unsafe":
+        fixture.ha_state.chmod(0o777)
+    elif layout == "symlink":
+        unrelated = fixture.root / "unrelated"
+        unrelated.mkdir(mode=0o700)
+        (fixture.ha_state / "mtls").symlink_to(unrelated, target_is_directory=True)
+    elif layout == "started":
+        (fixture.ha_state / "status.json").write_bytes(b"existing controller")
+    routing = fixture.root / "verification-routing.lock"
+    monkeypatch.setattr(
+        ha_repair,
+        "Path",
+        lambda value: routing if str(value) == "/run/nebius-vpngw/fix-routes.lock" else Path(value),
+    )
+    monkeypatch.setattr(
+        ha_repair,
+        "writer_locks",
+        lambda **kwargs: fixture.writer_locks(state_dir=fixture.ha_state, **kwargs),
+    )
+    replies = []
+    selected = iter(messages)
+    monkeypatch.setattr(guest, "receive", lambda: next(selected))
+    monkeypatch.setattr(guest, "reply", replies.append)
+    if layout in {"absent", "partial"}:
+        with pytest.raises(StopIteration):
+            guest.main()
+        assert replies[0] == {"ready": True}
+        assert replies[1] == replies[2]
+        assert fixture.state["installs"] == 1
+        assert (fixture.ha_state / "mtls/writer.lock").is_file()
+        assert not (fixture.ha_state / "mtls/active.json").exists()
+        assert not (fixture.ha_state / "controller-checkpoint.json").exists()
+        assert not fixture.marker.exists()
+    else:
+        with pytest.raises((RuntimeError, ValueError)):
+            guest.main()
+        assert replies == []
+        assert fixture.state["installs"] == 0
+        if layout == "symlink":
+            assert not list(unrelated.iterdir())
+        elif layout == "started":
+            assert (fixture.ha_state / "status.json").read_bytes() == b"existing controller"
+
+
+def test_approved_command_parent_survives_guest_reservation_and_activation(
+    monkeypatch, migration_guest, tmp_path
+):
+    from nebius_vpngw.deploy import ha_command
+    from nebius_vpngw.deploy.apply_command import CommandJournal
+
+    package = migration_guest.plan
+    manifests = {package.instance.hostname: package.manifest}
+    packages = ha_command.package_intent(None, "a" * 64, manifests)
+    lock_path = ha_repair.STATE / "apply.lock"
+    lock = json.loads(lock_path.read_text())
+    lock["operation_id"] = packages["parent"]
+    lock_path.write_text(json.dumps(lock))
+    journal = CommandJournal("project-a", "gateway-a", root=tmp_path / "parent")
+    command = ha_command.create(
+        journal,
+        scope="1" * 64,
+        artifact="2" * 64,
+        action_scope="3" * 64,
+        targets=(package.target_identity,),
+        approval="4" * 64,
+        runtime_scope="5" * 64,
+        report={},
+        attachment_plan=None,
+        packages=packages,
+    )
+    with journal:
+        command.begin()
+        command.start_runtime()
+        command.bind_package_plans(None, ((package.instance.hostname, package),))
+        # Serialize exactly as the SSH reservation does before activation begins.
+        messages = json.loads(json.dumps(requests(migration_guest)))
+        reserved_digest = package.digest
+        package.manifest["ha_parent"] = packages["parent"]
+        assert package.digest == reserved_digest
+        messages[1]["plan_digest"] = package.digest
+        messages[2]["operation_id"] = packages["parent"]
+        messages[3]["operation"] = packages["parent"]
+        assert run_protocol(monkeypatch, messages)[-1] == {"complete": True}
+    assert migration_guest.state["installs"] == 1
+    assert ops.Journal().read()["state"] == "complete"
+
+
 def test_real_handoff_rejects_unrelated_post_approval_drift(monkeypatch, migration_guest):
     messages = requests(migration_guest)
     migration_guest.config.write_text("gateway: {changed: true}\n")
@@ -407,6 +515,30 @@ def test_first_marker_interruption_proves_controller_never_started(monkeypatch, 
     assert guest.never_started(dict(old, phase="activate"), fixture.ha) is False
     guest.STARTUP_HELPER.write_bytes(b"unknown guard")
     assert guest.never_started(old, fixture.ha) is False
+
+
+def test_conversion_resumes_own_checkpoint_before_first_marker(monkeypatch, migration_guest):
+    fixture = migration_guest
+    messages = requests(fixture)
+    raw = b"gateway: {}\nvm_ha: {cluster_id: fixture}\n"
+    (guest.STAGED_CONFIG / (fixture.ha["generation_id"] + ".yaml")).write_bytes(raw)
+    messages[2]["receipt"]["staged_file_sha256"] = ordinary_remote.sha(raw)
+    original = ha_repair.publish
+
+    def interrupt(path, raw, mode=0o600):
+        if path == fixture.marker:
+            raise OSError("crash before marker publication")
+        original(path, raw, mode)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ha_repair, "publish", interrupt)
+        with pytest.raises(OSError, match="crash before marker"):
+            run_protocol(patch, messages)
+    assert not fixture.marker.exists()
+    assert (fixture.ha_state / "controller-checkpoint.json").exists()
+    fresh_owner(monkeypatch)
+    assert run_protocol(monkeypatch, messages)[-1] == {"complete": True}
+    assert fixture.state["installs"] == 1
 
 
 def test_completed_handoff_does_not_reopen_ordinary_admission(monkeypatch, migration_guest):

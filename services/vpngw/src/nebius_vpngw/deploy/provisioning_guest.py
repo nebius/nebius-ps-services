@@ -173,7 +173,16 @@ def prepare(
     with child:
         selected = child.state["transaction"]
         if selected is not None and selected["authority"] != authority:
-            raise RuntimeError("Provisioned guest selection belongs to another execution")
+            if (
+                selected["phase"] != "complete"
+                or selected["authority"]["creation"] == authority["creation"]
+                or selected["authority"]["execution"] == authority["execution"]
+            ):
+                raise RuntimeError("Provisioned guest selection belongs to another execution")
+            # Exact successful creation above proves this command's new resource.
+            # Inspect it as fresh; select() archives the completed predecessor only
+            # after clean guest state and unchanged authority have been verified.
+            selected = None
         if parent["progress"][effect.key] == Progress.VERIFIED.value and (
             selected is None
             or selected["phase"] != "complete"

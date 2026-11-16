@@ -732,7 +732,7 @@ def test_agent_capability_document_is_read_only_and_machine_readable(
             "vm-ha-mtls-rotation-quiescence-v1",
             "vm-ha-standby-auto-healing-policy-v4",
             "vm-ha-rebound-policy-v1",
-            "vm-ha-live-peer-replacement-v4",
+            "vm-ha-live-peer-replacement-v5",
             "vm-ha-standby-replacement-inhibition-v2",
             "vm-ha-standby-restoration-v2",
         ],

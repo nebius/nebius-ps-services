@@ -13,6 +13,7 @@ from . import (
     provisioning_execute,
     provisioning_guest,
     provisioning_receipts,
+    provisioning_retirement,
     provisioning_routes,
     provisioning_trust,
 )
@@ -411,6 +412,8 @@ def inspect(
         for item in instances
         if item.hostname in names
     }
+    resource_owner = ProvisioningJournal(journal.project, journal.gateway)
+    retired_resources = resource_owner.snapshot()
     resources = provisioning_discovery.resources(
         manager,
         manager._get_client(),
@@ -419,7 +422,10 @@ def inspect(
         configuration_sha256=apply_approval.digest(local),
         artifact_sha256=artifact,
         bootstraps=bootstraps,
+        retained_disks=provisioning_retirement.retained_disks(resource_owner, manager._get_client()),
     )
+    if provisioning_retirement.receipt(resource_owner, retired_resources) is not None:
+        provisioning_retirement.require_successor(resource_owner, resources, state=retired_resources)
     discovery = Discovery(
         manager,
         deployment,

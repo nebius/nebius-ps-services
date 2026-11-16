@@ -160,7 +160,7 @@ import verification_catalog as runtime_catalog  # noqa: E402
 
 ROOT_MARKER = ".sdlc-workflow-test-root.json"
 ROOT_SCHEMA = "agentic-sdlc/verification-root-v1"
-LIFECYCLE_SCHEMA = "agentic-sdlc/three-tier-lifecycle-v8"
+LIFECYCLE_SCHEMA = "agentic-sdlc/three-tier-lifecycle-v9"
 RUN_MARKER = ".agentic-sdlc-three-tier-run.json"
 PROJECT_MARKER = ".sdlc-workflow-test-project.json"
 OWNERSHIP_LABEL = "sdlc-workflow-test.verification-id"
@@ -193,6 +193,7 @@ GENERATION_GUARDED_COMMANDS = {
     "close-browser",
     "prepare-images",
     "record-git",
+    "record-aggregate",
     "run-compose",
     "run-test-class",
     "finish",
@@ -400,10 +401,24 @@ def lifecycle_lock(root: Path):
                 os.close(descriptor)
 
 
-def command(args: list[str], *, timeout: int = 30) -> subprocess.CompletedProcess[str]:
+def command(args: list[str], *, timeout: int | None = 30) -> subprocess.CompletedProcess[str]:
     environment = None
     if args[:2] == ["git", "-C"] and len(args) >= 3:
         environment = owned_git_origin.environment(Path(args[2]))
+    if timeout is None:
+        from verification_suites import scheduler
+        owner = scheduler().source_module("workflow_process", Path(__file__).resolve().parents[2] / "worktree/scripts/workflow_process.py")
+        observation = owner.run_owned(args, env=environment,
+            stdout_capture=owner.Capture(4 * 1024 * 1024), stderr_capture=owner.Capture(4 * 1024 * 1024),
+            on_observation=lambda row: print("Owned command continues; elapsed " + str(round(row["elapsed_seconds"], 1)) + " seconds", flush=True))
+        if not observation["local_group_quiescent"] or not all(observation[key]["complete"] for key in ("stdout", "stderr")):
+            raise LifecycleError("owned command termination is unproven; retain operation ownership")
+        outputs = [(observation[key]["data"] or b"[output omitted; bounded capture exceeded]").decode(errors="replace")
+                   if observation[key]["data"] != b"" else "" for key in ("stdout", "stderr")]
+        result = subprocess.CompletedProcess(args, observation["exit_code"], *outputs)
+        result.observation = observation
+        # Backend ownership remains with the lifecycle even after the local CLI exits.
+        return result
     try:
         return subprocess.run(
             args,
@@ -483,6 +498,8 @@ def validate_state(root: Path, state: dict[str, Any]) -> None:
     expected_paths = {
         "verification_root": root,
         "project_root": expected_run / "project",
+        "selected_project_root": expected_run / "project/project-a",
+        "companion_project_root": expected_run / "project/project-b",
         "private_root": expected_run / "private",
         "evidence_root": expected_run / "evidence",
         "report_path": paths(root)["reports"] / verification_id / "report.md",
@@ -651,10 +668,17 @@ def prepare(root_value: Path) -> dict[str, Any]:
             + "\n",
             encoding="utf-8",
         )
+        for scope in ("project-a", "project-b"):
+            selected = run_root / "project" / scope
+            selected.mkdir(mode=0o700)
+            (selected / "README.md").write_text("# " + scope + "\n\nDisposable local fixture.\n")
+        import three_tier_task_acceptance
+        three_tier_task_acceptance.seed(run_root / "project")
         try:
             owned_git_origin.prepare_configuration(run_root / "project", run_root, verification_id, kind="three-tier")
             baseline = owned_git_origin.create_baseline(run_root / "project")
             owned_git_origin.initialize(run_root / "project", run_root, verification_id)
+            owned_git_origin._git(run_root / "project", "switch", "-c", "feature/parallel-projects")
         except owned_git_origin.OriginError as error:
             raise LifecycleError(str(error)) from error
         state: dict[str, Any] = {
@@ -668,6 +692,8 @@ def prepare(root_value: Path) -> dict[str, Any]:
             "verification_root": str(root),
             "run_root": str(run_root),
             "project_root": str(run_root / "project"),
+            "selected_project_root": str(run_root / "project/project-a"),
+            "companion_project_root": str(run_root / "project/project-b"),
             "private_root": str(run_root / "private"),
             "evidence_root": str(run_root / "evidence"),
             "report_path": str(
@@ -682,7 +708,7 @@ def prepare(root_value: Path) -> dict[str, Any]:
                 "browser_name": browser_name,
                 "headless_browser": "PENDING_PREFLIGHT",
             },
-            "git": {"baseline_sha": baseline, "promoted_sha": None},
+            "git": {"baseline_sha": baseline, "promoted_sha": None, "aggregate_sha": None},
             "endpoints": {},
             "runtime_observations": [],
             "runtime_inventory": None,
@@ -740,11 +766,16 @@ def validate_results(root: Path, expected_verification_id: str) -> dict[str, str
         raise LifecycleError("A distinct promoted Git revision is required.")
     project, run_root = Path(state["project_root"]), Path(state["run_root"])
     owned_git_origin.validate(project, run_root, state["verification_id"], baseline=baseline, require_clean=True)
-    if owned_git_origin._git(project, "rev-parse", "HEAD") != promoted:
+    if owned_git_origin._git(project, "rev-parse", "HEAD") != state["git"].get("aggregate_sha"):
         raise LifecycleError("Current Git revision differs from the promoted revision.")
     canonical = run_root / "evidence/three-tier-results.json"
     before = hashlib.sha256(three_tier_target._private_bytes(canonical, run_root)).hexdigest()
     validate_semantic_results(state, keep=state.get("cleanup", {}).get("status") == "KEPT")
+    import three_tier_statistics
+    try:
+        three_tier_statistics.require_complete(state)
+    except three_tier_statistics.StatisticsEvidenceError as error:
+        raise LifecycleError(str(error)) from error
     after = hashlib.sha256(three_tier_target._private_bytes(canonical, run_root)).hexdigest()
     if before != after:
         raise LifecycleError("Canonical results changed during validation.")
@@ -789,7 +820,7 @@ def phase_identity(state: dict[str, Any], phase: str, *, coordinator_session: st
         ):
             raise LifecycleError("Previously observed execution state is missing.")
     observation = ({"phase_observation": phase}
-                   if phase in {"sdlc-classify-failure", "sdlc-tdd"} else {})
+                   if phase in three_tier_target.PHASE_OBSERVATION_PURPOSES else {})
     basis = (execution_target(state, require_clean=False, **observation)["basis_sha256"]
              if execution_phase else None)
     return objective, basis
@@ -891,17 +922,21 @@ def validate_phase_pass_artifact(
     if promoted_sha is None:
         if expected_basis is not None:
             observation = ({"phase_observation": phase}
-                           if phase in {"sdlc-classify-failure", "sdlc-tdd"} else {})
+                           if phase in three_tier_target.PHASE_OBSERVATION_PURPOSES else {})
             current_head = execution_target(
                 state, require_clean=not historical and phase not in {
                     "sdlc-tdd", "sdlc-update-documents", "align", "sdlc-classify-failure",
                 }, **observation,
             )["head"]
         else:
+            try:
+                registration = three_tier_target._registration(
+                    state, agent_name(), coordinator_session=coordinator_session)
+            except three_tier_target.TargetError as error:
+                raise LifecycleError(str(error)) from error
+            mapped = Path(registration[1]["project_root"])
             current_head = require_command(
-                ["git", "-C", str(project_root), "rev-parse", "HEAD"],
-                "Phase Git identity",
-            )
+                ["git", "-C", str(mapped), "rev-parse", "HEAD"], "Phase Git identity")
         if historical:
             ancestry_checks.append((recorded_head, current_head, "current"))
         elif current_head != recorded_head:
@@ -1011,6 +1046,8 @@ def record_phase(
     state["phases"].append(entry)
     state["status"] = "RUNNING"
     update_state(root, state)
+    import three_tier_statistics
+    three_tier_statistics.observe(state, phase)
     return state
 
 
@@ -1528,7 +1565,7 @@ def _run_owned_compose(
             target["path"],
             *arguments,
         ],
-        timeout=1800,
+        timeout=None,
     )
     if result.returncode != 0:
         raise LifecycleError(
@@ -1674,12 +1711,28 @@ def run_browser_stage(root_value: Path, stage: str) -> dict[str, Any]:
     if stage not in three_tier_browser.STAGES:
         raise LifecycleError("Unknown browser stage.")
     completed = [item["stage"] for item in state["browser_stages"]]
-    if completed != list(three_tier_browser.STAGES[:len(completed)]) or len(completed) >= 4 or stage != three_tier_browser.STAGES[len(completed)]:
-        raise LifecycleError("Browser stages require one ordered attempt each; failures require a new trial.")
+    try:
+        three_tier_browser.validate_stage_order(completed + [stage])
+    except three_tier_browser.BrowserOwnershipError as error:
+        raise LifecycleError(str(error)) from error
     if any(item["outcome"] != "PASS" for item in state["browser_stages"]):
         raise LifecycleError("A failed browser trial cannot be resumed as passing.")
     target = {"path": state["project_root"], "head": state["git"]["baseline_sha"]} if stage == "capability-discovery" else browser_target(state)
     record = None
+    revalidation = None
+    if stage == "evaluate" and "evaluate" in completed:
+        receipts = three_tier_browser.validate_receipts(state, require_complete=False)
+        previous = receipts[-1]
+        if previous["stage"] != "evaluate" or previous["target"]["head"] == target["head"]:
+            raise LifecycleError("Repeated evaluation requires a distinct clean candidate before UAT.")
+        try:
+            revalidation = three_tier_target.browser_revalidation(
+                state, target, skills_root=Path(__file__).resolve().parents[2], agent=agent_name())
+        except three_tier_target.TargetError as error:
+            raise LifecycleError(str(error)) from error
+        if any(value.get("revalidation", {}).get("cursor_id") == revalidation["cursor_id"]
+               for value in receipts if isinstance(value.get("revalidation"), dict)):
+            raise LifecycleError("A repair cursor cannot authorize another browser attempt.")
     if stage != "capability-discovery":
         expected_phase = "sdlc-evaluate" if stage == "evaluate" else "sdlc-uat-tests"
         if target.get("phase") != expected_phase:
@@ -1699,7 +1752,7 @@ def run_browser_stage(root_value: Path, stage: str) -> dict[str, Any]:
         three_tier_browser.run_stage(state, stage, target,
             persist=lambda: update_state(root, state),
             checkpoint=lambda name, value: browser_checkpoint(state, target, name, value),
-            record=record)
+            record=record, revalidation=revalidation)
     except three_tier_browser.BrowserOwnershipError as error:
         raise LifecycleError(str(error)) from error
     return state
@@ -1787,13 +1840,20 @@ def prepare_public_images(root_value: Path) -> dict[str, Any]:
                 "pull",
                 image,
             ],
-            timeout=300,
+            timeout=None,
         )
         if pulled.returncode != 0:
             detail = (pulled.stderr or pulled.stdout).strip()[:500]
             raise LifecycleError(
                 f"Public base image pull failed for {image}: {detail or 'command failed'}"
             )
+    import three_tier_task_acceptance
+    try:
+        state["environment"]["task_acceptance_profile"] = three_tier_task_acceptance.prepare(
+            state, command, private_json, python_base=next(image for image in PUBLIC_BASE_IMAGES if image.startswith("python:")),
+            ownership_label=OWNERSHIP_LABEL, compose_label=COMPOSE_LABEL)
+    except (RuntimeError, ValueError, KeyError) as error:
+        raise LifecycleError(str(error)) from error
     state["environment"]["public_base_images"] = list(PUBLIC_BASE_IMAGES)
     update_state(root, state)
     return state
@@ -1826,16 +1886,20 @@ def record_git(
     if not git_path.is_dir() or git_path.is_symlink():
         raise LifecycleError("Three-tier project is not an initialized Git repository.")
     expected_head = promoted_sha or baseline_sha
+    target = execution_target(state) if promoted_sha is not None else {"checkout_root": str(project_root), "path": state["selected_project_root"], "head": baseline_sha}
+    checkout = Path(target["checkout_root"])
+    if target["head"] != expected_head:
+        raise LifecycleError("Inner promotion differs from the product execution target.")
     if (
         require_command(
-            ["git", "-C", str(project_root), "rev-parse", "HEAD"], "Git identity"
+            ["git", "-C", str(checkout), "rev-parse", "HEAD"], "Git identity"
         )
         != expected_head
     ):
         label = "Promoted" if promoted_sha is not None else "Baseline"
         raise LifecycleError(f"{label} SHA is not the current project HEAD.")
     if require_command(
-        ["git", "-C", str(project_root), "status", "--porcelain"], "Git cleanliness"
+        ["git", "-C", str(checkout), "status", "--porcelain"], "Git cleanliness"
     ):
         raise LifecycleError(
             "Three-tier project must be clean before recording Git identity."
@@ -1856,10 +1920,111 @@ def record_git(
             raise LifecycleError(
                 "Promoted SHA is not a descendant of the baseline SHA."
             )
-    state["git"] = {"baseline_sha": baseline_sha, "promoted_sha": promoted_sha}
+    if state["git"].get("promoted_sha") not in {None, promoted_sha}:
+        raise LifecycleError("Inner promotion receipt is immutable.")
+    state["git"]["promoted_sha"] = promoted_sha
+    if promoted_sha is not None:
+        state["inner_delivery"] = {"path": target["path"], "head": promoted_sha}
     update_state(root, state)
     return state
 
+
+def record_aggregate(root_value: Path) -> dict:
+    """Observe both delivered objectives and freeze independent final acceptance."""
+    root = verification_root(root_value, create=False)
+    _, state = load_active(root)
+    observation = observe_aggregate(state)
+    if state.get("multi_project") is not None and state["multi_project"] != observation:
+        raise LifecycleError("Frozen aggregate acceptance evidence changed; retain this trial.")
+    state["git"]["aggregate_sha"] = observation["aggregate_sha"]
+    state["multi_project"] = observation
+    update_state(root, state)
+    return state
+
+
+def observe_aggregate(state: dict) -> dict:
+    """Read current aggregate proofs without changing the frozen trial."""
+    repo, boundary = Path(state["project_root"]), Path(state["run_root"])
+    home = Path(state["private_root"]) / (agent_name() + "-home")
+    registration = three_tier_target._registration(state, agent_name())
+    with three_tier_target.workflow_imports(Path(__file__).resolve().parents[2]):
+        from workflow_automatic import verify_delivery
+        from workflow_objectives import validate_run
+        from workflow_state import read
+        run_dir = registration[4]
+        app_run, _ = validate_run(run_dir)
+        app_proof = verify_delivery(run_dir)
+        if app_run["status"] != "done":
+            raise LifecycleError("The application objective has not completed automatic delivery.")
+        candidates = []
+        for candidate in (home / "implement").glob("*/run-*"):
+            peer_run, _ = validate_run(candidate)
+            if peer_run.get("logical_project_root") == state["companion_project_root"]:
+                candidates.append(candidate)
+        if len(candidates) != 1:
+            raise LifecycleError("A unique companion objective must deliver in the same native home.")
+        peer = candidates[0]
+        peer_run, peer_objective = validate_run(peer)
+        if peer_run["status"] != "done" or peer_run["git_common_dir"] != app_run["git_common_dir"]:
+            raise LifecycleError("Companion delivery is incomplete or belongs to another repository.")
+        peer_proof = verify_delivery(peer)
+        scripts = Path(__file__).resolve().parents[2] / "implement-test/scripts"
+        sys.path.insert(0, str(scripts))
+        try:
+            from public_workflow_trial import validate_receipt, validate_shared_capacity
+            evidence = boundary / "evidence/companion"
+            terminal = read(evidence / "finished.json")
+            if (terminal.get("verification_id") != state["verification_id"]
+                    or terminal.get("status") != "PASS" or terminal.get("cleanup_verified") is not True):
+                raise LifecycleError("Companion native invocation has not finished successfully.")
+            validate_receipt(evidence / "public-invocations.json", peer, peer_objective["revisions"][-1]["sha256"])
+            invocation = read(evidence / "initial-invocation.json")
+            try:
+                validate_shared_capacity(invocation["samples"], [str(run_dir), str(peer)])
+            except ValueError as error:
+                raise LifecycleError(str(error)) from error
+            native_receipts = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                               for path in evidence.glob("*.json")}
+        finally:
+            sys.path.remove(str(scripts))
+    owned_git_origin.validate(repo, boundary, state["verification_id"], baseline=state["git"]["baseline_sha"], require_clean=True)
+    head = owned_git_origin._git(repo, "rev-parse", "HEAD")
+    for proof in (app_proof, peer_proof):
+        owned_git_origin._git(repo, "merge-base", "--is-ancestor", proof["delivered_head"], head)
+    inner = state["git"].get("promoted_sha")
+    if not valid_git_sha(inner):
+        raise LifecycleError("Inner promotion and UAT proof must precede aggregate acceptance.")
+    # Historical UAT is preserved at its actual commit. Only identical app
+    # content can carry forward; the aggregate still needs its own runtime build.
+    before = owned_git_origin._git(repo, "rev-parse", inner + ":project-a")
+    after = owned_git_origin._git(repo, "rev-parse", head + ":project-a")
+    if before != after:
+        raise LifecycleError("Aggregate application content differs from inner UAT; a fresh product trial is required.")
+    if state["git"].get("aggregate_sha") not in {None, head}:
+        raise LifecycleError("Frozen aggregate acceptance changed; retain this trial.")
+    script = repo / "project-b/text_tool.py"
+    reject_symlinks(script, stop_at=boundary)
+    probes = [("  HeLLo   WORLD  ", "hello world\n"), ("", "\n"), ("One\tTwo\nTHREE", "one two three\n")]
+    for argument, expected in probes:
+        completed = subprocess.run([sys.executable, "-I", str(script), argument], cwd=script.parent,
+                                   capture_output=True, text=True, timeout=15, check=False)
+        if completed.returncode != 0 or completed.stdout != expected or completed.stderr:
+            raise LifecycleError("Independent companion CLI acceptance failed.")
+    if owned_git_origin._git(repo, "rev-parse", "HEAD") != head or owned_git_origin._git(repo, "status", "--porcelain"):
+        raise LifecycleError("Companion acceptance changed the frozen aggregate.")
+    import three_tier_task_acceptance
+    with three_tier_target.workflow_imports(Path(__file__).resolve().parents[2]):
+        profile_binding = state["environment"].get("task_acceptance_profile", {})
+        profile_path = Path(state["private_root"]) / "task-acceptance-profile.json"
+        if profile_binding.get("path") != str(profile_path) or hashlib.sha256(profile_path.read_bytes()).hexdigest() != profile_binding.get("sha256"):
+            raise LifecycleError("Independent task acceptance profile is missing or changed")
+        task_acceptance = three_tier_task_acceptance.observe(run_dir, repo, inner, head, read_json(profile_path))
+    return {"task_acceptance": task_acceptance, "application": app_proof, "companion": peer_proof, "aggregate_sha": head,
+            "application_tree": after, "shared_objective_limit": 4,
+            "shared_worker_limit": 4, "shared_worktree_limit": 16,
+            "native_receipts": native_receipts,
+            "companion_probe": {"script_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
+                                "cases": len(probes), "outcome": "passed"}}
 
 def validate_phase_history(state: dict[str, Any]) -> None:
     phase_map = {
@@ -1960,10 +2125,13 @@ def finish(root_value: Path, status: str, keep: bool) -> dict[str, Any]:
         raise LifecycleError(str(error)) from error
     state["semantic_summary"] = summarize_semantic_results(state)
     if status == "PASS":
+        import three_tier_statistics
         validate_runtime_ready(state, keep=keep)
         try:
             state["semantic_summary"] = validate_semantic_results(state, keep=keep)
-        except SemanticEvidenceError as error:
+            three_tier_statistics.observe(state, "complete")
+            state["semantic_summary"]["statistics"] = three_tier_statistics.require_complete(state)
+        except (SemanticEvidenceError, three_tier_statistics.StatisticsEvidenceError) as error:
             raise LifecycleError(str(error)) from error
     state["result"] = status
     state["status"] = "KEPT" if keep else "READY_FOR_CLEANUP"
@@ -2261,6 +2429,10 @@ def _destroy_quiescent(root: Path, state: dict) -> tuple[str, dict | None]:
             raise LifecycleError("Owned Docker resources remain after cleanup.")
         validate_state(root, state)
         three_tier_runtime.validate_observations(state)
+        import three_tier_statistics
+        statistics_retention = three_tier_statistics.archive(state)
+        if statistics_retention["retention_pending"]:
+            raise LifecycleError("Statistics retention is pending; preserve the owned source reports and retry cleanup.")
         checkpoint = paths(root)["archive"] / (
             state["verification_id"] + ".cleanup.json"
         )
@@ -2382,6 +2554,7 @@ def parser() -> argparse.ArgumentParser:
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("prepare")
     commands.add_parser("record-native-activation")
+    commands.add_parser("record-aggregate")
     commands.add_parser("validate-results")
     phase_parser = commands.add_parser("record-phase")
     phase_parser.add_argument("--phase", required=True)
@@ -2535,6 +2708,8 @@ def main(argv: list[str]) -> int:
                 )
                 if output:
                     print(output, end="" if output.endswith("\n") else "\n")
+            elif arguments.command == "record-aggregate":
+                record_aggregate(arguments.verification_root)
             elif arguments.command == "record-git":
                 record_git(
                     arguments.verification_root,

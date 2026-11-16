@@ -308,7 +308,7 @@ def test_replacement_rejects_group_readable_canonical_state(tmp_path):
 def test_cloud_receipt_survives_timeout_and_settles_without_resubmission(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    from nebius.api.nebius.common import v1 as common
+    from nebius.api.nebius.compute import v1 as compute
     from nebius.api.nebius.compute.v1 import StopInstanceRequest
 
     from nebius_vpngw.deploy.replacement_cloud import Cloud
@@ -336,7 +336,11 @@ def test_cloud_receipt_survives_timeout_and_settles_without_resubmission(tmp_pat
         events.append(("lookup", request.id))
         return SimpleNamespace(wait=lambda: Operation())
 
-    monkeypatch.setattr(common, "OperationServiceClient", lambda _: SimpleNamespace(get=lookup))
+    monkeypatch.setattr(
+        compute,
+        "InstanceServiceClient",
+        lambda _: SimpleNamespace(operation_service=lambda: SimpleNamespace(get=lookup)),
+    )
     with workflow.Journal(
         desired.project_id, desired.gateway_name, root=tmp_path / "state"
     ) as journal:

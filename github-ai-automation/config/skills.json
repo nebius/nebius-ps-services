@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "skills": [
+    "review-pr",
+    "code-review",
+    "create-pr",
+    "merge-pr",
+    "troubleshoot",
+    "test-live-on-nebius",
+    "publish-release",
+    "apply-security",
+    "align",
+    "github-workflows",
+    "maintain-project-specs",
+    "global-context-management",
+    "nebius",
+    "agent-nebius-auth-setup",
+    "agent-nebius-auth-diagnose",
+    "commit",
+    "shell-scripting",
+    "python-project",
+    "linter",
+    "container",
+    "terraform",
+    "helmchart",
+    "design",
+    "review-github-issues",
+    "research"
+  ],
+  "hooks": [],
+  "requires": {
+    "align": [
+      "code-review",
+      "linter",
+      "apply-security"
+    ],
+    "review-pr": [
+      "code-review",
+      "create-pr",
+      "merge-pr",
+      "maintain-project-specs",
+      "github-workflows",
+      "container",
+      "terraform",
+      "helmchart",
+      "review-github-issues",
+      "test-live-on-nebius",
+      "troubleshoot"
+    ],
+    "troubleshoot": [
+      "design"
+    ],
+    "test-live-on-nebius": [
+      "nebius",
+      "agent-nebius-auth-setup",
+      "agent-nebius-auth-diagnose"
+    ],
+    "design": [
+      "research"
+    ],
+    "review-github-issues": [
+      "research",
+      "design"
+    ]
+  }
+}

@@ -128,27 +128,12 @@ fixtures are not prerequisites for a documentation-only change.
 Keep source, installed-wheel, disposable-controller, CI, and live deployment
 evidence separate. Local results do not certify a customer environment.
 
-## Releases
+## Release history
 
 `CHANGELOG.md` contains release summaries. Large releases link to their complete
-history under `docs/releases/`; documentation checks read both surfaces. Release
-preparation may leave `[Unreleased]` empty after moving its notes into a version.
-
-1. From a clean feature branch, run `./publish-release.sh --prep X.Y.Z`.
-2. Review and merge the branch to `main` through the repository workflow.
-3. From clean synced `main`, run `./publish-release.sh --publish X.Y.Z`.
-
-Prep updates the changelog and publishes the prep branch, setting its upstream
-when needed. It requires a strictly clean worktree including untracked files,
-and rejects an existing local/remote tag before editing. Repeated prep of the
-same unpublished version is idempotent once `[Unreleased]` is empty. Publish
-requires the version's nonempty changelog section and checks the source version
-before pushing the annotated `nebius-cxcli-vX.Y.Z` tag.
-
-The tag triggers release CI, retaining full main history for ancestry/parent
-checks. It runs quality/wheel gates, validates portable sources and wheel
-version/catalog, then publishes the GitHub Release. Assets include the wheel
-and editable catalog with Terraform refs pinned to the release tag.
+history under `docs/releases/`; documentation checks read both surfaces.
+Maintainer GitHub Release operations belong to the repository's
+[publish-release skill](../../../skills/publish-release/SKILL.md).
 
 Branch CI validates local sources against the checkout. Post-gate checks use
 the synchronized environment. Editable runtime versions come from live SCM

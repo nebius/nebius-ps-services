@@ -108,6 +108,9 @@ identify unknowns that can change the recommendation.
 - Read `references/runtime-architecture-and-sessions.md` when an accepted
   agent needs a runtime boundary, durable session, sandbox, asynchronous
   execution, user control, or process-failure recovery.
+- Read `references/resource-safety-and-admission.md` when execution, streams,
+  large artifacts, delegation, shared capacity, or resource pressure are in scope.
+
 - Read `references/contracts-context-and-memory.md` when an agentic capability
   is accepted or when task, context, memory, provenance, or handoff contracts
   are in scope.
@@ -193,6 +196,8 @@ Define only the contracts and controls required by the accepted workloads:
 - canonical business state, execution checkpoints, append-only history,
   projections, atomic lifecycle admission, execution fencing, event delivery,
   and artifact ownership;
+- resource admission, runtime pressure controls, bounded lifetime delegation,
+  disjoint child budgets, and independently scoped cleanup authority;
 - failure taxonomy, retry ownership, deadlines, circuit breakers, bulkheads,
   compensation, reconciliation, cancellation, and safe terminal states;
 - prompt-injection defenses, sandboxing, egress, tenant isolation, secrets,
@@ -251,7 +256,7 @@ Check:
 - every side effect has one trusted authority, idempotency boundary, approval
   policy, verification path, and audit record;
 - every state class has one owner, schema, retention, concurrency, and recovery
-  policy;
+  policy, including current-denial barriers after restoration;
 - when those runtime components are present, control, execution, session state,
   context, memory, policy, tools, and traces communicate through versioned
   interfaces with explicit capability gates;
@@ -262,6 +267,8 @@ Check:
   ownership, and budgets after adapter transformations;
 - summaries, caches, artifacts, and opaque continuations cannot bypass current
   access policy or promote untrusted material into instructions;
+- SDK helpers and descendants cannot bypass admission; parent settlement
+  closes new submissions and proves owned work quiescent;
 - duplicate delivery, stale context, partial success, cancellation, provider
   failure, budget exhaustion, and human timeout reach safe states;
 - evaluation and rollout gates bind the exact prompt, model, tool, policy,

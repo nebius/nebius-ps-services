@@ -13,6 +13,8 @@ import hashlib
 import json
 import os
 import queue
+import re
+import signal
 import socket
 import stat
 import struct
@@ -30,6 +32,17 @@ SCHEMA = "nebius-vpngw.package-worker.v1"
 LIMIT = 128 * 1024 * 1024
 ACTIVE = False
 TRANSPORT = None
+BACKEND = "handoff"
+
+
+def use_repair_backend() -> None:
+    """Select the isolated full-repair owner in a fresh bootstrap process."""
+    global ROOT, RUN, BACKEND
+    if ACTIVE or TRANSPORT is not None:
+        raise RuntimeError("Cannot change the owner of an active package worker")
+    ROOT = Path("/var/lib/nebius-vpngw-repair/workers")
+    RUN = Path("/run/nebius-vpngw-repair")
+    BACKEND = "repair"
 
 
 def digest(value: Any) -> str:
@@ -39,7 +52,8 @@ def digest(value: Any) -> str:
 
 
 def identity(request: dict) -> str:
-    if request.get("action") not in {"prepare-guarded", "reserve"}:
+    actions = {"repair-install"} if BACKEND == "repair" else {"prepare-guarded", "reserve"}
+    if request.get("action") not in actions:
         raise ValueError("package worker action is invalid")
     # Transport payloads and fresh observations are not new transaction identity.
     # The original immutable package envelope and authority are always retained.
@@ -139,7 +153,8 @@ def record(key: str) -> tuple[Path, dict]:
 
 
 def unit(key: str, generation: int) -> str:
-    return f"nebius-vpngw-package-{key}-{generation}.service"
+    prefix = "repair-package" if BACKEND == "repair" else "package"
+    return f"nebius-vpngw-{prefix}-{key}-{generation}.service"
 
 
 def address(key: str) -> str:
@@ -236,6 +251,8 @@ def status(key: str, request_key: str | None = None) -> dict:
         and entry["state"] == "complete"
         and (entry["request"]["action"] != "reserve" or unit_running(value))
     ):
+        if BACKEND == "repair" and unit_running(value):
+            return {"state": "RUNNING_OWNED", "identity": key, "result": None}
         return {"state": "PREPARED", "identity": key, "result": entry["result"]}
     if unit_running(value):
         if entry is None and value["requests"]:
@@ -246,6 +263,17 @@ def status(key: str, request_key: str | None = None) -> dict:
             "result": None,
         }
     request = read(ROOT / key / "request.json")
+    if BACKEND == "repair":
+        backend = sys.modules.get("_vpngw_repair_remote")
+        if backend is None:
+            from .deploy import repair_remote as backend
+        assert backend is not None
+        backend.recovery_admission(request)
+        return {
+            "state": "READY_TO_CONTINUE",
+            "identity": key,
+            "result": {"generation": value["generation"]},
+        }
     if (
         entry
         and entry["request"]["action"] == "complete"
@@ -310,6 +338,257 @@ def inspect_reservation(expected: dict) -> dict:
     return status(key, initial(key))
 
 
+def settled_reservation(expected: dict) -> dict:
+    """Prove the original worker and every submitted request reached an outcome."""
+    key = expected["identity"]
+    # Reuse exact source/request admission, but PREPARED alone is insufficient:
+    # it can describe an earlier phase while the worker is accepting more work.
+    inspect_reservation(expected)
+    _, value = record(key)
+    if unit_running(value) or value["terminal"] != "complete" or any(
+        item["state"] != "complete" for item in value["requests"].values()
+    ):
+        raise RuntimeError("Previous package worker has unsettled requests")
+    return {"identity": key, "record": digest(value), "generation": value["generation"]}
+
+
+def _retirement_owner(value: dict, *, require_solitary: bool = True) -> dict:
+    """Bind a live, solitary worker to its exact systemd cgroup and process."""
+    result = subprocess.run(
+        ["systemctl", "show", "--all", value["unit"],
+         "--property=ActiveState,SubState,ControlGroup,MainPID,ControlPID,Job"],
+        capture_output=True, text=True, timeout=10, check=True,
+    )
+    fields = dict(row.split("=", 1) for row in result.stdout.splitlines() if "=" in row)
+    group = "/system.slice/" + value["unit"]
+    if (
+        fields.get("ActiveState") != "active"
+        or fields.get("SubState") != "running"
+        or fields.get("ControlGroup") != group
+        or fields.get("ControlPID") != "0"
+        or fields.get("Job") != ""
+        or not fields.get("MainPID", "").isdecimal()
+        or int(fields["MainPID"]) <= 1
+    ):
+        raise RuntimeError("Prior handoff process authority is unavailable")
+    pid = int(fields["MainPID"])
+    proc = Path("/proc") / str(pid)
+    expected = ["/usr/bin/python3", "-B", str(ROOT / value["identity"] / "bootstrap.py"),
+                value["identity"], str(value["generation"]), value["source"]]
+    if (proc / "cmdline").read_bytes().rstrip(b"\0").split(b"\0") != [
+        item.encode() for item in expected
+    ] or (proc / "cgroup").read_text().splitlines() != ["0::" + group]:
+        raise RuntimeError("Prior handoff process identity changed")
+    base = Path("/sys/fs/cgroup") / group.lstrip("/")
+    members = {int(item) for path in base.rglob("cgroup.procs")
+               for item in path.read_text().split()}
+    if require_solitary and members != {pid}:
+        raise RuntimeError("Prior handoff still has executing children")
+    return {"pid": pid, "start": (proc / "stat").read_text().rsplit(") ", 1)[1].split()[19],
+            "group": str(base)}
+
+
+def _retirement_frozen(owner: dict) -> bool:
+    events = dict(row.split() for row in (Path(owner["group"]) / "cgroup.events").read_text().splitlines())
+    if events.get("frozen") not in {"0", "1"}:
+        raise RuntimeError("Prior handoff freezer evidence is unavailable")
+    return events["frozen"] == "1"
+
+
+def _retirement_control(unit_name: str, action: str) -> None:
+    if action not in {"freeze", "thaw"}:
+        raise ValueError("Invalid handoff retirement control")
+    subprocess.run(["systemctl", action, unit_name], capture_output=True, timeout=10, check=True)
+
+
+@contextlib.contextmanager
+def _retirement_instance(root: Path):
+    lock = os.open(root / "instance.lock", os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(lock)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_uid != os.geteuid() or info.st_mode & 0o077):
+            raise RuntimeError("Prior handoff instance exclusion is unsafe")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+    finally:
+        os.close(lock)
+
+
+def retire_idle_for_repair(expected: dict, operation: str) -> dict:
+    """Retire only a proven idle handoff, after a separately confirmed full repair.
+
+    No old activation step is submitted and no old deployment is marked complete.
+    Freezing before the final receipt check excludes the worker's socket thread.
+    A process descriptor selects the original process even if its PID is reused.
+    Linux permits fatal signals while frozen; a systemd Stop job would thaw first.
+    """
+    key = expected.get("identity")
+    if (BACKEND != "handoff" or not isinstance(key, str)
+            or re.fullmatch(r"[a-f0-9]{64}", key) is None
+            or re.fullmatch(r"[a-f0-9]{32}", operation) is None):
+        raise RuntimeError("Prior handoff retirement identity is invalid")
+    root = ROOT / key
+    path = root / "transport.json"
+    if not path.exists() and not path.is_symlink():
+        return {"state": "ABSENT", "identity": key}
+    if any(p.is_symlink() for p in (root, *root.parents)):
+        raise RuntimeError("Prior handoff retirement storage is unsafe")
+    for protected in (ROOT, root, root / "retirements", root / "history"):
+        if protected.exists() or protected.is_symlink():
+            info = protected.lstat()
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                    or info.st_mode & 0o022):
+                raise RuntimeError("Prior handoff retirement storage is unsafe")
+    guard = os.open(root / "submission.lock", os.O_RDWR | os.O_NOFOLLOW)
+    descriptor = None
+    frozen_by_us = False
+    terminating = False
+    owner = None
+    saved = None
+    marker = root / "retirements" / (operation + ".json")
+    try:
+        info = os.fstat(guard)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_uid != os.geteuid() or info.st_mode & 0o077):
+            raise RuntimeError("Prior handoff submission exclusion is unsafe")
+        try:
+            fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return {"state": "PENDING", "identity": key}
+        _, value = record(key)
+        request = read(root / "request.json")
+        if (identity(request) != key or value["source"] != expected["source"]
+                or {k: v for k, v in request.items() if k != "staged_package"} != expected["request"]):
+            raise RuntimeError("Prior handoff reservation differs from original authority")
+        bootstrap = root / "bootstrap.py"
+        with os.fdopen(os.open(bootstrap, os.O_RDONLY | os.O_NOFOLLOW), "rb") as source:
+            info = os.fstat(source.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                    or info.st_uid != os.geteuid() or info.st_mode & 0o077
+                    or info.st_size > 4 * 1024 * 1024
+                    or hashlib.sha256(source.read()).hexdigest() != value["source"]):
+                raise RuntimeError("Prior handoff bootstrap differs from original authority")
+        saved = read(marker) if marker.exists() or marker.is_symlink() else None
+        binding = {"operation": operation, "identity": key, "boot": value["boot"],
+                   "generation": value["generation"], "source": value["source"]}
+        if saved is not None and any(saved.get(k) != v for k, v in binding.items()):
+            raise RuntimeError("Prior handoff retirement authority changed")
+        if saved is not None and (
+            set(saved) != {*binding, "record", "owner", "phase"}
+            or saved["phase"] not in {"intent", "terminating", "stopped", "thawed"}
+        ):
+            raise RuntimeError("Prior handoff retirement record is invalid")
+        if not unit_running(value):
+            if saved is not None and saved["phase"] in {"intent", "terminating", "stopped"}:
+                if saved["record"] != digest(value):
+                    raise RuntimeError("Stopped handoff receipts changed during retirement")
+                with _retirement_instance(root):
+                    publish(marker, {**saved, "phase": "stopped"})
+                return {"state": "RETIRED", "identity": key, "operation": operation,
+                        "record": saved["record"]}
+            return {"state": "STOPPED", "identity": key}
+        if saved is not None and saved["phase"] == "stopped":
+            raise RuntimeError("Retired handoff process became active again")
+        if saved is not None and saved["phase"] == "intent":
+            current_owner = _retirement_owner(value, require_solitary=False)
+            if current_owner != saved["owner"]:
+                raise RuntimeError("Prior handoff retirement process changed")
+            if saved["record"] != digest(value) and _retirement_frozen(current_owner):
+                # A lost reply may precede our frozen readback. Restore an owned
+                # freeze before waiting for work admitted during that interval.
+                _retirement_control(value["unit"], "thaw")
+                publish(marker, {**saved, "phase": "thawed"})
+                return {"state": "PENDING", "identity": key}
+        if (value["boot"] != BOOT.read_text().strip() or value["terminal"] is not None
+                or value["waiting"] or not value["requests"]
+                or any(item["state"] != "complete" or not isinstance(item["result"], dict)
+                       for item in value["requests"].values())):
+            return {"state": "PENDING", "identity": key}
+        owner = _retirement_owner(value)
+        open_process = getattr(os, "pidfd_open", None)
+        signal_process = getattr(signal, "pidfd_send_signal", None)
+        if not callable(open_process) or not callable(signal_process):
+            raise RuntimeError("Prior handoff process control is unavailable")
+        descriptor = open_process(owner["pid"])
+        if _retirement_owner(value) != owner:
+            raise RuntimeError("Prior handoff process changed before retirement")
+        resuming = saved is not None and saved["phase"] in {"intent", "terminating"}
+        if saved is not None and resuming and (saved["record"] != digest(value) or saved["owner"] != owner):
+            raise RuntimeError("Prior handoff retirement evidence changed")
+        if _retirement_frozen(owner) and not resuming:
+            raise RuntimeError("Prior handoff is frozen by another operation")
+        directory(marker.parent)
+        history = root / "history" / ("repair-" + operation + "-" + digest(value) + ".json")
+        directory(history.parent)
+        if history.exists():
+            if read(history) != value:
+                raise RuntimeError("Prior handoff archive changed")
+        else:
+            publish(history, value)
+        saved = {**binding, "record": digest(value), "owner": owner, "phase": "intent"}
+        publish(marker, saved)
+        frozen_by_us = True
+        _retirement_control(value["unit"], "freeze")
+        deadline = time.monotonic() + 10
+        while not _retirement_frozen(owner):
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Prior handoff freezer did not settle")
+            time.sleep(0.05)
+        if record(key)[1] != value or _retirement_owner(value) != owner:
+            return {"state": "PENDING", "identity": key}
+        # No admitted request or child can begin while the exact cgroup is frozen.
+        publish(marker, {**saved, "phase": "terminating"})
+        signal_process(descriptor, signal.SIGKILL)
+        terminating = True
+        deadline = time.monotonic() + 10
+        while unit_running(value):
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Prior handoff process remains unsettled")
+            time.sleep(0.05)
+        with _retirement_instance(root):
+            if record(key)[1] != value:
+                raise RuntimeError("Prior handoff receipts changed while stopping")
+            publish(marker, {**saved, "phase": "stopped"})
+        return {"state": "RETIRED", "identity": key, "operation": operation,
+                "record": digest(value)}
+    finally:
+        try:
+            if frozen_by_us and not terminating and owner is not None and saved is not None:
+                if _retirement_owner(value, require_solitary=False) != owner:
+                    raise RuntimeError("Cannot thaw a changed handoff process")
+                _retirement_control(value["unit"], "thaw")
+                publish(marker, {**saved, "phase": "thawed"})
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            os.close(guard)
+
+
+@contextlib.contextmanager
+def archive_settled_reservation(expected: dict):
+    """Retain a settled worker's exact record while excluding a new generation."""
+    proof = settled_reservation(expected)
+    root = ROOT / proof["identity"]
+    fd = os.open(root / "instance.lock", os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if settled_reservation(expected) != proof:
+            raise RuntimeError("Previous package worker changed before archival")
+        _, value = record(proof["identity"])
+        history = root / "history"
+        directory(history)
+        target = history / (proof["record"] + ".json")
+        if target.exists() or target.is_symlink():
+            if read(target) != value:
+                raise RuntimeError("Package worker archive changed")
+        else:
+            publish(target, value)
+        yield proof
+    finally:
+        os.close(fd)
+
+
 def receipts(key: str) -> dict:
     _, value = record(key)
     if value["boot"] != BOOT.read_text().strip():
@@ -330,7 +609,7 @@ def set_waiting(waiting: bool) -> None:
 
 
 @contextlib.contextmanager
-def native_lock(path: str):
+def native_lock(path: str, *, deadline: float | None = None):
     """Wait for native exclusion without deleting locks or cancelling writers."""
     fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o640)
     try:
@@ -348,7 +627,10 @@ def native_lock(path: str):
                 break
             except BlockingIOError:
                 set_waiting(True)
-                time.sleep(0.5)
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    raise TimeoutError("Native package lock remains held at the operation deadline")
+                time.sleep(0.5 if remaining is None else min(0.5, remaining))
         set_waiting(False)
         yield
     finally:
@@ -605,9 +887,14 @@ def control(request: dict) -> dict:
 
 def main(key: str, generation: int, source: str) -> None:
     global ACTIVE, TRANSPORT
-    handoff_remote: Any = sys.modules.get("_vpngw_handoff_remote")
-    if handoff_remote is None:
-        from .deploy import handoff_remote
+    if BACKEND == "repair":
+        handoff_remote: Any = sys.modules.get("_vpngw_repair_remote")
+        if handoff_remote is None:
+            from .deploy import repair_remote as handoff_remote
+    else:
+        handoff_remote = sys.modules.get("_vpngw_handoff_remote")
+        if handoff_remote is None:
+            from .deploy import handoff_remote
 
     instance_guard = os.open(ROOT / key / "instance.lock", os.O_RDWR | os.O_NOFOLLOW)
     try:

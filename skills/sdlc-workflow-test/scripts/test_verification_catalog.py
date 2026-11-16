@@ -7,11 +7,44 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
+
+import verification_catalog as catalog
 
 import verify_agentic_sdlc as verifier
 
 
 class CatalogTests(unittest.TestCase):
+    def test_extracted_verifier_references_are_frozen(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            before = catalog.snapshot(project)
+            for name in ("lightweight-runtime-verification.md", "live-runtime-ownership.md"):
+                relative = "sdlc-workflow-test/references/" + name
+                self.assertIn(relative, before["files"])
+                dependency = catalog.anchor() / relative
+                original = Path.read_bytes
+                def changed(path):
+                    data = original(path)
+                    return data + b"\n" if path == dependency else data
+                with mock.patch.object(Path, "read_bytes", changed), self.assertRaises(catalog.CatalogError):
+                    catalog.validate_record(before, project)
+
+    def test_explicit_three_tier_catalog_binds_container_acceptance_owner(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            before = catalog.snapshot(project)
+            relative = "test-software-in-container/scripts/tsc_support/contracts.py"
+            self.assertIn(relative, before["files"])
+            dependency = catalog.anchor() / relative
+            read_bytes = Path.read_bytes
+            def changed(path):
+                body = read_bytes(path)
+                return body + b"\n" if path == dependency else body
+            with mock.patch.object(Path, "read_bytes", changed):
+                with self.assertRaisesRegex(catalog.CatalogError, "catalog changed"):
+                    catalog.validate_record(before, project)
+
     def test_distinct_catalog_owner_isolated_and_exact_basis_preserved(self):
         source = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
@@ -67,7 +100,7 @@ print(json.dumps(result))
                     assert 'immutable execution basis is stale' in wrong['basis'],wrong
                     assert 'catalog differs' in wrong['target'],wrong
                     correct=observe(copied)
-                    assert correct=={'basis':'PASS','target':coordinator['integration_worktree']},correct
+                    assert correct=={'basis':'PASS','target':str(Path(coordinator['integration_worktree'])/'project-a')},correct
                     dependency=copied/'worktree/scripts/workflow_impact.py'
                     original=dependency.read_bytes()
                     dependency.write_bytes(original+b'\n')

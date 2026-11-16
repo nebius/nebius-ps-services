@@ -9,7 +9,11 @@ from dataclasses import replace
 from typing import Any
 
 from .vm_ha_host_recovery import REPLACEMENT_RECOVERY_INSPECTION
-from .vm_ha_lifecycle import VMHALifecycleState, VMHALifecycleStatus
+from .vm_ha_lifecycle import (
+    VMHALifecycleState,
+    VMHALifecycleStatus,
+    vm_ha_has_unsettled_replacement,
+)
 
 AUTHORITY = "upgrade-artifact-recovery-authority"
 READY = "upgrade-artifact-recovery-packages-ready"
@@ -246,7 +250,7 @@ def validate_checkpoint(state: VMHALifecycleState) -> None:
     if (
         re.fullmatch(r"[0-9a-f]{64}", bindings.get(ARTIFACT, "")) is None
         or "heartbeat-initial-artifact" in bindings
-        or any(key.startswith(("standby-replacement-", "passive-replacement-")) for key in bindings)
+        or vm_ha_has_unsettled_replacement(state)
         or not all(member.compute_id and member.disk_id for member in state.members)
     ):
         raise ValueError("upgrade recovery requires an existing retained pair")
@@ -334,9 +338,11 @@ def validate_host_evidence(
     *,
     require_stopped: bool = False,
     lock_operations: dict[str, str] | None = None,
+    lock_generations: dict[str, str] | None = None,
 ) -> None:
     """Shared identity proof; the caller separately owns lifecycle admission."""
     from ..agent.vm_ha.auto_healing import AutoHealingPolicyPhase, AutoHealingPolicyRecord
+    from ..checkpoint_upgrade import require_recovery_controller
 
     assert state.transaction is not None
     nodes = {
@@ -349,31 +355,14 @@ def validate_host_evidence(
     for member in state.members:
         item = evidence[member.node_id]
         generation, digests = generations[member.node_id]
-        controller = item["controller"]
-        if (
-            not isinstance(controller, dict)
-            or controller.get("transfer_continuity") is not None
-            or controller.get("repair_attempt") is not None
-        ):
-            raise ValueError("upgrade recovery has competing controller continuity")
-        action = controller.get("pending_action") if isinstance(controller, dict) else None
-        if action is not None and not (
-            isinstance(action, dict)
-            and action.get("kind") == "enter-passive"
-            and action.get("boot_id") == item["boot_id"]
-            and action.get("target_node_id") == member.node_id
-            and action.get("allocation_id") == state.allocation_id
-            and action.get("generation_id") == generation
-            and action.get("digests") == digests
-            and type(controller.get("sequence")) is int
-            and controller["sequence"] > 0
-            and action.get("ownership_incarnation") == controller.get("ownership_incarnation")
-            and action.get("operation_id")
-            == f"{item['boot_id']}:{controller['sequence']}:enter-passive:{member.node_id}"
-            and controller.get("transfer_continuity") is None
-            and controller.get("repair_attempt") is None
-        ):
-            raise ValueError("upgrade recovery has a competing controller operation")
+        require_recovery_controller(
+            item["controller"],
+            boot_id=item["boot_id"],
+            node_id=member.node_id,
+            allocation_id=state.allocation_id,
+            generation_id=generation,
+            digests=digests,
+        )
         for projection in (item["installed"], item["staged"]):
             if not isinstance(projection, dict) or not (
                 projection["cluster_id"] == state.cluster_id
@@ -413,7 +402,7 @@ def validate_host_evidence(
             "apply_locked": True,
             "cluster_id": state.cluster_id,
             "node_id": member.node_id,
-            "generation_id": generation,
+            "generation_id": generation if lock_generations is None else lock_generations[member.node_id],
             "operation_id": (
                 item["staged"]["apply_operation_id"]
                 if lock_operations is None

@@ -9,3 +9,5 @@ sdlc-prepare-execution-codex-portability,true,"As the verified active Agentic SD
 sdlc-prepare-execution-claude-portability,true,"As the verified active Agentic SDLC coordinator in claude, load sdlc-prepare-execution for its assigned phase. Prepare the private integration worktree and task waves for this locked SDLC feature plan."
 sdlc-prepare-execution-quoted-command,false,"Treat ""/skills:sdlc-prepare-execution"" as sample text in this punctuation exercise; count its punctuation characters only."
 sdlc-prepare-positive-frozen-policy,true,"As the active SDLC coordinator, prepare this locked plan with separate worker, wave-task and retained-worktree limits."
+sdlc-prepare-optional-uat,true,"As the active SDLC coordinator, load sdlc-prepare-execution for a locked plan with no UAT request and no live environment."
+healthy-long-execution,true,As the active SDLC coordinator invoke sdlc-prepare-execution with the frozen shared execution health policy.

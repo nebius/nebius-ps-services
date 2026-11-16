@@ -66,6 +66,32 @@ def native_payload(name: str) -> dict:
     return files
 
 
+def ha_checkpoint_files(state: Path, predecessor: Path) -> dict:
+    """Require conversion evidence unless current-format bytes needed no conversion."""
+    from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_from_dict
+
+    result = {
+        name: file_identity(state / name)
+        for name in ("apply.lock", "controller-checkpoint.json")
+    }
+    receipt = state / "checkpoint-conversion.json"
+    if receipt.exists() or receipt.is_symlink():
+        result[receipt.name] = file_identity(receipt)
+    else:
+        checkpoint = state / "controller-checkpoint.json"
+        assert result[checkpoint.name]["kind"] == "file", "Checkpoint must be a regular file"
+        prior = file_identity(predecessor)
+        assert prior["kind"] == "file", "Predecessor checkpoint must be a regular file"
+        current = checkpoint.read_bytes()
+        assert current == predecessor.read_bytes(), "Changed checkpoint requires conversion evidence"
+        controller_checkpoint_from_dict(json.loads(current))
+        result[receipt.name] = {
+            "kind": "absent-current-format-unchanged",
+            "predecessor_sha256": prior["sha256"],
+        }
+    return result
+
+
 def native_selection_payload(plan: dict) -> dict:
     # desired includes required packages already installed before preparation.
     return {name: native_payload(name) for name in plan["desired"]}
@@ -242,10 +268,9 @@ def observe(topology: str) -> dict:
         result.update(
             guard=guard,
             guard_authority={key: value for key, value in guard.items() if key != "installed_at"},
-            ha_files={
-                name: file_identity(repair.STATE / name)
-                for name in ("apply.lock", "controller-checkpoint.json", "checkpoint-conversion.json")
-            },
+            ha_files=ha_checkpoint_files(
+                repair.STATE, Path("/qualification/predecessor-checkpoint.json")
+            ),
             ha_marker=file_identity(Path("/etc/nebius-vpngw/vm-ha-enabled")),
         )
         result["safety"].update(forwarding_blocked=True, standby_readiness_absent=True)

@@ -24,6 +24,50 @@ SCRIPT = Path(__file__).with_name("initialize_phase.py")
 
 
 class InitializePhaseTests(unittest.TestCase):
+    def test_source_inventory_precedes_initialization_without_task_plans(self):
+        import hashlib
+        import workflow_statistics
+        source = self.project / "README.md"
+        reference = {"kind": "project", "path": "README.md", "sha256": hashlib.sha256(source.read_bytes()).hexdigest(), "anchor": "fixture"}
+        candidate = {"schema": "workflow/architecture-inventory-v1", "layers": [
+            {"id": "LAYER-docs", "name": "Documentation", "origin": "observed", "sources": [reference]}],
+            "components": [{"id": "COMP-readme", "name": "Fixture readme", "origin": "observed", "layer": "LAYER-docs",
+                            "features": [], "sources": [reference]}], "gaps": ["Counter implementation is not yet planned."]}
+        workflow_statistics.inventory(self.run, candidate, "startup-root")
+        initial = (self.run / "statistics/initial.json").read_bytes()
+        self.assertEqual(json.loads(initial)["architecture"]["component_count"], 1)
+        self.assertEqual(json.loads(initial)["task_counts"]["known"], 0)
+        self.initialize()
+        self.assertEqual(initial, (self.run / "statistics/initial.json").read_bytes())
+
+    def test_accepted_objective_supplies_planned_architecture_before_project_changes(self):
+        import hashlib
+        import workflow_statistics
+        project_before = self.git("status", "--porcelain")
+        latest = read(self.run / "objective.json")["revisions"][-1]
+        source = self.run / latest["snapshot"]
+        reference = {"kind": "objective", "path": latest["snapshot"],
+                     "sha256": hashlib.sha256(source.read_bytes()).hexdigest(), "anchor": "outcome and scope"}
+        candidate = {"schema": "workflow/architecture-inventory-v1", "layers": [
+            {"id": "LAYER-counter", "name": "Counter logic", "origin": "declared", "sources": [reference]}],
+            "components": [{"id": "COMP-counter", "name": "Counter", "origin": "declared", "layer": "LAYER-counter",
+                            "features": [], "sources": [reference]}], "gaps": ["Tasks are not planned yet."]}
+        workflow_statistics.inventory(self.run, candidate, "startup-root")
+        self.initialize()
+        report = read(self.run / "statistics/initial.json")
+        self.assertEqual(report["architecture"]["new_planned_components"], ["COMP-counter"])
+        self.assertEqual(report["architecture"]["existing_components"], [])
+        self.assertEqual(report["architecture_currentness"], "current")
+        self.assertEqual(report["task_counts"]["known"], 0)
+        self.assertEqual(project_before, self.git("status", "--porcelain"))
+        candidate["layers"][0]["origin"] = "observed"
+        with self.assertRaisesRegex(WorkflowError, "project source evidence"):
+            workflow_statistics.inventory(self.run, candidate, "startup-root")
+        candidate["layers"][0]["origin"] = "declared"
+        reference["path"] = "run.json"
+        with self.assertRaisesRegex(WorkflowError, "accepted objective revision"):
+            workflow_statistics.inventory(self.run, candidate, "startup-root")
+
     def setUp(self):
         temp = self.enterContext(tempfile.TemporaryDirectory())
         self.root = Path(temp).resolve()
@@ -98,6 +142,8 @@ class InitializePhaseTests(unittest.TestCase):
         self.assert_publication(current)
         after = self.snapshot()
         for name, data in before.items():
+            if name in {"statistics/current.json", "statistics/current.md"}:
+                continue  # Progress changes; initial/history artifacts remain immutable.
             self.assertEqual(after[name], data, name)
 
     def assert_publication(self, current):
@@ -209,7 +255,8 @@ class InitializePhaseTests(unittest.TestCase):
                 self.assertEqual(result["status"], "ALREADY_INITIALIZED" if boundary == "history" else "RECOVERED")
                 after = self.snapshot()
                 for name, data in before.items():
-                    if name not in {"current-state.json", "checkpoints/latest.json"}:
+                    if name not in {"current-state.json", "checkpoints/latest.json",
+                                    "statistics/current.json", "statistics/current.md"}:
                         self.assertEqual(after[name], data, name)
                 self.assert_publication(read(self.run / "current-state.json"))
 
@@ -258,7 +305,11 @@ class InitializePhaseTests(unittest.TestCase):
 
     def managed_intake(self):
         import worktree_manager as manager
+        import workflow_reconcile as reconcile
         value = read(self.run / "objectives/r0001.json")
+        objectives.fence(self.run, "startup-root", "cancelled")
+        reconcile.cancel_complete(self.run, "startup-root")
+        self.git("checkout", "-b", "feature/startup-managed")
         outer = manager.add_worktree(cwd=self.project, project=None, task_slug="startup-test")
         self.project = Path(outer["scope_cwd"])
         self.enterContext(mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "startup-managed"}))
