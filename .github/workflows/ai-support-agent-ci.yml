@@ -27,11 +27,13 @@ on:
         type: string
   pull_request:
     paths:
+      - "README.md"
       - "agents/ai-support-agent/**"
       - ".github/workflows/ai-support-agent-ci.yml"
   push:
     branches: [main]
     paths:
+      - "README.md"
       - "agents/ai-support-agent/**"
       - ".github/workflows/ai-support-agent-ci.yml"
 

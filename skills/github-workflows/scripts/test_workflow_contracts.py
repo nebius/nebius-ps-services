@@ -4,7 +4,6 @@
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import tempfile
 import unittest
@@ -25,6 +24,81 @@ def step(value, name):
 
 
 class WorkflowContracts(unittest.TestCase):
+    def test_generic_release_passes_operator_identity_to_qualification(self):
+        path = ROOT / "skills/github-workflows/assets/project-name-release-publish.yml.template"
+        value = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
+        steps = next(iter(value["jobs"].values()))["steps"]
+        verify = step(steps, "Verify exact-commit release qualification")
+        self.assertEqual(verify["env"].get("MERGE_OPERATOR_IDS"), "${{ vars.MERGE_OPERATOR_IDS }}")
+        self.assertEqual(value["permissions"]["pull-requests"], "read")
+
+    def test_every_active_workflow_has_a_declared_owner(self):
+        policy = json.loads((ROOT / ".github/merge-policy.json").read_text())
+        expected = {row["file"] for row in policy["ci_workflows"]}
+        expected.update(policy[key] for key in ("merge_workflow", "completion_workflow", "status_workflow"))
+        expected.update(profile["publisher"] for profile in policy["release_profiles"].values())
+        expected.update({"pr-reviewer-trimmer.yml", "helm-chart-publish.yml", "nccl-test-image-publish.yml"})
+        self.assertEqual({path.name for path in WORKFLOWS.glob("*.yml")}, expected)
+
+    def test_release_profiles_cover_jobs_and_producer_modes(self):
+        policy = json.loads((ROOT / ".github/merge-policy.json").read_text())
+        for project, profile in policy["release_profiles"].items():
+            for filename, definition in profile["workflows"].items():
+                with self.subTest(project=project, workflow=filename):
+                    value = workflow(filename)
+                    inputs = value["on"]["workflow_dispatch"]["inputs"]
+                    self.assertLessEqual(len(inputs), 25)
+                    self.assertTrue({"qualification_sha", "qualification_profile", "qualification_id"}.issubset(inputs))
+                    self.assertTrue(set(definition["jobs"]).issubset(value["jobs"]))
+                    producers = [job for name, job in value["jobs"].items() if name.startswith("release-qualification-") and project in json.dumps(job)]
+                    self.assertEqual(len(producers), 1)
+                    self.assertTrue(set(definition["jobs"]).issubset(producers[0]["needs"]))
+                    self.assertNotIn("write", json.dumps(producers[0]["permissions"]))
+                    for job_id in definition["jobs"]:
+                        job = value["jobs"][job_id]
+                        self.assertNotIn("write", json.dumps(job.get("permissions", value["permissions"])))
+                        commands = "\n".join(s.get("run", "") for s in job["steps"])
+                        self.assertIn("release_qualification.py checkout", commands)
+                    self.assertIn("qualification_sha", value["concurrency"]["group"])
+                    self.assertIn("qualification_sha", value["concurrency"]["cancel-in-progress"])
+            release = workflow(profile["publisher"])
+            self.assertEqual(release["permissions"]["pull-requests"], "read")
+            commands = "\n".join(s.get("run", "") for job in release["jobs"].values() for s in job["steps"])
+            self.assertRegex(commands, r'release_qualification\.py"? verify')
+            self.assertNotIn("release_qualification.py inputs", commands)
+
+    def test_publication_intents_precede_alias_effects(self):
+        image = workflow("nccl-test-image-publish.yml")["jobs"]["publish"]["steps"]
+        serialized = [json.dumps(s) for s in image]
+        intent = next(i for i, s in enumerate(serialized) if "publication-image-intent-" in s)
+        alias = next(i for i, s in enumerate(serialized) if "Assign missing aliases" in s)
+        build = next(s for s in image if s.get("uses", "").startswith("docker/build-push-action@"))
+        self.assertNotIn("tags", build["with"])
+        self.assertIn("push-by-digest=true", build["with"]["outputs"])
+        self.assertLess(intent, alias)
+        for filename in [
+            WORKFLOWS / "nccl-test-image-publish.yml",
+            ROOT / "skills/github-workflows/assets/project-name-image-publish.yml.template",
+        ]:
+            value = yaml.load(filename.read_text(), Loader=yaml.BaseLoader)
+            steps = [s for job in value["jobs"].values() for s in job["steps"]]
+            record = step(steps, "Record original image intent before aliases")
+            preserve = step(steps, "Preserve original image intent before aliases")
+            for value in [record, preserve]:
+                self.assertEqual(value["if"], "steps.existing.outputs.publish_needed == 'true' || steps.existing.outputs.aliases_needed == 'true' || steps.existing.outputs.latest_needed == 'true'")
+            self.assertIn("steps.existing.outputs.digest", record["env"]["IMAGE_DIGEST"])
+        helm = workflow("helm-chart-publish.yml")
+        self.assertEqual(helm["permissions"]["actions"], "read")
+        text = json.dumps(helm)
+        self.assertIn("--chart-ref", text)
+        self.assertLess(text.index("Preserve chart publication intent"), text.index("helm push"))
+        steps = helm["jobs"]["publish"]["steps"]
+        for name in ["Preserve original chart package before push", "Record original chart publication intent", "Preserve chart publication intent before push"]:
+            # Restored bytes receive new attempt-bound evidence before effects.
+            self.assertNotIn("if", step(steps, name))
+        self.assertIn("steps.restore.outputs.package_path", step(steps, "Preserve original chart package before push")["with"]["path"])
+        self.assertIn("steps.restore.outputs.package_path", step(steps, "Record original chart publication intent")["env"]["PACKAGE_PATH"])
+
     def test_policy_listeners_and_ci_filters_agree(self):
         policy = json.loads((ROOT / ".github/merge-policy.json").read_text())
         names = []
@@ -56,13 +130,15 @@ class WorkflowContracts(unittest.TestCase):
             )
         broker = workflow(policy["merge_workflow"])
         completion = workflow(policy["completion_workflow"])
-        self.assertEqual(set(broker["on"]["workflow_run"]["workflows"]), set(names))
+        observer = workflow(policy["status_workflow"])
+        self.assertEqual(set(broker["on"]), {"workflow_dispatch"})
+        self.assertEqual(set(observer["on"]["workflow_run"]["workflows"]), set(names))
         self.assertEqual(
             set(completion["on"]["workflow_run"]["workflows"]),
-            set(names + [broker["name"]]),
+            {broker["name"]},
         )
         self.assertEqual(
-            broker["on"]["workflow_run"]["types"], ["in_progress", "completed"]
+            observer["on"]["workflow_run"]["types"], ["in_progress", "completed"]
         )
         self.assertNotIn("schedule", broker["on"])
         self.assertEqual(completion["on"]["schedule"], [{"cron": "17 * * * *"}])

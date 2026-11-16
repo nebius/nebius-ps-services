@@ -63,26 +63,14 @@ or implicit implementation/publication authority is introduced.
    An already-merged PR uses observation and exact-result verification only.
    Preserve the original receipt, grant, targets and readiness deadline across
    every handoff. Only the completion owner closes at the selected boundary.
-8. The merge/completion owner observes until actual merge or the fixed
-   86,400-second limit; pending is not completed and the grant stays open.
-   PR readiness, merge settlement and post-merge verification each have an
-   independent fixed 86,400-second (24-hour) budget. Use publication checkpoint
-   deadlines when supplied, even when shorter. Repairs and reruns never reset
-   them. An explicit user continuation may start a new ordinary observation
-   attempt, retaining the original transaction and prior outcome; only explicit
-   release resume renews release-owned budgets. Preserve checkpoints, leave GitHub work running
-   and report the exact resume command on timeout. Keep short API timeouts,
-   bounded polling and minute progress. Verify exact-result CI and configured
-   Pages through the completion helper before reporting complete. Record confirmed
-   merge results immediately and perform outer local completion independently of
-   failed/timed-out result verification; pending verification keeps the grant open. Missing setup,
-   permissions, merge queues or unsupported workflow-file merges stop for a
-   maintainer; never use PAT, admin, auto-merge, direct push or CLI merge fallback.
-
-Plain review-pr reviews/repairs and returns readiness without merging. A root
-combined review-and-merge request delegates **once, before review work**, to
-merge-pr, which calls parent-owned review-pr and then protected merge. The child
-never interprets the root merge request as permission to recurse. Explicit
-complete publish-release, publish-helm and publish-image requests authorize their
-necessary ordinary PR and merge steps without another routine prompt. Help,
-report-only and Agentic SDLC restrictions always propagate.
+8. Observe authoritative merge settlement under the fixed ordinary 86,400-second
+   budget or inherited publication deadline; acceptance alone is not merge.
+   Record the merge immediately and verify containment in destination history.
+   Default ordinary completion returns here, with result CI and Pages reported
+   separately. Only explicit `merge-pr --wait-for-result` waits for those results.
+   Publish-release owns its selected service qualification, and SDLC retains its
+   accepted delivery boundary. Repairs and reruns never reset a deadline.
+   Guarded local completion is independent of asynchronous CI. Preserve concurrent
+   user checkout changes and report a local-completion blocker without undoing
+   those changes or falsely closing the grant. Missing setup, authority or required
+   queue support remains a maintainer blocker; no bypass or credential fallback.

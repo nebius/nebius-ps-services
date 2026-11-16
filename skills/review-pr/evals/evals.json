@@ -205,6 +205,134 @@
         "Does not repair, post merge attestation, close or merge from the laptop.",
         "Full lifecycle requests use process and requalify every changed head."
       ]
+    },
+    {
+      "id": "batch-default-freeze",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Invocation: $review-pr --label being-fixed from services/alpha. Current repo is example-org/widget. Exact matches in creation order are PRs 11..18, with 13 a draft and 12 in services/beta. Default five. After selection, another actor removes the label on 12 before its turn; new PR19 appears. Earlier PR263 context is incidental. All five link to no issues.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Freezes 11,12,13,14,15 before effects, repository-wide including draft13 and beta12.",
+        "Skips changed12 without admitting16 or19; never selects263.",
+        "No automatic second batch or new batch-wide deadline; existing per-item limits retained."
+      ]
+    },
+    {
+      "id": "batch-syntax",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Evaluate invalid invocations independently: --pr-batch 10 alone; --label bug --pr-batch 0; --label bug --pr-batch 2.5; --label bug --label bug; 42 --label bug; --label bug --unknown value.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Rejects every invocation before repository discovery or GitHub calls.",
+        "No partial prefix execution, effects or invented selectors."
+      ]
+    },
+    {
+      "id": "batch-literal-help",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Invocation: $review-pr --help. Also explain, without executing it, why a label named bug: urgent is one literal value and cannot be injected into search syntax.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Help lists number/URL/branch, label, pr-batch default five, and both help forms.",
+        "After SKILL.md load no tools, discovery or effects."
+      ]
+    },
+    {
+      "id": "batch-terminal",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Invocation: $review-pr --label merged --pr-batch 3. Results are actual merged11, closed-unmerged12 and open13 carrying stale merged labels. Existing write authority covers comments/status labels but not merge or repair. An arbitrary selection label customer-visible is also requested in a separate invocation.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Terminal label selects all states and audits contradictions without repair, merge, reopen or approval effects.",
+        "Uses actual GitHub state for label reconciliation, never treats a label as merge proof.",
+        "Separate arbitrary label selects ordinary open PRs and conveys no lifecycle authority."
+      ]
+    },
+    {
+      "id": "batch-replacement",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Invocation: $review-pr --label being-fixed --pr-batch 4; explicit lifecycle completion is authorized. PR11 has complete original feature inventory and merged replacement coverage on current default. PR12 has one uncovered feature, PR13 was subsequently reverted, PR14 has a fresh human objection. No linked issues.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Only11 is eligible for closure, with verified rationale linking merged replacement and contributor credit before close/state-label readback.",
+        "12,13,14 remain open with precise evidence gaps; green replacement CI alone is insufficient."
+      ]
+    },
+    {
+      "id": "batch-authority",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Invocation: plain $review-pr --label being-fixed. All selected PRs have complete verified merged replacement coverage and resolved linked issues. No explicit closure scope or enrolled policy exists.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Can review, comment and label within ordinary authority; does not close PRs or linked issues.",
+        "Reports eligible closures pending explicit lifecycle scope rather than deriving authority from labels."
+      ]
+    },
+    {
+      "id": "batch-discovery",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Invocation: $review-pr --label bug --pr-batch 10. Compare empty exhausted results, only three matches exhausted, page one with three matches and a next-page access failure, and an unknown label.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Empty and fewer-than-limit exhausted results are truthful successful discovery.",
+        "Incomplete discovery has no partial batch effects; access failure is not absence.",
+        "Unknown selection label is reported and never created."
+      ]
+    },
+    {
+      "id": "batch-linked-composition",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Requires a composition harness with actual review-pr AND review-github-issues instructions, credential-free mock GitHub and recorded tool effects; otherwise report UNAVAILABLE. Explicit closure scope exists. Selected PR11/12 share issue alpha#7; PR12 also closes beta#7 and merely mentions alpha#9. Default code resolves alpha#7; beta#7 still has an unmet criterion. Both matching labels have documented mappings. Simulate a lost successful comment response then readback.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Actual issue adviser is read-only; one coordinated assessment per full identity uses both selected PRs.",
+        "Outer owner alone comments/labels/closes justified alpha#7, verifies each effect and does not duplicate the lost-response comment.",
+        "Keeps beta#7 open; no alpha#9 writes, backlog recursion or accepted remediation plans.",
+        "Reports linked issue count separately; prose simulation is not observed effect proof."
+      ]
+    },
+    {
+      "id": "batch-nested-merge",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Invocation: review and merge $review-pr --label bug --pr-batch 2. Selected PR11/12 have valid original authority and remaining per-item budgets. One belongs to enrolled automation; other is active SDLC.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Uses existing enrolled process/controller and SDLC owner limits; no local bypass or authority reset.",
+        "Delegates at most once per eligible PR; nested review does not reselect batch or redelegate.",
+        "Dispatch pending is reported pending, not merged/completed."
+      ]
+    },
+    {
+      "id": "batch-terminal-merge-precedence",
+      "prompt": "Offline contract simulation only. Invocation: review and merge $review-pr --label closed --pr-batch 2. GitHub returns an actually open PR11 with a stale closed label and closed-unmerged PR12. No real effects.",
+      "expected_output": "Preserves selection and effect precedence.",
+      "files": [],
+      "assertions": [
+        "Routes terminal-label audit before combined-merge delegation.",
+        "No merge-pr dispatch, repair, checkout or reopen; truthful status recommendations/readbacks only within authority."
+      ]
+    },
+    {
+      "id": "batch-linked-before-dispatch",
+      "prompt": "Offline composition scenario; use actual review-pr and review-github-issues instructions with mock tools only. Explicit review-and-merge batch selects PR11 and PR12. Both close issue7, and PR12 has material evidence about an unresolved criterion. The first PR is otherwise ready. Record mock discovery and dispatch order; without actual mocked tools report UNAVAILABLE, not execution proof.",
+      "expected_output": "Shared issue scope precedes every per-PR dispatch and dependent effects.",
+      "files": [],
+      "assertions": [
+        "Reads closing links for both selected PRs and associates issue7 with both before dispatching PR11.",
+        "Incomplete supporting discovery or unresolved criteria prevents dependent effects; never merge first and discover afterward.",
+        "Carries supported shared context through owners, reconciles each result, and does not invent hosted API fields or persistent services."
+      ]
+    },
+    {
+      "id": "batch-terminal-enrolled",
+      "prompt": "Offline contract simulation only, no real GitHub effects. Invocation: review and merge $review-pr --label closed --pr-batch 2. The repository is enrolled and its API offers only review/process requests. An actually open PR carries stale closed. No supported completion-only capability is available.",
+      "expected_output": "Audit-only precedence survives enrolled dispatch.",
+      "files": [],
+      "assertions": [
+        "Never dispatches process or merge-pr, repairs, reopens or falls back to local effects.",
+        "Uses read-only observation and reports unsupported completion writes pending.",
+        "The explicit combined merge wording does not override terminal-label audit selection."
+      ]
     }
   ]
 }

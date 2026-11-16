@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   actions: read
+  pull-requests: read
 
 concurrency:
   group: __PROJECT_NAME__-release-${{ github.ref }}
@@ -30,7 +31,7 @@ jobs:
         working-directory: ${{ env.APP_DIR }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -51,6 +52,15 @@ jobs:
           RELEASE_COMMIT: ${{ steps.revision.outputs.commit }}
         run: python3 "${GITHUB_WORKSPACE}/.github/scripts/publication.py" ancestry --commit "$RELEASE_COMMIT" --branch "$MAIN_BRANCH"
 
+      - name: Verify exact-commit release qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+          RELEASE_COMMIT: ${{ steps.revision.outputs.commit }}
+        run: >-
+          python3 "${GITHUB_WORKSPACE}/.github/scripts/release_qualification.py" verify
+          --project "$APP_DIR" --commit "$RELEASE_COMMIT" --publisher __WORKFLOW_FILE__
+
       - name: Verify existing release or establish absence
         id: state
         env:
@@ -60,7 +70,7 @@ jobs:
 
       - name: Set up Python
         if: steps.state.outputs.release_exists == 'false'
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "__PYTHON_VERSION__"
 
@@ -169,7 +179,7 @@ jobs:
 
       - name: Preserve immutable pre-publication evidence
         if: steps.state.outputs.release_exists == 'false'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: publication-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.APP_DIR }}/publication.json
@@ -224,7 +234,7 @@ jobs:
 
       - name: Upload release manifest artifact
         if: steps.state.outputs.release_exists == 'false'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: __PROJECT_NAME__-release-manifest-${{ github.run_id }}
           path: ${{ env.APP_DIR }}/release-manifest.json

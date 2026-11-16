@@ -11,6 +11,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Verify exact-commit CI qualification before release publication, retaining
+  final tagged package and artifact checks while excluding unrelated CI/Pages.
+
 ## [nebius-vpngw-v0.6.5] - 2026-11-15
 
 - Size the native qualification suite budget for its expanded case set and retain

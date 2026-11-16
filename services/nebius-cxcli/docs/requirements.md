@@ -1924,4 +1924,45 @@ Authorized disposable Nebius/tailnet install, repeat deploy, reboot and independ
 
 <!-- /REQUIREMENT: REQ-054 -->
 
+<!-- REQUIREMENT: REQ-055 status=active priority=P1 type=reliability -->
+### REQ-055: Reuse exact-commit release qualification
+
+#### User Story
+
+Maintainers need shorter delivery with complete, identity-bound validation and
+recoverable publication rather than repeated or unrelated work.
+
+#### Acceptance Criteria
+
+- AC-001: Require the cxcli CI and Nsight native/chart CI and shared publisher contract producers for the frozen
+  merged commit before tagging. Bind quality, Python compatibility, wheel and all native/chart matrix results to trusted run/attempt and artifact identities. Include dependency manifest and lock changes in Nsight trigger routing.
+  Publication retains tagged runtime version, final wheel build, installation and
+  CLI smoke checks plus independent remote byte verification. Optional cloud UAT
+  is not a new release prerequisite. Keep existing service and release-specific wheel/catalog checks.
+- AC-002: Preserve user checkout state, original release identities and required
+  protection, review, failure and cleanup gates.
+
+#### Negative Criteria
+
+- NC-001: Never treat missing evidence, skipped required jobs, uncertain effects,
+  expired artifacts or unrelated successful runs as qualification.
+- NC-002: Do not activate the disabled AI controller or overwrite published data.
+
+#### Validation Method
+
+Focused source regressions and workflow contract tests, followed by independent
+installation and deployed workflow evidence at their respective boundaries.
+
+#### Test Method
+
+Cover exact identity, failure and skip rejection, stale attempts, concurrent
+observation, interruption, duplicate notifications and retained evidence expiry.
+
+#### Evaluation Method
+
+Compare selected test inventories and repeated work; report observed timings and
+separate local checks from deployed qualification without claiming unrun tests.
+
+<!-- /REQUIREMENT: REQ-055 -->
+
 <!-- maintain-project-specs:requirements:end -->

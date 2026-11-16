@@ -203,3 +203,11 @@ Requested campaigns wait for a meaningful ready scope. An existing test environm
 uses its project harness directly; container/Nebius campaigns require explicit
 skill selection. Missing optional prerequisites leave a handoff without blocking
 implementation or eligible publication. Actual failures and cleanup remain owned.
+
+## Delivery waiting and optional UAT
+
+Ordinary merge returns after confirmed merge and destination containment.
+Use `merge-pr --wait-for-result` to wait for full result CI and Pages. Release
+publication instead verifies its exact-commit service/shared publisher profile.
+Additional live/cloud/UAT campaigns are opt-in; required CI, review, recorded
+failures and cleanup remain binding. SDLC retains its accepted delivery boundary.

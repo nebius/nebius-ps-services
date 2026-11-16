@@ -15,3 +15,8 @@ checkout-behavior-explanation,false,"Explain how review-pr handles the final loc
 review-concurrent-editing,true,"$review-pr Review PR 42 and fix safe issues while I keep editing this checkout; leave my branch and files untouched."
 review-private-fork,true,"$review-pr Review this fork PR in your private workspace and publish safe fixes to its existing branch."
 repair-review-skill,false,"Design a change to review-pr so it never switches my working branch; do not review any PR."
+review-pr-optional-uat,true,Review this PR for protected merge readiness with required CI and optional UAT clearly separated.
+batch-label-explicit,true,$review-pr --label being-fixed --pr-batch 10
+batch-label-default,true,$review-pr --label needs-information
+batch-label-claude,true,/review-pr --label merged --pr-batch 5
+batch-skill-design,false,Refactor the review-pr label batch policy; do not review any GitHub PR.

@@ -4380,5 +4380,48 @@ claims. An unresolved runtime reproducer prevents a tested release-candidate cla
 
 <!-- /REQUIREMENT: REQ-039 -->
 
+<!-- REQUIREMENT: REQ-040 status=active priority=P1 type=reliability -->
+### REQ-040: Reuse exact-commit release qualification
+
+#### User Story
+
+Maintainers need shorter delivery with complete, identity-bound validation and
+recoverable publication rather than repeated or unrelated work.
+
+#### Acceptance Criteria
+
+- AC-001: Require the VPNGW CI and shared publisher contract producers for the frozen
+  merged commit before tagging. Bind native, historical-upgrade, lint, unit/safety
+  and build results to trusted run/attempt and artifact identities. Move offline
+  dependency-install coverage into CI before removing duplicate release suites.
+  Publication retains tagged runtime version, final wheel build, installation and
+  CLI smoke checks plus independent remote byte verification. Optional cloud UAT
+  is not a new release prerequisite. Existing HA and non-HA contracts are unchanged.
+- AC-002: Preserve user checkout state, original release identities and required
+  protection, review, failure and cleanup gates.
+
+#### Negative Criteria
+
+- NC-001: Never treat missing evidence, skipped required jobs, uncertain effects,
+  expired artifacts or unrelated successful runs as qualification.
+- NC-002: Do not activate the disabled AI controller or overwrite published data.
+
+#### Validation Method
+
+Focused source regressions and workflow contract tests, followed by independent
+installation and deployed workflow evidence at their respective boundaries.
+
+#### Test Method
+
+Cover exact identity, failure and skip rejection, stale attempts, concurrent
+observation, interruption, duplicate notifications and retained evidence expiry.
+
+#### Evaluation Method
+
+Compare selected test inventories and repeated work; report observed timings and
+separate local checks from deployed qualification without claiming unrun tests.
+
+<!-- /REQUIREMENT: REQ-040 -->
+
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->

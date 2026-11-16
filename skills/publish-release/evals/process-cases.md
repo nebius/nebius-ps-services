@@ -25,7 +25,7 @@ native invocation, commit-owner delegation or real GitHub publication.
 - Routine PR approval comes from the Actions broker after local review; never
   wait for human approval before dispatch. Actual additional approval gates print
   their GitHub link, poll every 15 seconds and emit minute progress. Approval after
-  3601 seconds continues within the fixed three-hour phase; only phase exhaustion
+  3601 seconds continues within the fixed eight-hour phase; only phase exhaustion
   returns a timeout and exact resume command.
 - Changes requested, failed checks, conflicts, closed PRs and API errors are not
   reported as waiting for approval. No self-approval or admin bypass is attempted.
@@ -33,7 +33,7 @@ native invocation, commit-owner delegation or real GitHub publication.
   the release phase deadline and do not renew it. Saved gate-specific deadlines
   cannot shorten the canonical phase budget.
 - PR readiness, merge settlement, post-merge verification and release execution
-  have independent 10,800-second phases. Verification polls retain their
+  have independent 28,800-second phases. Verification polls retain their
   checkpoint deadline across reruns; old stored deadlines persist until resume.
   Direct async merge with no queue entry is pending; never infer removal without
   previously observed membership. A queued
@@ -72,3 +72,17 @@ GitHub responses. In a separately authorized disposable GitHub target, validate
 one dirty feature/default start and an approval timeout/resume under actual branch
 protections. Source tests and copied-skill parity do not establish those live or
 native-agent outcomes. Never publish to a real project to satisfy local checks.
+
+## Qualification and waiting boundaries
+
+- A running producer and a missing producer dispatch the missing work once
+  immediately; repeated observation neither duplicates dispatch nor renews time.
+- A blocked observation returns a nonzero process status. A concurrent resume
+  invalidates stale observation state without losing the newer checkpoint.
+- A required job skip, partial native/history matrix, expired proof, changed
+  attempt or later run blocks qualification; unrelated CI and Pages do not.
+- Eight-hour defaults apply only to new phase deadlines or explicit resume;
+  existing shorter checkpoints are preserved across installation.
+- Ordinary merge completes at merge plus containment. Explicit full-result
+  observation remains separate; missing optional UAT alone never grants a waiver
+  over a known failure or required acceptance criterion.

@@ -27,9 +27,9 @@ CI policy reached `main` in [PR #239](https://github.com/nebius/nebius-ps-servic
 Required CI continues to enforce the maintained workflow inventory without
 changing branch protection.
 
-## Actions event policies
+## Existing Actions policy baseline
 
-Repository administrators own three active Actions event policies in
+The pre-cutover deployment has three Actions event policies in
 `nebius/nebius-ps-services`. They preserve the two reviewed uses of
 `pull_request_target` and explicitly prohibit that event for every other
 workflow path. GitHub's default restriction is scheduled for enforcement on
@@ -287,7 +287,8 @@ Official contracts: [built-in token](https://docs.github.com/en/actions/concepts
 
 ## Targeted events and hourly recovery
 
-Protected merge has no schedule. PR events and trusted PR CI `in_progress` and
+Protected merge is dispatch-only. CI status observer owns PR events and trusted
+PR CI `in_progress` and
 `completed` events update only affected current heads. Starts must remain wired
 so a same-SHA rerun cannot leave stale green Required CI. Push and result-CI
 runs do not enter that aggregate path.
@@ -305,8 +306,9 @@ normal CI start/completion handlers should update the affected head directly.
 Merge completion has the sole hourly recovery schedule (`17 * * * *`) and manual
 recovery. A separate default-branch-only status-write job repairs Required CI
 for all open default-base PRs. Completion event discovery reads the producer
-run's artifacts; ordinary CI and CI-only broker runs are filtered before runner
-allocation. GitHub may still display skipped workflow-run rows.
+run's artifacts. Completion listens only to the broker; the observer sends a
+paired source run/attempt callback for verified result CI. Targeted callbacks
+skip global recovery enumeration. GitHub can still show skipped observer rows.
 
 Validated result inputs produce an immutable `merge-result-route/v1` receipt
 before tests. It binds repository, workflow/run/attempt, broker/PR/result and
@@ -333,3 +335,74 @@ fallback qualification as incomplete. GitHub scheduling has no promised latency
 here. Keep source tests, deployed behavior and downstream helper installation
 parity separate. Roll back a defective helper through a reviewed revert while
 preserving hourly recovery.
+
+## Delivery and publication qualification
+
+Ordinary protected merge returns after GitHub confirms the merge and the result
+is contained in the destination branch. Required pre-merge CI and code review
+still apply. Optional live/cloud UAT is opt-in; a known failure, active trial,
+cleanup obligation or accepted requirement cannot be silently waived. Use
+`$merge-pr --wait-for-result` to observe all result CI and configured Pages.
+The separate Agentic SDLC delivery boundary remains in force.
+
+Release profiles in `.github/merge-policy.json` select the exact service and
+shared publisher checks. `release-qualification/v1` binds the commit/tree,
+profile digest, numeric repository, workflow revision, run attempt, complete job
+set and retained report digests. Missing producers can be explicitly dispatched
+once; uncertain dispatches are reconciled before further effects. A failed,
+expired or superseded proof blocks publication. Publishers independently verify
+qualification and keep final tagged package/version/installation checks.
+Historical routing receipts keep reruns visible during discovery; success still
+requires current-attempt provenance. A trusted result producer without a usable
+source route blocks fallback until its identity can be reconciled.
+
+The four release phases each allow eight hours. Existing checkpoint deadlines
+remain unchanged until explicit resume. Read-only observation releases the state
+lock while accessing GitHub and discards stale updates. Exclusive effect locks
+retain single-owner publication.
+
+CI status observer owns PR metadata and CI start/completion events. Protected
+merge accepts only explicit operator dispatch. Merge completion watches the
+broker, accepts independently verified targeted result notifications, and keeps
+manual/hourly recovery. CI start events invalidate stale green aggregate status;
+ordinary CI completions no longer launch the protected merge workflow.
+
+Image publication preserves a verified digest and intent before assigning any
+alias. Retries fill only missing aliases from that digest; `latest` still needs
+a current explicit request. Helm preserves the original compressed package and
+registry destination before push, and retries reuse those exact bytes. Evidence
+is retained for 90 days; missing original evidence requires reconciliation.
+Every effectful recovery attempt retains its own receipt before publication,
+including the restored chart bytes or reused image digest. Run/attempt history
+detects deleted receipts; a proven attempt that skipped intent and effects is
+the only historical receipt-free retry.
+
+## Observer cutover and rollback
+
+The source topology above requires coordinated deployment. The historical
+activation evidence in this document does not prove this cutover is deployed.
+
+1. Preserve current event policies and protection/token/fork settings. Resolve
+   inherited policy and prove old dispatches and publication writers quiescent;
+   retain receipts and existing recovery. Complete independent review and CI on
+   the exact candidate before installing the trusted workflows on default.
+2. Once the new observer code is reviewed and deployed, create an exact-path
+   observer exception allowing only `pull_request_target` and `workflow_run`.
+   Reconcile ambiguous create responses by identity and complete body before
+   retry. Record the returned ID; never guess it from the existing three IDs.
+3. Exclude `.github/workflows/ci-status-observer.yml` from baseline policy 10050
+   only after the observer exception is verified. Narrow policy 10052 to
+   `workflow_dispatch`; keep reviewer policy 10051 unchanged. Compare each
+   captured body immediately before updating and independently read it back.
+4. Verify all workflow paths match exactly one intended policy, all triggers are
+   permitted, and protection/token/fork settings are unchanged. Exercise a
+   reviewed ordinary PR, same-SHA rerun start, targeted result callback and hourly
+   recovery. Qualify an exact default commit before a new release; keep the AI
+   controller and its effect workflows disabled.
+5. On failure, stop new operator dispatches while retaining completion recovery.
+   Reapply only captured task-owned policy/workflow changes with drift checks.
+   Restore baseline coverage before removing the new exception. Do not erase
+   receipts, renew budgets, or repeat uncertain merge/publication effects.
+
+Local source tests do not establish installed or deployed qualification. Record
+those outcomes separately; this implementation does not itself activate AI.

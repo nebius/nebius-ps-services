@@ -5744,3 +5744,10 @@ python -m mypy
 ---
 
 For detailed design, workflows, and troubleshooting, see [docs/design.md](docs/design.md).
+
+## Release qualification
+
+Releases use the project profile in `.github/merge-policy.json` and the shared
+[qualification contract](../../skills/publish-release/references/release-qualification.md).
+Required native/offline checks remain enforced. Optional cloud UAT is separate;
+final tagged package and remote asset verification remain part of publication.

@@ -2,12 +2,14 @@
 """Offline publication failure, identity and retry regressions."""
 
 import contextlib
+import hashlib
 import io
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from urllib.error import HTTPError
 from unittest.mock import Mock, patch
 
@@ -20,6 +22,165 @@ IDENTITY = {"tag": "example-v1.2.3", "tag_object": "d" * 40, "sha": SHA}
 
 
 class PublicationTests(unittest.TestCase):
+    def test_third_attempt_reuses_attempt_bound_original_receipts(self):
+        for schema in [pub.IMAGE_INTENT_SCHEMA, pub.CHART_SCHEMA]:
+            with self.subTest(schema=schema):
+                api = Mock(repo="example/repo")
+                run = {"id": 10, "run_attempt": 3, "path": ".github/workflows/publish.yml",
+                       "head_repository": {"full_name": api.repo}, "event": "push",
+                       "head_branch": IDENTITY["tag"], "head_sha": SHA}
+                originals = {
+                    attempt: {**IDENTITY, "schema": schema, "repository": api.repo,
+                              "workflow": "publish.yml", "run_id": 10, "run_attempt": attempt,
+                              "workflow_sha": SHA, "event": "push", "ref": "refs/tags/" + IDENTITY["tag"],
+                              "digest": DIGEST, "tags": ["registry.example/demo:1.2.3"],
+                              "assets": [{"name": "demo.tgz", "sha256": "b" * 64, "size": 20}],
+                              "chart_ref": "oci://registry.example/demo"}
+                    for attempt in [1, 2]
+                }
+                artifacts = [
+                    {"id": attempt, "name": f"{schema.split('/')[0]}-10-{attempt}", "expired": False}
+                    for attempt in [1, 2]
+                ]
+                api.pages.side_effect = lambda path, key: (
+                    [run] if key == "workflow_runs" else artifacts if key == "artifacts" else []
+                )
+                api.api.side_effect = lambda path: {**run, "run_attempt": int(path.rsplit("/", 1)[1])}
+                api.artifact.side_effect = lambda artifact: originals[artifact["id"]]
+                with patch.object(pub, "command", return_value=""), patch.dict(
+                    os.environ, {"GITHUB_RUN_ID": "10", "GITHUB_RUN_ATTEMPT": "3"}
+                ):
+                    receipts = pub.trusted_manifests(api, "publish.yml", schema, SHA, IDENTITY["tag"])
+                    self.assertEqual(receipts, list(originals.values()))
+                    if schema == pub.IMAGE_INTENT_SCHEMA:
+                        self.assertEqual(pub.image_recovery_state(
+                            {"registry.example/demo:1.2.3": None}, [], receipts,
+                            ["registry.example/demo:1.2.3"],
+                        ), ("pending", DIGEST))
+                    artifacts.pop()
+                    with self.assertRaisesRegex(pub.Unverifiable, "evidence missing"):
+                        pub.trusted_manifests(api, "publish.yml", schema, SHA, IDENTITY["tag"])
+
+    def test_receipt_free_retry_requires_proven_skipped_intent_and_effects(self):
+        api = Mock(repo="example/repo")
+        run = {"id": 10, "run_attempt": 1, "status": "completed",
+               "path": ".github/workflows/publish.yml",
+               "head_repository": {"full_name": api.repo}, "event": "push",
+               "head_branch": IDENTITY["tag"], "head_sha": SHA}
+        steps = [{"name": name, "conclusion": "skipped"} for name in [
+            "Preserve original chart package before push",
+            "Preserve chart publication intent before push", "Push chart package",
+        ]]
+        jobs = [{"status": "completed", "steps": steps}]
+        api.pages.side_effect = lambda path, key: (
+            [run] if key == "workflow_runs" else jobs if key == "jobs" else []
+        )
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "11", "GITHUB_RUN_ATTEMPT": "1"}):
+            self.assertEqual(pub.trusted_manifests(api, "publish.yml", pub.CHART_SCHEMA, SHA, IDENTITY["tag"]), [])
+            # A prior preserved package cannot disappear into a fresh build.
+            steps[0]["conclusion"] = "success"
+            with patch.object(pub, "tag_identity", return_value=IDENTITY):
+                with self.assertRaisesRegex(pub.Unverifiable, "evidence missing"):
+                    pub.chart_restore(api, "publish.yml", IDENTITY["tag"], "unused", "oci://example/chart")
+            steps[0]["conclusion"] = "skipped"
+            jobs[0]["status"] = "in_progress"
+            with self.assertRaises(pub.Unverifiable):
+                pub.trusted_manifests(api, "publish.yml", pub.CHART_SCHEMA, SHA, IDENTITY["tag"])
+        # The currently executing first attempt may establish new intent.
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "10", "GITHUB_RUN_ATTEMPT": "1"}):
+            self.assertEqual(pub.trusted_manifests(api, "publish.yml", pub.CHART_SCHEMA, SHA, IDENTITY["tag"]), [])
+
+    def test_deleted_release_evidence_blocks_even_when_release_is_absent(self):
+        api = Mock()
+        api.pages.return_value = []
+        with patch.object(pub, "tag_identity", return_value=IDENTITY), patch.object(
+            pub, "trusted_manifests", side_effect=pub.Unverifiable("evidence missing")
+        ):
+            with self.assertRaisesRegex(pub.Unverifiable, "evidence missing"):
+                pub.release_state(api, "release.yml", IDENTITY["tag"])
+
+    def test_deleted_receipt_blocks_prior_attempt_even_without_destination(self):
+        for schema in [pub.RELEASE_SCHEMA, pub.IMAGE_SCHEMA, pub.IMAGE_INTENT_SCHEMA, pub.CHART_SCHEMA]:
+            with self.subTest(schema=schema):
+                api = Mock(repo="example/repo")
+                run = {"id": 10, "run_attempt": 1, "status": "completed",
+                       "conclusion": "success", "path": ".github/workflows/publish.yml",
+                       "head_repository": {"full_name": api.repo}, "event": "push",
+                       "head_branch": IDENTITY["tag"], "head_sha": SHA}
+                api.pages.side_effect = lambda path, key: [run] if key == "workflow_runs" else []
+                api.api.return_value = run
+                with patch.dict(os.environ, {"GITHUB_RUN_ID": "11", "GITHUB_RUN_ATTEMPT": "1"}):
+                    with self.assertRaisesRegex(pub.Unverifiable, "missing|Missing"):
+                        pub.trusted_manifests(api, "publish.yml", schema, SHA, IDENTITY["tag"])
+                # A same-run rerun must also examine its earlier attempts.
+                run["run_attempt"] = 2
+                with patch.dict(os.environ, {"GITHUB_RUN_ID": "10", "GITHUB_RUN_ATTEMPT": "2"}):
+                    with self.assertRaises(pub.Unverifiable):
+                        pub.trusted_manifests(api, "publish.yml", schema, SHA, IDENTITY["tag"])
+
+    def test_expired_tag_intent_blocks_but_other_tag_history_is_ignored(self):
+        api = Mock(repo="example/repo")
+        run = {"id": 10, "path": ".github/workflows/chart.yml", "head_repository": {"full_name": api.repo},
+               "event": "push", "head_branch": IDENTITY["tag"], "head_sha": SHA}
+        artifact = {"name": "publication-chart-10-1", "expired": True}
+        api.pages.side_effect = lambda path, key: [run] if key == "workflow_runs" else [artifact]
+        with self.assertRaisesRegex(pub.Unverifiable, "expired"):
+            pub.trusted_manifests(api, "chart.yml", pub.CHART_SCHEMA, SHA, IDENTITY["tag"])
+        run["head_branch"] = "other-v1.2.3"
+        self.assertEqual(pub.trusted_manifests(api, "chart.yml", pub.CHART_SCHEMA, SHA, IDENTITY["tag"]), [])
+        api.artifact.assert_not_called()
+
+    def test_image_intent_recovers_zero_or_partial_aliases_without_rebuild(self):
+        tags = ["registry.example/demo:1.2.3", "registry.example/demo:git-aaaa"]
+        intent = {"tags": tags + ["registry.example/demo:latest"], "digest": DIGEST}
+        for observed in [{t: None for t in tags}, {tags[0]: DIGEST, tags[1]: None}]:
+            self.assertEqual(pub.image_recovery_state(observed, [], [intent], tags), ("pending", DIGEST))
+        self.assertEqual(pub.image_recovery_state(dict.fromkeys(tags, DIGEST), [], [intent], tags), ("verified-existing", DIGEST))
+        for observed, intents in [(dict.fromkeys(tags, OTHER), [intent]), (dict.fromkeys(tags), [intent, {**intent, "digest": OTHER}])]:
+            with self.assertRaises(pub.Unverifiable):
+                pub.image_recovery_state(observed, [], intents, tags)
+        with self.assertRaises(pub.Unverifiable):
+            pub.image_recovery_state(dict.fromkeys(tags), [intent], [], tags)
+
+    def test_chart_retry_restores_exact_original_bytes_and_destination(self):
+        data = b"original compressed archive including original timestamps"
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as bundle:
+            bundle.writestr("demo-1.2.3.tgz", data)
+        archive = stream.getvalue()
+        asset = {"name": "demo-1.2.3.tgz", "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        digest = "sha256:" + hashlib.sha256(archive).hexdigest()
+        destination = "oci://registry.example/demo"
+        intent = {**IDENTITY, "assets": [asset], "chart_ref": destination, "run_id": 1, "run_attempt": 1,
+                  "package_artifact_id": 2, "package_artifact_digest": digest}
+        package = {"id": 2, "expired": False, "workflow_run": {"id": 1},
+                   "name": "publication-chart-package-1-1", "digest": digest, "size_in_bytes": len(archive)}
+        api = Mock()
+        api.api.return_value = package
+        with tempfile.TemporaryDirectory() as directory, patch.object(pub, "tag_identity", return_value=IDENTITY), patch.object(pub, "trusted_manifests", return_value=[intent]), patch.object(pub, "command", return_value=archive):
+            result = pub.chart_restore(api, "chart.yml", IDENTITY["tag"], directory, destination)
+            self.assertEqual(Path(result["package_path"]).read_bytes(), data)
+            with self.assertRaisesRegex(pub.Unverifiable, "Conflicting"):
+                pub.chart_restore(api, "chart.yml", IDENTITY["tag"], directory, "oci://other.example/demo")
+            package["expired"] = True
+            with self.assertRaisesRegex(pub.Unverifiable, "provenance"):
+                pub.chart_restore(api, "chart.yml", IDENTITY["tag"], directory, destination)
+            package["expired"] = False
+            with patch.object(pub, "command", return_value=archive + b"tampered"):
+                with self.assertRaisesRegex(pub.Unverifiable, "digest"):
+                    pub.chart_restore(api, "chart.yml", IDENTITY["tag"], directory, destination)
+
+    def test_shared_remote_deadline_bounds_each_call(self):
+        token = pub.REMOTE_DEADLINE.set(11)
+        try:
+            with patch.object(pub.time, "monotonic", return_value=10), patch.object(pub.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"{}", b"")) as run:
+                pub.command(["gh", "api"])
+                self.assertEqual(run.call_args.kwargs["timeout"], 1)
+            with patch.object(pub.time, "monotonic", return_value=12), self.assertRaises(pub.Unverifiable):
+                pub.command(["gh", "api"])
+        finally:
+            pub.REMOTE_DEADLINE.reset(token)
+
     def test_tag_version_is_strict_semver(self):
         self.assertEqual(pub.version("example-v0.2.3", "example"), "0.2.3")
         for tag in [
@@ -301,6 +462,7 @@ class PublicationTests(unittest.TestCase):
     def test_manual_retry_ignores_release_lane_at_same_source(self):
         manual = {
             "id": 1,
+            "run_attempt": 1,
             "path": ".github/workflows/image.yml",
             "head_repository": {"full_name": "example/project"},
             "event": "workflow_dispatch",
@@ -345,6 +507,21 @@ class PublicationTests(unittest.TestCase):
                     pub.trusted_manifests(api, "image.yml", pub.IMAGE_SCHEMA, SHA),
                     [value],
                 )
+                # Either authenticated image receipt accounts for the attempt;
+                # an interrupted run need not have both intent and completion.
+                self.assertEqual(
+                    pub.trusted_manifests(api, "image.yml", pub.IMAGE_INTENT_SCHEMA, SHA),
+                    [],
+                )
+                value["schema"] = pub.IMAGE_INTENT_SCHEMA
+                api.pages.side_effect = lambda path, key: (
+                    [manual] if key == "workflow_runs" else
+                    [{"id": 3, "name": "publication-image-intent-1-1", "expired": False}]
+                )
+                self.assertEqual(
+                    pub.trusted_manifests(api, "image.yml", pub.IMAGE_SCHEMA, SHA), [],
+                )
+                value["schema"] = pub.IMAGE_SCHEMA
 
     def test_explicit_latest_reuses_verified_digest_without_rebuilding(self):
         tags = ["registry/image:sha-aaaaaaa", "registry/image:latest"]
@@ -381,7 +558,7 @@ class PublicationTests(unittest.TestCase):
                     patch.object(pub, "GitHub"),
                     patch.object(pub, "trusted_manifests", return_value=[manifest]),
                     patch.object(
-                        pub, "image_digest", side_effect=[DIGEST, latest_digest]
+                        pub, "image_digest", side_effect=[DIGEST, DIGEST, latest_digest]
                     ),
                 ):
                     self.assertEqual(pub.main(), 0)

@@ -1720,6 +1720,14 @@ read-only and does not configure connectors or save reports automatically. See
 
 ### `review-github-issues`
 
+Both review skills support opt-in exact-label batches:
+`$review-pr --label being-fixed --pr-batch 10` and
+`$review-github-issues --label being-fixed --issue-batch 10`.
+Omitting the batch flag defaults to five total selected items; limits never
+repeat automatically. Existing no-flags selection remains unchanged. Issue
+review may reuse documented existing labels, preserving unrelated labels;
+linked issues retain independent closure evidence and authority.
+
 `review-github-issues` reviews all open issues in the current GitHub repository
 by default. Optional `--repo` accepts comma-separated repository names or URLs;
 `--issue` checks comma-separated numbers in every selected repo. Finish repos
@@ -1728,7 +1736,7 @@ roots first, then remaining projects follow by issue count. Related issues form
 shared remediation batches ordered by severity, then size; each issue retains
 its own assessment and disposition.
 
-Explicit invocation applies justified comments and closures; valid low-priority
+Explicit invocation applies justified existing labels, comments and closures; valid low-priority
 issues stay open. Accepted batches use internal `research` and `design` advisers,
 save one verified plan under the owning project's `docs/github-issues/` using
 `batch-<anchor-number>-<topic-slug>.md`, then publish individual acceptance.

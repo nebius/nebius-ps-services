@@ -8,6 +8,7 @@ owners retain those narrowly scoped effects and service-specific qualification.
 from __future__ import annotations
 
 import argparse
+import contextvars
 import hashlib
 import io
 import json
@@ -17,6 +18,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -24,9 +26,12 @@ import zipfile
 
 RELEASE_SCHEMA = "publication-release/v1"
 IMAGE_SCHEMA = "publication-image/v1"
+IMAGE_INTENT_SCHEMA = "publication-image-intent/v1"
+CHART_SCHEMA = "publication-chart/v1"
 SEMVER = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
+REMOTE_DEADLINE = contextvars.ContextVar("publication_remote_deadline", default=None)
 
 
 class Unverifiable(RuntimeError):
@@ -43,13 +48,19 @@ def require(condition, message):
 
 
 def command(args, *, binary=False):
-    result = subprocess.run(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        timeout=120,
-        check=False,
-    )
+    deadline = REMOTE_DEADLINE.get()
+    remaining = 120 if deadline is None else min(120, deadline - time.monotonic())
+    require(remaining > 0, "Publication observation deadline reached")
+    try:
+        result = subprocess.run(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=remaining,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise Unverifiable("External observation unavailable or timed out") from None
     require(
         result.returncode == 0, "External observation failed; state is unverifiable"
     )
@@ -227,8 +238,44 @@ class GitHub:
         return path
 
 
+def no_publication_effect(api, run_id, attempt, schema):
+    """Prove a receipt-free attempt stopped before the durable intent/effects.
+
+    Step names are part of the publisher contract. Unknown/older workflows and
+    lost job history require reconciliation, rather than an assumed fresh start.
+    """
+    boundaries = {
+        RELEASE_SCHEMA: (
+            "Preserve immutable pre-publication evidence",
+            "Create GitHub release",
+        ),
+        IMAGE_SCHEMA: (
+            "Preserve original image intent before aliases",
+            "Assign missing aliases from the preserved digest",
+            "Update explicitly requested latest from verified digest",
+        ),
+        CHART_SCHEMA: (
+            "Preserve original chart package before push",
+            "Preserve chart publication intent before push",
+            "Push chart package",
+        ),
+    }[IMAGE_SCHEMA if schema == IMAGE_INTENT_SCHEMA else schema]
+    jobs = api.pages(f"actions/runs/{run_id}/attempts/{attempt}/jobs", "jobs")
+    if not jobs or any(job.get("status") != "completed" for job in jobs):
+        return False
+    for name in boundaries:
+        steps = [step for job in jobs for step in job.get("steps", [])
+                 if step.get("name") == name]
+        if len(steps) != 1 or steps[0].get("conclusion") != "skipped":
+            return False
+    return True
+
+
 def trusted_manifests(api, workflow, schema, source_sha, tag=None):
     manifests = []
+    family = {schema}
+    if schema in {IMAGE_SCHEMA, IMAGE_INTENT_SCHEMA}:
+        family = {IMAGE_SCHEMA, IMAGE_INTENT_SCHEMA}
     # Run-scoped artifacts avoid untrusted repository-wide lookalike names.
     runs = api.pages(
         f"actions/workflows/{quote(workflow, safe='')}/runs", "workflow_runs"
@@ -251,25 +298,29 @@ def trusted_manifests(api, workflow, schema, source_sha, tag=None):
             or run["head_branch"] != os.environ.get("MAIN_BRANCH", "main")
         ):
             continue
+        accounted = set()
         for artifact in api.pages(f"actions/runs/{run['id']}/artifacts", "artifacts"):
             match = re.fullmatch(
-                r"publication-(release|image)-(\d+)-(\d+)", artifact["name"]
+                r"publication-(release|image|image-intent|chart)-(\d+)-(\d+)", artifact["name"]
             )
             if (
                 not match
-                or f"publication-{match[1]}/v1" != schema
+                or f"publication-{match[1]}/v1" not in family
                 or int(match[2]) != run["id"]
             ):
                 continue
             if artifact["expired"]:
-                continue
+                # Tag producers are already bound to the exact source/tag above.
+                # Manual producers can select an older source than head_sha;
+                # without readable evidence their source cannot be ruled out.
+                raise Unverifiable(
+                    "Publication evidence expired; reconcile original identity before retry"
+                )
             value = api.artifact(artifact)
             require(isinstance(value, dict), "Invalid publication manifest")
-            if value.get("sha") != source_sha:
-                continue
             attempt = api.api(f"actions/runs/{run['id']}/attempts/{int(match[3])}")
             require(
-                value["schema"] == schema
+                value["schema"] == f"publication-{match[1]}/v1"
                 and value["repository"] == api.repo
                 and value["workflow"] == workflow
                 and value["run_id"] == run["id"]
@@ -277,7 +328,10 @@ def trusted_manifests(api, workflow, schema, source_sha, tag=None):
                 and value["workflow_sha"] == run["head_sha"]
                 and value["event"] == run["event"]
                 and attempt["path"] == run["path"]
-                and attempt["head_sha"] == run["head_sha"],
+                and attempt["head_sha"] == run["head_sha"]
+                and attempt["id"] == run["id"]
+                and attempt["run_attempt"] == int(match[3])
+                and 1 <= int(match[3]) <= run["run_attempt"],
                 "Publication provenance mismatch",
             )
             # Historical workflow code must belong to the accepted main history.
@@ -296,7 +350,26 @@ def trusted_manifests(api, workflow, schema, source_sha, tag=None):
                 else f"refs/heads/{os.environ.get('MAIN_BRANCH', 'main')}"
             )
             require(value["ref"] == expected_ref, "Publication ref mismatch")
-            manifests.append(value)
+            require(
+                SHA.fullmatch(value.get("sha", ""))
+                and (not tag or (value["sha"] == source_sha and value.get("tag") == tag)),
+                "Publication source mismatch",
+            )
+            accounted.add(int(match[3]))
+            if value.get("sha") == source_sha and value["schema"] == schema:
+                manifests.append(value)
+        # Artifact listings omit deleted/retention-pruned rows. Account for
+        # every historical attempt, including reruns of this same run ID.
+        for attempt in range(1, run["run_attempt"] + 1):
+            if attempt in accounted or (
+                str(run["id"]) == os.environ.get("GITHUB_RUN_ID")
+                and str(attempt) == os.environ.get("GITHUB_RUN_ATTEMPT")
+            ):
+                continue
+            require(
+                no_publication_effect(api, run["id"], attempt, schema),
+                "Publication evidence missing; reconcile original identity before retry",
+            )
     return manifests
 
 
@@ -313,11 +386,11 @@ def release_state(api, workflow, tag):
     identity = tag_identity(tag)
     releases = [r for r in api.pages("releases") if r["tag_name"] == tag]
     require(len(releases) <= 1, "Ambiguous release identity")
+    manifests = trusted_manifests(api, workflow, RELEASE_SCHEMA, identity["sha"], tag)
     if not releases:
         return "absent"
     release = releases[0]
     require(not release["draft"], "Partial draft release requires reconciliation")
-    manifests = trusted_manifests(api, workflow, RELEASE_SCHEMA, identity["sha"], tag)
     require(
         manifests,
         "Existing release lacks trusted original hashes; maintainer reconciliation required",
@@ -492,6 +565,80 @@ def immutable_state(observed, manifests, tags):
     return "verified-existing", next(iter(observed.values()))
 
 
+def image_recovery_state(observed, manifests, intents, tags):
+    """A retained pre-alias intent may finish only its original missing aliases."""
+    if not intents:
+        require(not manifests or any(observed.values()),
+                "Deleted historical aliases require explicit reconciliation")
+        return immutable_state(observed, manifests, tags)
+    matching = [m for m in intents if set(t for t in m["tags"] if not t.endswith(":latest")) == set(tags)]
+    require(matching, "Pending image intent has a different alias set")
+    digests = {m["digest"] for m in matching}
+    digests.update(m["digest"] for m in manifests if set(tags).issubset(m["tags"]))
+    require(len(digests) == 1, "Conflicting original image identities")
+    expected = digests.pop()
+    require(DIGEST.fullmatch(expected) and all(v in {None, expected} for v in observed.values()),
+            "Image alias conflicts with original intent")
+    return ("pending" if any(v is None for v in observed.values()) else "verified-existing"), expected
+
+
+def chart_restore(api, workflow, tag, directory, chart_ref):
+    identity = tag_identity(tag)
+    originals = trusted_manifests(api, workflow, CHART_SCHEMA, identity["sha"], tag)
+    if not originals:
+        return {"restored": "false"}
+    first = originals[0]
+    require(all(all(m.get(k) == v for k, v in identity.items())
+                and m.get("assets") == first["assets"]
+                and m.get("chart_ref") == chart_ref for m in originals),
+            "Conflicting original chart publication")
+    require(len(first["assets"]) == 1, "Chart intent must contain one package")
+    asset = first["assets"][0]
+    require(Path(asset["name"]).name == asset["name"] and asset["name"].endswith(".tgz"),
+            "Invalid original chart package name")
+    package = api.api(f"actions/artifacts/{int(first['package_artifact_id'])}")
+    require(not package["expired"] and package["workflow_run"]["id"] == first["run_id"]
+            and package["name"] == f"publication-chart-package-{first['run_id']}-{first['run_attempt']}"
+            and package.get("digest") == first["package_artifact_digest"]
+            and package["size_in_bytes"] <= 64 * 1024 * 1024,
+            "Original chart package provenance is unavailable")
+    raw = command(api.args(f"actions/artifacts/{package['id']}/zip"), binary=True)
+    require(len(raw) <= 64 * 1024 * 1024 and
+            'sha256:' + hashlib.sha256(raw).hexdigest() == package["digest"],
+            "Original chart artifact digest differs")
+    with zipfile.ZipFile(io.BytesIO(raw)) as bundle:
+        entries = bundle.infolist()
+        require(len(entries) == 1 and entries[0].filename == asset["name"]
+                and entries[0].file_size == asset["size"] and asset["size"] <= 64 * 1024 * 1024,
+                "Unexpected original chart package contents")
+        data = bundle.read(entries[0])
+    require(hashlib.sha256(data).hexdigest() == asset["sha256"], "Original chart bytes changed")
+    destination = Path(directory)
+    destination.mkdir(parents=True, exist_ok=True)
+    path = destination / asset["name"]
+    with path.open("xb") as stream:
+        stream.write(data)
+    return {"restored": "true", "package_path": str(path), "package_sha256": asset["sha256"]}
+
+
+def chart_manifest(api, workflow, tag, paths, chart_ref):
+    require(isinstance(chart_ref, str) and chart_ref.startswith("oci://")
+            and not any(c.isspace() for c in chart_ref), "Invalid chart destination")
+    value = {**runtime(workflow), **tag_identity(tag), "schema": CHART_SCHEMA,
+             "chart_ref": chart_ref,
+             "assets": asset_records(paths), "package_artifact_id": int(os.environ["PACKAGE_ARTIFACT_ID"]),
+             "package_artifact_digest": os.environ["PACKAGE_ARTIFACT_DIGEST"]}
+    require(value["event"] == "push" and value["ref"] == f"refs/tags/{tag}"
+            and value["workflow_sha"] == value["sha"] and len(value["assets"]) == 1,
+            "Chart publication requires its exact tagged workflow")
+    package = api.api(f"actions/artifacts/{value['package_artifact_id']}")
+    require(not package["expired"] and package["workflow_run"]["id"] == value["run_id"]
+            and package["name"] == f"publication-chart-package-{value['run_id']}-{value['run_attempt']}"
+            and package.get("digest") == value["package_artifact_digest"],
+            "Chart package must be preserved before its publication intent")
+    return value
+
+
 def output(values):
     with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
         for key, value in values.items():
@@ -513,6 +660,9 @@ def main():
             "image-state",
             "image-verify",
             "image-manifest",
+            "image-intent",
+            "chart-restore",
+            "chart-manifest",
             "registry-absent",
             "repository-empty",
         ],
@@ -525,6 +675,8 @@ def main():
     parser.add_argument("--workflow")
     parser.add_argument("--asset", action="append", default=[])
     parser.add_argument("--output", default="publication.json")
+    parser.add_argument("--directory", default="dist")
+    parser.add_argument("--chart-ref")
     args = parser.parse_args()
     try:
         if args.action == "version":
@@ -556,6 +708,10 @@ def main():
                     "release_exists": str(state == "verified-existing").lower(),
                 }
             )
+        elif args.action == "chart-restore":
+            output(chart_restore(GitHub(), args.workflow, args.tag, args.directory, args.chart_ref))
+        elif args.action == "chart-manifest":
+            Path(args.output).write_text(json.dumps(chart_manifest(GitHub(), args.workflow, args.tag, args.asset, args.chart_ref), indent=2) + "\n")
         elif args.action == "release-manifest":
             value = {
                 **runtime(args.workflow),
@@ -589,23 +745,26 @@ def main():
                 immutable = [t for t in tags if not t.endswith(":latest")]
                 require(immutable, "No immutable image aliases")
                 observed = {t: image_digest(t) for t in immutable}
-                manifests = []
-                if any(observed.values()):
-                    manifests = trusted_manifests(
+                manifests = trusted_manifests(
                         GitHub(),
                         args.workflow,
                         IMAGE_SCHEMA,
                         args.commit,
                         args.tag or None,
                     )
+                intents = trusted_manifests(GitHub(), args.workflow, IMAGE_INTENT_SCHEMA,
+                                           args.commit, args.tag or None)
                 if args.tag:
                     identity = tag_identity(args.tag)
-                    for manifest in manifests:
+                    for manifest in manifests + intents:
                         require(
                             all(manifest[k] == v for k, v in identity.items()),
                             "Original image tag identity changed",
                         )
-                state, digest = immutable_state(observed, manifests, immutable)
+                state, digest = image_recovery_state(observed, manifests, intents, immutable)
+                if digest:
+                    require(image_digest(immutable[0].rsplit(":", 1)[0] + "@" + digest) == digest,
+                            "Original image digest is no longer available")
                 latest = [t for t in tags if t.endswith(":latest")]
                 require(
                     not latest
@@ -620,7 +779,7 @@ def main():
                     "Latest requires an explicit manual request on main",
                 )
                 latest_needed = bool(
-                    state == "verified-existing"
+                    state in {"verified-existing", "pending"}
                     and latest
                     and image_digest(latest[0]) != digest
                 )
@@ -629,6 +788,9 @@ def main():
                         "state": state,
                         "digest": digest,
                         "publish_needed": str(state == "absent").lower(),
+                        "aliases_needed": str(state == "pending").lower(),
+                        "missing_aliases": json.dumps([t for t, value in observed.items() if value is None]
+                                                      + (latest if latest_needed else [])),
                         "latest_needed": str(latest_needed).lower(),
                         "latest_ref": latest[0] if latest else "",
                         "verified_source": immutable[0].rsplit(":", 1)[0] + "@" + digest
@@ -639,14 +801,18 @@ def main():
             else:
                 digest = os.environ["IMAGE_DIGEST"]
                 require(DIGEST.fullmatch(digest), "Missing build digest")
-                require(
-                    all(image_digest(t) == digest for t in tags),
-                    "Published tag digest mismatch",
-                )
-                if args.action == "image-manifest":
+                if args.action == "image-intent":
+                    destination = tags[0].rsplit(":", 1)[0]
+                    require(image_digest(destination + "@" + digest) == digest,
+                            "Built image digest is not available")
+                    require(all(image_digest(t) in {None, digest} for t in tags if not t.endswith(":latest")),
+                            "Destination alias changed before intent publication")
+                else:
+                    require(all(image_digest(t) == digest for t in tags), "Published tag digest mismatch")
+                if args.action in {"image-manifest", "image-intent"}:
                     value = {
                         **runtime(args.workflow),
-                        "schema": IMAGE_SCHEMA,
+                        "schema": IMAGE_INTENT_SCHEMA if args.action == "image-intent" else IMAGE_SCHEMA,
                         "sha": args.commit,
                         "tags": tags,
                         "digest": digest,

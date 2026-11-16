@@ -16,6 +16,36 @@ report-only and active SDLC stay read-only. Standalone review never merges.
 `review-pr` reviews GitHub pull requests and safely moves them closer to
 merge-readiness when permissions allow.
 
+## Usage
+
+```text
+$review-pr
+$review-pr 42
+$review-pr --label being-fixed --pr-batch 10
+$review-pr --label being-fixed
+$review-pr --help
+```
+
+`--label` selects one exact existing label across the current repository;
+`--pr-batch` is a positive total limit, default five. It requires label mode
+and cannot combine with an explicit PR selector. No flags preserves the
+current-branch PR review. `-h, --help` explains every option without effects.
+
+[Label batches](references/label-batches.md) freeze oldest-created matches before
+effects and never refill or start another batch. Active/custom labels select
+open PRs including drafts; `merged` and `closed` audit all states without new
+repair or merge. `being-fixed` requires full verified merged replacement coverage
+before authorized closure, with attribution to the original contributor.
+Existing per-item budgets remain; there is no new batch-wide time limit.
+
+Directly closing-linked issues are assessed once per full identity, independently
+of PR outcomes and the PR count limit. The issue skill advises read-only; the
+outer owner verifies each authorized label, comment and closure separately.
+Discover shared issue relationships before the first per-PR handoff and reconcile
+each owner's results in the batch context. Terminal audits also bypass enrolled
+`process` dispatch; unsupported narrow completion effects remain pending.
+Selection labels never grant closure or merge authority.
+
 ## What It Does
 
 - Reviews PRs by number, URL, or current branch.
@@ -105,8 +135,16 @@ until you update it yourself. Concurrent edits remain your work.
 
 The [private execution contract](../create-pr/references/private-review.md) defines
 allocation, original authority, recovery and safe cleanup. Candidate tests still
-need restricted execution separate from trusted controls. No public flags change.
+need restricted execution separate from trusted controls. Private execution helpers add no public flags.
 
 ## Enrolled repository automation
 
 Shared Actions authority: enrolled repositories route laptop and hosted requests through one merge/release controller; PR lifetime waivers are durable policy, not labels. See the skill contract and sibling merge-pr automation-authority reference.
+
+## Delivery waiting and optional UAT
+
+Ordinary merge returns after confirmed merge and destination containment.
+Use `merge-pr --wait-for-result` to wait for full result CI and Pages. Release
+publication instead verifies its exact-commit service/shared publisher profile.
+Additional live/cloud/UAT campaigns are opt-in; required CI, review, recorded
+failures and cleanup remain binding. SDLC retains its accepted delivery boundary.

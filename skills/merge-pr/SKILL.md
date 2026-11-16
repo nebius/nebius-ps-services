@@ -49,11 +49,13 @@ result-commit CI and configured Pages publication separately.
 - PR number, PR URL, or current branch PR.
 - Optional `--merge-method squash|merge|rebase`; default `squash`.
   A required merge queue stops for a maintainer.
+- Optional `--wait-for-result` waits for exact-result CI and configured Pages.
+  Default completion is confirmed merge plus destination containment.
 - Optional `--delete-branch`; default is to keep the branch unless the user or
   calling skill explicitly asks to delete it.
 
 Public usage: `$merge-pr [<PR-number|PR-URL|current-branch>]`
-`[--merge-method squash|merge|rebase] [--delete-branch]`.
+`[--merge-method squash|merge|rebase] [--delete-branch] [--wait-for-result]`.
 `-h, --help` shows help only. No additional public flags.
 
 ## Required Reads
@@ -134,23 +136,27 @@ ordinary un-enrolled protocol below does not run in that profile.
    state after errors before any retry. Wait at most 86,400 seconds with 30-second
    polls; retain the caller grant on timeout and return the exact resume identity.
    Externally queued PRs may be observed read-only, never enqueued by this skill.
-6. After actual merge, preserve known success even if later verification fails.
-   Immediately return the authoritative result to create-pr's owner for private
-   merge recording; merged continuations cannot repair, push or merge again.
-   Use the trusted completion helper to verify exact-result CI artifacts and
-   configured Pages publication. The completion workflow owns explicit dispatch
-   and Pages effects; local observation is read-only. Observe for at most 86,400
-   seconds from first confirmed merge, using the release caller's checkpointed
-   verification deadline when present. Reruns and repeated checks never reset it;
-   only explicit release resume renews the caller's budgets. Keep short API
-   timeouts and minute progress; at expiry leave GitHub work running and report
-   the exact resume identity. Do not substitute the workflow revision,
-   a green feature head or a newer main tip for the tested result SHA.
-7. Return merge/CI/Pages evidence to the outer owner for guarded local completion,
-   including failed or timed-out verification; pending work keeps its grant open.
-   Nested calls never finalize independently. Delete branches only after closure,
-   when explicitly requested and actual merge/destination verification passed.
-   Retain checked-out branches. Return exact evidence/blocker.
+6. After actual merge, immediately record its authoritative result through the
+   outer create-pr owner and verify containment in the live destination history.
+   The default completion boundary is confirmed merge plus containment. Report
+   result CI and Pages separately as pending, failed or verified; GitHub continues
+   them independently. Do not wait for these jobs merely to return merge success.
+7. Only with `--wait-for-result`, observe the read-only completion helper until
+   exact-result CI and configured Pages settle, using the fixed 86,400-second
+   deadline from first merge or an inherited caller deadline. No rerun resets it.
+   Publish-release instead owns service-specific qualification and never passes
+   this flag merely to wait for unrelated CI or Pages. Agentic SDLC retains its
+   separately accepted result-verification boundary.
+8. Return the recorded merge and containment evidence for guarded outer local
+   completion. Pending asynchronous CI does not keep an ordinary merge grant open.
+   If the user changed branches or added work, preserve it: report the remote
+   merge success and a distinct local-completion blocker rather than switching,
+   overwriting or falsely closing the grant. Nested calls never finalize alone.
+   Delete branches only after valid closure and explicit deletion intent.
+
+Additional live/cloud/UAT campaigns are opt-in for ordinary merge. A request to
+merge does not waive required CI, code review, known failed trials, unresolved
+objections or cleanup. Required deterministic/native CI remains mandatory.
 
 ## Guardrails
 

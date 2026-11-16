@@ -4,6 +4,29 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Add opt-in exact-label PR and issue batches with a default total of five,
+  frozen selections and no automatic continuation. Preserve existing defaults,
+  per-item budgets, private review execution and lifecycle authority.
+- Allow justified existing issue-label changes and independently reconcile
+  linked issue labels, comments and closure. Verify merged replacement coverage
+  before closing adopted PRs; preserve unrelated labels and human reopening.
+- Collect shared linked-issue scope before per-PR handoffs and prevent terminal
+  audits from entering enrolled automation's repair/merge processing path.
+
+- Separate CI status observation from protected merge and targeted completion;
+  retain strict review, required CI, recovery and disabled AI automation.
+- Reuse exact-commit release qualification, use eight-hour release phases, and
+  make ordinary post-merge result waiting and optional live UAT explicit.
+- Preserve original image digests and Helm package bytes before publication
+  effects so interrupted releases resume without replacing immutable content.
+- Retain rerun source association without trusting historical success, reject
+  unresolved result producers and deleted publication receipts, and preserve
+  attempt-bound evidence for every image or chart recovery effect.
+
+- Recover a release checkpoint after a maintainer merges its canonical repaired
+  PR, preserving original execution evidence, identity and deadlines while
+  requiring selected release-profile qualification before tagging.
+
 - Refresh the exact verified upstream tracking ref after commit-push URL
   publication on Git versions that do not do so automatically. Preserve
   divergent or concurrently changed tracking history.

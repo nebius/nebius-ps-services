@@ -6,6 +6,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Verify exact-commit CI qualification before release publication, retaining
+  final tagged package and artifact checks while excluding unrelated CI/Pages.
+
 - Explicitly reject absent static authentication or service-account identity
   during SDK initialization, preserving fail-closed identity checks and type safety.
 

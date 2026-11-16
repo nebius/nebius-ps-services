@@ -131,10 +131,17 @@ setup. Complete follows every step below.
    If base advancement requires a canonical repair after binding, use the guarded
    `reconcile-pr` transition in the orchestration reference with fresh review
    evidence before any new broker dispatch. Arbitrary head drift still blocks.
-6. Observe actual merge, freeze its method-specific resulting SHA, and require
-   merge-pr's remote-default ancestry and exact-result CI verification. Failed,
-   pending or unverified applicable CI blocks tagging. No configured CI is
-   acceptable only when the owner independently establishes that fact.
+6. For explicit resume after an external merge of a canonical repaired head, use
+   the separate guarded `reconcile-merged` transition in the orchestration reference.
+   Preserve the original checkpoint; never manufacture a retrospective review.
+   Observe actual merge and freeze its method-specific resulting SHA. Verify
+   containment in remote default history, then use the private `qualify` action
+   described in [release qualification](references/release-qualification.md).
+   Wait only for the selected project's service/shared publisher profile. Missing
+   producers may be explicitly dispatched once and reconciled; failed or
+   unverifiable required qualification blocks tagging. Unrelated CI and Pages do
+   not gate this release. The tag publisher independently verifies the evidence.
+
 7. Create a private isolated clone at that exact merged SHA with full history.
    Keep the user's working checkout and local tags unchanged. Recheck remote
    ancestry, release notes and runtime inputs. Preserve required signing/auth
@@ -159,9 +166,9 @@ approvals consume the enclosing phase's remaining budget; there is no separate
 ten-minute cutoff. Partial approval or reordered API responses never restart it.
 
 PR readiness, merge settlement, post-merge verification and release execution each
-have independent fixed 10,800-second phase budgets. Gate changes, repairs and
+have independent fixed 28,800-second phase budgets. Gate changes, repairs and
 reruns never restart a phase. The checkpoint owns the verification deadline;
-merge-pr consumes it while verifying the exact result. An open PR
+the selected release qualification consumes it while verifying the exact result. An open PR
 without queue membership can be awaiting direct async merge; observe until actual
 merge or the phase deadline. Previously observed queue removal remains a blocker.
 Failed checks, rejected reviews, closed PRs, conflicts and identity

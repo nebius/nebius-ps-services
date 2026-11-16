@@ -15,6 +15,7 @@ from unittest import mock
 
 from project_specs_lib import lifecycle as lifecycle_module
 from project_specs_lib import migration
+from project_specs_lib import contracts
 from project_specs_lib.contracts import (
     ProjectSpecError,
     _managed_region,
@@ -37,6 +38,20 @@ from project_specs_lib.lifecycle import lifecycle_dir
 from project_specs_lib.migration import migrate_project, recover_migration
 
 SCRIPT = Path(__file__).resolve().with_name("project_specs.py")
+
+
+class SpecSizeBoundaryTests(unittest.TestCase):
+    def test_two_mib_spec_limit_remains_enforced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "design.md"
+            path.write_bytes(b"x" * (2 * 1024 * 1024))
+            path.chmod(0o600)
+            self.assertEqual(len(contracts._read_file(path, "design")[0]), 2 * 1024 * 1024)
+            with path.open("ab") as stream:
+                stream.write(b"x")
+            with self.assertRaises(ProjectSpecError) as raised:
+                contracts._read_file(path, "design")
+            self.assertEqual(raised.exception.code, "UNSAFE_SPEC")
 
 
 def git(root: Path, *arguments: str) -> str:

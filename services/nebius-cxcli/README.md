@@ -923,3 +923,10 @@ update access times.
 Source-contract tests use `tests/source_inspection.py` to locate current function
 definitions when edits shift imported line numbers. Rerun tests after edits to
 validate the final checkout.
+
+## Release qualification
+
+Releases use the project profile in `.github/merge-policy.json` and the shared
+[qualification contract](../../skills/publish-release/references/release-qualification.md).
+Required native/offline checks remain enforced. Optional cloud UAT is separate;
+final tagged package and remote asset verification remain part of publication.

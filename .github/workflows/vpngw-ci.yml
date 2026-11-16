@@ -3,22 +3,42 @@ name: vpngw-ci
 permissions:
   contents: read
 
-run-name: ${{ inputs.candidate_head != '' && format('ai-candidate-{0}-{1}-{2}-{3}', inputs.candidate_pr, inputs.candidate_head, inputs.candidate_base, inputs.candidate_request_id) || inputs.correlation_id != '' && format('post-merge-{0}', inputs.correlation_id) || format('{0} {1}', github.workflow, github.event_name) }}
+run-name: ${{ inputs.qualification_sha != '' && format('release-qualification-{0}-{1}-{2}', inputs.qualification_profile, inputs.qualification_sha, inputs.qualification_id) || inputs.candidate_head != '' && format('ai-candidate-{0}-{1}-{2}-{3}', inputs.candidate_pr, inputs.candidate_head, inputs.candidate_base, inputs.candidate_request_id) || inputs.correlation_id != '' && format('post-merge-{0}', inputs.correlation_id) || format('{0} {1}', github.workflow, github.event_name) }}
 
 on:
   pull_request:
     paths:
+      - ".github/merge-policy.json"
+      - "skills/publish-release/scripts/**"
+      - "skills/github-workflows/scripts/release_qualification.py"
+      - "skills/github-workflows/scripts/publication.py"
       - "services/vpngw/**"
       - ".github/workflows/vpngw-ci.yml"
       - ".github/workflows/vpngw-release.yml"
   push:
     branches: ["main"]
     paths:
+      - ".github/merge-policy.json"
+      - "skills/publish-release/scripts/**"
+      - "skills/github-workflows/scripts/release_qualification.py"
+      - "skills/github-workflows/scripts/publication.py"
       - "services/vpngw/**"
       - ".github/workflows/vpngw-ci.yml"
       - ".github/workflows/vpngw-release.yml"
   workflow_dispatch:
     inputs:
+      qualification_sha:
+        description: Explicit release qualification identity (all three required together)
+        required: false
+        type: string
+      qualification_profile:
+        description: Explicit release qualification identity (all three required together)
+        required: false
+        type: string
+      qualification_id:
+        description: Explicit release qualification identity (all three required together)
+        required: false
+        type: string
       candidate_pr:
         description: Trusted candidate identity (all five fields required together)
         required: false
@@ -66,8 +86,8 @@ defaults:
     working-directory: services/vpngw
 
 concurrency:
-  group: vpngw-${{ github.workflow }}-${{ inputs.candidate_head || inputs.result_sha || github.ref }}
-  cancel-in-progress: ${{ inputs.result_sha == '' && inputs.candidate_head == '' }}
+  group: vpngw-${{ github.workflow }}-${{ inputs.qualification_sha || inputs.candidate_head || inputs.result_sha || github.ref }}
+  cancel-in-progress: ${{ inputs.qualification_sha == '' && inputs.result_sha == '' && inputs.candidate_head == '' }}
 
 jobs:
   merge-inputs:
@@ -81,11 +101,12 @@ jobs:
       run:
         working-directory: .
     outputs:
+      qualification: ${{ steps.identity.outputs.qualification }}
       candidate: ${{ steps.identity.outputs.candidate }}
       post_merge: ${{ steps.identity.outputs.post_merge }}
       checkout_sha: ${{ steps.identity.outputs.checkout_sha }}
     steps:
-      - if: (inputs.candidate_pr != '' || inputs.candidate_head != '' || inputs.candidate_base != '' || inputs.candidate_request_id != '' || inputs.candidate_source != '') || inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != ''
+      - if: (inputs.candidate_pr != '' || inputs.candidate_head != '' || inputs.candidate_base != '' || inputs.candidate_request_id != '' || inputs.candidate_source != '') || inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != '' || inputs.qualification_sha != '' || inputs.qualification_profile != '' || inputs.qualification_id != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
@@ -95,9 +116,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
           CANDIDATE_INPUTS: ${{ (inputs.candidate_pr != '' || inputs.candidate_head != '' || inputs.candidate_base != '' || inputs.candidate_request_id != '' || inputs.candidate_source != '') }}
+          QUALIFICATION_INPUTS: ${{ inputs.qualification_sha != '' || inputs.qualification_profile != '' || inputs.qualification_id != '' }}
           POST_MERGE_INPUTS: ${{ inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != '' }}
         run: |
-          if [ "$CANDIDATE_INPUTS" = true ]; then
+          if [ "$QUALIFICATION_INPUTS" = true ]; then
+            python3 skills/github-workflows/scripts/release_qualification.py inputs --workflow vpngw-ci.yml
+          elif [ "$CANDIDATE_INPUTS" = true ]; then
             python3 skills/merge-pr/scripts/candidate_ci.py inputs --workflow vpngw-ci.yml
           elif [ "$POST_MERGE_INPUTS" = true ]; then
             python3 skills/merge-pr/scripts/merge_completion.py ci-inputs --workflow vpngw-ci.yml
@@ -130,7 +154,7 @@ jobs:
       pull-requests: read
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -148,6 +172,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
         run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow vpngw-ci.yml
+      - name: Check out the release qualification commit
+        if: needs.merge-inputs.outputs.qualification == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/github-workflows/scripts/release_qualification.py checkout --workflow vpngw-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
@@ -194,12 +225,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
         run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow vpngw-ci.yml
+      - name: Check out the release qualification commit
+        if: needs.merge-inputs.outputs.qualification == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/github-workflows/scripts/release_qualification.py checkout --workflow vpngw-ci.yml
       - name: Verify exact checkout identity
         working-directory: .
         env:
           EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: Build the candidate once
@@ -232,7 +270,7 @@ jobs:
       pull-requests: read
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -251,13 +289,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
         run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow vpngw-ci.yml
+      - name: Check out the release qualification commit
+        if: needs.merge-inputs.outputs.qualification == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/github-workflows/scripts/release_qualification.py checkout --workflow vpngw-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
         env:
           EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -309,7 +354,7 @@ jobs:
       pull-requests: read
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -328,13 +373,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
         run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow vpngw-ci.yml
+      - name: Check out the release qualification commit
+        if: needs.merge-inputs.outputs.qualification == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/github-workflows/scripts/release_qualification.py checkout --workflow vpngw-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
         env:
           EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -342,6 +394,8 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+      - name: Offline dependency installation
+        run: python -m pytest -q tests/integration/test_dependency_install.py
       - name: Unit tests
         run: |
           python -m pytest -n auto tests/unit \
@@ -389,7 +443,7 @@ jobs:
       pull-requests: read
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -408,13 +462,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
         run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow vpngw-ci.yml
+      - name: Check out the release qualification commit
+        if: needs.merge-inputs.outputs.qualification == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/github-workflows/scripts/release_qualification.py checkout --workflow vpngw-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
         env:
           EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -444,7 +505,7 @@ jobs:
       pull-requests: read
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -463,13 +524,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
         run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow vpngw-ci.yml
+      - name: Check out the release qualification commit
+        if: needs.merge-inputs.outputs.qualification == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/github-workflows/scripts/release_qualification.py checkout --workflow vpngw-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
         env:
           EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -493,7 +561,7 @@ jobs:
       pull-requests: read
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -512,13 +580,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
         run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow vpngw-ci.yml
+      - name: Check out the release qualification commit
+        if: needs.merge-inputs.outputs.qualification == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/github-workflows/scripts/release_qualification.py checkout --workflow vpngw-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
         env:
           EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -529,7 +604,7 @@ jobs:
       - name: Coverage
         run: python -m pytest --cov=nebius_vpngw --cov-report=term-missing --cov-report=xml tests/unit
       - name: Upload coverage report
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: vpngw-coverage
           path: services/vpngw/coverage.xml
@@ -547,7 +622,7 @@ jobs:
       pull-requests: read
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -566,13 +641,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
         run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow vpngw-ci.yml
+      - name: Check out the release qualification commit
+        if: needs.merge-inputs.outputs.qualification == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/github-workflows/scripts/release_qualification.py checkout --workflow vpngw-ci.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
         env:
           EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -587,7 +669,7 @@ jobs:
           PYTHONWARNINGS="ignore:No GlobalOverrides context is active:UserWarning" \
             python -m build --wheel --no-isolation
       - name: Upload wheel
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: nebius-vpngw-wheel
           path: services/vpngw/dist/*.whl
@@ -651,3 +733,41 @@ jobs:
           path: ${{ runner.temp }}/candidate.json
           if-no-files-found: error
           retention-days: 30
+
+  release-qualification-vpngw:
+    name: Release qualification for vpngw
+    needs: [merge-inputs, ordinary-job-settlement, historical-package-upgrades, lint, unit-tests, build]
+    if: >-
+      always() && needs.merge-inputs.result == 'success' &&
+      ((github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+      needs.merge-inputs.outputs.post_merge == 'true' ||
+      (needs.merge-inputs.outputs.qualification == 'true' && inputs.qualification_profile == 'services/vpngw'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Record complete qualification evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+          CI_NEEDS: ${{ toJSON(needs) }}
+          TESTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
+        run: >-
+          python3 skills/github-workflows/scripts/release_qualification.py emit
+          --workflow vpngw-ci.yml --project services/vpngw --commit "$TESTED_SHA"
+          --output "$RUNNER_TEMP/qualification.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-qualification-services-vpngw-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/qualification.json
+          retention-days: 14
+          if-no-files-found: error

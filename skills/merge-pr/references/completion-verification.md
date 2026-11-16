@@ -7,6 +7,14 @@ with the resolved host for REST/GraphQL requests; never print credentials.
 Quote shell arguments, pass GraphQL variables separately, and URL-encode branch
 names in REST paths. Do not execute repository content to discover CI policy.
 
+## Completion boundary
+
+Ordinary merge defaults to authoritative merged identity plus destination
+containment. Return that outcome without waiting for CI or Pages; report their
+observed state separately. `--wait-for-result` opts into the complete result
+verification below. SDLC uses its accepted boundary. Publish-release uses its
+own exact-commit release profile instead of this repository-wide wait.
+
 ## Read Queries and Timing
 
 Use the endpoints below through `gh api --method GET --hostname <host>`;
@@ -47,6 +55,12 @@ Budget sleeps and API calls against the absolute deadline and report progress at
 least once per minute. Timeout preserves the caller checkpoint and exact resume
 identity, leaving GitHub work running. The deployed completion workflow
 separately reconciles retained intent receipts while the laptop is offline.
+
+## Optional Full Result Observation
+
+The CI/Pages verification and deadline rules in this section apply only to
+`--wait-for-result` or an explicit caller contract. Ordinary completion uses the
+merged-result/destination proof below and reports background work separately.
 
 ## Actions Broker Result Evidence
 

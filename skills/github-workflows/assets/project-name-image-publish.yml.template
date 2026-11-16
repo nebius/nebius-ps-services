@@ -44,7 +44,7 @@ jobs:
         working-directory: ${{ env.APP_DIR }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ inputs.source_ref || github.ref }}
 
@@ -53,7 +53,7 @@ jobs:
         run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "__PYTHON_VERSION__"
 
@@ -77,7 +77,7 @@ jobs:
       name: __PUBLISH_ENVIRONMENT__
     steps:
       - name: Checkout trusted publication owner
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           path: .publication-owner
@@ -85,7 +85,7 @@ jobs:
       - name: Freeze helper from workflow revision
         run: cp .publication-owner/.github/scripts/publication.py "$RUNNER_TEMP/publication.py"
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.test.outputs.commit }}
           fetch-depth: 0
@@ -101,7 +101,7 @@ jobs:
 
       - name: Authorize workflow_dispatch actor
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -133,7 +133,7 @@ jobs:
           fi
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Resolve registry credentials
         id: registry_creds
@@ -162,7 +162,7 @@ jobs:
           fi
 
       - name: Login to registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           registry: ${{ env.REGISTRY_HOST }}
           username: ${{ steps.registry_creds.outputs.username }}
@@ -213,19 +213,65 @@ jobs:
           python3 "$RUNNER_TEMP/publication.py" image-state --workflow __PROJECT_NAME__-image-publish.yml
           --commit "$SOURCE_COMMIT" --tag "$RELEASE_TAG"
 
-      - name: Build and push image
+      - name: Build and push image by digest
         if: steps.existing.outputs.publish_needed == 'true'
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: ${{ env.APP_DIR }}
           file: ${{ env.APP_DIR }}/Dockerfile
-          push: true
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           provenance: mode=max
           sbom: true
-          tags: ${{ steps.image_tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Record original image intent before aliases
+        if: steps.existing.outputs.publish_needed == 'true' || steps.existing.outputs.aliases_needed == 'true' || steps.existing.outputs.latest_needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAGS: ${{ steps.image_tags.outputs.tags }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
+          RELEASE_TAG: ${{ steps.image_tags.outputs.release_tag }}
+          SOURCE_COMMIT: ${{ steps.image_tags.outputs.commit }}
+        run: >-
+          python3 "${RUNNER_TEMP}/publication.py" image-intent --workflow __PROJECT_NAME__-image-publish.yml
+          --commit "$SOURCE_COMMIT" --tag "$RELEASE_TAG" --output publication.json
+
+      - name: Preserve original image intent before aliases
+        if: steps.existing.outputs.publish_needed == 'true' || steps.existing.outputs.aliases_needed == 'true' || steps.existing.outputs.latest_needed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: publication-image-intent-${{ github.run_id }}-${{ github.run_attempt }}
+          path: publication.json
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Recheck aliases against preserved intent
+        id: recheck
+        if: steps.existing.outputs.publish_needed == 'true' || steps.existing.outputs.aliases_needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAGS: ${{ steps.image_tags.outputs.tags }}
+          PUBLISH_LATEST: ${{ inputs.publish_latest }}
+          RELEASE_TAG: ${{ steps.image_tags.outputs.release_tag }}
+          SOURCE_COMMIT: ${{ steps.image_tags.outputs.commit }}
+        run: >-
+          python3 "${RUNNER_TEMP}/publication.py" image-state --workflow __PROJECT_NAME__-image-publish.yml
+          --commit "$SOURCE_COMMIT" --tag "$RELEASE_TAG"
+
+      - name: Assign missing aliases from the preserved digest
+        if: steps.existing.outputs.publish_needed == 'true' || steps.existing.outputs.aliases_needed == 'true'
+        env:
+          MISSING_ALIASES: ${{ steps.recheck.outputs.missing_aliases }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r alias; do
+            [ -n "$alias" ] || continue
+            docker buildx imagetools create --prefer-index=false --tag "$alias" "$IMAGE_NAME@$IMAGE_DIGEST"
+          done < <(jq -r '.[]' <<< "$MISSING_ALIASES")
 
       - name: Update explicitly requested latest from verified digest
         if: steps.existing.outputs.latest_needed == 'true'
@@ -241,7 +287,7 @@ jobs:
         run: python3 "$RUNNER_TEMP/publication.py" image-verify
 
       - name: Record verified image identity
-        if: steps.existing.outputs.publish_needed == 'true' || steps.existing.outputs.latest_needed == 'true'
+        if: steps.existing.outputs.publish_needed == 'true' || steps.existing.outputs.aliases_needed == 'true' || steps.existing.outputs.latest_needed == 'true'
         env:
           TAGS: ${{ steps.image_tags.outputs.tags }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest || steps.existing.outputs.digest }}
@@ -252,8 +298,8 @@ jobs:
           --commit "$SOURCE_COMMIT" --tag "$RELEASE_TAG" --output publication.json
 
       - name: Preserve immutable image evidence
-        if: steps.existing.outputs.publish_needed == 'true' || steps.existing.outputs.latest_needed == 'true'
-        uses: actions/upload-artifact@v7
+        if: steps.existing.outputs.publish_needed == 'true' || steps.existing.outputs.aliases_needed == 'true' || steps.existing.outputs.latest_needed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: publication-image-${{ github.run_id }}-${{ github.run_attempt }}
           path: publication.json
@@ -262,7 +308,7 @@ jobs:
 
       - name: Upload publish manifest artifact
         if: steps.existing.outputs.publish_needed == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: __PROJECT_NAME__-image-publish-manifest-${{ github.run_id }}
           path: publication.json

@@ -17,3 +17,15 @@ report-only, non-default admission and active Agentic SDLC review mode.
 Before outer return or pause, preserve the caller checkout and keep the original
 owner's execution record. Nested reviews return exact execution/publication
 evidence without finalizing their parent. No review switch-back is necessary.
+
+## Label batch discovery
+
+Read [label batches](label-batches.md) before discovery. Use repository-scoped
+GitHub GraphQL `pullRequests` with a structured `labels` array, `orderBy` creation
+ascending, explicit states and cursors when the connector exposes those fields.
+The issue skill uses the corresponding `issues` connection. Verify exact literal
+label membership and object type on returned nodes. Do not use semantic search
+as an exact selector or interpolate untrusted label text into queries or shell.
+If the connector lacks these capabilities, disclose the existing authenticated
+CLI API fallback. A lack of safe access leaves selection pending, not permission
+to bypass authentication or enumerate an unrelated repository.

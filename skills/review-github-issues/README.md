@@ -18,6 +18,8 @@ $review-github-issues --issue 123,124
 $review-github-issues --repo example-org/alpha,example-org/beta
 $review-github-issues --repo example-org/alpha,example-org/beta --issue 12,34
 $review-github-issues --repo https://github.com/example-org/alpha --issue 12
+$review-github-issues --label being-fixed --issue-batch 10
+$review-github-issues --label being-fixed
 $review-github-issues --help
 ```
 
@@ -30,10 +32,12 @@ explicit-only. This is an agent skill, not a separately installed executable.
 | No flags | Review all observed open issues in the current checkout's GitHub repo, across all project folders. |
 | `--repo` | Comma-separated repository names or URLs; finish repositories in supplied order. |
 | `--issue` | Comma-separated positive numbers; check each in every selected repo and review every existing issue match. |
+| `--label` | One exact existing label; select oldest-created open issues repository-wide. |
+| `--issue-batch` | Total across the invocation, default five in label mode; requires `--label` and excludes `--issue`. |
 | `--priority` | Comma-separated exact project roots, highest first, applied independently in each repo. |
 | `-h`, `--help` | Explain the interface and effects without tools or side effects. |
 
-Without `--issue`, collect all open issues from each selected repository.
+Without `--issue` or `--label`, collect all open issues from each selected repository.
 Unknown repository identity requires clarification. Empty backlogs end without
 effects. Repeated inputs are deduplicated; positional issue numbers/URLs and
 unknown flags are rejected. There are no implementation flags.
@@ -42,7 +46,8 @@ GitHub calls; invalid input cannot partially start a review.
 
 ## Review order and batches
 
-1. Finish paginated collection for one repository, excluding pull requests.
+1. Finish the selected collection, excluding PRs; label mode freezes its total
+   across repositories before effects, while unbounded mode exhausts each repo.
 2. Map issues to primary project owners using discussion, docs and source.
 3. Process explicit priority projects first, then other projects by selected
    issue count descending, with alphabetical path ties. Uncertain owners go last.
@@ -53,8 +58,17 @@ GitHub calls; invalid input cannot partially start a review.
 
 `--priority` changes order, not selection, severity or labels. Identical folder
 names in different repositories remain separate groups. Unmatched priority
-paths are reported. Incomplete collection leaves that repo pending while other
-repos can continue; the report distinguishes coverage from completed review.
+paths are reported. Incomplete unbounded/number collection leaves that repo
+pending while other repos can continue. In label mode, unresolved earlier
+collection leaves the entire bounded selection pending with no partial effects.
+The report distinguishes coverage from completed review.
+
+Label mode stops at the total cap or exhaustion, freezes identities before
+any effect and never refills skipped/changed slots. Priority orders only that
+selected set. Report unvisited repositories and incomplete discovery honestly.
+No automatic next batch, hidden cursor or new overall time cap is introduced;
+existing limits and user stops remain binding. Reruns select afresh and reuse
+unchanged decisions, so still-open oldest matches may recur.
 
 For example, three related BGP issues and two related SSH issues in
 `services/vpngw` can form two batches and two plans. Each must share an evidenced
@@ -63,7 +77,8 @@ closing them as duplicates. Every member retains its own acceptance criteria.
 
 ## Decisions and outputs
 
-Ordinary invocation authorizes concise comments and justified closure on the
+Ordinary invocation authorizes documented existing-label changes, concise
+comments and justified closure on the
 selected issues, including a no-flags backlog review. Clearly out-of-scope or
 disproven claims can close as not planned; confirmed duplicates and resolved
 issues use their appropriate reasons. Needs-information and valid low-priority
@@ -87,6 +102,12 @@ local plan links and verified/pending effects. GitHub receives concise decisions
 and rationale. A failed save leaves acceptance pending; a partial comment
 failure does not undo the shared file or other verified comments.
 
+[Issue label management](references/labels.md) preserves unrelated labels and
+uses only existing documented mappings. Missing or ambiguous mappings remain
+recommendations; they do not block independent comments or justified closure.
+No labels are created. Verify labels, comments and closure separately; observe
+state before terminal labeling and read back ambiguous outcomes before retrying.
+
 The maintainer owns implementation, commits, pushes, PR creation and merge.
 
 ## Prerequisites and boundaries
@@ -101,7 +122,7 @@ The maintainer owns implementation, commits, pushes, PR creation and merge.
 - Host Plan Mode and explicit report-only limits prevent GitHub/file writes;
   report pending artifacts instead of exposing plan content.
 - Sensitive reports use private reporting policy. No implementation, canonical
-  spec edits, Git/PR actions, labels, assignments, milestones or transfers.
+  spec edits, Git/PR actions, label creation, assignments, milestones or transfers.
 
 ## Maintained resources and evaluation
 

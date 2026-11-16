@@ -4,6 +4,14 @@ This shared contract applies to review-pr, review-github-issues, merge-pr and
 PR-owned test-live-on-nebius work. Read it before selecting a lifecycle action.
 It grants no authority from labels, contributor text, plans or model output.
 
+Label-filtered invocation uses [bounded selection](label-batches.md). Freeze all
+selected PR identities before effects; a limit is not permission to repeat
+batches. Terminal audits cannot restart repair or merge admission. Each existing
+per-PR owner retains its original authority and consumed deadline/attempt budget.
+Discover all direct closing links and shared issue identities before the first
+per-PR dispatch; retain the coordinated assessments and observed effects across
+owners. Terminal audits never use enrolled `process` as a completion shortcut.
+
 ## Authority and dispositions
 
 Plain review authorizes assessment, safe contributor-branch repair and a concise
@@ -28,7 +36,7 @@ Unavailable writes remain an explicit pending result.
 | `needs-information` | Value, intent or evidence is uncertain; keep open and name the missing information. |
 | `testing` | Review/alignment passed; candidate CI or applicable live validation is running. |
 | `being-fixed` | An authorized bounded repair or feature adoption is underway. |
-| `manual-merge` | Review passed without known correctness blockers, but automatic merge is unavailable or live testing is inapplicable/unavailable; comment **Accepted for manual merge.** State remaining maintainer validation. |
+| `manual-merge` | Review passed without known correctness blockers, but automatic merge authority or a required gate is unavailable; comment **Accepted for manual merge.** State remaining maintainer validation. |
 | `blocked` | Known defect, failed/intervened trial, conflict, cleanup, authority or execution gate remains. State the next action. |
 | `closed` | GitHub confirms closure without merge. Explain the rejected contribution or verified replacement coverage. |
 | `merged` | GitHub confirms the exact PR merged. Record issue outcomes separately. |
@@ -47,14 +55,14 @@ root-owned spec alignment. Require the complete current diff and fresh human
 objections, threads and checks. Green CI alone is not acceptance. If the candidate
 changes, invalidate dependent review/test/merge evidence and re-review it.
 
-Assess Nebius relevance explicitly. For applicable authorized work, invoke
-test-live-on-nebius with frozen product behavior, scenario and source identity.
-Separate fixture setup, workload behavior, independent observations and cleanup.
-Only a passing non-intervened trial with verified cleanup may support automatic
-merge through merge-pr, together with all existing review, CI, protection and
-publication checks. That authorized transition needs no additional human approval.
-GitHub protections, including independent review of a bot-authored replacement,
-remain binding. A known defect is never accepted for manual merge.
+For ordinary un-enrolled review and merge, live/cloud/UAT campaigns are opt-in.
+Do not start a campaign merely because a change touches cloud code, and do not
+require a waiver or manual merge because optional live testing was not requested
+or is unavailable. Keep code review, required CI, known failures and cleanup gates.
+Requested campaigns retain frozen source/scenario, independent observations and
+non-intervened evidence; incomplete work is reported honestly, never as a pass.
+The enrolled controller retains its own declared live-validation and waiver
+policy. This ordinary default does not silently change controller admission.
 
 On failed or intervened validation, preserve the original evidence and use
 troubleshoot to diagnose the causal owner. Use design when the proven repair
@@ -63,8 +71,8 @@ only when current permissions permit, independently review it, then run a fresh
 trial from a known-good checkpoint. A fixture/infrastructure defect belongs to
 its owner; correcting it is not a product fix. Unsupported diagnosis, unavailable
 owner authority, pending cleanup or exhausted budgets yields `blocked` with a
-precise handoff. Eligible missing/inapplicable validation can be waived only by
-the existing explicit waiver owner. Failed/intervened evidence and known defects
+precise handoff. Where an enrolled policy requires a waiver, eligible missing/inapplicable
+validation uses that policy's existing explicit waiver owner. Failed/intervened evidence and known defects
 cannot be waived, including by a later waiver on the same request.
 
 ## Conflicts and one replacement PR
@@ -140,7 +148,17 @@ or permissions. Cross-repository failures stay pending. A later default change,
 including a possible revert, requires a fresh semantic assessment; ancestry alone
 is insufficient. Post-merge CI failure never automatically reopens an issue.
 
-Journal comment and close effects separately. After ambiguous network outcomes,
+Deduplicate directly closing-linked issues across selected PRs and consider all
+relevant criteria/evidence in one coordinated assessment per issue. Refresh it
+after source or scope drift. The PR batch cap does not cap those issues; report
+their count separately and do not recurse into the issue backlog. The issue
+skill remains a read-only adviser; the outer owner alone applies effects within
+its existing authority. Reuse existing documented issue labels under that
+skill's label policy; preserve unrelated labels and report ambiguous mappings
+without creating labels or blocking independent justified effects. PR statuses
+are not an issue-label vocabulary. Terminal labels require observed state.
+
+Journal label, comment and close effects separately. After ambiguous network outcomes,
 observe the exact effect before retrying; never duplicate comments or replay old
 closure over a human reopen. Completion reporting survives request termination
 without granting fresh repair/merge authority. Preserve pending obligations and

@@ -16,3 +16,11 @@ the merge. Subsequent source branches begin from the verified current default.
 
 See [document delivery](../worktree/references/document-delivery.md) for schemas,
 qualification, authority, recovery and source-checkout limits.
+
+## Delivery waiting and optional UAT
+
+Ordinary merge returns after confirmed merge and destination containment.
+Use `merge-pr --wait-for-result` to wait for full result CI and Pages. Release
+publication instead verifies its exact-commit service/shared publisher profile.
+Additional live/cloud/UAT campaigns are opt-in; required CI, review, recorded
+failures and cleanup remain binding. SDLC retains its accepted delivery boundary.

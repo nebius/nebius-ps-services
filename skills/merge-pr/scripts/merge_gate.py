@@ -65,26 +65,20 @@ def _gh(args, payload=None, binary=False):
                 selector.register(process.stdout, selectors.EVENT_READ)
                 while True:
                     remaining = deadline - time.monotonic()
-                    require(
-                        remaining > 0,
-                        "GitHub operation timed out; reconcile remote state",
-                    )
-                    if not selector.select(remaining):
+                    if remaining <= 0 or not selector.select(remaining):
                         raise ApiFailure(
-                            "GitHub operation timed out; reconcile remote state"
+                            "GitHub transport_timeout; reconcile remote state; no effects permitted"
                         )
                     chunk = os.read(process.stdout.fileno(), 65536)
                     if not chunk:
                         break
                     size += len(chunk)
-                    require(
-                        size <= LIMIT,
-                        "GitHub response exceeds the bounded response limit",
-                    )
+                    if size > LIMIT:
+                        raise ApiFailure("GitHub response_limit; no effects permitted")
                     chunks.append(chunk)
             if process.wait(timeout=max(0.1, deadline - time.monotonic())) != 0:
                 raise ApiFailure(
-                    "GitHub operation failed; reconcile remote state before retry"
+                    "GitHub process_failed; reconcile remote state before retry; no effects permitted"
                 )
             output = b"".join(chunks)
         finally:
@@ -99,9 +93,17 @@ def _gh(args, payload=None, binary=False):
 def gh(args, payload=None, binary=False):
     try:
         return _gh(args, payload, binary)
+    except ApiFailure:
+        raise
     except (Blocked, ValueError, OSError, subprocess.TimeoutExpired) as error:
+        category = (
+            "transport_timeout" if isinstance(error, subprocess.TimeoutExpired)
+            else "invalid_response" if isinstance(error, ValueError)
+            else "command_unavailable" if isinstance(error, OSError)
+            else "invalid_request"
+        )
         raise ApiFailure(
-            "GitHub transport or response failed; no effects permitted"
+            f"GitHub {category}; no effects permitted"
         ) from error
 
 
@@ -507,7 +509,7 @@ def orchestration_suite(api, suite_id, pr, policy):
     run = runs[0]
     paths = {
         f".github/workflows/{policy[key]}"
-        for key in ("merge_workflow", "completion_workflow")
+        for key in ("merge_workflow", "completion_workflow", "status_workflow")
         if policy.get(key)
     }
     if (
@@ -530,7 +532,8 @@ def orchestration_suite(api, suite_id, pr, policy):
         # Unlike GITHUB_REF, the Actions REST run records the PR head/branch.
         # Bind its base association too: target events can use non-default bases.
         return (
-            run["path"] == f".github/workflows/{policy.get('merge_workflow')}"
+            run["path"] in {f".github/workflows/{policy.get(k)}"
+                            for k in ("merge_workflow", "status_workflow")}
             and pr["base"]["ref"] == default
             and run.get("head_branch") == pr["head"]["ref"]
             and run.get("head_repository", {}).get("full_name")

@@ -117,7 +117,7 @@ def _load_skill_support(group, anchor_file, declared_path, *, source_only=False)
 _load_skill_support('git-environment', __file__, 'maintain-project-specs/scripts/project_specs_lib/contracts.py')
 from git_environment import environment as _git_environment  # noqa: E402
 
-MAX_SPEC_BYTES = 1024 * 1024
+MAX_SPEC_BYTES = 2 * 1024 * 1024
 REQUIREMENTS_SCHEMA = "maintain-project-specs/requirements-v2"
 DESIGN_SCHEMA = "maintain-project-specs/design-v2"
 LEGACY_CANONICAL_REQUIREMENTS_SCHEMA = "maintain-project-specs/requirements-v1"

@@ -10875,6 +10875,122 @@ Tags: 358 pass/4 skip; red controls, Ruff/mypy/Markdown/ratchet/review pass. Con
 
 <!-- /FEATURE: FEAT-061 -->
 
+<!-- FEATURE: FEAT-062 reqs=REQ-055 status=ready delivery=implemented priority=P1 version=3 -->
+### FEAT-062: Reuse exact-commit release qualification
+
+#### Requirements Covered
+
+- REQ-055: Reuse exact-commit release qualification.
+
+#### Context Evidence
+
+The workflow audit found repeated validation, missing dependency routing and
+publication retry gaps. Existing protected merge and artifact owners are reused.
+
+#### Design Details
+
+Require the cxcli CI and Nsight native/chart CI and shared publisher contract producers for the frozen
+merged commit before tagging. Bind quality, Python compatibility, wheel and complete native/chart matrix
+results to trusted run/attempt and artifact identities. Include dependency manifest and lock changes in Nsight trigger routing.
+Publication retains tagged runtime version, final wheel build, installation and
+CLI smoke checks plus independent remote byte verification. Optional cloud UAT
+is not a new release prerequisite. Keep existing service and release-specific wheel/catalog checks.
+
+The alignment pass authenticates historical routes only for source discovery;
+current-attempt provenance still gates qualification. An unresolved trusted
+result producer cannot disappear behind an older green run. Publication history
+accounts for deleted receipts and every attempt; proven pre-effect failures may
+retry, while every image or chart recovery effect retains new attempt-bound
+evidence for the original digest or archive before publication.
+
+#### Selected Option
+
+Use explicit qualification profiles, immutable evidence and existing workflow
+owners; separate merge settlement from downstream verification.
+
+#### Alternatives Considered
+
+Reject bypassing required CI, blanket live-test requirements, existence-only
+publication checks and a new always-running coordinator.
+
+#### Implementation Boundaries
+
+Workflow YAML, owning skills/helpers, policy, tests, templates and documentation.
+No product networking behavior, registry destination or credential expansion.
+
+#### Test-First Success Criteria
+
+- TDD-001: Qualification retains all required coverage and rejects false success.
+- TDD-002: Interrupted effects reconcile original identity without overwrite.
+- TDD-003: Observation does not monopolize state or reset fixed budgets.
+
+#### Validation Plan
+
+Run focused negative controls, workflow inventory checks and scoped alignment.
+
+#### Test Plan
+
+Inject missing/skipped jobs, changed identities, concurrent resume, partial
+publication, expired evidence and duplicate/lost notifications.
+
+#### Evaluation Plan
+
+Measure removed duplicate work against the frozen baseline. Keep local,
+installed and deployed results separate.
+
+#### Rollout And Rollback
+
+Integrate approved recovery source, update templates and skills together, and
+coordinate exact-path Actions event policy changes after reviewable deployment.
+Preserve existing checkpoints and user checkout; roll back only owned changes.
+
+#### Done Definition
+
+Source changes and required tests pass; installation and deployed qualification
+are independently reported, including any remaining rollout prerequisites.
+
+#### Implementation Evidence
+
+The source implements exact-commit release profiles and qualification evidence,
+scoped publication gates, non-sliding eight-hour release phases, short-lock
+observations and exclusive effect ownership. CI producers retain required native,
+package and matrix coverage. The status observer, dispatch-only broker and
+verified targeted completion callbacks separate responsibilities. Publication
+intents preserve original image digests and chart archive bytes/destination.
+Optional UAT is distinct from required CI and accepted delivery criteria. The
+AI controller remains disabled. Source templates and operator cutover guidance
+are aligned; installed and deployed qualification are separate boundaries.
+
+#### Verification Evidence
+
+Initial local validation passed 116 merge gate/completion tests, 71 release
+owner/recovery tests, 47 workflow/publication/qualification tests and the 2 MiB
+spec size boundary regression. The two offline dependency tests, 80 repair
+control tests and 85 authentication-owner tests also pass (402 source tests total).
+Tests include stale observations, interrupted
+one-time dispatch, pending plus missing producers, partial image aliases,
+original chart bytes, destination drift, expired evidence and superseded runs.
+Ruff and Python syntax pass. All active workflows pass Actionlint apart from
+its known unsupported concurrency.queue key; the provider documents queue:max.
+Seven changed skill structures pass for Codex and Claude with one existing
+progressive-disclosure warning. Disposable npx discovery, both-host copy parity,
+repeat installation and isolation pass. The installed release skill received
+only the independent eight-hour budget update: 68 tests pass and all five saved
+checkpoints are byte-for-byte unchanged. Full installed skill synchronization
+remains paired with the trusted workflow deployment. These checks do not establish hosted workflow, registry or native
+agent qualification. The observer event-policy cutover and live acceptance
+checks remain deployment prerequisites; no live policy changes are claimed.
+
+Subsequent alignment passed 136 focused workflow/publication/qualification and
+release-owner tests. Regressions cover routing-free and rerunning result
+producers, deleted receipt rows, same-run retries, pre-effect failures, image
+receipt families and repeated recovery with original identities. Active and
+generic publishers carry matching operator identity and explicit PR-read
+permissions. Read-only review found no remaining blocker in that repair scope;
+GitHub deployment and registry behavior remain unverified.
+
+<!-- /FEATURE: FEAT-062 -->
+
 <!-- maintain-project-specs:design:end -->
 
 ## General Architecture and Runtime Design (Recovered Pre-Lifecycle Baseline)

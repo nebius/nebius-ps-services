@@ -3414,8 +3414,8 @@ request, a successful merge, and successful verification.
   after verified membership; distinguish removal from never-proven membership,
   and defer requested branch deletion while queued. Cleanup must reject a
   head that advances beyond the explicitly expected SHA at deletion time.
-- AC-004: Ordinary PR readiness, merge settlement and exact-result CI/Pages
-  verification each use an independent fixed 86,400-second (24-hour) budget.
+- AC-004: Ordinary PR readiness and merge settlement, plus explicitly requested
+  full result CI/Pages verification, each use an independent fixed 86,400-second (24-hour) budget.
   Observe checks, statuses and Actions provenance every 30 seconds; retries,
   repairs and CI reruns never reset deadlines. An explicit user continuation
   starts a new observation attempt while retaining the original transaction and
@@ -3536,7 +3536,7 @@ and receive a verified GitHub Release URL.
 - AC-003: Local review-pr and safe canonical repairs precede merge-pr Actions
   approval and protected automatic merge. Do not wait for routine human PR
   approval before broker dispatch. Additional human or publication-environment
-  gates share their enclosing 10,800-second phase budget, with approval links,
+  gates share their enclosing 28,800-second phase budget, with approval links,
   15-second polling and minute progress; there is no separate ten-minute cutoff.
   PR readiness, merge settlement, post-merge verification and release execution
   have independent fixed phase deadlines. Gate changes, repairs, partial
@@ -3554,6 +3554,12 @@ and receive a verified GitHub Release URL.
   clean matching checkout and fresh configured-operator attestation for the live
   head/base; preserve prior-head evidence and deadlines. Arbitrary drift still
   blocks, and the broker independently repeats merge admission.
+  After an external merge, explicit resume may recover an authorized published
+  descendant through a separate owner transition: verify registered execution,
+  unchanged numeric PR/repository/ref identity, authoritative merged result and
+  immutable remote-default containment. Reject existing tag/publication evidence;
+  preserve checkpoint history and deadlines, and require selected release-profile
+  qualification before tagging; unrelated CI and Pages do not gate it. Do not manufacture a retrospective review or replay a merge.
 - AC-005: Tag only the verified merged commit in remote default history from an
   isolated checkout. Create its annotated tag before SCM runtime verification;
   push after success. Default advancement cannot change release contents.
@@ -3621,7 +3627,7 @@ Ordinary create-pr performs complete local code review before publication and st
 
 - AC-019: Protected merge has no cron. PR and trusted PR CI start/completion events target only affected current heads; ignore push and result-CI for PR aggregation. One hourly completion recovery at minute 17 and manual recovery also repair Required CI for all open default-base PRs. When both workflow-run and commit PR associations are empty, resolve only a unique fork owner/ref match and verify the current PR head plus repository-owned Actions check-suite provenance. Stale targets produce no update; ambiguity or invalid/incomplete authoritative evidence stops discovery without effects.
 - AC-020: Completion events inspect only the producer run. Operator-dispatched merge intents and validated early result-CI routing receipts can route recovery, including failed CI. Routing identity never proves CI success. Preserve latest-attempt exact-result evidence. Target-specific malformed receipts block that target while independent valid targets proceed; authentication, permissions and incomplete global listings stop all effects.
-- AC-021: Keep the seven CI workflow identities and five result-dispatch inputs, trusted checkout ordering and success artifacts. Check policy, listener, path-filter and publication contract parity in baseline CI.
+- AC-021: Keep the complete configured CI inventory and five result-dispatch inputs, trusted checkout ordering and success artifacts. Check policy, listener, path-filter and publication contract parity in baseline CI.
 - AC-022: Existing releases require a trusted immutable pre-publication manifest binding repository, tag object/commit, workflow run/attempt and every asset basename, size and SHA-256. Verify downloaded bytes. Missing evidence, transport/auth failures, partial or conflicting state block reconciliation; never treat errors as absence or overwrite published artifacts.
 - AC-023: Image SemVer tags are tag-triggered only (X.Y.Z and X.Y.Z-gSHA); manual builds use sha-SHA and optional main-only latest, with no release_version input. Serialize the destination image across preflight, push, digest verification and manifest using noncanceling queue:max. Verify all immutable aliases against trusted prior evidence before reuse and every remote digest after publication.
 - AC-024: Preserve service-specific release qualification and Helm catalog, metadata, package, anonymous-pull and digest checks. Share deterministic publication utilities without a privileged generic command workflow. github-workflows is the sole release/image YAML template owner; publisher skills delegate setup to it.
@@ -4122,11 +4128,12 @@ evidence-backed decisions, and saves batch plans for later implementation.
 - AC-001: Without flags, review all open issues across the unambiguous current
   checkout's GitHub repository. Support only optional --repo comma-separated
   repository names or URLs, --issue comma-separated positive numbers, and
-  --priority comma-separated project roots, plus side-effect-free help.
+  --priority comma-separated project roots, optional exact --label with
+  --issue-batch (default five), plus side-effect-free help.
   Validate all arguments before repository discovery or GitHub calls.
   Check each supplied issue number in every selected repository and review
   every existing issue match; exclude PRs. Do not retain positional aliases.
-- AC-002: Complete pagination and deduplicate full identities before ordering
+- AC-002: In unbounded mode, complete pagination and deduplicate full identities before ordering
   each repository. Freeze observed targets for the collection interval, report
   incomplete coverage, and revalidate before effects. Process repositories in
   supplied order. Within each repository, order explicit project priorities
@@ -4142,8 +4149,8 @@ evidence-backed decisions, and saves batch plans for later implementation.
   batches by highest supported severity, then count, then lowest issue number;
   unknown severity remains explicit. Rare serious defects remain actionable;
   valid low-priority work stays open with deferral rationale.
-- AC-005: Ordinary invocation authorizes selected-issue comments and justified
-  closure, while accepted work remains open. Use research and design as internal
+- AC-005: Ordinary invocation authorizes selected-issue comments, justified
+  closure and existing documented repository labels, while accepted work remains open. Use research and design as internal
   advisers and verify a complete saved plan before acceptance. Before each
   acceptance, refresh the target and all member/dependency evidence supporting
   its shared remediation, including relevant source state. Reverify affected
@@ -4159,6 +4166,12 @@ evidence-backed decisions, and saves batch plans for later implementation.
   verified local plan paths and action/coverage limitations. Respect read-only
   modes, missing matching checkouts and sensitive reporting boundaries.
 
+- AC-008: Label mode selects oldest-created open issues, at most one invocation-wide
+  positive limit across supplied repositories (default five); priority orders
+  only the selected set. Freeze full identities before effects and never refill
+  skipped or changed slots. Batch requires label and excludes explicit numbers.
+  Preserve unrelated labels; ambiguous mappings remain recommendations.
+
 #### Negative Criteria
 
 - NC-001: No wrong-repository effects, keyword-only duplicate decisions,
@@ -4166,7 +4179,8 @@ evidence-backed decisions, and saves batch plans for later implementation.
   untrusted command execution, repeated equivalent comments, overwrite of
   unrelated work, or disclosure of implementation-plan contents.
 - NC-002: No implementation, canonical-spec rewrite during triage, Git/PR
-  actions, label/assignee/milestone changes, authentication repair, silent clone,
+  actions, label creation or undefined label mappings, assignee/milestone changes,
+  authentication repair, silent clone,
   new scheduler infrastructure, or live issue mutation to test the skill.
 
 #### Validation Method
@@ -5351,6 +5365,16 @@ hosted automation, with meaningful status and independently justified issue clos
 - AC-007: Reconcile terminal labels, comments and issues through narrow completion
   records without restarting implementation, admitting backlog work or remerging.
 
+- AC-008: Optional --label and --pr-batch select one repository-wide batch,
+  default five, oldest-created first. Freeze identities before effects; never
+  refill or automatically continue. Preserve no-flags selected-PR behavior.
+  Terminal labels audit all states without restarting repair or merge; other
+  labels select open PRs including drafts. No new batch-wide deadline applies.
+- AC-009: Deduplicate directly closing-linked issues across selected PRs; assess
+  each independently through the read-only issue adviser. The outer owner alone
+  applies authorized effects, with separate label/comment/closure verification.
+  Linked issue count is independent of the PR cap; no recursive backlog triage.
+
 #### Negative Criteria
 
 - NC-001: No merges from labels, contributor prose, failed evidence or partial
@@ -5736,6 +5760,51 @@ baseline and candidate counts/latency. Measure complete preflight wall time
 separately; qualify both native workflows and preserve partial evidence honestly.
 
 <!-- /REQUIREMENT: REQ-083 -->
+
+<!-- REQUIREMENT: REQ-084 status=active priority=P1 type=reliability -->
+### REQ-084: Bounded delivery and recoverable workflow publication
+
+#### User Story
+
+Maintainers need shorter delivery with complete, identity-bound validation and
+recoverable publication rather than repeated or unrelated work.
+
+#### Acceptance Criteria
+
+- AC-001: Ordinary protected merge completes after authoritative merge and containment.
+  Required CI and code review remain mandatory; additional live UAT is opt-in.
+  Release observation has four independent 28800-second non-sliding budgets.
+  Observers use short atomic state locks and a separate exclusive effect lock.
+  Release profiles bind exact result commits, required jobs, trusted producers and
+  14-day artifact evidence; unrelated CI and Pages do not gate publication.
+  Separate status observation, dispatched merge and targeted completion recovery.
+  Keep AI effects disabled. Preserve original Helm archives and image intent before
+  alias publication, with 90-day evidence and conflict-safe interrupted recovery.
+- AC-002: Preserve user checkout state, original release identities and required
+  protection, review, failure and cleanup gates.
+
+#### Negative Criteria
+
+- NC-001: Never treat missing evidence, skipped required jobs, uncertain effects,
+  expired artifacts or unrelated successful runs as qualification.
+- NC-002: Do not activate the disabled AI controller or overwrite published data.
+
+#### Validation Method
+
+Focused source regressions and workflow contract tests, followed by independent
+installation and deployed workflow evidence at their respective boundaries.
+
+#### Test Method
+
+Cover exact identity, failure and skip rejection, stale attempts, concurrent
+observation, interruption, duplicate notifications and retained evidence expiry.
+
+#### Evaluation Method
+
+Compare selected test inventories and repeated work; report observed timings and
+separate local checks from deployed qualification without claiming unrun tests.
+
+<!-- /REQUIREMENT: REQ-084 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

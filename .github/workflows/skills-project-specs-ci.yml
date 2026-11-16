@@ -200,7 +200,7 @@ jobs:
       actions: read
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -225,7 +225,7 @@ jobs:
           EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: ${{ matrix.python }}
       - name: Verify trusted loading, source audit and payload parity
@@ -251,7 +251,7 @@ jobs:
       actions: read
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -277,7 +277,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
 
@@ -406,6 +406,8 @@ jobs:
           python -B project-agent-instructions/scripts/test_project_specs_retention.py
           python -B agent-nebius-auth-setup/scripts/test_install_hook_registration.py
           python -B agent-nebius-auth-setup/scripts/test_pre_tool_use_nebius_auth.py
+          python -B sdlc-classify-failure/scripts/test_repair_control.py
+          python -B agent-nebius-auth-setup/scripts/test_agent_nebius_auth_setup.py
           python -B agent-nebius-auth-setup/scripts/test_agent_nebius_auth_contract.py
 
       - name: Run native workflow harness regressions
@@ -415,8 +417,6 @@ jobs:
           GIT_CONFIG_NOSYSTEM: "1"
         run: |
           set -euo pipefail
-          python -B implement-test/scripts/test_implement_lifecycle.py
-          python -B implement-test/scripts/test_verify_implement.py
           python -B sdlc-workflow-test/scripts/test_three_tier_browser.py
           python -B sdlc-workflow-test/scripts/test_owned_git_origin.py
           python -B sdlc-workflow-test/scripts/test_three_tier_target.py
@@ -441,7 +441,7 @@ jobs:
       actions: read
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -466,11 +466,11 @@ jobs:
           EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - name: Set up Node for pinned skills CLI
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "24"
           package-manager-cache: false

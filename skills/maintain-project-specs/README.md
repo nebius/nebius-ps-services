@@ -203,3 +203,10 @@ mismatched IDs, generic HTML and semantic edits have no exemption. The unchanged
 rejected pair must reach the paired publisher to reserve the bounded correction
 allowance before edits; the read-only check creates no allowance. Publication and
 semantic validation remain owned by the paired transaction.
+
+## Canonical document size bound
+
+Each canonical requirements or design document may contain at most 2 MiB.
+The owner rejects larger files before parsing and preserves its ownership, mode,
+no-symlink and concurrent-change checks. This bound accommodates large managed
+designs without allowing unbounded document reads.

@@ -15,3 +15,7 @@ explicit-priorities,true,"$review-github-issues --priority services/vpngw,servic
 explicit-multi-numbers,true,"$review-github-issues --repo example-org/alpha,example-org/beta --issue 12,34"
 skill-design-only,false,Design changes to the review-github-issues skill interface; do not run issue triage.
 review-github-issues-issue-workflow-explanation,false,Explain how $review-github-issues participates in saved issue plans and closure after merge; do not execute the workflow.
+explicit-label-batch,true,$review-github-issues --label being-fixed --issue-batch 10
+explicit-label-default,true,$review-github-issues --label bug
+explicit-label-claude,true,/review-github-issues --label needs-information --issue-batch 2
+label-pr-review,false,Review the pull requests labeled being-fixed and their diffs.
