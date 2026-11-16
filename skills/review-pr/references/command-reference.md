@@ -1,5 +1,9 @@
 # Review PR commands
 
+Before ordinary repair allocation or a permission blocker, use the trusted
+owner's read-only `inspect-pr-access` command and decision table in
+[branch access](branch-access.md). Do not infer denial from fork `push=false`.
+
 Read-only inspection uses `gh pr view <pr-url> --json number,url,title,author,headRefName,headRefOid,baseRefName,baseRefOid,isDraft,state,labels,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup`
 and `gh pr diff <pr-url>`. Paginate API files/reviews/threads; a truncated diff or
 missing checks never establishes review completion.

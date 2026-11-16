@@ -219,6 +219,12 @@ first; repair proven defects, then reconcile canonical specs before final review
    including parent-owned calls; retain the original transaction authority.
    Honor report-only restrictions and current GitHub write permissions. Pin
    trusted helpers before contributor checkout and isolate candidate execution.
+   For ordinary repair-capable review, consume the canonical read-only
+   [branch-access preflight](references/branch-access.md) before repair allocation
+   or any permission blocker. Direct fork write OR upstream write plus maintainer
+   edits may permit repair. Missing branch-write access does not block an
+   unchanged candidate; unknown evidence is not denial. Assess status-write
+   permission separately and preserve enrolled credential ownership.
 3. Delegate complete frozen base-to-head diff analysis to nested read-only
    code-review (or reuse same-operation exact-head/base analysis). Inspect specs,
    fresh review comments, unresolved threads, checks and conflicts. For dependency
@@ -346,6 +352,8 @@ When using this skill:
 1. Review the PR against the base branch, or perform the selected terminal audit.
 2. Identify whether the PR branch is same-repository, forked, writable, and
    safe to update.
+   Report the preflight actor/identity, eligible/denied/unknown result and basis,
+   needed repair and separate status-write outcome. Metadata is not a tested push.
 3. Apply the smallest relevant set of sibling skills for the changed surface.
 4. Fix safe issues directly on the PR branch when appropriate and writable.
 5. Resolve straightforward conflicts when safe and push permissions allow it.

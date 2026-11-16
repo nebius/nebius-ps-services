@@ -125,10 +125,13 @@ Small conflicts may be repaired when both parent intents are unambiguous and
 focused validation proves preservation. Hosted repair is bounded to five edited
 files and 200 non-marker changed lines. Local review uses the same conservative
 boundary. No rebase, force push, default-branch edit or permission expansion.
-For forks verify actual existing write access and maintainer-edit permission.
-The repository GITHUB_TOKEN cannot write a contributor fork; it must report a
-contributor handoff or use a separately authorized replacement path. Never add
-credentials to bypass the restriction.
+For forks consume the canonical [branch-access assessment](branch-access.md):
+direct head write OR upstream write plus maintainer edits, with denied and
+unknown evidence distinguished. Branch-write access matters only for needed
+repairs; base-repository status-write access is separate.
+The built-in repository-scoped Actions GITHUB_TOKEN cannot write a contributor
+fork; report a contributor handoff or use a separately authorized replacement
+path. Never add credentials to bypass the restriction.
 
 For substantial conflicts, require accepted adoption authority. Label the original
 `being-fixed`. Design one complete inventory of the original diff: each feature,

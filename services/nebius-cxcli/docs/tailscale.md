@@ -375,10 +375,26 @@ server identity; it does not prove Kubernetes user authorization. Supply the clu
 CA when its API does not use a publicly trusted certificate. DNS must resolve only
 inside the advertised prefixes. Targets cannot contain credentials or query strings.
 
-`verification.required: true` makes this client check part of deploy. Leave it
-false for an automation runner without tailnet connectivity and run verification
-from a connected laptop. Reports distinguish infrastructure readiness from client
-proof; deployment never silently counts an unrun client test as passed.
+Deploy runs configured client checks after router readiness. With
+`verification.required: false`, a failed check is reported as `PENDING` and does
+not fail an otherwise ready deployment. This includes a disconnected local client,
+timeouts, unavailable route tooling and malformed command responses. Set
+`verification.required: true` to fail deployment when the client check fails.
+For an automation runner without tailnet connectivity, leave it false and run
+`tailscale verify` from a connected laptop. Explicit verification returns a
+nonzero exit status with an actionable error when these checks fail; subprocess
+output is not included in the error.
+
+The schema-1 `tailscale-report.json` records separate router and client evidence.
+Every configured member of every enabled gateway starts the completion check as
+`PENDING`. `gateway_ready` becomes true only after the report contains exactly one
+current `READY` observation for each member. An interrupted or partial check cannot
+claim aggregate readiness. Progress reports preserve earlier components' client
+results, including when a later component fails. `INFRASTRUCTURE_READY` indicates
+onboarding is still pending and does not count as an active gateway. A required
+client failure can fail deployment while `gateway_ready` remains true: router
+readiness and client traffic are separate evidence. HA configuration alone does
+not prove failover, and an unrun client test is never counted as passed.
 
 ```bash
 nebius-cxcli tailscale verify ./config.yaml --failover --json

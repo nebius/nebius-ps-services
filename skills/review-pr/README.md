@@ -137,6 +137,16 @@ stops there. An explicit root review-and-merge request delegates once to merge-p
 its parent-owned review-pr call returns evidence without recursive delegation.
 Unsafe findings or unresolved human objections stop. Agentic SDLC remains read-only.
 
+## Fork repair permissions
+
+Review uses a shared read-only preflight before allocating repairs or reporting
+a permission blocker. Direct fork write access or upstream write access plus
+maintainer edits can permit updates to the original PR branch. Missing evidence
+is unknown, not denied; metadata eligibility does not prove a successful push.
+Needed repairs with denied/unknown access receive an accurate `blocked`
+disposition when status writes are authorized. A PR needing no branch changes
+continues review without branch-write access. See [branch access](references/branch-access.md).
+
 ## Reviewed dependency updates
 
 Dependabot updates, including Docker, require complete local review, meaningful

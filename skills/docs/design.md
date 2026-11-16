@@ -10733,7 +10733,7 @@ fresh model selection, deployment health or unrelated authorization paths.
 
 <!-- /FEATURE: FEAT-051 -->
 
-<!-- FEATURE: FEAT-052 reqs=REQ-053 status=ready delivery=implemented priority=P1 version=2 -->
+<!-- FEATURE: FEAT-052 reqs=REQ-053 status=ready delivery=implemented priority=P1 version=3 -->
 ### FEAT-052: Contribution acceptance and fork-safe specification repair
 
 #### Requirements Covered
@@ -10752,6 +10752,12 @@ Extend the canonical Git task with independently frozen PR base/head repository 
 
 Version strict task and review/intent evidence consistently. Merge admission, recovery and CI checkout retain trusted default code and protected exact-head effects while accepting bound forks. Confirmed merged completion can tolerate a deleted head repository only through immutable prior admission plus authoritative result/base evidence. Freeze trusted installed/default helper provenance before checkout and isolate candidate execution from operator credentials. Never let candidate policy suppress its own review.
 
+The ordinary review coordinator consumes a private read-only `inspect-pr-access` command from the existing commit transaction CLI. A shared pure assessment in `pr_publication.py` serves this preflight and the final publication check; do not duplicate the permission formula in agent reasoning. Return exact observed actor and PR/base/head identities, boolean-or-unknown permission facts, an eligible/denied/unknown result, its basis and a sanitized reason. Missing or malformed relevant facts and failed identity reads remain unknown. Positive evidence for either supported route suffices; denial needs conclusive negative evidence for both routes. Metadata eligibility is not a tested push and creates no execution authority.
+
+Preflight uses bounded GitHub reads only: no checkout, Git invocation, state allocation, credential changes or probe push. Reobserve actor and selected PR identity to detect drift. Known repository-scoped Actions tokens do not inherit a human maintainer's fork permission; enrolled controllers retain their existing effect ownership. Existing publication checks remain fresh and retain transport, remote-head, non-force and ambiguous-outcome protections.
+
+Needed safe repairs with eligible access continue through private preparation. Denied or unknown access blocks only the needed repair and must be reported accurately. Unsafe conflict semantics remain blocked even with access. Unchanged candidates continue ordinary review. Status comments/labels use their separate upstream authority, preserve unrelated labels and verify readback; use canonical `blocked`, never a new alias. Update source guidance and deterministic/behavioral regressions, then refresh only affected installed copies through the existing installer. No live PR mutation, merge or commit is included in this skill update.
+
 #### Selected Option
 
 Reuse existing local agent and Python/Git/GitHub Actions owners. Deterministic helpers own validation and publication; the root agent owns semantic acceptance and canonical spec authoring.
@@ -10762,7 +10768,7 @@ A merge-level spec writer duplicates ownership. Filename-only checks miss semant
 
 #### Implementation Boundaries
 
-Review/code-review/spec guidance and evaluations; create-pr and commit publication helpers; merge admission/completion and workflow templates/consumers; matching README, changelog and tests. No live PR edits, merges, credential changes or production installation are part of this implementation.
+Review/code-review/spec guidance and evaluations; create-pr and commit publication helpers; merge admission/completion and workflow templates/consumers; matching README, changelog and tests. No live PR edits, merges, credential changes or production installation are part of this implementation. The permission-preflight increment refreshes only the three affected local skill copies; hosted deployment remains separate.
 
 #### Test-First Success Criteria
 
@@ -10792,9 +10798,13 @@ Source behavior and all direct consumers align, focused tests pass and evidence 
 
 #### Implementation Evidence
 
+Permission-preflight increment implemented: the private read-only CLI and final publication boundary share a three-valued assessment. Maintainer access requires a verified human identity; environment variable names never establish token provenance. Review instructions distinguish needed repairs, denied versus unknown access, and separate status-write outcomes. Source-owned review-pr, commit and create-pr installations were refreshed; their payload bytes match source, with unrelated installed skills, hook files and hook registrations unchanged. Earlier delivery evidence below remains historical.
+
 Implemented contribution assessment and root-owned spec handoff in review-pr, code-review, maintain-project-specs and merge-pr, with canonical per-project outcomes and behavioral cases. Create-pr now uses private bound intake and publish-target through commit_transaction.py and pr_publication.py. Task/checkpoint/closure v3 binds separate repository identities and journals non-force publication. Trusted pre-push rejection witnesses permit safe cancellation; advanced contributor heads are durably fenced in one atomic checkpoint. Single stable push destinations, exact branch/PR readback and final publication proof prevent wrong-target or incomplete completion. Review/intent v2 admission and completion accept bound forks, including deletion after confirmed merge. Release consumers, SDLC operation guards, installer expectations, CI and guidance use the same contracts.
 
 #### Verification Evidence
+
+Permission-preflight verification: the broader 63-case publication suite passed on the initial implementation snapshot. After actor and credential-provenance hardening, 14 focused assessment cases and two real disposable publication cases pass on the final helper, including a valid maintainer repair and malformed/bot actor rejection before push. Seven commit-contract checks, Codex/Claude structure validation, scoped Python/Markdown lint and diff checks pass. Source and installed read-only GitHub observations both report maintainer-edit eligibility with direct fork push=false, upstream push=true and maintainer edits enabled; no push was attempted. Model quality probes on both hosts report UNAVAILABLE because isolated-runner authentication is absent. Source, installed-copy and read-only metadata evidence do not certify semantic model behavior or live repair publication.
 
 Passing source checks: 61 merge-gate tests, 39 merge-completion tests, 16 real disposable publication cases, a targeted interruption-at-settlement regression, 47 release-consumer tests, 6 commit-contract checks and the SDLC direct-helper guard case. Codex/Claude structural validation, standard-field checks, Ruff and Markdown checks pass. Real pinned npx installation validates both hosts, copied resources, repeat installation and isolation. All 90 transaction regression cases pass on the final helper code: 89 passed in the parallel run and one 30-second checkout-completion timeout passed unchanged in an isolated 12.8-second rerun. Two focused native installed-helper/upgrade cases pass on both hosts using a frozen source snapshot whose four product-helper files match the final source. Together the focused suites cover 262 distinct cases. The ten affected skills pass Codex/Claude structure and disposable copied-payload checks. Native comparative quality runs were attempted on both hosts but authentication was unavailable in isolated homes. No live GitHub PR mutation, workflow activation, protected bootstrap, native semantic quality pass or production deployment is claimed.
 
@@ -10847,8 +10857,9 @@ Delivery remains implemented, not live verified. Historical grants require their
 retirement; their presence alone does not block new v4 operations. No schema
 translation or unrelated-session closure is authorized. Fresh model
 trigger and comparative output-quality runs are unavailable without clean-runner
-credentials. No real PR repair, push, merge or active installation refresh is
-claimed. Executable hooks, non-LFS filters and external drivers await an enforced
+credentials. The historical private-execution delivery did not claim a real PR
+repair, push, merge or active installation refresh; the permission-preflight
+increment records its scoped local installation evidence above. Executable hooks, non-LFS filters and external drivers await an enforced
 restricted runner. FEAT-068 separately verifies unused LFS configuration with
 sentinel executables; actual LFS content remains unsupported.
 

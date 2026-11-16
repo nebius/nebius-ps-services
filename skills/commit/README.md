@@ -68,6 +68,12 @@ no-commit retries. See
 
 ## What It Does
 
+PR coordinators also use the private read-only `inspect-pr-access --repository
+OWNER/REPO --pr NUMBER` helper before repair allocation. It shares the final
+publication permission rule, reports eligible/denied/unknown evidence, and
+performs no Git or state mutation. This is not a public commit action and grants
+no transaction authority. See [branch access](../review-pr/references/branch-access.md).
+
 - Resolves the Git repository root and runs Git commands from there.
 - Inspects the complete tracked and untracked diff before staging and stops on
   obvious unsafe or incoherent content.

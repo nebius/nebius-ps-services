@@ -167,6 +167,18 @@ class CommitContractTest(unittest.TestCase):
         self.assertIn("Do not switch branches or", merge)
         self.assertIn("local branch update/skip", merge)
 
+    def test_review_consumes_shared_branch_access_without_extra_authority(self):
+        review = self.text("review-pr/SKILL.md")
+        self.assertIn("references/branch-access.md", review)
+        access = self.text("review-pr/references/branch-access.md")
+        for term in ("inspect-pr-access", "maintainer_can_modify", "unknown",
+                     "unchanged", "status-label access separately", "GITHUB_TOKEN",
+                     "not an authorization receipt", "no Git command"):
+            self.assertIn(term, access)
+        publication = self.text("create-pr/references/pr-publication.md")
+        self.assertIn("inspect-pr-access", publication)
+        self.assertIn("fresh checks before publication", publication)
+
 
 if __name__ == "__main__":
     unittest.main()

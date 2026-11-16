@@ -27,3 +27,5 @@ pr-selector-design,false,Design the --pr selector for the review-pr skill; do no
 review-close-linked,true,$review-pr Review and close only PR42; complete independently resolved linked issues.
 review-close-exclude-issues,true,/review-pr --pr 42 review and close it; leave issues unchanged.
 design-issue-closure,false,Design automatic linked-issue completion for review-pr; do not review or close any PR.
+fork-maintainer-review,true,$review-pr Review this fork PR and resolve safe conflicts; upstream maintainers are allowed to edit its branch.
+fork-permission-skill-design,false,Design the fork permission policy for review-pr; do not review or update any PR.

@@ -34,12 +34,48 @@ def client_status() -> dict[str, Any]:
         raise RuntimeError(
             "Install and connect the Tailscale client on this computer, then retry verify"
         )
-    result = subprocess.run(
-        [binary, "status", "--json"], capture_output=True, text=True, timeout=15, check=False
-    )
+    try:
+        result = subprocess.run(
+            [binary, "status", "--json"], capture_output=True, text=True, timeout=15, check=False
+        )
+    except (subprocess.TimeoutExpired, OSError, UnicodeError):
+        raise RuntimeError(
+            "Cannot read Tailscale status; check the local client and retry verification"
+        ) from None
     if result.returncode or len(result.stdout) > 4 * 1024 * 1024:
-        raise RuntimeError("The local Tailscale client is unavailable")
-    value = json.loads(result.stdout)
+        raise RuntimeError(
+            "The local Tailscale client is unavailable; check it and retry verification"
+        )
+    try:
+        value = json.loads(result.stdout)
+        if not isinstance(value, dict) or not isinstance(value.get("BackendState"), str):
+            raise ValueError
+        tailnet = value.get("CurrentTailnet")
+        if tailnet is not None and (
+            not isinstance(tailnet, dict) or not isinstance(tailnet.get("Name", ""), str)
+        ):
+            raise ValueError
+        peers = value.get("Peer")
+        if peers is not None and not isinstance(peers, dict):
+            raise ValueError
+        for peer in (peers or {}).values():
+            if not isinstance(peer, dict) or not isinstance(peer.get("ID", ""), str):
+                raise ValueError
+            for field in ("PrimaryRoutes", "TailscaleIPs"):
+                values = peer.get(field)
+                if values is None:
+                    continue
+                if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
+                    raise ValueError
+                for item in values:
+                    if field == "PrimaryRoutes":
+                        ipaddress.ip_network(item, strict=True)
+                    else:
+                        ipaddress.ip_address(item)
+    except ValueError:
+        raise RuntimeError(
+            "Invalid Tailscale status response; check the local client and retry verification"
+        ) from None
     if value.get("BackendState") != "Running":
         raise RuntimeError("The local Tailscale client is not connected")
     return value
@@ -69,7 +105,7 @@ def verify_os_route(address: str, status: dict[str, Any], node_id: str) -> str:
         (p for p in (status.get("Peer") or {}).values() if p.get("ID") == node_id), {}
     )
     peer_ip = next(
-        (v for v in peer.get("TailscaleIPs", []) if ipaddress.ip_address(v).version == 4), None
+        (v for v in (peer.get("TailscaleIPs") or []) if ipaddress.ip_address(v).version == 4), None
     )
     if not peer_ip:
         raise RuntimeError("Selected router has no IPv4 tailnet address")
@@ -83,14 +119,38 @@ def verify_os_route(address: str, status: dict[str, Any], node_id: str) -> str:
         )
         if system not in {"Darwin", "Linux"}:
             raise RuntimeError("Client route verification supports macOS and Linux")
-        result = subprocess.run(command, capture_output=True, text=True, timeout=10, check=False)
+        try:
+            result = subprocess.run(
+                command, capture_output=True, text=True, timeout=10, check=False
+            )
+        except (subprocess.TimeoutExpired, OSError, UnicodeError):
+            raise RuntimeError(
+                "Cannot read the operating system route; check local route tooling and retry verification"
+            ) from None
         if result.returncode or len(result.stdout) > 65536:
-            raise RuntimeError("Cannot establish the operating system route to the target")
+            raise RuntimeError(
+                "Cannot establish the operating system route; check accepted routes and retry verification"
+            )
         if system == "Darwin":
             match = re.search(r"^\s*interface:\s*(\S+)\s*$", result.stdout, re.MULTILINE)
-            return match.group(1) if match else ""
-        values = json.loads(result.stdout)
-        return values[0].get("dev", "") if len(values) == 1 else ""
+            if match:
+                return match.group(1)
+        else:
+            try:
+                values = json.loads(result.stdout)
+            except ValueError:
+                values = None
+            if (
+                isinstance(values, list)
+                and len(values) == 1
+                and isinstance(values[0], dict)
+                and isinstance(values[0].get("dev"), str)
+                and values[0]["dev"]
+            ):
+                return values[0]["dev"]
+        raise RuntimeError(
+            "Invalid operating system route response; check accepted routes and retry verification"
+        )
 
     target, overlay = interface(address), interface(peer_ip)
     if not target or target != overlay or not (target.startswith("utun") or target == "tailscale0"):

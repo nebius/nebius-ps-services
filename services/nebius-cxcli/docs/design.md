@@ -10805,7 +10805,7 @@ Guest MTU/MSS, immutable bootstrap and client verification implemented. Empty pe
 
 <!-- /FEATURE: FEAT-060 -->
 
-<!-- FEATURE: FEAT-061 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=10 -->
+<!-- FEATURE: FEAT-061 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=11 -->
 ### FEAT-061: Tailscale HA gateways
 
 #### Requirements Covered
@@ -10826,6 +10826,10 @@ Both wizards: dim SSH/custody guidance, shared tags (approval pending; availabil
 
 Shared parsing preserves literal comma lists, validates YAML, safely retries controls/errors and navigation. One tag validator serves config/both wizards: tag: plus letter-led alphanumeric/hyphen name, unique entries. Retry without prefix guessing/raw input errors. Distinct type/empty/syntax/duplicate errors; infrastructure empty tags remain optional.
 
+Gateway reports seed one PENDING slot per configured (component, member) before observations and replace exact slots as verification finishes. Aggregate readiness requires exact nonempty identity coverage without duplicates and all READY; infrastructure results retain their distinct status. Every publication retains accumulated client evidence. Schema 1 and existing consumers remain unchanged; client checks never redefine router readiness.
+
+Client status/OS-route readers normalize expected command timeouts, execution errors and malformed responses into sanitized RuntimeError diagnostics. Keep existing subprocess timeouts and failover polling; no blanket catch, raw output or new retries. Optional client failures remain PENDING; required failures raise after evidence publication. Keep report, journal, authentication and route-approval contracts otherwise unchanged.
+
 #### Selected Option
 
 Staged activation, scoped VPN defaults, shared validators; fixed stack.
@@ -10844,6 +10848,8 @@ Config, wizard, SDK, lifecycle, reports/guides.
 - TDD-002: Both wizards explain custody/preserve mixed rules.
 - TDD-003: Parser/checkbox/tag retries, persistence, ports/navigation.
 - TDD-004: Preserve grants; narrowing is not revocation.
+- TDD-005: Second-member and later-component failures retain complete pending coverage and earlier client evidence; single-member, HA and mixed-stage results produce accurate published summaries.
+- TDD-006: Status/route timeouts and malformed responses remain sanitized; optional/required/explicit verification have distinct correct outcomes. Public-safe upstream-format fixtures exercise real readers and API parsing; actual CLI dispatch covers operational status, diagnosis, verification and auth checks.
 
 #### Validation Plan
 
@@ -10867,11 +10873,11 @@ Separate local/live proof.
 
 #### Implementation Evidence
 
-Shared validate_tags/prompt_tags wired to runtime/setup/onboarding.
+Existing tag validation remains implemented. `tailscale_deploy.py` now seeds current member coverage, gates aggregate readiness on exact unique coverage and preserves accumulated client evidence. `tailscale_verify.py` normalizes expected local command/response failures and safely handles absent router addresses. Schema 1, journal ownership and route approvals are unchanged. Regression and transport/CLI coverage lives in `tests/test_tailscale_reporting.py`, `tests/test_tailscale_verify.py` and `tests/test_tailscale_transports.py`, with synthetic vendor fixtures under `tests/fixtures/tailscale/`.
 
 #### Verification Evidence
 
-Tags: 358 pass/4 skip; red controls, Ruff/mypy/Markdown/ratchet/review pass. Config loads. Live unverified.
+Before remediation, the new regressions produced 20 failures and four passes, reproducing the reporting and client-boundary defects. After remediation, 270 focused offline tests passed (Tailscale suites plus deployment reports); four native policy tests were deselected because Go is unavailable locally. Scoped Ruff, Markdown lint, whitespace checks and the existing mypy ratchet passed. Changed-scope alignment and read-only code/security review found no new blocker. CLI, guest, API and OS-route transports were mocked; no live tailnet, data-path, TLS or failover qualification was performed.
 
 <!-- /FEATURE: FEAT-061 -->
 

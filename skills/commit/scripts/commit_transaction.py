@@ -4341,6 +4341,9 @@ def review(arguments: argparse.Namespace) -> dict[str, object]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="action", required=True)
+    access_parser = subparsers.add_parser("inspect-pr-access")
+    access_parser.add_argument("--repository", required=True)
+    access_parser.add_argument("--pr", type=int, required=True)
     prepare_parser = subparsers.add_parser("prepare")
     prepare_parser.add_argument("--repo-root", required=True)
     prepare_parser.add_argument("--session-id", required=True)
@@ -4433,6 +4436,10 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
+    if arguments.action == "inspect-pr-access":
+        result = _pr.inspect_pr_access(arguments.repository, arguments.pr)
+        print(json.dumps(result, sort_keys=True))
+        return 2 if result["status"] == "unknown" else 0
     try:
         result = {
             "begin": begin,

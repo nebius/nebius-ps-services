@@ -4,6 +4,12 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Share fork branch-access assessment between review preflight and publication.
+  Recognize direct writes or upstream maintainer edits, distinguish denied from
+  unknown evidence, preserve repository-token scope, and block only needed
+  repairs. Report status-write effects separately and preserve private review
+  isolation, existing publication ownership and read-only modes.
+
 - Complete independently resolved directly closing-linked issues during explicit
   review-and-close requests, including superseded PRs whose fixes are already
   merged elsewhere. Preserve issue exclusions, plain-review limits, human

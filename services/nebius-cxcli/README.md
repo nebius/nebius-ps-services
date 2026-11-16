@@ -260,6 +260,13 @@ route or Tailnet Lock approval. Have the administrator complete it, then rerun
 targets to check actual traffic; infrastructure readiness alone is insufficient.
 Failover testing is separate and only runs when explicitly requested.
 
+`gateway_ready: true` requires fresh readiness evidence for every configured member
+across all enabled gateway components. Client verification is reported separately:
+a local client or route-command timeout leaves optional verification `PENDING`;
+`verification.required: true` makes a failed client check fail deployment while
+retaining the router evidence. Reconnect the client, check accepted routes and run
+`tailscale verify` again.
+
 See the [Tailscale guide](docs/tailscale.md) for configuration, administrator
 prerequisites, credential modes, SecretStash import, recovery and retirement.
 Provisioning uses ordinary `deploy`; there is no `tailscale install` or

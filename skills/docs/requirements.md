@@ -4096,6 +4096,9 @@ Maintainers need ordinary PR review to assess contribution correctness, safety a
 
 - AC-008: Private review checkout isolation does not authorize credentialed contributor execution. Keep trusted controls separate from restricted candidate tests. Nested publication consumes owner-verified execution evidence without requiring caller HEAD to match a repaired PR; preserve original publication identity. Retain unresolved or unpublished work and clean only exact owned quiescent workspaces.
 
+- AC-009: Ordinary review uses one read-only permission assessment before repair allocation or a permission blocker. Direct head write or upstream write plus maintainer edits may admit a human maintainer; a fork's direct push=false alone cannot deny access. Distinguish eligible metadata, confirmed metadata denial and unknown evidence, and recheck through the publication owner before effects.
+- AC-010: Branch-write access is required only for needed repairs. Continue review of unchanged candidates without it. Report contribution value, correctness, conflicts, repair access and status-write outcomes separately. Required repairs with denied or unknown access use a precise blocked disposition when status writes are authorized; unavailable status effects remain pending. Preserve hosted token scope and every read-only/terminal/SDLC boundary.
+
 #### Negative Criteria
 
 - NC-001: No automatic acceptance from matching code/docs, green CI, filenames, bot identity or helper exit status alone; no raw push, force push, unauthorized replacement PR, default-branch publication or privileged contributor code execution.

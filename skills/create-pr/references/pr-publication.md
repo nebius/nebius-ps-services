@@ -5,6 +5,13 @@ Use the trusted installed commit transaction, including its sibling
 before contributor checkout; never run a candidate copy with operator credentials.
 This is a private owner contract, with no new public flags or merge authority.
 
+Ordinary review consumes the same owner's read-only `inspect-pr-access`
+preflight before repair allocation or a permission blocker; see
+[branch access](../../review-pr/references/branch-access.md). Its shared rule is
+direct head write OR verified human upstream write plus maintainer edits, subject
+to credential scope. Denied and unknown are distinct. The observation creates no grant and
+cannot replace fresh checks before publication; status-write access is separate.
+
 For an existing PR, pass private `begin --pr-bindings <private-json>` alongside
 the usual original receipt, target list and base. The JSON maps full local refs
 to selectors, for example:

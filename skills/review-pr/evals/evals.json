@@ -570,6 +570,76 @@
         "Finishes the eligible issue obligation after fresh assessment, verified/reused rationale and completed closure/readback.",
         "Does not reopen, re-close, repair or merge PR42 and does not treat an ordinary terminal audit as fresh closure authority."
       ]
+    },
+    {
+      "id": "fork-maintainer-access",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its branch-access reference. Use only these synthetic facts; do not contact GitHub, mutate files or execute publication. Explain the required next actions without claiming effects occurred. An ordinary review finds a safe conflict repair. The preflight reports eligible/maintainer_edit: head push=false, upstream push=true, maintainer_can_modify=true. The caller checkout has concurrent edits.",
+      "expected_output": "Uses canonical branch-access evidence and reports repair, readiness and status effects accurately.",
+      "files": [],
+      "assertions": [
+        "Continues toward the existing private preparation owner; does not declare denial from head push=false or ask for repeated repair approval.",
+        "Preserves caller files/refs, revalidates before publication, and requires fresh complete-diff review and CI after repair; metadata is not proof of push success."
+      ]
+    },
+    {
+      "id": "fork-direct-access",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its branch-access reference. Use only these synthetic facts; do not contact GitHub, mutate files or execute publication. Explain the required next actions without claiming effects occurred. An ordinary review finds a safe repair. Preflight reports eligible/direct: head push=true and maintainer_can_modify=false.",
+      "expected_output": "Uses canonical branch-access evidence and reports repair, readiness and status effects accurately.",
+      "files": [],
+      "assertions": [
+        "Accepts direct write as a sufficient metadata route without additionally requiring maintainer edits.",
+        "Keeps ordinary review repair authority separate from merge authority and publication verification."
+      ]
+    },
+    {
+      "id": "fork-denied-needed-repair",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its branch-access reference. Use only these synthetic facts; do not contact GitHub, mutate files or execute publication. Explain the required next actions without claiming effects occurred. Required conflict repair is safe but preflight conclusively reports denied/no_write_route. Upstream issue comment and label writes are authorized.",
+      "expected_output": "Uses canonical branch-access evidence and reports repair, readiness and status effects accurately.",
+      "files": [],
+      "assertions": [
+        "Explains the exact branch-write denial, completes useful read-only review and supplies a contributor handoff.",
+        "Uses canonical blocked disposition through the lifecycle owner with verified readback; does not invent block alias, alternate credentials or replacement PR."
+      ]
+    },
+    {
+      "id": "fork-unknown-access",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its branch-access reference. Use only these synthetic facts; do not contact GitHub, mutate files or execute publication. Explain the required next actions without claiming effects occurred. Required repair exists. API failure leaves preflight unknown/identity_or_permission_unavailable. Status-label writes are also unavailable.",
+      "expected_output": "Uses canonical branch-access evidence and reports repair, readiness and status effects accurately.",
+      "files": [],
+      "assertions": [
+        "Reports inability to verify access rather than confirmed denial.",
+        "Retains repair pending with a blocked disposition recommendation and clearly reports label/comment effects pending, not applied."
+      ]
+    },
+    {
+      "id": "fork-clean-without-write",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its branch-access reference. Use only these synthetic facts; do not contact GitHub, mutate files or execute publication. Explain the required next actions without claiming effects occurred. No branch changes are needed. Full review and required checks pass. Preflight reports denied; status writes are authorized. The request is plain review.",
+      "expected_output": "Uses canonical branch-access evidence and reports repair, readiness and status effects accurately.",
+      "files": [],
+      "assertions": [
+        "Does not create a branch-write-only blocker or refuse review because the branch is a fork.",
+        "Reports readiness subject to ordinary merge/review gates and does not merge from plain review."
+      ]
+    },
+    {
+      "id": "fork-hosted-token-scope",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its branch-access reference. Use only these synthetic facts; do not contact GitHub, mutate files or execute publication. Explain the required next actions without claiming effects occurred. A human local operator has upstream push and maintainer edits. An enrolled controller uses the upstream repository-scoped GITHUB_TOKEN; a required fork repair exists.",
+      "expected_output": "Uses canonical branch-access evidence and reports repair, readiness and status effects accurately.",
+      "files": [],
+      "assertions": [
+        "Does not transfer human maintainer authority to the hosted token or treat maintainer_can_modify as fork write authority for that token.",
+        "Preserves controller ownership, reports the exact capability gap and does not use a local bypass or token replacement."
+      ]
+    },
+    {
+      "id": "fork-unsafe-conflict",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its branch-access reference. Use only these synthetic facts; do not contact GitHub, mutate files or execute publication. Explain the required next actions without claiming effects occurred. Preflight is eligible, but conflict resolution requires an unresolved product behavior decision. Status writes are authorized.",
+      "expected_output": "Uses canonical branch-access evidence and reports repair, readiness and status effects accurately.",
+      "files": [],
+      "assertions": [
+        "Keeps the semantic conflict blocked and states the decision needed; writability does not make repair safe.",
+        "Leaves caller checkout and contributor branch unchanged until a supported resolution is established."
+      ]
     }
   ]
 }

@@ -465,13 +465,21 @@ class TailscaleDeployment:
     def complete(self) -> None:
         if not self.rows or self.executor.options.dry_run:
             return
+        reports: dict[tuple[str, str], dict[str, Any]] = {
+            (row["instance_id"], member): {
+                "component": row["instance_id"],
+                "member": member,
+                "status": "PENDING",
+                "reason": "Current deployment verification in progress",
+                "ha_configured": len(members(row)) == 2,
+            }
+            for row in self.rows
+            for member in members(row)
+        }
+        clients: list[dict[str, Any]] = []
+        self.write_report(list(reports.values()), clients)
         journal = self.open()
         raw = self.raw_outputs()
-        reports: list[dict[str, Any]] = []
-        clients: list[dict[str, Any]] = []
-        self.write_report(
-            [{"status": "PENDING", "reason": "Current deployment verification in progress"}]
-        )
         for row in self.rows:
             cfg, instance = validate(row), row["instance_id"]
             if cfg["stage"] == "active":
@@ -493,7 +501,8 @@ class TailscaleDeployment:
                 validate_live(sdk, first["network_id"], first["subnet_id"], cfg["routes"])
                 guests = self.guests(row, output, sdk)
                 if cfg["stage"] == "infrastructure":
-                    reports.extend(self.complete_infrastructure(row, output, record, guests))
+                    for report in self.complete_infrastructure(row, output, record, guests):
+                        reports[(report["component"], report["member"])] = report
                     clients.append(
                         {
                             "component": instance,
@@ -501,7 +510,7 @@ class TailscaleDeployment:
                             "reason": "Awaiting administrator handoff",
                         }
                     )
-                    self.write_report(reports, clients)
+                    self.write_report(list(reports.values()), clients)
                     continue
                 api = self.api(row)
                 if not record.get("activation_started"):
@@ -628,20 +637,17 @@ class TailscaleDeployment:
                             raise RuntimeError("Node identity changed while waiting for readiness")
                     own.update(phase=status, intent=intent)
                     journal.save()
-                    reports.append(
-                        {
-                            "component": instance,
-                            "member": member,
-                            "status": status,
-                            "node_id": result.get("node_id", ""),
-                            "enrollment": {
-                                k: own.get("enrollment", {}).get(k)
-                                for k in ("id", "phase", "key_id")
-                            },
-                            "ha_configured": len(guests) == 2,
-                        }
-                    )
-                    self.write_report(reports)
+                    reports[(instance, member)] = {
+                        "component": instance,
+                        "member": member,
+                        "status": status,
+                        "node_id": result.get("node_id", ""),
+                        "enrollment": {
+                            k: own.get("enrollment", {}).get(k) for k in ("id", "phase", "key_id")
+                        },
+                        "ha_configured": len(guests) == 2,
+                    }
+                    self.write_report(list(reports.values()), clients)
                     if status != "READY" and (disruptive or replacement):
                         raise RuntimeError(
                             "Updated member is not ready; remaining members were not changed"
@@ -678,14 +684,18 @@ class TailscaleDeployment:
                         }
                         if verification.get("required"):
                             self.write_report(
-                                reports, clients + [{"component": instance, **evidence}]
+                                list(reports.values()),
+                                clients + [{"component": instance, **evidence}],
                             )
                             raise RuntimeError(
                                 "Required Tailscale client verification did not pass"
                             ) from None
                     clients.append({"component": instance, **evidence})
-        self.write_report(reports, clients)
-        if any(report["status"] not in {"READY", "INFRASTRUCTURE_READY"} for report in reports):
+                    self.write_report(list(reports.values()), clients)
+        self.write_report(list(reports.values()), clients)
+        if any(
+            report["status"] not in {"READY", "INFRASTRUCTURE_READY"} for report in reports.values()
+        ):
             raise RuntimeError(
                 "Tailscale infrastructure exists, but tailnet readiness is PENDING; resolve approvals with tailscale doctor, then resume deploy"
             )
@@ -773,6 +783,14 @@ class TailscaleDeployment:
     ) -> None:
         from datetime import UTC, datetime
 
+        expected = {(row["instance_id"], member) for row in self.rows for member in members(row)}
+        observed = [(report.get("component"), report.get("member")) for report in reports]
+        gateway_ready = (
+            bool(expected)
+            and len(observed) == len(expected)
+            and set(observed) == expected
+            and all(report.get("status") == "READY" for report in reports)
+        )
         for paths in (self.executor.paths, self.executor.report_paths):
             paths.reports_dir.mkdir(parents=True, exist_ok=True)
             target = paths.reports_dir / "tailscale-report.json"
@@ -784,8 +802,7 @@ class TailscaleDeployment:
                     "schema": 1,
                     "observed_at": datetime.now(UTC).isoformat(),
                     "members": reports,
-                    "gateway_ready": bool(reports)
-                    and all(r.get("status") == "READY" for r in reports),
+                    "gateway_ready": gateway_ready,
                     "onboarding_pending": any(
                         r.get("status") == "INFRASTRUCTURE_READY" for r in reports
                     ),

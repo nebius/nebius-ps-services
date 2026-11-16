@@ -1906,6 +1906,9 @@ Customers advertise private Nebius VPC subnets through their own hosted Tailscal
 
 - AC-014: Both Tailscale wizards retry invalid/repeated tags at the tag prompt. Require tag: plus a letter-led alphanumeric/hyphen name without automatic prefixing. Config validation distinguishes list type, required emptiness, syntax and duplicates with actionable examples.
 
+- AC-015: Gateway readiness requires fresh READY observations for every configured component/member, with exact nonempty coverage and no duplicate identities. Reports retain pending members after partial failures, preserve earlier client evidence across components, and keep infrastructure, gateway and client readiness separate without changing report schema 1.
+- AC-016: Client status and OS-route command timeouts, execution failures and malformed responses produce sanitized actionable verification failures. Optional client verification records PENDING without failing an otherwise-ready deployment; required verification fails deployment while retaining independently proven router readiness. Explicit verify exits unsuccessfully without raw subprocess output.
+
 #### Negative Criteria
 
 - NC-001: No mandatory MysteryBox/ESO, automatic WireGuard migration, exit nodes, Headscale, site-to-site routing, source-IP preservation, unscoped source/destination grants (explicitly scoped all-traffic grants are supported) or unverified zone-HA claims.
