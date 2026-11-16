@@ -6,8 +6,8 @@ project folder.
 
 ## [Unreleased]
 
-- Isolate verifier unit fixtures from ambient host-memory measurements while
-  retaining regression coverage for unknown and critical memory admission.
+- Isolate Implement and SDLC verifier unit fixtures from ambient host-memory
+  measurements while retaining regression coverage for unknown and critical memory admission.
   Align repeated hook-installation assertions with the added policy test module.
 
 - Increase the bounded VPNGW native-suite allowance for its expanded case set

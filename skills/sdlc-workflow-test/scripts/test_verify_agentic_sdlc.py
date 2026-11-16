@@ -201,6 +201,16 @@ class VerifierContractTests(unittest.TestCase):
         self.assertFalse(verifier.valid_verification_context(replace(self.ctx, agent="claude"), value, current_head=self.head))
 
     def setUp(self) -> None:
+        owner = verifier.suite_checks.scheduler()
+        memory = owner.source_module(
+            "host_memory",
+            Path(owner.__file__).resolve().parents[2]
+            / "global-context-management/scripts/host_memory.py",
+        )
+        # Fixture result assertions must not depend on runner host visibility.
+        self.memory_probe = self.enterContext(
+            mock.patch.object(memory, "sample", return_value={"status": "normal"})
+        )
         self.enterContext(isolated_git_configuration())
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -2069,6 +2079,18 @@ class VerifierContractTests(unittest.TestCase):
                         command, expected, host_home=self.ctx.host_home
                     )
                 )
+
+    def test_unknown_or_critical_memory_does_not_execute_fixture_suites(self) -> None:
+        spec = verifier.suite_checks.SuiteSpec("memory-fixture", [sys.executable, "missing.py"], self.root)
+        for status in ("unknown", "critical"):
+            with self.subTest(status=status):
+                self.memory_probe.return_value = {"status": status}
+                with mock.patch.object(verifier.suite_checks.scheduler(), "_run") as run:
+                    result = verifier.suite_checks.execute(spec, dict(os.environ))
+                run.assert_not_called()
+                self.assertEqual(result.returncode, 126)
+                self.assertEqual(result.passed, frozenset())
+                self.assertEqual(result.inventory, frozenset())
 
     def test_structured_results_do_not_count_skips_as_passes(self) -> None:
         script = self.root / "test_skip_fixture.py"

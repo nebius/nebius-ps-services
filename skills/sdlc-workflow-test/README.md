@@ -579,3 +579,8 @@ with coherent running states, separately from measurable overlap duration.
 Deterministic unittest suites buffer output from passing tests so automatic
 summaries do not obscure named outcomes. Failed-test diagnostics remain in the
 captured output; the outcome parser and acceptance rules are unchanged.
+
+Verifier unit fixtures control memory observations so result assertions are
+independent of runner host visibility. Separate regressions require unknown or
+critical memory to admit no fixture suites. Operational verification retains
+the real host probe.
