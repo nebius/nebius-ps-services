@@ -92,7 +92,7 @@ def test_timing_confirmations_and_sink_failure_preserve_decisions(tmp_path, caps
 @pytest.mark.parametrize(
     "fault,reason",
     [
-        ("gap", "sample-gap"),
+        ("gap", None),
         ("backwards", "clock-backwards"),
         ("binding", "binding-changed"),
         ("healthy", "selected-not-down"),
@@ -100,10 +100,10 @@ def test_timing_confirmations_and_sink_failure_preserve_decisions(tmp_path, caps
         ("authority", "inactive-authority"),
     ],
 )
-def test_continuity_reset_reason(tmp_path, capsys, fault, reason):
+def test_continuity_diagnostic_matches_reset_policy(tmp_path, capsys, fault, reason):
     effects, clock = Effects(), RecoveryClock()
     selector = recovery_selector(tmp_path, effects, clock)
-    selector._recover_static(AUTH, {"site": "down"}, 1000)
+    selector._recover_static(AUTH, {"site": "down"}, 1000, clock.now)
     events(capsys)
     clock.now = 1
     if fault == "gap":
@@ -120,8 +120,13 @@ def test_continuity_reset_reason(tmp_path, capsys, fault, reason):
         selector.state["selected"]["site"] = "backup"
     if fault == "authority":
         effects.current = None
-    selector._recover_static(AUTH, health, 1001)
-    assert any(r.get("reason") == reason for r in events(capsys))
+    selector._recover_static(AUTH, health, 1001, clock.now)
+    records = events(capsys)
+    if fault == "gap":
+        assert selector.static_recovery_observations["site"]["since"] == 0
+        assert not any(record["event"] == "static-recovery-reset" for record in records)
+        return
+    assert any(record.get("reason") == reason for record in records)
 
 
 @pytest.mark.parametrize("outcome", [0, 1, "timeout", "deadline"])

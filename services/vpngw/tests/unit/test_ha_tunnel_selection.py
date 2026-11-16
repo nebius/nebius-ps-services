@@ -4,6 +4,7 @@ import json
 import subprocess
 from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -2088,18 +2089,23 @@ def test_native_static_backup_route_uses_new_effect_deadline_after_old_episode_e
     selector._begin(selector.policies["site"], "backup", "automatic-recovery", AUTH, 1281)
     selector.state["operation"]["phase"] = "activate"
     selector._save()
-    calls, rendered = [], []
+    calls, rendered, route_batches = [], [], []
     effects.suspend = lambda policy, authority: calls.append(("scope", policy.name))
     effects._swan_config = lambda cfg: rendered.append(cfg)
 
     def run(argv, timeout):
         assert timeout > 0
         calls.append(tuple(argv))
+        if argv[:2] == ("ip", "-batch"):
+            route_batches.append(Path(argv[2]).read_text())
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     effects.command_runner = run
     selector._advance(AUTH, 1282)
-    assert calls == [("scope", "site"), ("ip", "route", "replace", "10.1.0.0/16", "dev", "xfrm1")]
+    assert calls[0] == ("scope", "site")
+    assert len(calls) == 2
+    assert calls[1][:2] == ("ip", "-batch")
+    assert route_batches == ["route replace 10.1.0.0/16 dev xfrm1\n"]
     assert rendered[0]["_ha_tunnel_selections"] == {"site": "backup"}
     assert read_state(tmp_path / STATE_NAME)["operation"]["phase"] == "verify"
     assert selector.state["operation"]["deadline"] == 1310
