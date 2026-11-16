@@ -1746,6 +1746,12 @@ See [usage and boundaries](review-github-issues/README.md).
 
 ### `review-pr`
 
+Use `$review-pr --pr 42` for an explicit single target (number, URL or branch).
+`--pr` requires a value and overrides valid `--label` and `--pr-batch` options
+with a notice. Review still considers the PR's actual labels and state and may
+update status labels under existing authority; ignored options never set labels.
+Existing positional/current-branch and label-only batch selection remain supported.
+
 `review-pr` preserves your working branch, index and files throughout every
 standalone or nested review. Checkout-dependent work uses an independent private
 repository. Safe fixes may advance the remote PR; your local branch stays unchanged.
@@ -1760,6 +1766,13 @@ For a matching active Agentic SDLC run it instead becomes
 findings-and-readiness-only: the PR head must equal the clean exact promoted
 SHA, and every required branch change returns to the coordinator before review
 resumes.
+
+Explicit review-and-close requests include independently resolved directly
+closing-linked issues unless the user excludes issue changes. Selecting only
+one PR does not exclude its issues. When replacement work is already merged,
+verify current-default coverage and each issue's criteria, then comment, close
+as completed and verify each effect before returning. Report concrete gaps for
+issues left open; plain review, audit-only and enrolled ownership limits remain.
 
 ### `shell-scripting`
 

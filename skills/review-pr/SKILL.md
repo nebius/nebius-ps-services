@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: "Use only when explicitly asked to review a GitHub PR by number, URL, branch, or a bounded exact-label batch: coordinate code-review, safe repairs, checks and linked-issue assessment. Plain review never merges; combined review-and-merge delegates to merge-pr. In Agentic SDLC, report only."
+description: "Use only when explicitly asked to review a GitHub PR by --pr, number, URL, branch, or a bounded exact-label batch: coordinate code-review, safe repairs, checks and linked-issue assessment. Plain review never merges; combined review-and-merge delegates to merge-pr. In Agentic SDLC, report only."
 disable-model-invocation: true
 ---
 
@@ -24,6 +24,7 @@ authorization.
 
 ```text
 $review-pr [<PR-number-or-URL-or-branch>]
+$review-pr --pr <PR-number-or-URL-or-branch> [--label <exact-label>] [--pr-batch <positive-integer>]
 $review-pr --label <exact-label> [--pr-batch <positive-integer>]
 $review-pr --help
 $review-pr -h
@@ -31,15 +32,24 @@ $review-pr -h
 
 - A number, URL or branch selects that PR; no selector uses current-branch PR
   resolution. Natural-language review intent remains supported.
+- `--pr` requires one target and selects only that PR. It overrides valid
+  `--label` and `--pr-batch` options; report those ignored options once. Review
+  using the PR's actual labels and state, with existing authorized label updates.
 - `--label` selects one repository-wide batch with an exact existing label.
 - `--pr-batch` limits total selected PRs for this invocation; default five in
-  label mode. Requires `--label` and cannot combine with an explicit PR selector.
+  label mode. Without `--pr`, it requires `--label`; neither batch option can
+  combine with a positional PR selector.
 - `-h, --help` explains the interface without tools or effects.
 
-Validate complete argument syntax before repository discovery or GitHub calls.
-For label mode, read [label batches](references/label-batches.md) before selection.
-Reject invalid/repeated flags or missing values; labels are literal, not CSV or
-search expressions. Batch flags do not widen lifecycle authority.
+Validate complete argument syntax before repository discovery or GitHub calls,
+including ignored options: reject unknown/repeated flags, missing/empty values,
+non-positive/non-decimal batch sizes, or a positional selector with `--pr`.
+Labels are literal, not CSV or search expressions. With `--pr`, skip label
+existence checks and batch dependencies/discovery. Read
+[single-PR resolution](references/command-reference.md#single-pr-resolution)
+and [live-label routing](references/pr-lifecycle.md#selection-and-live-label-routing).
+Otherwise, read [label batches](references/label-batches.md) before label selection.
+Selection flags do not widen lifecycle authority.
 
 ## Agent Compatibility
 
@@ -62,6 +72,12 @@ to review **and merge** delegates once per selected PR to merge-pr. Its parent-o
 review-pr call returns evidence to merge-pr without delegating again, even
 when the original prompt includes merge intent. This is calling context, not
 a public mode flag. Help, report-only and active SDLC limits take precedence.
+
+An explicit review-and-close request includes independently resolved directly
+closing-linked issues unless the user excludes issue changes. “Only PR #N”
+limits PR selection, not its issue obligations. Follow the shared
+[closure continuation](references/pr-lifecycle.md#completion-after-unmerged-pr-closure)
+before returning; plain review gains no closure authority.
 
 ## Use This Skill For
 
@@ -157,11 +173,14 @@ is report-only; review-pr owns repair decisions and final readiness.
 
 Before GitHub effects, read the sibling merge-pr
 `merge-pr/references/automation-authority.md` contract. In an enrolled
-repository, first apply terminal-label audit precedence: never dispatch
+repository, first apply terminal audit precedence, including `--pr` live-label
+and state routing: never dispatch
 `process` for a terminal audit, even with full-lifecycle wording or a stale label
 on an open PR. Use read-only observation or an already-authorized narrow
 completion capability; unavailable completion effects stay pending without a
-local bypass. For other selections, a read-only request dispatches `review`; an explicitly authorized full
+local bypass. A closure-only request uses only an existing authorized narrow
+completion capability, never broader `process` or a local bypass. For other
+selections, a read-only request dispatches `review`; an explicitly authorized full
 lifecycle dispatches `process`. Never publish a local merge attestation or call
 the broker separately. In the isolated hosted agent, return findings and
 contribution/spec assessments through the supplied schema only. The controller
@@ -174,14 +193,17 @@ Read [the shared PR lifecycle](references/pr-lifecycle.md) and
 ordinary review. Review accepted behavior, safety and existing-user compatibility
 first; repair proven defects, then reconcile canonical specs before final review.
 
-1. Before any per-PR dispatch, freeze the selected set under the batch reference
-   when in label mode. Bind exact host/repository/PR, head/base branches and SHAs,
+1. Before any per-PR dispatch, resolve `--pr` to exactly one PR without batch
+   discovery or fallback; otherwise freeze the selected set under the batch
+   reference when in label mode. Read actual state and live labels before any
+   status update and apply the shared lifecycle routing. Bind exact
+   host/repository/PR, head/base branches and SHAs,
    author, ownership, draft state and live default. Resolve actual PRs, not an
    unrelated current branch. Collect all direct closing links across the frozen
    set and establish one shared issue assessment/effect registry by full identity
    before delegating any selected PR. The actual issue skill advises read-only;
    incomplete supporting discovery keeps dependent effects pending.
-   Route terminal-label selections to audit-only completion before local or
+   Route terminal audits to completion-only assessment before local or
    enrolled dispatch, never new repair or merge admission. Active Agentic SDLC
    retains its read-only mode. For other ordinary root combined review-and-merge
    requests, delegate once per PR to merge-pr with the original intent/receipt
@@ -236,10 +258,14 @@ first; repair proven defects, then reconcile canonical specs before final review
    report-only/non-default reviews return findings without merge admission.
    Eligible fork reviews use the same bound attestation and protected broker.
 8. Publish/read back the selected PR disposition from the shared lifecycle,
-   preserving report-only/SDLC restrictions; then return findings/fixes, validation,
-   final identity and attestation or blocker.
-   Independently assess linked issues under the shared lifecycle; report each
-   label/comment/closure effect or pending recommendation separately. Plain
+   preserving report-only/SDLC restrictions. For authorized unmerged PR closure,
+   complete the shared linked-issue continuation before returning: independently
+   verify current-default resolution, comment/read back, close as completed and
+   verify each eligible issue. Finish still-authorized obligations for an
+   already-closed PR with fresh evidence; never reopen it or replay closure over
+   human reopening. Report every issue outcome and each concrete remaining gap,
+   separately from PR closure, then return findings/fixes, validation, final
+   identity and attestation or blocker. Plain
    review does not gain issue-closure authority from batch selection.
    The review coordinator never issues merge effects. The calling
    create-pr/publication/merge-pr owner continues only
@@ -292,6 +318,10 @@ URLs, customer data, raw logs, or one-off local state.
   update.
 - Do not clear or ignore unresolved reviewer concerns without evidence that the
   branch now addresses them.
+- Never infer issue resolution from PR closure. Verify each issue's reported
+  defect and accepted criteria; keep unresolved issues open. An explicit issue
+  exclusion overrides automatic completion, while missing issue access leaves
+  that effect pending without undoing an independently justified PR closure.
 - Resolve conflicts automatically only when the correct merge is obvious from
   local context. Stop and explain when conflicts are semantic or risky.
 - Never rewrite the default branch.
@@ -324,6 +354,13 @@ When using this skill:
    and cleanup or retention outcome. Never imply local checkout adoption.
 8. State clearly whether the PR is ready to merge and what, if anything, still
    blocks it.
+   For closure requests, report verified PR closure separately from every linked
+   issue: closed by this operation, already closed, unresolved or blocked, with
+   evidence or an exact remaining criterion/access gap. Apply this to single
+   PRs as well as batches; never end with an unexplained “issues remain open.”
 9. For batches, report the limit, frozen selection and coverage; distinguish
    reviewed, skipped, pending and unreviewed PRs. Report deduplicated linked
    issues separately, with independently verified label/comment/closure outcomes.
+10. For `--pr`, report the exact selected PR, any ignored selection flags, and
+    the live state/labels behind its route. Report authorized label changes
+    separately from observed labels; never claim a batch was reviewed.

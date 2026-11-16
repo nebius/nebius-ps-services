@@ -1,13 +1,15 @@
 # Label-filtered PR batches
 
-Read for `--label` before repository discovery. This is bounded selection for
+Read for `--label` without `--pr` before repository discovery. With `--pr`, use
+[single-PR resolution](command-reference.md#single-pr-resolution) instead;
+valid label/batch options are ignored. This is bounded selection for
 the existing review workflow, not another lifecycle engine or grant of authority.
 
 ## Validate and select
 
 - Accept one nonempty literal label and optional positive decimal `--pr-batch`,
   default five. Reject repeated flags, missing values, unknown flags, a batch
-  without a label, and a label combined with an explicit PR number/URL/branch.
+  without a label, and a label combined with a positional PR number/URL/branch.
   A label is not CSV, a glob or search syntax; preserve its literal spelling.
 - Resolve the current Git root and unambiguous GitHub repository using trusted
   metadata. Do not restrict to the working subdirectory or silently select an
@@ -69,12 +71,9 @@ equivalent decisions instead of duplicating comments.
 
 ## Label-dependent behavior
 
-| Selection | Action within existing authority |
-| --- | --- |
-| `being-fixed` | Establish repair/adoption lineage and assess complete merged replacement coverage under the shared lifecycle. Partial or uncertain coverage stays open. |
-| `under-review`, `needs-information`, `testing`, `manual-merge`, `blocked` | Refresh evidence and choose the truthful current lifecycle disposition. A label does not prove approval, CI or an active worker. |
-| `merged`, `closed` | Audit actual state, labels and linked-issue obligations only. No fresh repair, merge or automatic reopen. Report stale open/terminal contradictions and correct labels only with evidence. |
-| Other existing label | Ordinary open-PR review. Do not invent a workflow meaning for the selection label. |
+Use [shared lifecycle routing](pr-lifecycle.md#selection-and-live-label-routing)
+for terminal audits, `being-fixed` coverage assessment and ordinary reviews.
+Batch selection labels retain their meanings; they never grant authority.
 
 ## Linked issues and report
 
@@ -89,6 +88,11 @@ The PR cap does not cap directly linked issues. Report their count separately.
 The outer lifecycle owner applies only already-authorized effects after fresh
 criterion evidence, discussion and state checks. No PR closure proves issue
 resolution. Never close a shared issue merely because one selected PR passed.
+Explicit PR-closure requests include the shared
+[linked-issue continuation](pr-lifecycle.md#completion-after-unmerged-pr-closure)
+unless issue changes are excluded. Complete each independently resolved issue
+once; unresolved issues retain a concrete criterion gap. Labels and batch caps
+never supply this authority, and terminal audits cannot broaden processing.
 
 Report selector, limit, frozen identities, discovery coverage, per-PR outcomes
 and one per-issue assessment with separate label/comment/closure results. Name

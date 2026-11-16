@@ -19,3 +19,5 @@ explicit-label-batch,true,$review-github-issues --label being-fixed --issue-batc
 explicit-label-default,true,$review-github-issues --label bug
 explicit-label-claude,true,/review-github-issues --label needs-information --issue-batch 2
 label-pr-review,false,Review the pull requests labeled being-fixed and their diffs.
+pr-caller-unmerged,true,$review-github-issues Assess linked issues in read-only PR-caller mode after another merged PR superseded the selected PR.
+pr-close-owner,false,Use review-pr to review and close only PR42 and complete its independently resolved linked issues.

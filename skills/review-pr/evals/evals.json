@@ -333,6 +333,243 @@
         "Uses read-only observation and reports unsupported completion writes pending.",
         "The explicit combined merge wording does not override terminal-label audit selection."
       ]
+    },
+    {
+      "id": "pr-target-kinds",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and describe intended actions separately from observed effects. Consider independently: --pr 42, --pr https://github.com/example-org/other/pull/42, and --pr feature-one. Current repository is example-org/widget; feature-one has exactly one PR (42). Earlier conversation mentioned PR99. Each PR is open with only the custom label customer-visible.",
+      "expected_output": "Selects the exact authorized scope and applies live-label routing without expanding lifecycle authority.",
+      "files": [],
+      "assertions": [
+        "Resolves exactly PR42 in the established repository for number/branch; the full URL binds example-org/other instead.",
+        "Never reviews incidental PR99, the current branch or a label batch, and fetches actual state/labels before routing.",
+        "Uses the existing ordinary review owners without claiming new execution or issue authority."
+      ]
+    },
+    {
+      "id": "pr-ignored-options",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and describe intended actions separately from observed effects. Invocation: $review-pr --pr 42 --label merged --pr-batch 10. PR42 is open, carries only customer-visible, and links to no issues. Also evaluate --pr 42 --label nonexistent and --pr 42 --pr-batch 10.",
+      "expected_output": "Selects the exact authorized scope and applies live-label routing without expanding lifecycle authority.",
+      "files": [],
+      "assertions": [
+        "Reports each supplied selection flag ignored once and targets only PR42 in every variant.",
+        "Makes no selection-label existence lookup or label-batch discovery and does not require a label for the ignored batch size.",
+        "Uses ordinary review from actual labels/state; the ignored merged filter cannot force a terminal audit or apply a merged label."
+      ]
+    },
+    {
+      "id": "pr-invalid-syntax",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and describe intended actions separately from observed effects. Evaluate independently: --pr; --pr 42 --pr 43; --pr 42 42; --pr 42 --label; --pr 42 --pr-batch 0; --pr 42 --pr-batch 2.5; --pr 42 --label bug --label bug; --pr 42 --unknown value; --pr 42 --label \"\".",
+      "expected_output": "Selects the exact authorized scope and applies live-label routing without expanding lifecycle authority.",
+      "files": [],
+      "assertions": [
+        "Rejects every invalid invocation before repository discovery, GitHub calls, delegation or effects.",
+        "Requires the target value even when current-branch context exists and never silently ignores malformed or repeated options.",
+        "Explains the syntax problem without requesting approval or treating it as a deployment/review failure."
+      ]
+    },
+    {
+      "id": "pr-ambiguous-target",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and describe intended actions separately from observed effects. Evaluate --pr reused-branch where PR11 is closed and PR42 is open from that branch; --pr absent-branch where no PR exists; --pr 42 where access is denied. The current branch has PR99.",
+      "expected_output": "Selects the exact authorized scope and applies live-label routing without expanding lifecycle authority.",
+      "files": [],
+      "assertions": [
+        "Reports branch ambiguity and asks for an exact PR number/URL rather than choosing newest or open PR42.",
+        "Reports absence or access failure accurately and never falls back to PR99 or a batch.",
+        "Does not dispatch review, repair, merge, status changes or linked-issue effects for unresolved targets."
+      ]
+    },
+    {
+      "id": "pr-live-terminal-precedence",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and describe intended actions separately from observed effects. Invocation: review and merge $review-pr --pr 42 --label being-fixed. Compare open42 with actual labels closed and being-fixed; merged42 with no labels; closed-unmerged42 with only testing. Repository is enrolled and offers review/process only.",
+      "expected_output": "Selects the exact authorized scope and applies live-label routing without expanding lifecycle authority.",
+      "files": [],
+      "assertions": [
+        "Every variant routes to terminal audit from actual state/live labels before merge delegation, status changes or enrolled process.",
+        "Reports stale or conflicting labels against actual state, permits only existing authorized narrow completion, and keeps unsupported effects pending.",
+        "Never repairs, remerges, reopens or uses process as a completion shortcut; the ignored filter grants no authority."
+      ]
+    },
+    {
+      "id": "pr-live-being-fixed",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and describe intended actions separately from observed effects. Invocation: plain $review-pr --pr 42 --label bug. Actual PR42 is open and being-fixed. It has a known replacement; one accepted feature is absent from current default. Existing permissions permit status labels and comments but no PR/issue closure.",
+      "expected_output": "Selects the exact authorized scope and applies live-label routing without expanding lifecycle authority.",
+      "files": [],
+      "assertions": [
+        "Ignores bug selection, uses live being-fixed lineage and independently checks complete current-default coverage.",
+        "Keeps the PR open because coverage is partial and does not replace the actual label with the ignored bug filter.",
+        "Preserves justified existing status/comment updates, unrelated labels, contributor credit and per-effect readback without inferring closure authority."
+      ]
+    },
+    {
+      "id": "pr-ignored-label-no-lineage",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and describe intended actions separately from observed effects. Invocation: $review-pr --pr 42 --label being-fixed. PR42 is open with under-review and customer-visible; no replacement lineage exists. Review finds a known blocker. Status-label updates are authorized.",
+      "expected_output": "Selects the exact authorized scope and applies live-label routing without expanding lifecycle authority.",
+      "files": [],
+      "assertions": [
+        "Uses ordinary review and never fabricates adoption history or coverage work from the ignored filter.",
+        "May reconcile the truthful blocked status and concise comment under existing rules, preserving customer-visible and verifying effects.",
+        "Does not treat --pr as read-only for labels, apply being-fixed from the filter, merge or close the PR."
+      ]
+    },
+    {
+      "id": "pr-refresh-and-linked-issues",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and describe intended actions separately from observed effects. Invocation: review and merge $review-pr --pr 42. Initial PR42 is open under-review; before downstream dispatch a human adds closed and changes discussion. One directly closing-linked issue still has an unresolved criterion. No supported narrow completion effect exists.",
+      "expected_output": "Selects the exact authorized scope and applies live-label routing without expanding lifecycle authority.",
+      "files": [],
+      "assertions": [
+        "Refreshes labels/state/discussion, changes to terminal audit before dispatch, and does not select another PR or reset budgets.",
+        "Collects the linked issue before delegation, uses the issue adviser read-only and keeps its unresolved criterion independent of PR outcomes.",
+        "Does not dispatch process, merge or close the issue; reports missing narrow completion capability separately and preserves caller checkout."
+      ]
+    },
+    {
+      "id": "pr-existing-selection-preserved",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and describe intended actions separately from observed effects. Evaluate independently: plain $review-pr with current-branch PR42; positional 42; --label being-fixed with eight exact matches; positional 42 --label being-fixed; --pr-batch 10 without --pr or --label.",
+      "expected_output": "Selects the exact authorized scope and applies live-label routing without expanding lifecycle authority.",
+      "files": [],
+      "assertions": [
+        "Preserves current-branch and positional selection and the default five oldest-created frozen label matches without refills.",
+        "Rejects positional-plus-label and standalone batch size before discovery; --pr precedence does not leak into other modes.",
+        "Keeps existing review authority, direct linked-issue collection and caller isolation."
+      ]
+    },
+    {
+      "id": "pr-help-contract",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and describe intended actions separately from observed effects. Invocation: $review-pr --help. Describe the help response only; do not inspect repository or GitHub state.",
+      "expected_output": "Selects the exact authorized scope and applies live-label routing without expanding lifecycle authority.",
+      "files": [],
+      "assertions": [
+        "Documents required --pr number/URL/branch and the ignored label/batch precedence with existing label updates.",
+        "Also documents positional/no-argument selection, label batch default five, valid syntax and -h/--help.",
+        "Stops after reading SKILL.md without loading other references, discovery, tools or effects."
+      ]
+    },
+    {
+      "id": "close-superseded-linked-issues",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its local lifecycle reference; use only the following synthetic facts. Do not contact GitHub, mutate files or execute publication. Explain the required actions and outcomes; do not claim any tool effect occurred. The user says: review and close only PR42. Its complete contribution is superseded by merged PR50, with all three directly closing-linked issues independently verified resolved on current default. There are no objections or write restrictions. No issue exclusion was given.",
+      "expected_output": "Completes only independently resolved issues within explicit closure authority, with precise evidence and effect boundaries.",
+      "files": [],
+      "assertions": [
+        "Interprets only PR42 as one selected PR including its linked issue obligations; no repeat issue-closure approval is required.",
+        "Requires independently verified PR closure, current-default criterion evidence, rationale comment/readback, completed issue closure and state/reason readback before returning.",
+        "Attributes issue resolution to merged PR50 and reports each issue separately; never merges PR42 or claims simulated writes happened."
+      ]
+    },
+    {
+      "id": "close-explicit-issue-exclusion",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its local lifecycle reference; use only the following synthetic facts. Do not contact GitHub, mutate files or execute publication. Explain the required actions and outcomes; do not claim any tool effect occurred. The user says: review and close only PR42; leave issues unchanged. Replacement PR50 is merged and all linked issues are resolved.",
+      "expected_output": "Completes only independently resolved issues within explicit closure authority, with precise evidence and effect boundaries.",
+      "files": [],
+      "assertions": [
+        "Closes only the eligible selected PR under the assumed authority and performs no issue comments, labels or closure.",
+        "Reports the explicit issue-write exclusion separately from resolution evidence, without requesting repeated permission."
+      ]
+    },
+    {
+      "id": "close-mixed-criteria",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its local lifecycle reference; use only the following synthetic facts. Do not contact GitHub, mutate files or execute publication. Explain the required actions and outcomes; do not claim any tool effect occurred. Explicit review-and-close selects PR42, whose full contribution is superseded on current default. Issue7 has a fixed reported defect and an explicitly optional diagnostic suggestion. Issue8 has one still-unmet required criterion outside the PR contribution. No live qualification or release requirement was accepted.",
+      "expected_output": "Completes only independently resolved issues within explicit closure authority, with precise evidence and effect boundaries.",
+      "files": [],
+      "assertions": [
+        "Completes independently resolved issue7 without turning its optional suggestion or unrequested live/release testing into a new gate.",
+        "Keeps issue8 open with its exact unmet criterion; PR contribution coverage alone does not resolve the broader issue.",
+        "Does not undo justified PR closure or skip eligible issue7 because issue8 remains open."
+      ]
+    },
+    {
+      "id": "close-rejected-proposal",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its local lifecycle reference; use only the following synthetic facts. Do not contact GitHub, mutate files or execute publication. Explain the required actions and outcomes; do not claim any tool effect occurred. The user authorized reviewing and closing PR42. Its proposal is rejected on substantiated grounds, while directly linked issue7 reports a valid unresolved defect. Green CI does not address the defect.",
+      "expected_output": "Completes only independently resolved issues within explicit closure authority, with precise evidence and effect boundaries.",
+      "files": [],
+      "assertions": [
+        "Keeps issue7 open and names the unresolved defect; rejected PR status and green CI never establish resolution.",
+        "Does not label the issue completed, not planned or duplicate solely because the proposal was rejected."
+      ]
+    },
+    {
+      "id": "close-shared-issue-identities",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its local lifecycle reference; use only the following synthetic facts. Do not contact GitHub, mutate files or execute publication. Explain the required actions and outcomes; do not claim any tool effect occurred. An explicit review-and-close batch selects PR11 and PR12. Both directly close alpha#7; PR12 also closes beta#7 and mentions alpha#9. Current default resolves alpha#7 but beta#7 has an unmet criterion. All discovery is complete.",
+      "expected_output": "Completes only independently resolved issues within explicit closure authority, with precise evidence and effect boundaries.",
+      "files": [],
+      "assertions": [
+        "Deduplicates alpha#7 by full identity and considers evidence from both selected PRs before dependent effects.",
+        "Completes alpha#7 once, leaves beta#7 open with the criterion gap, and makes no writes to merely mentioned alpha#9.",
+        "Reports three distinct concepts: PR outcomes, two directly linked issues, and each individual issue effect."
+      ]
+    },
+    {
+      "id": "close-stale-resolution",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its local lifecycle reference; use only the following synthetic facts. Do not contact GitHub, mutate files or execute publication. Explain the required actions and outcomes; do not claim any tool effect occurred. PR42 is eligible for superseded closure. Compare issue7 fixed only in the unmerged PR head, a replacement merged but then reverted, and current default moving materially after assessment.",
+      "expected_output": "Completes only independently resolved issues within explicit closure authority, with precise evidence and effect boundaries.",
+      "files": [],
+      "assertions": [
+        "Rejects head-only evidence and reverted replacement as issue-resolution proof.",
+        "Reassesses dependent criteria after material default drift; ancestry and passing CI alone cannot authorize closure.",
+        "Reports exact evidence gaps rather than automatically closing all linked issues."
+      ]
+    },
+    {
+      "id": "close-human-reopen",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its local lifecycle reference; use only the following synthetic facts. Do not contact GitHub, mutate files or execute publication. Explain the required actions and outcomes; do not claim any tool effect occurred. A prior authorized closure completed PR42. Issue7 was closed by another actor; issue8 was subsequently reopened by a human with an unresolved objection. A fresh request asks to review and close PR42 again.",
+      "expected_output": "Completes only independently resolved issues within explicit closure authority, with precise evidence and effect boundaries.",
+      "files": [],
+      "assertions": [
+        "Observes already-closed issue7 without duplicate comment or closure and does not reopen PR42.",
+        "Does not replay the old close on issue8; reports human reopening and the unresolved objection for reassessment.",
+        "A renewed request can finish other still-eligible obligations only after fresh independent checks."
+      ]
+    },
+    {
+      "id": "close-interrupted-effects",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its local lifecycle reference; use only the following synthetic facts. Do not contact GitHub, mutate files or execute publication. Explain the required actions and outcomes; do not claim any tool effect occurred. PR42 closure is verified. Issue7 rationale comment succeeded but its response was lost; issue8 comment was verified but closing failed. A continuation retains the original authority and no scope drift. Describe recovery.",
+      "expected_output": "Completes only independently resolved issues within explicit closure authority, with precise evidence and effect boundaries.",
+      "files": [],
+      "assertions": [
+        "Reads back uncertain effects before retrying and reuses issue7 equivalent comment without duplication.",
+        "Refreshes issue8 state/scope/permissions and retries only its missing authorized closure, then verifies state/reason.",
+        "Reports partial comment and closure outcomes separately and never rolls back justified PR closure."
+      ]
+    },
+    {
+      "id": "close-partial-access",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its local lifecycle reference; use only the following synthetic facts. Do not contact GitHub, mutate files or execute publication. Explain the required actions and outcomes; do not claim any tool effect occurred. PR42 is validly closed. Two linked issues are resolved on current default; one is writable, one is cross-repository and read-only. The acting identity must not gain permissions.",
+      "expected_output": "Completes only independently resolved issues within explicit closure authority, with precise evidence and effect boundaries.",
+      "files": [],
+      "assertions": [
+        "Completes the writable issue and reports the other blocked by actual write access, not by unresolved product behavior.",
+        "Does not expand credentials, change repository settings or undo PR closure; reports per-issue outcomes."
+      ]
+    },
+    {
+      "id": "close-mode-boundaries",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its local lifecycle reference; use only the following synthetic facts. Do not contact GitHub, mutate files or execute publication. Explain the required actions and outcomes; do not claim any tool effect occurred. Compare plain review of a being-fixed PR with resolved issues, an explicit review-and-close request under report-only or Plan Mode, and a matching active SDLC review.",
+      "expected_output": "Completes only independently resolved issues within explicit closure authority, with precise evidence and effect boundaries.",
+      "files": [],
+      "assertions": [
+        "Plain review and labels alone grant no PR or issue closure authority.",
+        "Report-only and Plan Mode perform no writes despite closure wording; active SDLC retains its separate owner and read-only limits.",
+        "Does not broaden these modes because issue resolution is already proven."
+      ]
+    },
+    {
+      "id": "close-enrolled-capability",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its local lifecycle reference; use only the following synthetic facts. Do not contact GitHub, mutate files or execute publication. Explain the required actions and outcomes; do not claim any tool effect occurred. The user requests review and close PR42, without merge. The repository is enrolled and exposes only review/process, with no supported narrow completion capability.",
+      "expected_output": "Completes only independently resolved issues within explicit closure authority, with precise evidence and effect boundaries.",
+      "files": [],
+      "assertions": [
+        "Does not dispatch broader process, merge-pr or a local closure fallback, and invents no hosted API fields.",
+        "Reports closure/issue effects pending for the exact missing completion capability; closure-only intent is not full-lifecycle authority."
+      ]
+    },
+    {
+      "id": "close-already-closed-continuation",
+      "prompt": "Offline instruction-quality comparison only. Read $review-pr and its local lifecycle reference; use only the following synthetic facts. Do not contact GitHub, mutate files or execute publication. Explain the required actions and outcomes; do not claim any tool effect occurred. The user renews an explicit review-and-close request for PR42, which is already closed as superseded. A directly linked issue remained open because a previous close attempt failed. Current default still resolves it, with fresh unchanged scope and no human reopening or objections.",
+      "expected_output": "Completes only independently resolved issues within explicit closure authority, with precise evidence and effect boundaries.",
+      "files": [],
+      "assertions": [
+        "Finishes the eligible issue obligation after fresh assessment, verified/reused rationale and completed closure/readback.",
+        "Does not reopen, re-close, repair or merge PR42 and does not treat an ordinary terminal audit as fresh closure authority."
+      ]
     }
   ]
 }

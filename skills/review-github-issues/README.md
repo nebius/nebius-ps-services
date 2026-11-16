@@ -3,7 +3,11 @@
 [The shared PR lifecycle](../review-pr/references/pr-lifecycle.md) aligns contribution assessment,
 status labels, failed-test repair, one replacement PR and independent issue
 completion. Plain review and report-only limits remain binding; issue closure
-requires its own verified resolution and authority.
+requires its own verified resolution and authority. In PR-caller mode this
+skill remains a read-only adviser, including when the selected PR closes
+without merging and another merged PR already resolved the issue on current
+default. The outer PR owner applies the authorized completion and verifies each
+effect; this adviser creates no redundant triage plan or GitHub writes.
 
 Review GitHub issues by project and shared remediation, apply evidence-backed
 triage decisions, and save one implementation plan per accepted batch. The

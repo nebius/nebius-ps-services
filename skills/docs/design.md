@@ -14078,7 +14078,7 @@ The failed trial and its original repair budget remain unchanged.
 <!-- /FEATURE: FEAT-076 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-077 reqs=REQ-078 status=ready delivery=implemented priority=P0 version=5 -->
+<!-- FEATURE: FEAT-077 reqs=REQ-078 status=ready delivery=implemented priority=P0 version=7 -->
 ### FEAT-077: Unified PR lifecycle and verified issue completion
 
 #### Requirements Covered
@@ -14124,7 +14124,8 @@ assumed and the merge broker receives no extra issue permissions.
 
 Label-filtered review adds --label and --pr-batch (positive integer, default
 five) on the current repository, independent of working subdirectory. Reject
-explicit PR selectors combined with label mode. Select oldest-created matches
+positional PR selectors combined with label mode; explicit --pr overrides
+label and batch selection as described below. Select oldest-created matches
 (number ties), freeze full identities and run the existing per-PR owners in
 order. Active/custom labels select open PRs including drafts; merged/closed
 labels audit all states, without fresh repair, merge or automatic reopen.
@@ -14132,6 +14133,24 @@ Labels grant no authority; being-fixed requires independently verified complete
 merged replacement coverage, current default and fresh objections before closure.
 Preserve caller isolation, per-item budgets and enrolled authority; no batch-wide
 time cap, refills, scheduler or automatic next batch. Hosted runtime is unchanged.
+
+Explicit --pr accepts one required number, URL or branch. Validate full syntax
+before discovery, including ignored values and duplicate/unknown flags; reject
+combination with a positional selector. With --pr, skip label existence and
+batch dependencies/discovery, report ignored --label/--pr-batch once, and bind
+exactly one target. Full URLs bind their host/repository; branch ambiguity or
+absence stops without choosing latest, current branch or a batch fallback.
+Reuse existing resolution and owners; add no executable parser or runtime.
+
+For --pr, actual terminal state or live merged/closed labels takes audit-only
+precedence, including stale terminal labels on open PRs and mixed status labels.
+Next, a live being-fixed label requires lineage and complete merged coverage;
+otherwise use ordinary assessment. Ignored filter labels never influence this
+routing or get applied. Keep one shared lifecycle behavior reference; batches
+retain selection semantics, and positional/no-flags resolution is unchanged.
+Refresh relevant evidence before every dispatch/effect. Keep status-label
+updates within existing authority, preserve unrelated labels and verify writes.
+Closed/merged audits never dispatch enrolled process or delegate a new merge.
 
 Before any per-PR dispatch, collect one-hop explicit closing-linked issues
 across the frozen PR set, keyed by host/repository/API identity. The actual issue skill advises read-only; the
@@ -14145,6 +14164,34 @@ pending. Terminal audits never dispatch enrolled process or bypass its owner. No
 recursion, redundant accepted plans or inferred closure from PR status. Preserve
 native closure attribution, human reopening, uncertain-write readback and distinct
 per-effect outcomes. Instruction-based batch contracts add no execution engine.
+
+Explicit review-and-close intent includes independent completion of directly
+closing-linked issues already resolved on current default, unless the user
+excludes issue changes. Selection wording such as only one PR limits targets,
+not their issue obligations. Plain review, report-only, Plan Mode and active
+SDLC retain their existing boundaries. No new public flag is added. Labels
+and contributor prose grant no effect authority; closure-only intent grants no
+merge authority.
+
+Discover issue scope before PR closure and use the existing read-only issue
+adviser. Assess actual reported defects and accepted criteria; distinguish
+optional suggestions without inventing release or live-test gates. After
+verified superseded-PR closure, refresh current-default coverage, issue scope,
+discussion and events. The outer owner posts and reads back a concise rationale
+linking the resolving merged PR/commit, closes eligible issues as completed,
+and independently verifies state/reason before returning per-issue results.
+Unresolved or uncertain issues stay open with concrete gaps. Preserve a valid
+PR closure when an independent issue write fails and continue other eligible
+issues. No recursive backlog selection or additional issue permissions.
+
+Reconcile unknown write outcomes before retrying; reuse equivalent comments.
+A renewed explicit closure request may complete outstanding issue obligations
+for an already-closed PR with fresh proof and without reopening it. Never
+replay closure over a later human reopening or unresolved objection. Enrolled
+repositories use only their existing authorized completion owner/capability;
+closure-only intent never dispatches broader process or falls back locally.
+The instruction workflow and existing coordination records remain canonical;
+no executable helper, service, schema or hosted-runtime change is introduced.
 
 #### Selected Option
 
@@ -14174,6 +14221,18 @@ Ruff, workflow contracts, canonical validation, explicit align and install parit
 
 #### Test Plan
 
+Cover explicit close-only selection, explicit issue exclusion, mixed resolved
+criteria, rejected PRs with valid defects, shared identities, head-only fixes,
+reverts/default drift, later human reopening, already-closed issues, permission
+denial and interrupted comment/close recovery. Preserve plain-review, audit,
+Plan Mode, SDLC and enrolled completion-only limits. Compare instruction quality
+against captured working bytes; static/quality results are not actual GitHub
+effect-order or live proof. Missing composition tooling remains unavailable.
+
+Add explicit target/ignored-option cases, invalid syntax before discovery,
+ambiguous branches, live versus ignored labels, terminal/enrolled precedence,
+status-update authority, independent issues and preserved no-flags/batch paths.
+
 Cover the complete status matrix, sanitized failure transport, repair/retest,
 adoption inheritance and coverage, terminal reconciliation, issue drift and races.
 
@@ -14194,6 +14253,21 @@ Scoped implementation, regression tests and alignment pass; installed and live
 qualification are reported separately, with remaining access limitations explicit.
 
 #### Implementation Evidence
+
+The linked-issue closure continuation is implemented in the review-pr contract,
+shared lifecycle and label-batch reference, issue-adviser caller boundary,
+enrolled authority reference, native metadata and affected READMEs/changelog.
+Added 16 instruction-quality cases and seven trigger definitions across the
+three affected skills. Existing cases and accepted --pr work are preserved.
+No executable runtime, hosted schema or new completion capability was added.
+
+Explicit --pr revision is implemented in the skill, shared lifecycle routing,
+selection guidance, README/help, native metadata and catalog/changelog. Added
+10 focused behavior and four trigger definitions. The existing instruction
+workflow owns selection; no new parser service, scheduler or runtime was added.
+Existing positional/no-flags selection, batch semantics, status-update authority,
+caller isolation and independent linked-issue assessment remain supported.
+Earlier evidence below applies only to prior revisions.
 
 The current label-batch revision is implemented in both skill instructions,
 help, READMEs, native metadata and focused references. Shared lifecycle and
@@ -14219,6 +14293,39 @@ lost successful issue-close responses settle through observation without another
 close request. Execution expiry alone does not revive or erase these obligations.
 
 #### Verification Evidence
+
+Linked-issue closure revision: STATIC_PASS for all three skills under portable
+core and repository Codex/Claude structural checks, canonical trigger/quality
+schemas, scoped Markdown/whitespace and paired canonical-spec validation.
+Native explicit-only frontmatter remains an intentional host extension.
+Pinned skills CLI 1.5.26 discovery, copied payload parity, repeat installation
+and isolation passed for both hosts in disposable homes. Existing evaluations
+remain unchanged; totals are 53/54/47 quality cases and 28/22/19 trigger cases
+for review-pr, review-github-issues and merge-pr respectively. Independent
+nested code-review and security review found no blocking instruction issue.
+
+Fresh Codex 0.169.0 and Claude 2.1.311 baseline-comparative quality attempts
+were UNAVAILABLE because isolated native authentication was unavailable.
+Native triggering shares that missing dependency and is UNAVAILABLE. No
+credential files were copied or authentication changed. Static definitions,
+manual contract review and installation parity are not observed model behavior
+or GitHub effect-order proof. No live GitHub effects, active user-skill refresh
+or commit was performed. The source is ready for the existing installation
+workflow; earlier verification below does not qualify this new behavior.
+
+Explicit --pr revision: standard-field and repository Codex/Claude structural
+checks passed. Native explicit-only frontmatter remains an intentional extension.
+Pinned skills CLI 1.5.26 discovery, copied payload parity, repeat installation
+and isolation passed for both hosts in disposable homes. Independent nested
+code-review and security review found no blocking instruction-contract issue.
+Focused cases cover target resolution, ignored/invalid options, live-label
+precedence, authority, linked issues, prior selectors and help boundaries.
+
+Fresh Codex and Claude trigger attempts and the Codex baseline-comparative
+quality attempt were UNAVAILABLE because isolated native authentication was
+unavailable. Definitions and static review are not runtime behavior proof.
+No live GitHub effects, actual user-skill installation or commit was performed.
+Prior passes below do not qualify this revision.
 
 Current label-batch revision: STATIC_PASS for standard fields and repository
 Codex/Claude validation, canonical pair validation, scoped Markdown/whitespace,

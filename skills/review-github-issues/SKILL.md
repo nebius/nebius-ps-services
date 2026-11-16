@@ -210,8 +210,15 @@ plan, apply standalone effects, recurse into backlog selection, or infer closure
 from PR closure alone. Return label recommendations under the label policy.
 Deduplicate shared issues across selected PRs, consider all relevant PR evidence,
 and invalidate dependent assessments after material drift. A rejected PR can leave a valid issue
-open. Verified resolution after merge may use the owner's explicit closure
-fallback. Standalone triage retains its planning and effect ownership below.
+open. Verified resolution on current default may use the owner's explicit
+closure continuation even when the selected PR closes without merging because
+another merged PR already resolved the issue. An explicit review-and-close
+request includes that completion unless issue writes are excluded; selecting
+only one PR does not exclude its directly linked issues. Assess the reported
+defect and accepted criteria, distinguishing optional suggestions and separately
+tracked follow-ups without inventing release/live gates. Return exact evidence
+or criterion gaps; the outer owner alone refreshes, comments, closes and verifies.
+Standalone triage retains its planning and effect ownership below.
 
 ## Idempotency
 

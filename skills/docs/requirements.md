@@ -5375,6 +5375,36 @@ hosted automation, with meaningful status and independently justified issue clos
   applies authorized effects, with separate label/comment/closure verification.
   Linked issue count is independent of the PR cap; no recursive backlog triage.
 
+- AC-010: Optional --pr requires one PR number, URL or branch and resolves
+  exactly one target. It overrides syntactically valid --label and --pr-batch
+  options with a concise ignored-options notice; it does not discover a batch
+  or check the ignored label's existence. Reject missing/malformed values,
+  repeated/unknown flags and a positional selector combined with --pr before
+  discovery. Unresolved or ambiguous targets stop without fallback.
+- AC-011: Explicit --pr review routes by actual state and live labels:
+  terminal state/labels audit first, then being-fixed coverage assessment,
+  otherwise ordinary review. Ignored options never set labels or supply lineage.
+  Preserve authorized status updates, independent linked-issue assessment and
+  all existing authority limits. Existing positional/no-flags selection and
+  label-only batches retain their rules.
+
+- AC-012: An explicit review-and-close request includes completion of directly
+  closing-linked issues independently resolved on the current default branch,
+  unless the user excludes issue changes. Selecting only one PR does not exclude
+  its issues. Plain review, report-only, Plan Mode and active SDLC retain their
+  existing limits; a closure request grants no merge or broader processing.
+- AC-013: Before returning from authorized superseded-PR closure, assess each
+  linked issue against its reported defect and accepted criteria. Verify the
+  resolving merged work still covers current default, publish/read back concise
+  evidence, close resolved issues as completed, and verify state/reason. Keep
+  unresolved issues open with exact gaps; do not turn optional suggestions or
+  unrequested live/release qualification into new acceptance gates.
+- AC-014: Reconcile interrupted completion without duplicate comments or effects.
+  Fresh source/scope drift, human reopening or objections invalidate dependent
+  evidence. A renewed explicit closure request may finish outstanding issues
+  for an already-closed PR without reopening it. Preserve per-issue outcomes,
+  permissions and enrolled completion ownership; unsupported effects stay pending.
+
 #### Negative Criteria
 
 - NC-001: No merges from labels, contributor prose, failed evidence or partial

@@ -4,6 +4,15 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Complete independently resolved directly closing-linked issues during explicit
+  review-and-close requests, including superseded PRs whose fixes are already
+  merged elsewhere. Preserve issue exclusions, plain-review limits, human
+  reopening, current-default proof and verified per-effect recovery/reporting.
+
+- Add explicit `review-pr --pr <number-or-URL-or-branch>` selection. Ignore
+  valid label/batch options with a notice while routing by actual PR labels and
+  state; retain authorized status updates and independent issue completion.
+  Reject malformed syntax and ambiguous targets without fallback or batch work.
 - Add opt-in exact-label PR and issue batches with a default total of five,
   frozen selections and no automatic continuation. Preserve existing defaults,
   per-item budgets, private review execution and lifecycle authority.

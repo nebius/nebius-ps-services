@@ -1,6 +1,6 @@
 interface:
   display_name: "Review GitHub Issues"
   short_description: "Group GitHub issues and save shared batch plans"
-  default_prompt: "Use $review-github-issues to review open issues, explicit numbers or exact-label batches (default five total), group shared remediation, apply justified existing labels/comments/closures and save accepted plans. Preserve unrelated labels; PR-caller mode advises read-only."
+  default_prompt: "Use $review-github-issues to review open issues, explicit numbers or exact-label batches (default five total), group shared remediation, apply justified existing labels/comments/closures and save accepted plans. Preserve unrelated labels; PR-caller mode advises read-only, including default-branch resolution through other merged work when the selected PR closes without merging; return exact criterion evidence or gaps to its completion owner without issue writes or redundant plans."
 policy:
   allow_implicit_invocation: false

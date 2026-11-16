@@ -5,6 +5,16 @@ status labels, failed-test repair, one replacement PR and independent issue
 completion. Plain review and report-only limits remain binding; issue closure
 requires its own verified resolution and authority.
 
+An explicit “review and close only PR #N” includes completion of that PR's
+independently resolved directly closing-linked issues. “Only” limits PR
+selection; “leave issues unchanged” explicitly excludes issue writes. When
+merged replacement work resolves an issue on current default, the outer owner
+verifies its criteria, posts and reads back the resolving evidence, closes it
+as completed and verifies state/reason before returning. Unresolved issues stay
+open with concrete gaps. Plain review and audit-only requests remain unchanged.
+See [closure continuation](references/pr-lifecycle.md#completion-after-unmerged-pr-closure)
+for interruption, human reopening, partial access and enrolled-owner boundaries.
+
 Ordinary review first assesses the contribution against accepted behavior,
 safety and supported existing-user workflows. After proven safe repairs, the
 root invokes maintain-project-specs for every affected project, then reviews the
@@ -21,14 +31,24 @@ merge-readiness when permissions allow.
 ```text
 $review-pr
 $review-pr 42
+$review-pr --pr 42
+$review-pr --pr 42 --label being-fixed --pr-batch 10
 $review-pr --label being-fixed --pr-batch 10
 $review-pr --label being-fixed
 $review-pr --help
 ```
 
-`--label` selects one exact existing label across the current repository;
+`--pr` requires a PR number, URL or branch and reviews exactly that PR. It
+ignores valid `--label` and `--pr-batch` options with one concise notice; no
+label-existence lookup or batch discovery occurs. The PR's actual labels and
+state guide review, and existing authorized status-label updates remain enabled.
+Bare `--pr`, malformed options, repeated flags, or mixing `--pr` with a
+positional target fails before discovery. Ambiguous targets require an exact
+PR number or URL; no current-branch or batch fallback occurs.
+
+Without `--pr`, `--label` selects one exact existing label across the current repository;
 `--pr-batch` is a positive total limit, default five. It requires label mode
-and cannot combine with an explicit PR selector. No flags preserves the
+and cannot combine with a positional PR selector. No flags preserves the
 current-branch PR review. `-h, --help` explains every option without effects.
 
 [Label batches](references/label-batches.md) freeze oldest-created matches before
@@ -45,6 +65,11 @@ Discover shared issue relationships before the first per-PR handoff and reconcil
 each owner's results in the batch context. Terminal audits also bypass enrolled
 `process` dispatch; unsupported narrow completion effects remain pending.
 Selection labels never grant closure or merge authority.
+
+For `--pr`, actual terminal state or live terminal labels take audit precedence,
+then live `being-fixed` triggers coverage assessment; otherwise ordinary review
+applies. An ignored filter does not set a label or change this route. See
+[shared label handling](references/pr-lifecycle.md#selection-and-live-label-routing).
 
 ## What It Does
 
@@ -85,7 +110,9 @@ Review checks, diffs, conflicts, and comments
 6. Fix safe issues and rerun focused validation in generic mode. In active
    Agentic SDLC mode, route every required branch change through the
    coordinator instead.
-7. Report readiness, remaining blockers, and merge guidance.
+7. For an authorized closure, verify PR closure and complete eligible linked
+   issues under the shared lifecycle; report each issue's evidence or exact gap.
+8. Report readiness or closure, remaining blockers, and separate issue outcomes.
 
 ## Core Concepts
 
