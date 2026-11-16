@@ -6,7 +6,9 @@ project folder.
 
 ## [Unreleased]
 
-- Include native course capture evidence in failing lifecycle-test diagnostics.
+- Preserve graceful profiler exit status in native course server jobs while
+  independently rejecting watchdog expiry and errors. Include fixture evidence
+  in failing lifecycle-test diagnostics.
 
 - Run current-branch commit-push, workflow statistics and task-acceptance
   regressions in the skills CI workflow.

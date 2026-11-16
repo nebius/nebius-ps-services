@@ -135,7 +135,10 @@ def client(auth: StaticAuth, *, endpoint=None, user_agent_prefix="nebius-cxcli")
     )
     try:
         response = sdk.whoami(timeout=20, auth_timeout=20, retries=1).wait()
-        metadata = response.service_account_profile.info.metadata
+        profile = response.service_account_profile
+        if profile is None:
+            raise ValueError
+        metadata = profile.info.metadata
         if metadata.id != auth.service_account_id or metadata.parent_id != auth.project_id:
             raise ValueError
     except Exception:

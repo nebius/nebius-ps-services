@@ -62,6 +62,19 @@ class PushCurrentTests(fixture.TransactionFixture):
         self.assertEqual(git(self.root, "rev-parse", "@{upstream}"), result["head"])
         self.assertEqual(self.finish(action="commit-push")["status"], "completed")
 
+    def test_divergent_tracking_ref_is_preserved(self):
+        self.ahead()
+        self.begin_push()
+        unrelated = git(self.root, "commit-tree", "HEAD^{tree}", "-m", "unrelated tracking history")
+        tracking = "refs/remotes/origin/feature/test"
+        git(self.root, "update-ref", tracking, unrelated)
+        self.assertEqual(self.push(expected=2)["code"], "history_changed")
+        self.assertEqual(git(self.root, "rev-parse", tracking), unrelated)
+        self.assertEqual(
+            git(self.root, "ls-remote", "origin", "refs/heads/feature/test"),
+            "",
+        )
+
     def test_active_reservation_blocks_before_remote_read(self):
         self.ahead()
         self.begin_push()

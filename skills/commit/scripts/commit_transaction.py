@@ -2552,6 +2552,10 @@ def push_current(arguments):
         upstream_ref = _run_git(root, ("config", "--get", f"branch.{branch}.merge"), check=False).stdout.decode().strip()
         if (upstream_remote or upstream_ref) and (upstream_remote != "origin" or upstream_ref != ref):
             raise TransactionError("existing upstream differs from the authorized origin branch", "scope_changed")
+        tracking = f"refs/remotes/origin/{branch}"
+        previous_tracking = _local_head(root, tracking)
+        if previous_tracking and _run_git(root, ("merge-base", "--is-ancestor", previous_tracking, target["head"]), check=False).returncode:
+            raise TransactionError("origin tracking ref diverged from the reviewed publication", "history_changed")
         destination = _pr.origin_destination(root, _run_git)
         publication = target["publication"]
         observed = _pr.remote_head(root, _run_git, destination, ref)
@@ -2567,8 +2571,18 @@ def push_current(arguments):
             raise TransactionError("push unconfirmed; retain the task and reconcile push-current", "effect_unknown")
         publication.update(remote_head=observed, published_head=observed, pending=None)
         _atomic_json(_task_state_path(path), state)
-        # Configure only this exact verified branch; no branch/ref is switched.
+        # URL pushes do not refresh tracking refs on every supported Git version.
+        # Bind upstream to the independently observed remote result, preserving
+        # concurrent or divergent local tracking history.
         branch = ref.removeprefix("refs/heads/")
+        previous = _local_head(root, tracking)
+        if previous != observed:
+            if previous != previous_tracking:
+                raise TransactionError("origin tracking ref changed during publication", "history_changed")
+            result = _run_git(root, ("update-ref", "--no-deref", tracking, observed, previous_tracking or "0" * len(observed)), check=False)
+            if result.returncode:
+                raise TransactionError("origin tracking ref changed during publication", "history_changed")
+        # Configure only this exact verified branch; no checkout is switched.
         _run_git(root, ("config", f"branch.{branch}.remote", "origin"))
         _run_git(root, ("config", f"branch.{branch}.merge", ref))
         return {"status": "published", "branch": branch, "head": observed}

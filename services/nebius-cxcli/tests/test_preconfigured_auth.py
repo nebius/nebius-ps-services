@@ -164,6 +164,22 @@ def test_identity_is_verified_with_static_token_and_no_renewal(configured, monke
     assert set(seen) == {"credentials", "parent_id", "domain", "user_agent_prefix"}
 
 
+def test_missing_service_account_identity_closes_static_client(configured, monkeypatch):
+    import nebius.sdk
+
+    closed = []
+    sdk = SimpleNamespace(
+        whoami=lambda **_kwargs: SimpleNamespace(
+            wait=lambda: SimpleNamespace(service_account_profile=None)
+        ),
+        sync_close=lambda **_kwargs: closed.append(True),
+    )
+    monkeypatch.setattr(nebius.sdk, "SDK", lambda **_kwargs: sdk)
+    with pytest.raises(RuntimeError, match="identity mismatch or unavailable"):
+        auth.client(auth.load())
+    assert closed == [True]
+
+
 def test_static_provider_render_omits_signing_credentials(configured):
     from nebius_cxcli.infra_render import _terraform_providers_block
 

@@ -11,6 +11,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.6.5] - 2026-11-15
+
 - Recheck shared dependency consumers before every full-repair Python install
   and resumed checkpoint, using the rebuilt distro parser independently of
   damaged local packages.

@@ -161,7 +161,7 @@ for i in range(int(os.environ['REPORTS'])): (Path(os.environ['COURSE_PROFILES_DI
 
 @pytest.mark.parametrize(
     "failure,expected",
-    [("", 0), ("client", 7), ("control", 2), ("server", 2), ("missing-report", 2)],
+    [("", 0), ("client", 7), ("control", 2), ("server", 2), ("missing-report", 2), ("deadline", 2)],
 )
 def test_native_server_waits_for_delayed_export_and_preserves_failures(
     tmp_path, failure, expected
@@ -190,6 +190,7 @@ def stop(*_):
     Path('server-stopped').write_text('yes')
     raise SystemExit(7 if os.environ['FAILURE']=='server' else 0)
 signal.signal(signal.SIGINT,stop)
+signal.signal(signal.SIGTERM,stop)
 Path('server-ready').write_text(str(os.getpid()))
 while True:time.sleep(.01)
 """,
@@ -204,16 +205,25 @@ print('500' if os.environ['FAILURE']=='control' else '200',end='')
     )
     executable(
         tmp_path / "bin/client",
-        """import json,os,sys
+        """import json,os,sys,time
 from pathlib import Path
 if sys.argv[1]=='-c':
     if '/health' in sys.argv[2]:raise SystemExit(0 if Path('server-ready').exists() else 1)
     print('synthetic_metric 1');raise SystemExit(0)
 Path('client-argv.json').write_text(json.dumps(sys.argv[1:]))
 assert os.environ['COURSE_CAPTURE']=='1'
+if os.environ['FAILURE']=='deadline':time.sleep(5)
 raise SystemExit(7 if os.environ['FAILURE']=='client' else 0)
 """,
     )
+    if failure == "deadline":
+        timeout_command = str((tmp_path / "bin/timeout").resolve())
+        (tmp_path / "bin/timeout").unlink()
+        executable(
+            tmp_path / "bin/timeout",
+            "import os,sys\nargs=['4s' if arg=='900s' else arg for arg in sys.argv[1:]]\n"
+            f"os.execv({timeout_command!r},['timeout',*args])\n",
+        )
     env.update(
         COURSE_PYTHON=str(tmp_path / "bin/client"),
         COURSE_VLLM="vllm",
@@ -232,7 +242,7 @@ raise SystemExit(7 if os.environ['FAILURE']=='client' else 0)
         evidence = [result.stdout, result.stderr]
         job = tmp_path / "results" / lab / "jobs/123"
         for path in sorted(job.rglob("*")):
-            if path.is_file() and (path.name == "result.json" or path.suffix in {".log", ".txt"}):
+            if path.is_file() and (path.name == "result.json" or path.suffix in {".log", ".txt", ".watchdog"}):
                 evidence.append(f"{path.relative_to(job)}:\n{path.read_text(errors='replace')}")
         pytest.fail("Unexpected native capture exit code: " + str(result.returncode)
                     + "\n" + "\n".join(evidence))

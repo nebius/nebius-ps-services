@@ -4,6 +4,10 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Refresh the exact verified upstream tracking ref after commit-push URL
+  publication on Git versions that do not do so automatically. Preserve
+  divergent or concurrently changed tracking history.
+
 - Keep commit contract checks aligned with the Implement loop reference that
   owns source-drift retention guidance; verify both preservation and retained
   integration evidence.

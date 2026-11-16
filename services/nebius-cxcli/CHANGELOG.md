@@ -6,6 +6,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Explicitly reject absent static authentication or service-account identity
+  during SDK initialization, preserving fail-closed identity checks and type safety.
+
 - Reject native component `bindings` in preconfigured static mode and reject
   FIFO credential paths without waiting for a writer.
 
