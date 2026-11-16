@@ -5386,7 +5386,9 @@ The native lane records the collected case identities, immutable image ID and
 installed dependency inventory before executing the selected tests. Completion
 requires every declared case to pass; an HA selection does not complete the full
 native lane. The qualification report retains full restart and owner-coverage
-driver streams for passed and failed cases without extending product deadlines.
+driver streams for passed and failed cases, plus setup/call/teardown timings.
+The expanded suite has a forty-minute aggregate test budget; individual test
+and product recovery deadlines remain unchanged.
 Native rekey and reauthentication checks wait for replacement identities on both
 peers, with established IKE sessions and installed ESP CHILD SAs on the expected
 XFRM interface, before starting the strict steady-state packet sample. The

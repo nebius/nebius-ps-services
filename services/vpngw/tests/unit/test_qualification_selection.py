@@ -95,6 +95,10 @@ def test_native_report_accounts_for_real_pass_failure_skip_and_unrun(
     assert saved["expected_cases"] == len(saved["expected_nodeids"])
     assert len(saved["unrun_nodeids"]) == unrun
     first_case = saved["expected_nodeids"][0]
+    assert set(saved["durations_seconds"]) == set(saved["outcomes"])
+    for node, phases in saved["outcomes"].items():
+        assert set(saved["durations_seconds"][node]) == set(phases)
+        assert all(value >= 0 for value in saved["durations_seconds"][node].values())
     assert saved[driver + "_output"] == {
         first_case: {"stdout": "final observation", "stderr": timeline}
     }

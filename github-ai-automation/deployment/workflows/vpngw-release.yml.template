@@ -21,7 +21,7 @@ jobs:
   ordinary-job-settlement:
     name: Ordinary systemd and networkd settlement
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 55
     permissions:
       contents: read
     steps:

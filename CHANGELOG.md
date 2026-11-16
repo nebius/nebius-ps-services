@@ -6,6 +6,10 @@ project folder.
 
 ## [Unreleased]
 
+- Increase the bounded VPNGW native-suite allowance for its expanded case set
+  in PR and release CI, while retaining individual recovery deadlines and
+  per-phase qualification timings.
+
 - Preserve graceful profiler exit status in native course server jobs while
   independently rejecting watchdog expiry and errors. Include fixture evidence
   in failing lifecycle-test diagnostics.
