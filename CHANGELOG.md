@@ -6,6 +6,10 @@ project folder.
 
 ## [Unreleased]
 
+- Isolate verifier unit fixtures from ambient host-memory measurements while
+  retaining regression coverage for unknown and critical memory admission.
+  Align repeated hook-installation assertions with the added policy test module.
+
 - Increase the bounded VPNGW native-suite allowance for its expanded case set
   in PR and release CI, while retaining individual recovery deadlines and
   per-phase qualification timings.

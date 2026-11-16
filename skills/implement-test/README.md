@@ -51,6 +51,10 @@ The deterministic harness collects exact test IDs before execution, runs at most
 two explicitly audited independent groups, and keeps unaudited groups exclusive.
 Healthy suites have no duration-only expiry. Readiness integration retains its
 full traversal and real-input receipt coverage; failure blocks live preparation.
+Verifier unit fixtures supply deterministic memory observations so their expected
+results do not depend on the test runner's host visibility. Separate cases verify
+that unknown or critical memory admits no fixture tests; operational verification
+continues to use the real host probe.
 
 `--create` first replaces any prior exactly owned fixture, then exercises the
 real Implement public interface on a seeded local-only brownfield

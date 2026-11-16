@@ -132,6 +132,10 @@ This correction needs no setup, credential change or IAM operation.
 
 ## Validation
 
+Hook installation regressions cover the complete source bundle, including hook
+test modules, and verify that a repeated installation reports no changed files
+or registrations.
+
 ```bash
 python3 -B scripts/test_agent_nebius_auth_setup.py
 python3 -B scripts/test_pre_tool_use_nebius_auth.py

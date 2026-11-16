@@ -18,11 +18,37 @@ from verify_implement import (
     contract,
     dependency_parity,
     main,
+    scheduler,
     verify,
 )
 
 
 class VerifyTests(unittest.TestCase):
+    def setUp(self):
+        owner = scheduler()
+        memory = owner.source_module(
+            "host_memory",
+            Path(owner.__file__).resolve().parents[2]
+            / "global-context-management/scripts/host_memory.py",
+        )
+        # These fixture suites test verifier results, not the execution host.
+        probe = patch.object(memory, "sample", return_value={"status": "normal"})
+        self.memory_probe = probe.start()
+        self.addCleanup(probe.stop)
+
+    def test_unavailable_or_critical_memory_launches_no_fixture_tests(self):
+        for status in ("unknown", "critical"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as temp:
+                source = self.make_skill(Path(temp))
+                self.memory_probe.return_value = {"status": status}
+                with patch.object(scheduler(), "_run") as run:
+                    result = verify(source, source, 10)
+                run.assert_not_called()
+                self.assertEqual(result["deterministic"], "PARTIAL")
+                self.assertTrue(all(
+                    row["status"] == "NOT_RUN" for row in result["test_groups"]
+                ))
+
     def test_completed_inventory_survives_later_verifier_error(self):
         with tempfile.TemporaryDirectory() as temporary:
             report = Path(temporary) / "report.md"
