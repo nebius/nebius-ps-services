@@ -66,7 +66,7 @@ sdlc-runs/
 
 No prompt workspace, raw-turn archive or unrelated-objective queue exists.
 `objective.json` selects ordered immutable normalized revisions and ancestry.
-`run.json` uses `workflow/run-v2`; phase fields live in `current-state.json`.
+`run.json` uses `workflow/run-v4`; phase fields live in `current-state.json`.
 The active pointer selects only a project run. It grants no session ownership.
 `active.lock` uses `workflow/coordinator-ownership-v1` and must agree with the
 run, project, native coordinator hash and `workflow/session-binding-v1` record.
@@ -145,7 +145,7 @@ writes, so inspect retained artifacts before any retry.
   "blocked_reason": null,
   "needs_human": false,
   "iteration_count": 7,
-  "max_iterations": 200,
+  "checkpoint_interval_iterations": 200,
   "retry_counts": {
     "requirements": 0,
     "context": 0,
@@ -197,6 +197,32 @@ writes, so inspect retained artifacts before any retry.
 }
 ```
 
+`current_phase` identifies the active skill or its output checkpoint. The root
+`status` describes the run's lifecycle, separately from the execution
+coordinator's nested `execution.status`. A phase output does not complete the
+run. For example, `plan_locked`, `execution_prepared`, `tests_red` and
+`tests_ready` belong in `current_phase`, while the active run remains
+`status: running`.
+
+Unpublished specification correction uses this coordinator checkpoint, including
+`next_recommended_skill` when `current_phase` is the completed output checkpoint
+or initialized startup. The current state and latest checkpoint must agree on
+run, execution, lifecycle, phase and repair pointers. A changed candidate or an
+active-phase checkpoint for the same operation does not renew the allowance.
+Classified repairs keep their original accounting and cannot enter this lane.
+
+During TDD authoring, record `current_phase: sdlc-tdd` and `status: running`.
+For initial TDD, publish expected-red output as `current_phase: tests_red`, or
+already-green output as `current_phase: tests_ready`, retaining `status: running`
+and routing
+to `sdlc-implement-plan`. Record identical fields in `current-state.json` and
+the new immutable checkpoint referenced by `checkpoints/latest.json`. Leave
+initial test files uncommitted for the implementation owner's TDD seal. A
+checkpoint observation never grants permission to seal or alter tests merely
+to satisfy an observer.
+Classified late test revision follows its typed repair and replanning route;
+these initial-output instructions do not bypass that owner.
+
 When a repair cycle is active, `repair` is a pointer projection rather than a
 second mutable budget:
 
@@ -212,7 +238,7 @@ second mutable budget:
 `diagnosis` is `null` until causal diagnosis exists. The immutable
 `failure-event-v2`, optional immutable `diagnosis-v3`, optional immutable
 `design-approval-v1`, deterministic classification, append-only repair
-journal, and process-locked atomic `repair-control-v2` projection are
+journal, and process-locked atomic `repair-control-v3` projection are
 authoritative. A broader-design approval also binds the digest and exact
 approval excerpt of its private user-input snapshot. `event_id` identifies exact commit-bound
 evidence; `blocker_key` identifies recurrence across commits and excludes
@@ -220,7 +246,19 @@ timestamps, temporary IDs, line numbers, checkpoints, and commits. The
 human-readable `evidence/FEAT-*/failure-log.md` is derived and never
 authoritative.
 
-After a successful remediation, any non-empty invalidation set creates an
+The v3 projection also requires `suspended_repairs` (digest references) and
+`resumptions` (completed dispatch to immutable receipt digest). A counted pending
+repair is suspended before an independent blocker takes ownership. Successful
+intervening completion restores its exact context only when the parent's gates
+cover all carried invalidations. Preserve child completion/cursor, counters and
+all failure history; refresh checkpoint event/classification/diagnosis pointers
+from the returned control. Historical completion replay cannot rewind the owner.
+An intervening completion that reaches its time limit persists consumed time and
+exhausted status, retaining the pending child and suspended parent. A retry cannot
+restore authority or reduce that time.
+Do not convert obsolete v2 controls into active state.
+
+Without a suspended parent, any non-empty invalidation set after successful remediation creates an
 `agentic-sdlc/revalidation-cursor-v2`. It names the ordered surfaces and exact
 next skill. Each phase advances it with immutable, digest-verified
 `revalidation-evidence-v2` bound to current requirements/design/plan
@@ -365,17 +403,18 @@ directory. They are local runtime state only and must not be committed.
 - `commit-authorization.json`: written immediately before `sdlc-commit` runs
   `git commit`, after validation, tests, and evaluation evidence passes.
 - `pr-authorization.json`: written immediately before `create-pr` publishes a
-  branch or opens/reuses a PR, after UAT evidence passes for the clean exact
-  SHA promoted by `sdlc-commit`. It must include `phase: "create-pr"`, the
+  branch or opens/reuses a PR, after required implementation evidence passes for the clean exact
+  SHA promoted by `sdlc-commit`; optional UAT may remain not_requested or pending. It must include `phase: "create-pr"`, the
   exact branch, `expected_head` equal to the recorded promoted HEAD,
   `base_branch` and `base_head` equal to the recorded remote-default identity,
-  `uat_status: "passed"`, and a short expiry. A guarded Git push may contain
+  `uat_status: <owner-reported status>`, `uat_policy_sha256` matching the frozen
+  objective, and a short expiry. Missing optional UAT is not synthetic PASS. A guarded Git push may contain
   only `origin` and one exact `HEAD:<branch>` refspec; CLI or MCP PR creation
   must name the same head branch. Shell execution must use one direct action
   without executable wrappers, absolute executable paths, prepended commands,
   shell operators, or redirections.
 - Protected delivery uses `delivery/<SLICE-ID>/review.json`, `submission.json`
-  and `completion.json`, with producer-validated qualification references and
+  and `completion.json`, with producer-validated implementation admission references and
   the accepted run completion policy. Supplied status-label files grant no
   merge authority. Raw CLI/API merge, approval and dispatch are denied; only
   the source-owned delivery adapter may invoke the compatible protected broker.
@@ -421,7 +460,7 @@ write is interrupted, resume by selecting the newest complete checkpoint.
 13. general align quality gate, in the integration worktree
 14. sdlc-commit: final seal, ff-only promotion, and integration cleanup
 15. uat, from the promoted project checkout
-16. managed child only: outer-integration-pending, then return the recorded
+16. externally managed child only: outer-integration-pending, then return the recorded
     primary path and await a fresh explicit user invocation of
     `$worktree integrate` from that primary checkout
 17. create-pr, from the final unmanaged source branch only
@@ -455,7 +494,7 @@ integration tip under the common-Git-directory lock with
 After UAT, `sdlc-update-documents` may assess the promoted checkout read-only
 and record no-op evidence. Required edits return `DOCUMENTATION_DRIFT` through
 classification into a corrective run from the exact promoted commit; completed
-execution never reopens. Fresh gates and UAT precede handoff. In a managed child, lease release enters
+execution never reopens. Fresh gates and UAT precede handoff. In an explicitly supplied manual child, lease release enters
 `outer-integration-pending`; `sdlc-start` returns the recorded primary path plus
 the exact `$worktree integrate <generated-name>` command and stops. Only a fresh
 explicit user invocation from that primary checkout may run it. After that
@@ -541,3 +580,26 @@ sync instead of editing installed hook artifacts directly.
 The shared [worker wave contract](../../worktree/references/worker-waves.md)
 freezes worker/wave/physical-worktree limits, admits independently verified
 no-change results, and requires producer-owned combined-wave validation receipts.
+
+## Automatic objective ownership
+
+Eligible feature-branch intake records a stable logical project and one automatic
+outer in the common Git directory. The run retains its original folder alongside
+its execution mapping. After inner final gates, the coordinator enters
+`aggregation-ready`, validates the latest aggregate candidate, promotes, records
+immutable proof, releases and removes owned resources. Public continuation and
+status use the original folder after cleanup. Automatic outers never enter the
+manual `$worktree integrate` handoff. See the shared
+[automatic project contract](../../worktree/references/automatic-projects.md).
+
+## Observational Statistics
+
+The coordinator calls the private statistics checkpoint helper after publishing
+the complete checkpoint, latest pointer and current state. See
+`../../worktree/references/statistics.md` for initial architecture, immutable
+history, automatic summaries and read-only status. Statistics failure does not
+change phase outcome or readiness. Keep these files outside `evidence/`.
+
+Optional UAT policy and campaign states follow
+[the shared contract](../../worktree/references/optional-uat.md). Continuation
+preserves opt-in; pending optional infrastructure does not create a Stop retry loop.

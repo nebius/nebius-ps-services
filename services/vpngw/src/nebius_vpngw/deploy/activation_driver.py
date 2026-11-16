@@ -92,6 +92,10 @@ def activate(
                 "diagnosis": Diagnosis("unlock", digest(request)),
             }
         while True:
+            if time.monotonic() >= deadline:
+                raise ObservationUnavailable(
+                    "activation-observation", "observation-deadline-expired"
+                )
             observed = control("inspect", deadline=deadline)
             units = observed["units"]
             settled = all(
@@ -100,10 +104,19 @@ def activate(
                 and state["ActiveState"] not in {"activating", "deactivating"}
                 for state in units.values()
             )
-            if settled or time.monotonic() >= deadline:
+            failed = any(state["ActiveState"] in {"failed", "inactive"} for state in units.values())
+            if settled and (failed or observed["materialized"] is not None):
                 break
-            time.sleep(min(0.2, max(0, deadline - time.monotonic())))
-        failed = any(state["ActiveState"] in {"failed", "inactive"} for state in units.values())
+            # A busy routing writer can make materialization unknown even
+            # after systemd settles. Reobserve under this same read deadline;
+            # missing proof cannot select or consume a corrective attempt.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ObservationUnavailable(
+                    "activation-observation",
+                    "materialization-unavailable" if settled else "services-still-transitioning",
+                )
+            time.sleep(min(0.2, remaining))
         complete = (
             settled
             and not failed

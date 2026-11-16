@@ -52,6 +52,7 @@ from nebius_vpngw.agent.vm_ha_controller import (
     ControllerSnapshot,
     DataPlaneMode,
     LocalReadiness,
+    RepairAttempt,
 )
 from nebius_vpngw.agent.vm_ha_controller import (
     RouteReconciliationContext as ControllerRouteContext,
@@ -78,6 +79,7 @@ from nebius_vpngw.deploy.vm_ha_routes import (
     RouteMutationKind,
     RouteMutationPhase,
     RouteOccupancySnapshot,
+    RoutePlanningProgress,
     RouteReconciliationContext,
     RouteReconciliationReceipt,
     RouteReplacementCompensated,
@@ -904,6 +906,7 @@ class LocalDataPlaneObservation:
     protection_ready: bool = False
     failed_services: tuple[str, ...] = ()
     ipsec_configuration_missing: bool = False
+    static_suspended: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -933,6 +936,10 @@ class LocalDataPlanePort(Protocol):
     def disable_active(self, action: ControllerAction) -> None: ...
 
     def repair_local(self, action: ControllerAction) -> RepairDisposition: ...
+
+    def emergency_fence(
+        self, action: ControllerAction, *, verification_timeout: float = 0.2
+    ) -> None: ...
 
     def prepare_candidate(self, action: ControllerAction) -> None: ...
 
@@ -1366,6 +1373,7 @@ class SystemDataPlaneRuntime:
         self.ipsec_configuration_observer: (
             Callable[[], ipsec_observation.ConfigurationInventory | None] | None
         ) = None
+        self.ipsec_reload_preparer: Callable[[ControllerAction, float], None] | None = None
         self.observation_deadline: float | None = None
 
     def _missing_ipsec_configuration(
@@ -1691,11 +1699,13 @@ class SystemDataPlaneRuntime:
         )
         advertised = {} if export_evidence is None else export_evidence[1]
         established_ike_sa_count = 0
+        static_suspended = None
         if self.tunnel_cold_passive:
             listed_sas = self._run(*ipsec_observation.command())
             if listed_sas.returncode != 0:
                 raise RuntimeError("unable to observe local IKE SA state")
             established_ike_sa_count = len(_ike_sa_ids(listed_sas.stdout))
+            static_suspended = self._static_suspension(listed_sas.stdout)
         learned = _learned_bgp_prefixes(rib)
         static_prefixes: set[str] = set()
         usable_xfrm: set[str] = set()
@@ -1759,6 +1769,7 @@ class SystemDataPlaneRuntime:
                 running_config.stdout, configured
             ),
             established_ike_sa_count=established_ike_sa_count,
+            static_suspended=static_suspended,
             bgp_export_state=export_state,
             routing_hygiene_ready=_routing_hygiene_ready(rules, all_routes, broad_apipa),
             protection_ready=self.destination_protection is not None
@@ -1912,9 +1923,7 @@ class SystemDataPlaneRuntime:
                 self._run(self.commands.systemctl, "is-active", "--quiet", service).returncode == 0
                 for service in ("strongswan",)
             )
-            if strongswan_running and self.tunnel_cold_passive:
-                self._suspend_cluster_tunnels_locked(stop_if_unavailable=False)
-            elif strongswan_running:
+            if strongswan_running and not self.tunnel_cold_passive:
                 load = self._run(self.commands.swanctl, "--load-all", "--noprompt")
                 if load.returncode != 0:
                     raise RuntimeError("cluster tunnel configuration could not be loaded")
@@ -1963,9 +1972,9 @@ class SystemDataPlaneRuntime:
                     self._effect_sleep(self.passive_materialization_interval)
             else:
                 raise RuntimeError("passive data-plane materialization did not converge")
-            self._require_bgp_exports(DataPlaneMode.PASSIVE)
             if self.tunnel_cold_passive:
                 self._suspend_passive_tunnels(action)
+            self._require_bgp_exports(DataPlaneMode.PASSIVE)
         except Exception as error:
             # PASSIVE is observable controller authority, not merely a forwarding
             # setting.  If materialization or hygiene fails after the initial
@@ -1998,6 +2007,29 @@ class SystemDataPlaneRuntime:
     def disable_active(self, action: ControllerAction) -> None:
         self._set_mode(action, DataPlaneMode.BLOCKED)
 
+    def _static_configuration_absent(self) -> bool | None:
+        if not self.static_tunnel_names:
+            return None
+        loaded = self._run(*ipsec_observation.command(), "--configuration")
+        if loaded.returncode:
+            return None
+        try:
+            inventory = ipsec_observation.ConfigurationInventory.from_json(loaded.stdout)
+            return not inventory.connections.intersection(self.static_tunnel_names)
+        except ValueError:
+            return None
+
+    def _static_suspension(self, raw_sas: str) -> bool | None:
+        from .tunnel_observation import scoped_ike_ids
+
+        configuration_absent = self._static_configuration_absent()
+        if configuration_absent is not True:
+            return configuration_absent
+        try:
+            return not scoped_ike_ids(raw_sas, set(self.static_tunnel_names or ()))
+        except ValueError:
+            return None
+
     def _suspend_passive_tunnels(self, action: ControllerAction) -> None:
         self.routing_lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_fd = os.open(self.routing_lock_path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -2005,24 +2037,25 @@ class SystemDataPlaneRuntime:
         try:
             if self._forwarding() or self.mode() is not DataPlaneMode.PASSIVE:
                 raise RuntimeError("cold static standby lost its passive forwarding fence")
-            if self.static_tunnel_names is None:
-                self._suspend_cluster_tunnels_locked(stop_if_unavailable=False)
-            else:
-                from .tunnel_observation import scoped_ike_ids
+            from .tunnel_observation import scoped_ike_ids
 
-                listed = self._run(*ipsec_observation.command())
-                if listed.returncode:
-                    raise RuntimeError("static standby SA state unavailable")
-                names = set(self.static_tunnel_names)
-                for uniqueid in scoped_ike_ids(listed.stdout, names):
-                    result = self._run(
-                        self.commands.swanctl, "--terminate", "--ike-id", uniqueid, "--timeout", "1"
-                    )
-                    if result.returncode:
-                        raise RuntimeError("static standby suspension failed")
-                listed = self._run(*ipsec_observation.command())
-                if listed.returncode or scoped_ike_ids(listed.stdout, names):
-                    raise RuntimeError("static standby suspension is incomplete")
+            # Materialization must have removed responder and initiation authority
+            # before terminating any SA. Never unload unrelated BGP connections.
+            if self._static_configuration_absent() is not True:
+                raise RuntimeError("static standby loaded authority is unproven")
+            listed = self._run(*ipsec_observation.command())
+            if listed.returncode:
+                raise RuntimeError("static standby SA state unavailable")
+            names = set(self.static_tunnel_names or ())
+            for uniqueid in scoped_ike_ids(listed.stdout, names):
+                result = self._run(
+                    self.commands.swanctl, "--terminate", "--ike-id", uniqueid, "--timeout", "1"
+                )
+                if result.returncode:
+                    raise RuntimeError("static standby suspension failed")
+            listed = self._run(*ipsec_observation.command())
+            if listed.returncode or self._static_suspension(listed.stdout) is not True:
+                raise RuntimeError("static standby suspension is incomplete")
             if self.inactive_static_reconciler is not None:
                 self.inactive_static_reconciler(action, False)
             self._write_state(action, DataPlaneMode.PASSIVE)
@@ -2047,10 +2080,17 @@ class SystemDataPlaneRuntime:
                 raise RuntimeError("candidate tunnel configuration could not be loaded")
             if self.inactive_static_reconciler is not None:
                 self.inactive_static_reconciler(action, True)
+            from .tunnel_observation import scoped_ike_ids
+
             for attempt in range(1, self.passive_materialization_attempts + 1):
                 listed = self._run(*ipsec_observation.command())
-                if listed.returncode == 0 and _ike_sa_ids(listed.stdout):
-                    break
+                if listed.returncode == 0 and self.static_tunnel_names:
+                    identities = set(scoped_ike_ids(listed.stdout, set(self.static_tunnel_names)))
+                    if any(
+                        str(sa["uniqueid"]) in identities and sa.get("state") == "ESTABLISHED"
+                        for _, sa in ipsec_observation.parse_sas(listed.stdout)
+                    ):
+                        break
                 if attempt < self.passive_materialization_attempts:
                     self._effect_sleep(self.passive_materialization_interval)
             else:
@@ -2106,7 +2146,9 @@ class SystemDataPlaneRuntime:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
             os.close(descriptor)
 
-    def emergency_fence(self, action: ControllerAction) -> None:
+    def emergency_fence(
+        self, action: ControllerAction, *, verification_timeout: float = 0.2
+    ) -> None:
         """Physically disable forwarding without waiting for the ordinary routing lock."""
 
         result = self.runner(
@@ -2115,7 +2157,7 @@ class SystemDataPlaneRuntime:
         )
         verified = self.runner(
             (self.commands.sysctl, "-n", "net.ipv4.ip_forward"),
-            min(self.command_timeout, 0.2),
+            min(self.command_timeout, verification_timeout),
         )
         if result.returncode != 0 or verified.returncode != 0 or verified.stdout.strip() != "0":
             raise RuntimeError("emergency local forwarding fence was not verified")
@@ -2145,6 +2187,11 @@ class SystemDataPlaneRuntime:
         ):
             raise RuntimeError("passive repair permits only missing-configuration reload")
         repair_deadline = action.repair_deadline_at - 1.0
+        from ..local_commands import CURRENT
+
+        inherited = CURRENT.get()
+        if inherited is not None:
+            repair_deadline = min(repair_deadline, inherited.deadline)
         descriptor = None
         attempted = False
         try:
@@ -2227,25 +2274,57 @@ class SystemDataPlaneRuntime:
                     if result.returncode:
                         raise RuntimeError("component repair did not complete")
                 if component == "strongswan":
+                    if self.ipsec_reload_preparer is None:
+                        raise RuntimeError("component kernel recovery is unavailable")
+                    try:
+                        self.ipsec_reload_preparer(action, repair_deadline)
+                    except (OSError, ValueError, TypeError):
+                        raise RuntimeError(
+                            "component kernel recovery evidence is unavailable"
+                        ) from None
                     loaded = self._run_before(
                         repair_deadline, self.commands.swanctl, "--load-all", "--noprompt"
                     )
                     if loaded.returncode:
                         raise RuntimeError("component configuration did not reload")
         except (RuntimeError, TimeoutError):
-            if (
-                action.repair_mode is DataPlaneMode.PASSIVE
-                and self.mode() is DataPlaneMode.PASSIVE
-                and not self._forwarding()
-            ):
+            if self._passive_repair_fenced(action):
                 # Retain the consumed passive attempt. Returning to BLOCKED
                 # would re-enter initial materialization and renew the loader.
                 return RepairDisposition.ATTEMPTED
-            self.emergency_fence(action)
+            self.emergency_fence(
+                action,
+                verification_timeout=0.1 if action.repair_mode is DataPlaneMode.PASSIVE else 0.2,
+            )
         finally:
             if descriptor is not None:
                 os.close(descriptor)
         return RepairDisposition.ATTEMPTED
+
+    def _passive_repair_fenced(self, action: ControllerAction) -> bool:
+        """Spend only the reserved fence time after the repair budget expires."""
+        if action.repair_mode is not DataPlaneMode.PASSIVE:
+            return False
+        try:
+            state = json.loads(self.state_path.read_text())
+            guard = json.loads(self.guard_path.read_text())
+            if not (
+                isinstance(state, dict)
+                and state.get("schema") == "nebius-vpngw/vm-ha-data-plane-v1"
+                and state.get("mode") == DataPlaneMode.PASSIVE.value
+                and state.get("boot_id") == action.boot_id
+                and isinstance(guard, dict)
+                and guard.get("guard_boot_id") == action.boot_id
+                and guard.get("data_plane_mode") == DataPlaneMode.PASSIVE.value
+            ):
+                return False
+            observed = self.runner(
+                (self.commands.sysctl, "-n", "net.ipv4.ip_forward"),
+                min(self.command_timeout, 0.1),
+            )
+            return observed.returncode == 0 and observed.stdout.strip() == "0"
+        except (OSError, ValueError, subprocess.SubprocessError, TimeoutError):
+            return False
 
     def enable_active(self, action: ControllerAction) -> None:
         # Promotion prerequisites must be installed and verified while the
@@ -2808,7 +2887,6 @@ class BoundRouteRuntime:
             and override_ready
             and export_ready,
         )
-        static_only = bool(self.static_manifest.prefixes) and not self.bgp_policies
         candidate_preparation_required = bool(
             self.static_manifest.prefixes and passive_mode and not readiness.static_ready
         )
@@ -2816,7 +2894,7 @@ class BoundRouteRuntime:
             candidate_preparation_required
             and observed.service_healthy
             and readiness.bgp_ready
-            and (not static_only or observed.established_ike_sa_count == 0)
+            and observed.static_suspended is True
             and not (self.static_manifest.prefixes & observed.usable_xfrm_prefixes)
             and routing_hygiene_ready
         )
@@ -3060,7 +3138,7 @@ class BoundRouteRuntime:
         ledger[restored_route_id] = original
         self.store.save_ledger(ledger)
 
-    def reconcile(self, action: ControllerAction) -> None:
+    def reconcile(self, action: ControllerAction) -> None | RepairDisposition:
         ownership = self._ownership(require_takeover_fence=action.takeover_fence_required)
         context = self._context(action, self.binding.cluster_id)
         if not context.matches(ownership):
@@ -3119,19 +3197,28 @@ class BoundRouteRuntime:
             self.store.save_pending_mutation(mutation, context)
             self._apply_mutation(mutation, ledger)
 
-        result = NebiusSDKRouteBackend.execute_verified_plan(
-            plan,
-            context=context,
-            apply_mutation=apply,
-            reobserve_ownership=lambda: self._ownership(
-                require_takeover_fence=action.takeover_fence_required
-            ),
-            reobserve_plan=lambda: self._plan(
-                self._ownership(require_takeover_fence=action.takeover_fence_required),
-                state,
-            ),
-            receipt_store=self.store,
-        )
+        try:
+            result = NebiusSDKRouteBackend.execute_verified_plan(
+                plan,
+                context=context,
+                apply_mutation=apply,
+                reobserve_ownership=lambda: self._ownership(
+                    require_takeover_fence=action.takeover_fence_required
+                ),
+                reobserve_plan=lambda: self._plan(
+                    self._ownership(require_takeover_fence=action.takeover_fence_required),
+                    state,
+                ),
+                receipt_store=self.store,
+            )
+        except RoutePlanningProgress:
+            # No effects were submitted by the empty plan. Keep the action
+            # pending so its next cycle can adopt and plan with fresh authority.
+            if self.store.load_pending_mutation() is not None or not context.matches(
+                self._ownership(require_takeover_fence=action.takeover_fence_required)
+            ):
+                raise RuntimeError("route progress lost exact quiescent authority") from None
+            return RepairDisposition.DEFERRED
         if result.receipt is None or result.committed_state is None:
             raise RuntimeError("route reconciliation did not produce an exact durable receipt")
         synchronize_authority_labels = getattr(
@@ -3151,6 +3238,7 @@ class BoundRouteRuntime:
                     if isinstance(route, ManagedRouteSnapshot)
                 )
             )
+        return None
 
     def _apply_mutation(
         self, mutation: RouteMutation, ledger: dict[str, ManagedRouteOwnership]
@@ -3383,8 +3471,6 @@ class AcceptedPeerHeartbeatStore(Protocol):
 
     def load_accepted_peer_heartbeat(self, peer_node_id: str) -> PeerHeartbeat | None: ...
 
-    def save_accepted_peer_heartbeat(self, peer_node_id: str, heartbeat: PeerHeartbeat) -> None: ...
-
 
 class BoundPeerRuntime:
     """Explicit service-loop peer port; no hidden thread or ownership claim."""
@@ -3415,8 +3501,6 @@ class BoundPeerRuntime:
 
     def poll(self, *, timeout_seconds: float) -> PeerHeartbeat:
         heartbeat, _replay = self.exchange.receive(timeout_seconds=timeout_seconds)
-        if self.heartbeat_store is not None:
-            self.heartbeat_store.save_accepted_peer_heartbeat(self.peer_node_id, heartbeat)
         if self.evidence_tracker is not None:
             heartbeat = self.evidence_tracker.accept(heartbeat)
         with self._record_lock:
@@ -3586,6 +3670,35 @@ class VMHARuntimePorts:
         ):
             raise RuntimeError("controller action does not match the installed runtime binding")
 
+    def require_repair_authority(self, action: ControllerAction) -> None:
+        """Reobserve the exact repair owner; the caller supplies its absolute budget."""
+        self._require_action_identity(action)
+        if (
+            action.kind is not ActionKind.REPAIR_LOCAL_DATAPLANE
+            or action.target_node_id != self.local.node_id
+        ):
+            raise RuntimeError("local repair action identity changed")
+        cloud = self.cloud.observe()
+        if action.repair_mode is DataPlaneMode.PASSIVE:
+            peer, received_at = self.peer_runtime.observe()
+            now = self.peer_runtime.clock()
+            admitted = bool(
+                cloud.passive_attachment_exact(self.local.node_id, self.peer.node_id)
+                and peer is not None
+                and peer.node_id == peer.observed_owner_id == self.peer.node_id
+                and received_at is not None
+                and peer.authority_fresh(now)
+                and peer.local_service_fresh(now)
+            )
+        else:
+            admitted = cloud.local_attachment_exact(self.local.node_id)
+        if not (
+            admitted
+            and cloud.ownership_epoch == action.ownership_epoch
+            and self.data_plane.mode() is action.repair_mode
+        ):
+            raise RuntimeError("local repair ownership changed")
+
     def handlers(self) -> dict[ActionKind, Callable[[ControllerAction], None | RepairDisposition]]:
         former_actions = {
             ActionKind.STOP_FORMER_OWNER,
@@ -3673,27 +3786,32 @@ class VMHARuntimePorts:
             repair_local = getattr(self.data_plane, "repair_local", None)
             if not callable(repair_local):
                 raise RuntimeError("local data-plane repair is unavailable")
-            cloud = self.cloud.observe()
-            if action.repair_mode is DataPlaneMode.PASSIVE:
-                peer, received_at = self.peer_runtime.observe()
-                now = self.peer_runtime.clock()
-                admitted = bool(
-                    cloud.passive_attachment_exact(self.local.node_id, self.peer.node_id)
-                    and peer is not None
-                    and peer.node_id == peer.observed_owner_id == self.peer.node_id
-                    and received_at is not None
-                    and peer.authority_fresh(now)
-                    and peer.local_service_fresh(now)
-                )
-            else:
-                admitted = cloud.local_attachment_exact(self.local.node_id)
-            if not (
-                admitted
-                and cloud.ownership_epoch == action.ownership_epoch
-                and self.data_plane.mode() is action.repair_mode
-            ):
-                raise RuntimeError("local repair ownership changed")
-            return repair_local(action)
+            from ..local_commands import CURRENT, CommandBudget
+
+            if action.repair_deadline_at is None:
+                raise RuntimeError("local repair deadline is unavailable")
+            deadline = action.repair_deadline_at - 1.0
+            inherited = CURRENT.get()
+            if inherited is not None:
+                deadline = min(deadline, inherited.deadline)
+            token = CURRENT.set(CommandBudget(deadline))
+            disposition = None
+            try:
+                try:
+                    with vm_ha_observation_budget(
+                        seconds=deadline - self.peer_runtime.clock(), clock=self.peer_runtime.clock
+                    ):
+                        self.require_repair_authority(action)
+                        disposition = repair_local(action)
+                except TimeoutError:
+                    # A returned terminal attempt includes verified failure
+                    # fencing. Context-exit expiry must not erase its receipt.
+                    # Admission/repair exceptions and deferred work still fail.
+                    if disposition is not RepairDisposition.ATTEMPTED:
+                        raise
+                return disposition
+            finally:
+                CURRENT.reset(token)
 
         def prepare_candidate(action: ControllerAction) -> None:
             observation = self.cloud.observe()
@@ -3885,6 +4003,25 @@ class VMHARuntimePorts:
             tunnel_recovery=self.tunnel_recovery_provider(),
             evidence=evidence or HeartbeatEvidence(),
         )
+
+    def fence_repair_verification(self, repair: RepairAttempt) -> None:
+        """Fence locally before teardown can wait for any ordinary writer."""
+
+        action = ControllerAction(
+            kind=ActionKind.DISABLE_ACTIVE,
+            operation_id=f"{repair.operation_id}:verification-fence",
+            boot_id=repair.boot_id,
+            target_node_id=self.local.node_id,
+            allocation_id=self.binding.shared_allocation_id,
+            ownership_epoch=repair.ownership_epoch,
+            generation_id=self.binding.generation_id,
+            digests=DigestSet(
+                self.binding.configuration_digest,
+                self.binding.static_routes_digest,
+                self.binding.bgp_policy_digest,
+            ),
+        )
+        self.data_plane.emergency_fence(action)
 
     def install_shutdown_guard(self, *, boot_id: str) -> None:
         """Restore the local fail-closed data plane without cloud authority."""
@@ -4219,19 +4356,20 @@ def build_runtime_ports(
             data_plane_kwargs["blocked_preparer"] = blocked_preparer
         if candidate_preparer is not None:
             data_plane_kwargs["candidate_preparer"] = candidate_preparer
-            data_plane_kwargs["static_tunnel_names"] = tuple(
-                str(t["name"])
-                for c in cast(list[dict[str, Any]], config.get("connections", []))
-                if c.get("routing_mode") == "static"
-                for t in c.get("tunnels", [])
-                if t.get("ha_role") != "disable"
-            )
         full_config = {
             "vm_ha": dict(config),
             "gateway": config.get("gateway", {}),
             "connections": config.get("connections", []),
             "defaults": config.get("defaults", {}),
         }
+
+        from ...tunnel_state import collect_tunnel_state
+
+        tunnels, _, interfaces = collect_tunnel_state(full_config, log=lambda _message: None)
+        static_ids = {item["if_id"] for item in interfaces if item["mode"] == "static"}
+        data_plane_kwargs["static_tunnel_names"] = tuple(
+            tunnel["name"] for tunnel in tunnels if tunnel["if_id"] in static_ids
+        )
 
         def reconcile_static(action: ControllerAction, candidate: bool) -> None:
             from .tunnel_runtime import reconcile_inactive_static

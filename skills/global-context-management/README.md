@@ -3,6 +3,13 @@
 Execution supports Codex and Claude through the selected native host context.
 See `SKILL.md` for invocation, required setup and evidence boundaries.
 
+Host-memory monitoring may be owned by a declared outer verifier with current
+physical-host visibility and active monitoring for its sandboxed children.
+Workers inherit that setup context. Immediate monitor completion has no session
+handle; inspect its output and exit status before retaining or polling a handle.
+Cleanup verifies the recorded task/workspace owner as well as process identity.
+See [host memory guidance](references/host-memory.md).
+
 Shared runtime loading and source-only permission inspection follow the
 [trusted runtime contract](references/trusted-runtime.md). Install and use each
 agent independently; within-agent workflow coordination remains supported.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 from typing import Any
 
@@ -40,9 +41,9 @@ def recommended_fix(source: object, issue: object) -> str:
         or "product_predicate" in context
     ):
         return "Investigate owned inventory, target/build identity and assignment lease using the named predicate; unknown causes remain blocked_missing_evidence."
-    if any(
-        word in source_context
-        for word in ("browser", "playwright", "gui", "uat", "sdlc-evaluate")
+    if re.search(
+        r"(?<![a-z0-9])(?:browser|playwright|gui|uat|sdlc-evaluate)(?![a-z0-9])",
+        source_context,
     ):
         return (
             "Inspect the owned Playwright report and trace, repair the proven owner, "
@@ -64,6 +65,8 @@ def report_text(state: dict[str, Any]) -> str:
         f"- Test result: {markdown_escape(state.get('result', 'PENDING'))}",
         f"- Created at: {markdown_escape(state['created_at'])}",
         f"- Updated at: {markdown_escape(state['updated_at'])}",
+        f"- Before/during/after statistics: {markdown_escape((state.get('semantic_summary') or {}).get('statistics', {}).get('status', 'UNVERIFIED'))}",
+        "- Sanitized statistics retention: `statistics/retention.json` beside this report after cleanup.",
         "",
         "## Environment",
         "",

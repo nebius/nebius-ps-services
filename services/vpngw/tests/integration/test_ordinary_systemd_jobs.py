@@ -830,6 +830,97 @@ def test_ha_install_phase_blocks_controller_and_keeps_independent_guard(
         command("systemctl", "daemon-reload")
 
 
+@pytest.mark.parametrize("previous_order", [True, False], ids=["counterfactual", "drain-first"])
+def test_ha_settlement_drains_native_restart_timer(manager, monkeypatch, tmp_path, previous_order):
+    """A timer's Wants can cancel an accepted stop of the required controller."""
+    from nebius_vpngw.deploy import handoff_remote
+
+    controller = "nebius-vpngw-vm-ha.service"
+    timer = "nebius-vpngw-fix-routes.timer"
+    worker = "nebius-vpngw-fix-routes.service"
+    restarted = tmp_path / "maintenance-ran"
+    definitions = {
+        controller: "[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n",
+        "frr.service": (
+            f"[Unit]\nRequires={controller}\nAfter={controller}\n"
+            "[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n"
+            "ExecStop=/bin/sleep 3\n"
+        ),
+        "strongswan.service": (
+            f"[Unit]\nRequires={controller}\nAfter={controller}\n"
+            "[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n"
+        ),
+        worker: (
+            "[Unit]\nWants=frr.service strongswan.service\nAfter=frr.service strongswan.service\n"
+            f"[Service]\nType=oneshot\nExecStart=/bin/touch {restarted}\n"
+        ),
+        timer: f"[Timer]\nOnActiveSec=1s\nAccuracySec=1us\nUnit={worker}\n",
+    }
+    root = Path("/etc/systemd/system")
+    previous = {
+        name: ((root / name).read_bytes(), (root / name).stat().st_mode & 0o777)
+        if (root / name).exists() else None
+        for name in definitions
+    }
+    for name in definitions:
+        assert not (root / name).is_symlink()
+    operation = None
+    try:
+        command("systemctl", "stop", "strongswan.service")
+        for name, definition in definitions.items():
+            (root / name).write_text(definition)
+        command("systemctl", "daemon-reload")
+        command("systemctl", "start", "frr.service", "strongswan.service")
+        operation = ops.Operation.begin(
+            request="8" * 32, config="2" * 64, artifact="3" * 64,
+            predecessor="4" * 64, manager=manager, network=manager.network(),
+            purpose="ha-handoff",
+        )
+        if previous_order:
+            monkeypatch.setattr(handoff_remote, "REPLAN_WRITERS", (
+                *ops.HA_WRITERS, *ops.MANAGEMENT, "frr.service", "strongswan.service",
+            ))
+        manager.deadline = time.monotonic() + 10
+        command("systemctl", "start", timer)
+        if previous_order:
+            # The same deadline can expire in the wait loop or its final native
+            # observation. Both must leave the original accepted stop unresolved.
+            with pytest.raises((TimeoutError, subprocess.TimeoutExpired)):
+                handoff_remote._stop_replan_writers(operation)
+            assert time.monotonic() >= manager.deadline
+            assert restarted.exists()
+            # The operation's observation budget has expired. Verify its native
+            # outcome independently without extending the operation deadline.
+            observer = ops.Manager(time.monotonic() + 10)
+            assert not observer.stopped(controller)
+            assert any(
+                effect.get("unit") == controller and effect["state"] == "accepted"
+                for effect in operation.check()["effects"]
+            )
+        else:
+            handoff_remote._stop_replan_writers(operation)
+            assert all(manager.stopped(name) for name in definitions)
+            assert not restarted.exists()
+            assert all(effect["state"] == "settled" for effect in operation.check()["effects"])
+            count = len(operation.check()["effects"])
+            handoff_remote._stop_replan_writers(operation)
+            assert len(operation.check()["effects"]) == count
+            operation.complete()
+    finally:
+        if operation is not None:
+            operation.fail()
+        command("systemctl", "stop", timer, worker)
+        command("systemctl", "stop", "frr.service", "strongswan.service", controller)
+        for name, saved in previous.items():
+            path = root / name
+            if saved is None:
+                path.unlink()
+            else:
+                path.write_bytes(saved[0])
+                path.chmod(saved[1])
+        command("systemctl", "daemon-reload")
+
+
 def test_process_group_writer_survives_direct_child_exit(manager, tmp_path):
     import signal
 

@@ -36,7 +36,13 @@ criteria retain their separately declared harness.
 ## Output
 
 - A complete UAT report for the current slice exists.
-- Every mandatory slice and inherited regression criterion passes with executed evidence; missing or failed evidence blocks delivery.
+- Requested UAT reports actual executed results or pending prerequisites separately from delivery eligibility.
 - Cross-feature flows pass.
-- Product is ready for publication-only `create-pr` only on pass and only for
-  the clean exact promoted SHA tested by UAT.
+- Eligible publication uses independent implementation admission for the exact
+  promoted SHA; unrequested or pending UAT is disclosed without a synthetic PASS.
+
+UAT follows the [shared optional policy](../worktree/references/optional-uat.md).
+Requested campaigns wait for a meaningful ready scope. An existing test environment
+uses its project harness directly; container/Nebius campaigns require explicit
+skill selection. Missing optional prerequisites leave a handoff without blocking
+implementation or eligible publication. Actual failures and cleanup remain owned.

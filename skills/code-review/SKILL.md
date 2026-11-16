@@ -191,6 +191,9 @@ focused validation planning, and near-final risk review.
 
 ## Review Standards
 
+- Establish each check's documented exit semantics before running it. Never
+  combine `git diff --no-index` with `--check`; use the quality rubric's
+  untracked-file validation guidance without changing the reviewed index.
 - Be ambitious about simplification. Look for ways to delete complexity, not
   just move it around.
 - Be neutral and evidence-based. Critique code behavior and risk, not the

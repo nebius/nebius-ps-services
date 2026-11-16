@@ -107,6 +107,11 @@ counted dispatch remain with their existing owner; this diagnostic branch does
 not repair the candidate or reset counters. Retired active diagnosis records are
 rejected without conversion.
 
+Use `plan_defect` for a proven frozen-command error. Preserve the original
+producer failure, demonstrate the command-only counterfactual, and return the
+bounded diagnosis to classification. Plan review and counted corrective
+execution remain with the workflow owners.
+
 Each autonomous blocker tranche defaults to five remediation attempts and 120
 active minutes. Users can set a session profile up to 10/180 with optional
 flags, for example

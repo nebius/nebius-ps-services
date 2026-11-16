@@ -18,7 +18,7 @@ git = fixtures.git
 
 from test_workflow_fixture import replan_future as fixture_replan_future  # noqa: E402
 
-class DesignRevisionTests(unittest.TestCase):
+class RevisionFixture(unittest.TestCase):
     def setUp(self):
         self.fixture = fixtures.GitLifecycleTests()
         self.fixture.setUp()
@@ -69,9 +69,12 @@ class DesignRevisionTests(unittest.TestCase):
         if str(scripts) not in sys.path:
             sys.path.insert(0, str(scripts))
         import repair_control
-        from test_repair_control import failure_payload, design_diagnosis
-
         self.repair = repair_control
+        self.classify(coordinator)
+
+    def classify(self, coordinator):
+        from test_repair_control import failure_payload, design_diagnosis
+        repair_control = self.repair
         payload = failure_payload(
             proposed="UNKNOWN_DEFECT", cause_status="unknown",
             commit=self.tdd, lifecycle="active_task",
@@ -102,7 +105,7 @@ class DesignRevisionTests(unittest.TestCase):
         }
 
     def prepare_revision(self):
-        owner = importlib.import_module("workflow_design_revision")
+        owner = importlib.import_module("workflow_revision")
         return owner.prepare_design_revision(
             self.run_dir, "FEAT-001", self.classification["classification_id"],
             self.dispatch["dispatch_id"], [self.termination], self.session,
@@ -130,12 +133,13 @@ class DesignRevisionTests(unittest.TestCase):
         )
 
     def seal(self):
-        owner = importlib.import_module("workflow_design_revision")
+        owner = importlib.import_module("workflow_revision")
         return owner.seal_design_revision(
             self.run_dir, "FEAT-001", self.dispatch["dispatch_id"],
             "test-design-correction", "fix: admitted design contract", self.session,
         )
 
+class DesignRevisionTests(RevisionFixture):
     def test_fresh_disjoint_task_dispatches_after_real_impact_reconciliation(self):
         from workflow_refinement import refinement, settle
         from project_specs_lib.impact import statement_inventory
@@ -165,10 +169,16 @@ class DesignRevisionTests(unittest.TestCase):
         with self.assertRaises(engine.ExecutionError):
             engine._assert_current_assignment(self.run_dir, "FEAT-001",
                 engine._load_coordinator(self.run_dir, "FEAT-001"), self.assignment)
-        self.assertEqual(self.candidate.read_bytes(), self.candidate_bytes)
+        import base64
+        import json
+        archive = self.run_dir / "execution/FEAT-001/retired-workers" / self.assignment["assignment_digest"]
+        saved = json.loads((archive / "snapshot.json").read_bytes())
+        self.assertEqual(base64.b64decode(saved["candidate"]["files"]["src/a.py"]["content"]), self.candidate_bytes)
+        self.assertFalse(self.candidate.exists())
+        self.assertTrue((archive / "retired.json").is_file())
 
     def test_prepare_rejects_missing_wrong_or_tampered_authority(self):
-        owner = importlib.import_module("workflow_design_revision")
+        owner = importlib.import_module("workflow_revision")
         original = read(engine.coordinator_path(self.run_dir, "FEAT-001"))
         for classification, dispatch in (("0" * 64, self.dispatch["dispatch_id"]),
                                           (self.classification["classification_id"], "0" * 64)):
@@ -181,7 +191,7 @@ class DesignRevisionTests(unittest.TestCase):
     def test_pending_observer_preserves_coordinator_authority(self):
         from workflow_state import WorkflowError, write
         from workflow_reconcile import termination
-        import workflow_design_revision as owner
+        import workflow_revision as owner
         prepared = self.prepare_revision()
         with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "independent-observer"}):
             self.assertEqual(owner.observe_pending_revision(self.run_dir, "FEAT-001"), prepared)
@@ -204,7 +214,7 @@ class DesignRevisionTests(unittest.TestCase):
 
     def test_prepare_rejects_wrong_head_dirty_checkout_live_writer_and_partial_merge(self):
         from workflow_state import write
-        owner = importlib.import_module("workflow_design_revision")
+        owner = importlib.import_module("workflow_revision")
         stray = self.integration / "unrelated.txt"
         stray.write_text("preserve\n")
         with self.assertRaises(engine.ExecutionError):
@@ -265,7 +275,7 @@ class DesignRevisionTests(unittest.TestCase):
         self.assertEqual(git(self.integration, "rev-parse", "HEAD"), self.tdd)
 
     def test_prepare_replays_interrupted_retention_without_changing_original_failure(self):
-        owner = importlib.import_module("workflow_design_revision")
+        owner = importlib.import_module("workflow_revision")
         save = owner.write
         wave_path = engine.wave_path(self.run_dir, "FEAT-001", "WAVE-001")
         def interrupt(path, value, **kwargs):
@@ -327,7 +337,7 @@ class DesignRevisionTests(unittest.TestCase):
         self.assertEqual(git(self.integration, "rev-parse", "HEAD"), committed)
 
     def test_seal_recovers_commit_before_receipt_and_rejects_changed_replay(self):
-        owner = importlib.import_module("workflow_design_revision")
+        owner = importlib.import_module("workflow_revision")
         self.prepare_revision()
         self.publish_correction()
         save = owner._save
@@ -369,7 +379,7 @@ class DesignRevisionTests(unittest.TestCase):
         self.assertEqual(prepared["revision_id"], self.dispatch["dispatch_id"])
         self.assertEqual(read(engine.wave_path(self.run_dir, "FEAT-001", "WAVE-001"))["status"], "superseded")
         publication = self.publish_correction()
-        owner = importlib.import_module("workflow_design_revision")
+        owner = importlib.import_module("workflow_revision")
         sealed = owner.seal_design_revision(
             self.run_dir, "FEAT-001", prepared["revision_id"],
             publication["operation_id"], "fix: admitted design contract", self.session,

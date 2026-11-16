@@ -275,6 +275,281 @@ def revalidation_payload(
 
 
 class RepairControlTests(unittest.TestCase):
+    def interposed_repair(self, child_type="VALIDATION_DEFECT"):
+        event = self.record_event(failure_payload(proposed="PLAN_DEFECT", lifecycle="integrated_wave"))
+        diagnosis = localized_diagnosis(event)
+        diagnosis["result"] = "plan_defect"
+        diagnosis = repair_control.record_diagnosis(self.run_dir, diagnosis)["diagnosis"]
+        parent = self.classify(event, diagnosis)
+        first = repair_control.begin_remediation(
+            self.run_dir, "FEAT-001", parent["classification_id"], "localized",
+            "Correct only the frozen command directory.", "evidence/command-counterfactual.json",
+            active_seconds_delta=17,
+        )
+        payload = failure_payload(
+            proposed=child_type, lifecycle="active_task", component="review command",
+            operation="inspect existing files", error_class="optional path absent",
+            source_boundary="auxiliary review", independent="Review fails after frozen checks pass.",
+        )
+        payload["phase"] = "sdlc-validate-codes"
+        child = self.classify(self.record_event(payload))
+        second = repair_control.begin_remediation(
+            self.run_dir, "FEAT-001", child["classification_id"], "localized",
+            "Inspect only paths independently proven to exist.", "evidence/path-observation.json",
+            active_seconds_delta=11,
+        )
+        return parent, first, child, second
+
+    def test_interposed_repair_completion_restores_counted_parent(self):
+        parent, first, _child, second = self.interposed_repair()
+        with self.assertRaises(repair_control.RepairControlError):
+            repair_control.integrated_wave_authority(self.run_dir, "FEAT-001",
+                parent["classification_id"], first["attempt"]["dispatch_id"])
+        result = repair_control.complete_remediation(self.run_dir, "FEAT-001",
+            second["attempt"]["dispatch_id"], "succeeded", "evidence/fresh-worker-oracle.json", 13)
+        control = result["control"]
+        self.assertEqual(control["current_classification_id"], parent["classification_id"])
+        self.assertEqual(control["active_blocker"], first["control"]["active_blocker"])
+        self.assertEqual(control["status"], "remediating")
+        self.assertEqual(control["feature_dispatches"], 2)
+        self.assertEqual(control["route_history"][-1]["classification_id"], parent["classification_id"])
+        self.assertEqual(control["route_history"][-1]["resumed_from_dispatch_id"], second["attempt"]["dispatch_id"])
+        repair_control.integrated_wave_authority(self.run_dir, "FEAT-001",
+            parent["classification_id"], first["attempt"]["dispatch_id"])
+        finished = repair_control.complete_remediation(self.run_dir, "FEAT-001",
+            first["attempt"]["dispatch_id"], "succeeded", "evidence/corrective-wave.json")
+        self.assertEqual(finished["control"]["status"], "revalidation_required")
+        self.assertEqual(finished["control"]["invalidations"], control["invalidations"])
+        replay = repair_control.complete_remediation(self.run_dir, "FEAT-001",
+            second["attempt"]["dispatch_id"], "succeeded", "evidence/fresh-worker-oracle.json", 13)
+        self.assertFalse(replay["updated"])
+        self.assertEqual(replay["control"], finished["control"])
+
+    def test_interposed_observation_preserves_nested_budgets_and_mutation_fence(self):
+        parent, first, _child, second = self.interposed_repair()
+        attempts = [second["attempt"]]
+        for ordinal in (3, 4):
+            payload = failure_payload(
+                proposed="VALIDATION_DEFECT", lifecycle="integrated_wave",
+                component=f"authoring step {ordinal}", operation="inspect helper",
+                independent=f"Distinct authoring failure {ordinal} before any product mutation.",
+            )
+            child = self.classify(self.record_event(payload))
+            result = repair_control.begin_remediation(
+                self.run_dir, "FEAT-001", child["classification_id"], "localized",
+                "Use the verified helper contract.", "evidence/helper-contract.json",
+            )
+            attempts.append(result["attempt"])
+        before = {p: p.read_bytes() for p in self.run_dir.rglob("*") if p.is_file()}
+        observed = repair_control.observe_integrated_wave_repair(
+            self.run_dir, "FEAT-001", parent["classification_id"], first["attempt"]["dispatch_id"])
+        self.assertEqual(observed["dispatch_id"], first["attempt"]["dispatch_id"])
+        self.assertEqual({p: p.read_bytes() for p in self.run_dir.rglob("*") if p.is_file()}, before)
+        with self.assertRaises(repair_control.RepairControlError):
+            repair_control.integrated_wave_authority(
+                self.run_dir, "FEAT-001", parent["classification_id"], first["attempt"]["dispatch_id"])
+        for attempt in reversed(attempts):
+            result = repair_control.complete_remediation(
+                self.run_dir, "FEAT-001", attempt["dispatch_id"], "succeeded", "evidence/verified-child.json")
+            self.assertEqual(result["control"]["feature_dispatches"], 4)
+            repair_control.observe_integrated_wave_repair(
+                self.run_dir, "FEAT-001", parent["classification_id"], first["attempt"]["dispatch_id"])
+        repair_control.complete_remediation(self.run_dir, "FEAT-001", first["attempt"]["dispatch_id"],
+                                           "succeeded", "evidence/verified-parent.json")
+        with self.assertRaises(repair_control.RepairControlError):
+            repair_control.observe_integrated_wave_repair(
+                self.run_dir, "FEAT-001", parent["classification_id"], first["attempt"]["dispatch_id"])
+
+    def test_interposed_observation_rejects_unlinked_or_mutated_lineage(self):
+        parent, first, _child, _second = self.interposed_repair()
+        path = repair_control._control_path(self.run_dir, "FEAT-001")
+        original = path.read_bytes()
+        control = json.loads(original)
+        mutations = [
+            {"suspended_repairs": []},
+            {"feature_dispatches": 1},
+            {"feature_dispatches": 5},
+            {"feature_dispatch_limit": 5},
+            {"status": "blocked_feature_dispatch_limit"},
+            {"current_classification_id": parent["classification_id"]},
+            {"invalidations": control["invalidations"][1:]},
+            {"active_blocker": {**control["active_blocker"],
+                                "active_seconds": control["active_blocker"]["time_limit_seconds"]}},
+        ]
+        for changes in mutations:
+            try:
+                repair_control._write_json_atomic(path, {**control, **changes})
+                with self.subTest(changes=tuple(changes)), self.assertRaises(repair_control.RepairControlError):
+                    repair_control.observe_integrated_wave_repair(
+                        self.run_dir, "FEAT-001", parent["classification_id"], first["attempt"]["dispatch_id"])
+            finally:
+                path.write_bytes(original)
+        snapshot_path = path.parent / "suspended" / (control["suspended_repairs"][0] + ".json")
+        snapshot = json.loads(snapshot_path.read_text())
+        snapshot["interruption_event_id"] = parent["event_id"]
+        identity = repair_control._digest(snapshot)
+        forged = snapshot_path.with_name(identity + ".json")
+        repair_control._write_json_atomic(forged, snapshot)
+        try:
+            repair_control._write_json_atomic(path, {**control, "suspended_repairs": [identity]})
+            with self.assertRaises(repair_control.RepairControlError):
+                repair_control.observe_integrated_wave_repair(
+                    self.run_dir, "FEAT-001", parent["classification_id"], first["attempt"]["dispatch_id"])
+        finally:
+            path.write_bytes(original)
+            forged.unlink()
+        repair_control.observe_integrated_wave_repair(
+            self.run_dir, "FEAT-001", parent["classification_id"], first["attempt"]["dispatch_id"])
+
+    def test_interposed_observation_rejects_reordered_chain_and_changed_commit(self):
+        parent, first, _child, _second = self.interposed_repair()
+        for ordinal, commit in ((3, "a" * 40), (4, "b" * 40)):
+            payload = failure_payload(
+                proposed="VALIDATION_DEFECT", lifecycle="integrated_wave", commit=commit,
+                component=f"nested author {ordinal}", operation="inspect helper",
+                independent=f"Independent authoring failure {ordinal}.",
+            )
+            child = self.classify(self.record_event(payload))
+            repair_control.begin_remediation(
+                self.run_dir, "FEAT-001", child["classification_id"], "localized",
+                "Use the verified helper contract.", "evidence/helper-contract.json")
+            if ordinal == 3:
+                path = repair_control._control_path(self.run_dir, "FEAT-001")
+                before = path.read_bytes()
+                control = json.loads(before)
+                try:
+                    repair_control._write_json_atomic(path, {
+                        **control, "suspended_repairs": list(reversed(control["suspended_repairs"]))})
+                    with self.assertRaises(repair_control.RepairControlError):
+                        repair_control.observe_integrated_wave_repair(
+                            self.run_dir, "FEAT-001", parent["classification_id"], first["attempt"]["dispatch_id"])
+                finally:
+                    path.write_bytes(before)
+                repair_control.observe_integrated_wave_repair(
+                    self.run_dir, "FEAT-001", parent["classification_id"], first["attempt"]["dispatch_id"])
+        with self.assertRaises(repair_control.RepairControlError):
+            repair_control.observe_integrated_wave_repair(
+                self.run_dir, "FEAT-001", parent["classification_id"], first["attempt"]["dispatch_id"])
+
+    def test_interposed_repair_rejects_failed_broader_and_tampered_continuation(self):
+        for mode in ("failed", "broader", "snapshot", "dispatch", "invalidations", "time", "schema"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                self.run_dir = Path(temporary) / "run"
+                parent, first, _child, second = self.interposed_repair(
+                    "SPEC_GAP" if mode == "broader" else "VALIDATION_DEFECT")
+                control_path = repair_control._control_path(self.run_dir, "FEAT-001")
+                control = repair_control._load_control(self.run_dir, "FEAT-001")
+                if mode in {"snapshot", "dispatch"}:
+                    if mode == "snapshot":
+                        path = repair_control._repair_root(self.run_dir, "FEAT-001") / "suspended" / (control["suspended_repairs"][-1] + ".json")
+                    else:
+                        path = repair_control._repair_root(self.run_dir, "FEAT-001") / "dispatches" / (first["attempt"]["dispatch_id"] + ".json")
+                    value = json.loads(path.read_text())
+                    value["changed"] = True
+                    repair_control._write_json_atomic(path, value)
+                if mode == "schema":
+                    control["schema"] = "agentic-sdlc/repair-control-v2"
+                    repair_control._write_json_atomic(control_path, control)
+                if mode == "invalidations":
+                    control["invalidations"] = []
+                    repair_control._write_json_atomic(control_path, control)
+                before = control_path.read_bytes()
+                args = (self.run_dir, "FEAT-001", second["attempt"]["dispatch_id"],
+                        "failed_same_blocker" if mode == "failed" else "succeeded",
+                        "evidence/worker-oracle.json", 3600 if mode == "time" else 0)
+                if mode == "failed":
+                    result = repair_control.complete_remediation(*args)
+                    self.assertEqual(result["control"]["status"], "diagnosis_required")
+                    self.assertEqual(len(result["control"]["suspended_repairs"]), 1)
+                else:
+                    with self.assertRaises(repair_control.RepairControlError):
+                        repair_control.complete_remediation(*args)
+                    if mode == "time":
+                        exhausted = repair_control._load_control(self.run_dir, "FEAT-001")
+                        self.assertEqual(exhausted["active_blocker"]["active_seconds"], 3611)
+                        self.assertEqual(exhausted["active_blocker"]["stop_trigger"], "time_limit")
+                        self.assertEqual(exhausted["status"], "exhausted")
+                        self.assertEqual(exhausted["suspended_repairs"], control["suspended_repairs"])
+                        self.assertEqual(exhausted["feature_dispatches"], 2)
+                        self.assertEqual(exhausted["resumptions"], {})
+                        self.assertIsNone(exhausted["active_blocker"]["attempts"][-1]["result"])
+                        stopped = control_path.read_bytes()
+                        with self.assertRaises(repair_control.RepairControlError):
+                            repair_control.complete_remediation(*args[:-1], 0)
+                        self.assertEqual(control_path.read_bytes(), stopped)
+                    else:
+                        self.assertEqual(control_path.read_bytes(), before)
+                with self.assertRaises(repair_control.RepairControlError):
+                    repair_control.integrated_wave_authority(self.run_dir, "FEAT-001",
+                        parent["classification_id"], first["attempt"]["dispatch_id"])
+
+    def test_interposed_completion_recovers_atomic_publication_without_recharge(self):
+        for boundary in ("control", "journal"):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as temporary:
+                self.run_dir = Path(temporary) / "run"
+                parent, _first, _child, second = self.interposed_repair()
+                args = (self.run_dir, "FEAT-001", second["attempt"]["dispatch_id"],
+                        "succeeded", "evidence/fresh-worker-oracle.json", 13)
+                writer = repair_control._write_json_atomic
+                journal = repair_control._append_journal
+                def interrupt_write(path, value):
+                    if path == repair_control._control_path(self.run_dir, "FEAT-001"):
+                        raise RuntimeError("simulated interruption")
+                    return writer(path, value)
+                def interrupt_journal(*args, **kwargs):
+                    if args[2] == "remediation-completion-committed":
+                        raise RuntimeError("simulated interruption")
+                    return journal(*args, **kwargs)
+                name, side_effect = (("_write_json_atomic", interrupt_write) if boundary == "control"
+                                     else ("_append_journal", interrupt_journal))
+                with mock.patch.object(repair_control, name, side_effect=side_effect), self.assertRaises(RuntimeError):
+                    repair_control.complete_remediation(*args)
+                restored = repair_control.complete_remediation(*args)["control"]
+                self.assertEqual(restored["current_classification_id"], parent["classification_id"])
+                self.assertEqual(restored["feature_dispatches"], 2)
+                identity = restored["resumptions"][second["attempt"]["dispatch_id"]]
+                receipt = json.loads((repair_control._repair_root(self.run_dir, "FEAT-001") / "resumptions" / (identity + ".json")).read_text())
+                self.assertEqual(receipt["completed_context"]["active_blocker"]["active_seconds"], 24)
+                self.assertEqual(len(list((repair_control._repair_root(self.run_dir, "FEAT-001") / "resumptions").glob("*.json"))), 1)
+
+    def test_interposed_nested_and_fourth_dispatch_preserve_all_budgets(self):
+        parent, first, child, second = self.interposed_repair()
+        payload = failure_payload(proposed="VALIDATION_DEFECT", lifecycle="active_task",
+            component="second checker", independent="Separate checker fails before reading product.")
+        payload["phase"] = "sdlc-validate-codes"
+        third_class = self.classify(self.record_event(payload))
+        third = repair_control.begin_remediation(self.run_dir, "FEAT-001", third_class["classification_id"],
+            "localized", "Fix the second checker input.", "evidence/second-checker.json")["attempt"]
+        restored = repair_control.complete_remediation(self.run_dir, "FEAT-001", third["dispatch_id"],
+            "succeeded", "evidence/second-checker-pass.json")["control"]
+        self.assertEqual(restored["current_classification_id"], child["classification_id"])
+        restored = repair_control.complete_remediation(self.run_dir, "FEAT-001", second["attempt"]["dispatch_id"],
+            "succeeded", "evidence/first-checker-pass.json")["control"]
+        self.assertEqual(restored["active_blocker"], first["control"]["active_blocker"])
+        payload["component"] = "third checker"
+        fourth_class = self.classify(self.record_event(payload))
+        fourth = repair_control.begin_remediation(self.run_dir, "FEAT-001", fourth_class["classification_id"],
+            "localized", "Fix the third checker input.", "evidence/third-checker.json")["attempt"]
+        restored = repair_control.complete_remediation(self.run_dir, "FEAT-001", fourth["dispatch_id"],
+            "succeeded", "evidence/third-checker-pass.json")["control"]
+        self.assertEqual(restored["feature_dispatches"], 4)
+        self.assertEqual(restored["current_classification_id"], parent["classification_id"])
+        self.assertEqual(restored["active_blocker"], first["control"]["active_blocker"])
+        self.assertEqual(restored["suspended_repairs"], [])
+        self.assertEqual(len(restored["resumptions"]), 3)
+
+    def test_interposed_failure_replay_cannot_reset_or_reactivate_a_blocker(self):
+        parent, _first, child, second = self.interposed_repair()
+        original = repair_control._load_event(self.run_dir, "FEAT-001", parent["event_id"])
+        with self.assertRaises(repair_control.RepairControlError):
+            repair_control.record_failure_event(self.run_dir, original)
+        restored = repair_control.complete_remediation(self.run_dir, "FEAT-001", second["attempt"]["dispatch_id"],
+            "succeeded", "evidence/worker-pass.json")["control"]
+        completed = repair_control._load_event(self.run_dir, "FEAT-001", child["event_id"])
+        with self.assertRaises(repair_control.RepairControlError):
+            repair_control.record_failure_event(self.run_dir, completed)
+        self.assertEqual(repair_control._load_control(self.run_dir, "FEAT-001"), restored)
+
     def test_timestamp_guidance_matches_existing_accepted_format(self) -> None:
         canonical = "2026-11-03T10:00:00Z"
         self.assertEqual(repair_control._now(canonical), canonical)
@@ -291,6 +566,15 @@ class RepairControlTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.run_dir = Path(self.temporary.name) / "run"
+        # These isolate the repair state machine with synthetic events. Live
+        # worker binding is covered by the real-Git WorkerResultContractCases.
+        guard = mock.patch.object(repair_control, "_validate_worker_failure")
+        locks = mock.patch.object(repair_control, "_failure_transition_lock",
+                                  side_effect=lambda run, execution, **_: repair_control._transition_lock(run, execution))
+        guard.start()
+        locks.start()
+        self.addCleanup(guard.stop)
+        self.addCleanup(locks.stop)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -344,6 +628,94 @@ class RepairControlTests(unittest.TestCase):
                 self.assertEqual(classification["invalidates"], [
                     "validation", "tests", "evaluation", "documentation", "alignment", "commit",
                 ])
+
+    def worker_recovery_fixture(self, *, proposed="IMPLEMENTATION_DEFECT", lifecycle="active_task",
+                                charged=True, prior_dispatches=0):
+        self.run_dir = self.run_dir.resolve()
+        payload = failure_payload(proposed=proposed, lifecycle=lifecycle)
+        payload["phase"] = "sdlc-implement-plan"
+        payload["evidence_digests"]["worker_result"] = digest("5")
+        event = self.record_event(payload)
+        classification = self.classify(event)
+        (self.run_dir / "current-state.json").write_text(json.dumps({
+            "fingerprint_ids": [key + ":" + value for key, value in event["fingerprints"].items()],
+        }))
+        if not charged:
+            return event, classification, None
+        if prior_dispatches:
+            # Synthetic earlier-feature history isolates redemption at the ceiling.
+            control = repair_control._load_control(self.run_dir, "FEAT-001")
+            control["feature_dispatches"] = prior_dispatches
+            repair_control._write_json_atomic(repair_control._control_path(self.run_dir, "FEAT-001"), control)
+        attempt = repair_control.begin_remediation(
+            self.run_dir, "FEAT-001", classification["classification_id"], "localized",
+            "Repair the classified active worker failure.", "evidence/worker-failure.json",
+        )["attempt"]
+        return event, classification, attempt
+
+    def test_worker_recovery_accepts_exact_counted_same_assignment_routes(self):
+        for proposed in ("IMPLEMENTATION_DEFECT", "ENVIRONMENT_DEFECT", "VALIDATION_DEFECT"):
+            with self.subTest(proposed=proposed), tempfile.TemporaryDirectory() as directory:
+                self.run_dir = Path(directory) / "run"
+                event, classification, attempt = self.worker_recovery_fixture(proposed=proposed)
+                before = repair_control._control_path(self.run_dir, "FEAT-001").read_bytes()
+                authority = repair_control.worker_recovery_authority(self.run_dir, "FEAT-001", "5" * 64, "a" * 40)
+                self.assertEqual(authority["event_id"], event["event_id"])
+                self.assertEqual(authority["classification_id"], classification["classification_id"])
+                self.assertEqual(authority["dispatch_id"], attempt["dispatch_id"])
+                self.assertEqual(repair_control._control_path(self.run_dir, "FEAT-001").read_bytes(), before)
+
+    def test_worker_recovery_rejects_uncharged_wrong_route_and_wrong_lifecycle(self):
+        for options in (
+            {"charged": False}, {"proposed": "TEST_DEFECT"}, {"proposed": "PLAN_DEFECT"},
+            {"lifecycle": "integrated_wave"},
+        ):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as directory:
+                self.run_dir = Path(directory) / "run"
+                self.worker_recovery_fixture(**options)
+                with self.assertRaises(repair_control.RepairControlError) as caught:
+                    repair_control.worker_recovery_authority(self.run_dir, "FEAT-001", "5" * 64, "a" * 40)
+                self.assertEqual(caught.exception.code, "REPAIR_NOT_AUTHORIZED")
+
+    def test_worker_recovery_rejects_wrong_receipt_commit_and_current_fingerprints(self):
+        self.worker_recovery_fixture()
+        for receipt, commit in (("6" * 64, "a" * 40), ("5" * 64, "b" * 40)):
+            with self.subTest(receipt=receipt, commit=commit), self.assertRaises(repair_control.RepairControlError):
+                repair_control.worker_recovery_authority(self.run_dir, "FEAT-001", receipt, commit)
+        (self.run_dir / "current-state.json").write_text(json.dumps({
+            "fingerprint_ids": ["requirements:" + digest("2"), "design:" + digest("3"), "plan:" + digest("6")],
+        }))
+        with self.assertRaises(repair_control.RepairControlError):
+            repair_control.worker_recovery_authority(self.run_dir, "FEAT-001", "5" * 64, "a" * 40)
+
+    def test_worker_recovery_rejects_completed_and_superseded_dispatch(self):
+        for replacement in (False, True):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as directory:
+                self.run_dir = Path(directory) / "run"
+                _, _, attempt = self.worker_recovery_fixture()
+                if replacement:
+                    payload = failure_payload(lifecycle="active_task", created_at="2026-07-28T10:01:00Z")
+                    payload["phase"] = "sdlc-implement-plan"
+                    payload["evidence_digests"]["worker_result"] = digest("6")
+                    self.classify(self.record_event(payload))
+                else:
+                    repair_control.complete_remediation(self.run_dir, "FEAT-001", attempt["dispatch_id"],
+                                                        "succeeded", "evidence/verification.json")
+                with self.assertRaises(repair_control.RepairControlError):
+                    repair_control.worker_recovery_authority(self.run_dir, "FEAT-001", "5" * 64, "a" * 40)
+
+    def test_worker_recovery_redeems_fourth_dispatch_without_counting_again(self):
+        self.worker_recovery_fixture(prior_dispatches=3)
+        self.assertEqual(repair_control._load_control(self.run_dir, "FEAT-001")["feature_dispatches"], 4)
+        repair_control.worker_recovery_authority(self.run_dir, "FEAT-001", "5" * 64, "a" * 40)
+        self.assertEqual(repair_control._load_control(self.run_dir, "FEAT-001")["feature_dispatches"], 4)
+
+    def test_worker_recovery_rejects_dispatch_receipt_tampering(self):
+        _, _, attempt = self.worker_recovery_fixture()
+        path = repair_control._repair_root(self.run_dir, "FEAT-001") / "dispatches" / (attempt["dispatch_id"] + ".json")
+        repair_control._write_json_atomic(path, {**attempt, "hypothesis": "Changed immutable hypothesis."})
+        with self.assertRaises(repair_control.RepairControlError):
+            repair_control.worker_recovery_authority(self.run_dir, "FEAT-001", "5" * 64, "a" * 40)
 
     def test_active_environment_dispatch_is_counted_and_requires_revalidation(self) -> None:
         payload = failure_payload(proposed="ENVIRONMENT_DEFECT", lifecycle="active_task")
@@ -2004,6 +2376,53 @@ class RepairControlTests(unittest.TestCase):
                 "succeeded",
                 f"Independent oracle {index} passed.",
             )
+
+    def test_exhausted_observation_replay_is_atomic(self) -> None:
+        self.record_event()
+        args = (self.run_dir, "FEAT-001", "Which boundary?", "Mapper defect.",
+                "evidence/observation-1", "decision_changing")
+        for _ in range(2):
+            with self.assertRaises(repair_control.RepairControlError) as error:
+                repair_control.record_experiment(*args, active_seconds_delta=3600)
+            self.assertEqual(error.exception.code, "REPAIR_BUDGET_EXHAUSTED")
+            control = repair_control._load_control(self.run_dir, "FEAT-001")
+            self.assertEqual(control["active_blocker"]["active_seconds"], 3600)
+            self.assertEqual(len(control["active_blocker"]["experiments"]), 1)
+            self.assertEqual(control["active_blocker"]["experiments"][0]["outcome"], "exhausted")
+
+    def test_diagnostic_time_rejects_malformed_and_changed_replay(self) -> None:
+        self.record_event()
+        args = (self.run_dir, "FEAT-001", "Which boundary?", "Mapper defect.",
+                "evidence/observation-1", "decision_changing")
+        path = repair_control._control_path(self.run_dir, "FEAT-001")
+        before = path.read_bytes()
+        for value in (-1, True, 1.5):
+            with self.subTest(value=value), self.assertRaises(repair_control.RepairControlError):
+                repair_control.record_experiment(*args, active_seconds_delta=value)
+            self.assertEqual(path.read_bytes(), before)
+        repair_control.record_experiment(*args, active_seconds_delta=5)
+        with self.assertRaisesRegex(repair_control.RepairControlError, "observation accounting changed"):
+            repair_control.record_experiment(*args, active_seconds_delta=6)
+
+    def test_diagnostic_intervals_charge_union(self) -> None:
+        self.record_event()
+        for index, intervals in enumerate(([[10, 40], [20, 50]], [[30, 60]])):
+            result = repair_control.record_experiment(
+                self.run_dir, "FEAT-001", f"Question {index}.", "Mapper defect.",
+                f"evidence/observation-{index}", "decision_changing",
+                active_intervals=intervals,
+            )
+        self.assertEqual(result["control"]["active_blocker"]["active_seconds"], 50)
+
+    def test_third_low_information_observation_replays(self) -> None:
+        self.record_event()
+        for index in (1, 2, 3, 3):
+            result = repair_control.record_experiment(
+                self.run_dir, "FEAT-001", f"Question {index}.", "Mapper defect.",
+                f"evidence/observation-{index}", "low", active_seconds_delta=2,
+            )
+        self.assertFalse(result["created"])
+        self.assertEqual(result["control"]["active_blocker"]["active_seconds"], 6)
 
     def test_three_low_information_experiments_require_model_rebuild(self) -> None:
         self.record_event()

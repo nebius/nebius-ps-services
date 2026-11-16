@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import json
 import signal
+import subprocess
+import sys
 from unittest.mock import Mock
 
 import pytest
@@ -34,3 +36,24 @@ def test_source_upload_does_not_restart_the_remote_deadline(monkeypatch, capsys)
     assert ordinary_remote.DEADLINE == 600.0
     assert json.loads(capsys.readouterr().out)["status"] == "failed"
     alarm.assert_not_called()
+
+
+def test_repair_guard_verifier_is_available_without_installed_package():
+    source = base64.b64decode(ordinary_bootstrap.source_frame()).decode()
+    # Load the real framed helpers in isolated stdlib Python, stopping before
+    # the transaction entry point reads its request or touches the guest.
+    helpers = source.rsplit("exec(compile(base64.b64decode", 1)[0]
+    result = subprocess.run(
+        [sys.executable, "-I", "-S"],
+        input=helpers
+        + "import _vpngw_repair_guest as guard\n"
+        + "assert guard.storage.SCHEMA == 'nebius-vpngw.repair.v1'\n"
+        + "assert guard.service_guard().startswith(b'[Unit]\\nRequires=')\n"
+        + "assert callable(guard.verify_guard)\n"
+        + "import _vpngw_dependency_scope as scope\n"
+        + "assert callable(scope.closure) and callable(scope.check_shared_conflicts)\n",
+        text=True,
+        capture_output=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr

@@ -66,26 +66,16 @@ from project_specs_lib.contracts import (  # noqa: E402
 )
 from workflow_objectives import validate_run, check_dispatch  # noqa: E402 — verified runtime support precedes imports
 from workflow_state import git_environment, WorkflowError  # noqa: E402 — verified runtime support precedes imports
-from workflow_liveness import (  # noqa: E402
-    WORKER_START_SECONDS,
-    WORKER_MAX_SECONDS,
-    WORKER_DEADLINE_WARNING_SECONDS,
-)
+from workflow_liveness import health_policy, RETIRED_FIELDS  # noqa: E402 — sibling runtime follows verified support
 
 
 COORDINATOR_SCHEMA = "workflow/execution-coordinator-v3"
 WAVE_SCHEMA = "workflow/execution-wave-v3"
-TASK_SCHEMA = "workflow/execution-task-v3"
-ASSIGNMENT_SCHEMA = "workflow/worker-assignment-v2"
+TASK_SCHEMA = "workflow/execution-task-v4"
+ASSIGNMENT_SCHEMA = "workflow/worker-assignment-v4"
 RESULT_SCHEMA = "workflow/worker-result-v4"
 INCOMING_HANDOFF_SCHEMA = "agentic-sdlc/incoming-handoff-v3"
 TASK_FINISH_INTENT_SCHEMA = "workflow/task-finish-intent-v3"
-WORKER_HEARTBEAT_SECONDS = 30
-WORKER_STANDARD_WARNING_SECONDS = 240
-WORKER_STANDARD_READ_ONLY_SECONDS = 300
-WORKER_INTEGRATION_WARNING_SECONDS = 360
-WORKER_INTEGRATION_READ_ONLY_SECONDS = 420
-WORKER_STALL_SECONDS = 240
 WORKER_PHASES = (
     "preflight",
     "implementing",
@@ -139,8 +129,8 @@ def _impact(action: str, callback, *args):
 
 def _verify_execution_objective_impact(
     run_dir: Path, execution_id: str, coordinator: dict[str, Any]
-) -> None:
-    _impact(
+) -> dict[str, Any]:
+    return _impact(
         "objective impact execution basis is stale",
         verify_objective_impact_execution,
         run_dir,
@@ -154,6 +144,10 @@ def _assert_current_assignment(run_dir, execution_id, coordinator, assignment):
     basis = _impact("assignment execution basis is stale", verify_objective_impact_execution,
                     run_dir, execution_id, coordinator["plan_digest"],
                     Path(coordinator["selected_project_root"]))
+    _assert_assignment_basis(basis, assignment)
+
+
+def _assert_assignment_basis(basis, assignment):
     if canonical_digest(basis) != assignment["basis_sha256"]:
         raise ExecutionError("REPLAN_REQUIRED", "assignment belongs to a superseded execution basis")
 
@@ -187,6 +181,9 @@ class TaskPlan:
     regression_oracle: str | None
     ownership_complete: bool
     feature_ids: tuple[str, ...] = ()
+    name: str | None = None
+    primary_component: str | None = None
+    touched_components: tuple[str, ...] = ()
 
 
 def utc_now() -> str:
@@ -227,17 +224,8 @@ def _system_clock() -> datetime:
 
 
 def worker_liveness_profile(dependencies: Iterable[str]) -> dict[str, object]:
-    if tuple(dependencies):
-        return {
-            "worker_profile": "integration",
-            "read_only_warning_seconds": WORKER_INTEGRATION_WARNING_SECONDS,
-            "read_only_seconds": WORKER_INTEGRATION_READ_ONLY_SECONDS,
-        }
-    return {
-        "worker_profile": "standard",
-        "read_only_warning_seconds": WORKER_STANDARD_WARNING_SECONDS,
-        "read_only_seconds": WORKER_STANDARD_READ_ONLY_SECONDS,
-    }
+    profile = "integration" if tuple(dependencies) else "standard"
+    return {"worker_profile": profile, "health_policy": health_policy(profile)}
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -261,8 +249,9 @@ def _session_hash(value: str) -> str:
 def _validated_session_history(task_record: dict[str, Any]) -> list[str]:
     if task_record.get("schema") in {
         "agentic-sdlc/execution-task-v1",
+        "agentic-sdlc/execution-task-v2",
         "agentic-sdlc/execution-task-v3",
-        "agentic-sdlc/execution-task-v3",
+        "workflow/execution-task-v3",
     }:
         raise ExecutionError(
             "WORKFLOW_UPGRADE_REQUIRED", "legacy execution task schema is unsupported"
@@ -431,25 +420,59 @@ def _journal_has_intent(path: Path, event: str, base: str, message: str) -> bool
     )
 
 
+def _git_process(argv, cwd, *, data=None):
+    """One byte-exact owner for Git, including hooks and message plumbing."""
+    from workflow_process import Capture, ProcessCleanupError, run_owned
+    from workflow_timing import observed
+
+    def checkpoint(sample):
+        if sample["elapsed_seconds"] >= 30:
+            print("Owned Git operation continues; observation checkpoint.", file=sys.stderr, flush=True)
+
+    with observed("tools") as sample:
+        try:
+            result = run_owned(argv, cwd=cwd, env=git_environment(cwd), stdin=data,
+                               policy={"observation_interval_seconds": 30, "deadline": None},
+                               stdout_capture=Capture(4 * 1024 * 1024),
+                               stderr_capture=Capture(4 * 1024 * 1024),
+                               on_observation=checkpoint)
+        except BaseException as error:
+            observation = getattr(error, "observation", None)
+            if (not isinstance(error, ProcessCleanupError)
+                    and isinstance(observation, dict)
+                    and observation.get("local_group_quiescent") is False):
+                failure = ProcessCleanupError("Git writer termination is unproven; retain ownership")
+                failure.observation = observation
+                failure.original_error = error
+                raise failure from error
+            raise
+        sample["failed"] = result["exit_code"] != 0
+        if not result["local_group_quiescent"]:
+            error = ProcessCleanupError("Git writer termination is unproven; retain ownership")
+            error.observation = result
+            raise error
+        if (result["stop_reason"] != "exited"
+                or any(not result[name]["complete"] or result[name]["data"] is None
+                       for name in ("stdout", "stderr"))):
+            raise ExecutionError("GIT_OPERATION_FAILED", "Git result is incomplete; preserve this attempt")
+        return subprocess.CompletedProcess(argv, result["exit_code"],
+                                           result["stdout"]["data"], result["stderr"]["data"])
+
+
 def _run(
     argv: list[str], cwd: Path, action: str, *, check: bool = True
 ) -> subprocess.CompletedProcess[str]:
     try:
-        result = subprocess.run(
-            argv,
-            cwd=str(cwd),
-            env=git_environment(cwd),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=120,
-        )
+        raw = _git_process(argv, cwd)
     except (OSError, subprocess.SubprocessError) as exc:
-        raise ExecutionError("GIT_OPERATION_FAILED", f"{action} failed: {exc}") from exc
+        raise ExecutionError("GIT_OPERATION_FAILED", f"{action} failed") from exc
+    result = subprocess.CompletedProcess(raw.args, raw.returncode, raw.stdout.decode(), raw.stderr.decode())
     if check and result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or "unknown Git error"
-        raise ExecutionError("GIT_OPERATION_FAILED", f"{action} failed: {detail}")
+        error = ExecutionError("GIT_OPERATION_FAILED", f"{action} failed (Git exit {result.returncode})")
+        error.diagnostics = {"exit_code": result.returncode,
+                             "stdout_sha256": hashlib.sha256(raw.stdout).hexdigest(),
+                             "stderr_sha256": hashlib.sha256(raw.stderr).hexdigest()}
+        raise error
     return result
 
 
@@ -460,10 +483,7 @@ def git(cwd: Path, args: list[str], action: str, *, check: bool = True) -> str:
 def _seal_message_git(cwd: Path, args: list[str], data: bytes | None = None) -> bytes:
     """Preserve message bytes; diagnostics must never reflect Git/message output."""
     try:
-        result = subprocess.run(
-            ["git", *args], cwd=cwd, env=git_environment(cwd), input=data,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120, check=False,
-        )
+        result = _git_process(["git", *args], cwd, data=data)
     except (OSError, subprocess.SubprocessError) as error:
         raise ExecutionError("GIT_OPERATION_FAILED", "Git seal message operation failed") from error
     if result.returncode != 0:
@@ -575,22 +595,51 @@ def _path_in_project_scope(path: str, project_scope: str) -> bool:
 
 
 def _is_project_spec_path(path: str, project_scope: str) -> bool:
-    scope = PurePosixPath() if project_scope == "." else PurePosixPath(project_scope)
+    # Shared claims never delegate paired canonical publication to a worker.
     candidate = PurePosixPath(path)
-    return candidate in {
-        scope / "docs/requirements.md",
-        scope / "docs/design.md",
+    return len(candidate.parts) >= 2 and candidate.parts[-2:] in {
+        ("docs", "requirements.md"), ("docs", "design.md"),
     }
 
 
+def _owned_path(path: str, project_scope: str, run_dir: Path | None = None) -> bool:
+    if _path_in_project_scope(path, project_scope):
+        return True
+    if run_dir is None or not validate_run(run_dir)[0].get("shared_admission"):
+        return False
+    from workflow_projects import get
+    row = get(run_dir)
+    return bool(row and row["state"] == "allocated" and any(
+        _path_in_project_scope(path, claim) for claim in row["claims"]))
+
+
+def _require_shared_slot(run_dir: Path, execution_id: str, wave_id: str, task_id: str) -> None:
+    if validate_run(run_dir)[0].get("shared_admission"):
+        from workflow_projects import require_resource
+        require_resource(run_dir, "workers", f"{execution_id}/{wave_id}/{task_id}")
+
+
 def _verify_claim_paths(
-    project_root: Path, project_scope: str, tasks: Iterable[TaskPlan]
+    project_root: Path, project_scope: str, tasks: Iterable[TaskPlan], run_dir: Path | None = None
 ) -> None:
     tasks = tuple(tasks)
     _reject_special_claims(project_root, tasks)
+    if any(_is_project_spec_path(item.path, project_scope)
+           for task in tasks for item in task.write_claims):
+        raise ExecutionError("REPLAN_REQUIRED", "canonical project pairs require coordinator-owned publication")
+    if run_dir is not None and validate_run(run_dir)[0].get("shared_admission"):
+        from workflow_inputs import check_expansion
+        try:
+            check_expansion(run_dir, [{"kind": item.kind, "path": item.path}
+                                      for task in tasks for item in task.write_claims])
+        except WorkflowError as error:
+            raise ExecutionError(error.code, str(error)) from error
+        from workflow_projects import claim
+        claim(run_dir, [item.path for task in tasks for item in task.write_claims
+                        if not _path_in_project_scope(item.path, project_scope)])
     for task in tasks:
         for claim in task.write_claims:
-            if not _path_in_project_scope(claim.path, project_scope):
+            if not _owned_path(claim.path, project_scope, run_dir):
                 raise ExecutionError(
                     "REPLAN_REQUIRED",
                     f"{task.task_id} write claim escapes initialized project scope",
@@ -732,6 +781,16 @@ def parse_locked_plan(text: str) -> list[TaskPlan]:
         dependencies = _split_values(_field(fields, "Depends on", task_id))
         requirements = _split_values(_field(fields, "Requirements", task_id))
         feature_ids = _split_values(_optional_field(fields, "Features") or "none")
+        name = _optional_field(fields, "Name")
+        component = _optional_field(fields, "Primary component")
+        touched = _split_values(_optional_field(fields, "Touched components") or "none")
+        if component == "unknown":
+            component = None
+        if ((name is not None and len(name) > 500)
+                or any(re.fullmatch(r"COMP-[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}", ref) is None
+                       for ref in ((component,) if component else ()) + touched)
+                or len(touched) != len(set(touched))):
+            raise ExecutionError("PLAN_INVALID", f"{task_id} has invalid reporting metadata")
         if any(FEATURE_ID_RE.fullmatch(item) is None for item in feature_ids):
             raise ExecutionError("PLAN_INVALID", f"{task_id} has malformed feature IDs")
         if any(
@@ -797,6 +856,9 @@ def parse_locked_plan(text: str) -> list[TaskPlan]:
                 regression_oracle=regression_oracle,
                 ownership_complete=ownership_complete,
                 feature_ids=feature_ids,
+                name=name,
+                primary_component=component,
+                touched_components=touched,
             )
         )
     known = {task.task_id for task in tasks}
@@ -980,7 +1042,7 @@ def journal_path(run_dir: Path, execution_id: str, name: str) -> Path:
 
 def _task_json(task: TaskPlan) -> dict[str, Any]:
     value = asdict(task)
-    for field in ("requirements", "dependencies", "conflict_domains", "feature_ids"):
+    for field in ("requirements", "dependencies", "conflict_domains", "feature_ids", "touched_components"):
         value[field] = list(value[field])
     value["write_claims"] = [asdict(item) for item in task.write_claims]
     return value
@@ -1051,11 +1113,27 @@ def _save_coordinator(run_dir: Path, execution_id: str, value: dict[str, Any]) -
     write_json_atomic(coordinator_path(run_dir, execution_id), value)
 
 
+def _require_steering(run_dir: Path, execution_id: str, plan: Path | None = None) -> None:
+    from workflow_readiness import require
+    _impact("steering readiness is pending", require, run_dir, execution_id, plan)
+
+
 def prepare_specifications(run_dir: Path, project_root: Path, execution_id: str) -> dict[str, Any]:
     """Allocate the sole Implement integration checkout before spec publication."""
     from workflow_state import lock
     with lock(run_dir.parent):
-        return _prepare_execution(run_dir, project_root, execution_id, None, None)
+        try:
+            from workflow_statistics import safe_clock
+            started = safe_clock()
+        except Exception:
+            started = None
+        result = _prepare_execution(run_dir, project_root, execution_id, None, None)
+        try:
+            from workflow_statistics import safe_record
+            safe_record(run_dir, "prepare_specifications", started=started)
+        except Exception:
+            pass  # Observations preserve bootstrap results and error types.
+        return result
 
 
 def prepare_execution(
@@ -1143,9 +1221,11 @@ def _prepare_execution(
         tasks = parse_locked_plan(plan_text)
         from workflow_program import slice_basis
         slice_basis(run_dir, selected_project_root, execution_id, tasks)
-        _verify_claim_paths(project_root, project_scope, tasks)
+        _verify_claim_paths(project_root, project_scope, tasks, run_dir)
         from workflow_validation import validate_plan, plan_path as validation_path
         validation_plan_sha256 = canonical_digest(validate_plan(read_json(validation_path(plan_path)), [task.task_id for task in tasks]))
+        from workflow_task_acceptance import load_policy
+        load_policy(run_dir, plan_path, [task.task_id for task in tasks])
         waves = build_dependency_waves(tasks, wave_limit=limits["wave_task_limit"])
         _impact(
             "objective impact verification failed",
@@ -1153,6 +1233,7 @@ def _prepare_execution(
             run_dir,
             selected_project_root,
         )
+    _require_steering(run_dir, execution_id, plan_path)
     if accepted_run["owner"] == "implement":
         from workflow_spec_bootstrap import verify_source_specs
         verify_source_specs(project_root, project_scope, accepted_run["source_head"])
@@ -1188,35 +1269,16 @@ def _prepare_execution(
         if (head(project_root) != accepted_run["source_head"]
                 or branch(project_root) != accepted_run["source_branch"]):
             raise ExecutionError("SOURCE_DRIFT", "source identity changed after objective acceptance")
-        # NUL-delimited paths preserve spaces, newlines, quotes and both sides
-        # of renames. Dirty content is never copied into committed execution.
-        dirty_paths = set()
-        for command in (["diff", "--name-only", "--no-renames", "-z"],
-                        ["diff", "--cached", "--name-only", "--no-renames", "-z"],
-                        ["ls-files", "--others", "--exclude-standard", "-z"]):
-            dirty_paths.update(path for path in _run(["git", *command], project_root,
-                                                   "inspect uncommitted paths").stdout.split("\0") if path)
-        if dirty_paths:
-            dependencies_path = run_dir / "input-dependencies.json"
-            if not dependencies_path.exists():
-                raise ExecutionError("UNCOMMITTED_INPUT", "declare complete committed input dependencies before excluding unrelated dirty content")
-            dependencies = read_json(dependencies_path)
-            if (dependencies.get("schema") != "workflow/input-dependencies-v1"
-                    or dependencies.get("base_head") != accepted_run["source_head"]
-                    or dependencies.get("complete") is not True
-                    or not isinstance(dependencies.get("claims"), list)):
-                raise ExecutionError("UNCOMMITTED_INPUT", "committed input dependency declaration is incomplete")
-            inputs = []
-            for claim in dependencies["claims"]:
-                if (not isinstance(claim, dict) or set(claim) != {"kind", "path"}
-                        or claim["kind"] not in {"exact", "prefix"}
-                        or not isinstance(claim["path"], str) or not claim["path"]
-                        or Path(claim["path"]).is_absolute() or ".." in Path(claim["path"]).parts):
-                    raise ExecutionError("UNCOMMITTED_INPUT", "input dependency path is invalid")
-                inputs.append(WriteClaim(**claim))
-            writes = [claim for task in tasks for claim in task.write_claims]
-            if any(_path_allowed(path, inputs + writes) for path in dirty_paths):
-                raise ExecutionError("UNCOMMITTED_INPUT", "requested task depends on uncommitted source content")
+        from workflow_inputs import check_source
+        dependencies_path = run_dir / "input-dependencies.json"
+        try:
+            check_source(project_root, project_scope,
+                         read_json(dependencies_path) if dependencies_path.exists() else None,
+                         base=accepted_run["source_head"], protect_project=False,
+                         writes=[{"kind": claim.kind, "path": claim.path}
+                                 for task in tasks for claim in task.write_claims])
+        except WorkflowError as error:
+            raise ExecutionError(error.code, str(error)) from error
     elif anchor.get("status") == "unmanaged":
         try:
             promotion = ensure_promotion_branch(
@@ -1535,6 +1597,9 @@ def _prepare_execution(
                 "dispatched_at": None,
                 "worker_started_at": None,
                 "last_heartbeat_at": None,
+                "dispatched_clock": None,
+                "worker_started_clock": None,
+                "last_heartbeat_clock": None,
                 "heartbeat_sequence": 0,
                 "heartbeat_phase": None,
                 "finish_intent": None,
@@ -1588,6 +1653,7 @@ def _replan_future_locked(
 ) -> dict[str, Any]:
     from workflow_validation import require_quiescent
     require_quiescent(run_dir, execution_id)
+    _require_steering(run_dir, execution_id, plan_path)
     coordinator = _load_coordinator(run_dir, execution_id)
     from workflow_capacity import policy
     limits = policy(run_dir, worker_limit=capacity)
@@ -1599,7 +1665,7 @@ def _replan_future_locked(
         run_dir,
         selected_project_root,
     )
-    if coordinator.get("status") in {"sealed", "promoted", "done", "design_revision_pending"}:
+    if coordinator.get("status") in {"sealed", "promoted", "done", "design_revision_pending", "test_revision_pending"}:
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "sealed execution cannot replan"
         )
@@ -1634,10 +1700,13 @@ def _replan_future_locked(
     if re.search(rf"(?m)^# {re.escape(execution_id)} Plan v[0-9]+\s*$", text) is None:
         raise ExecutionError("PLAN_INVALID", "replacement plan heading is invalid")
     tasks = parse_locked_plan(text)
+    from workflow_task_acceptance import load_policy, validate_replan
+    replacement_policy = load_policy(run_dir, plan_path, [task.task_id for task in tasks])
+    validate_replan(run_dir, execution_id, replacement_policy)
     from workflow_program import slice_basis
     slice_basis(run_dir, selected_project_root, execution_id, tasks)
     _verify_claim_paths(
-        Path(str(coordinator["project_root"])), str(coordinator["project_scope"]), tasks
+        Path(str(coordinator["project_root"])), str(coordinator["project_scope"]), tasks, run_dir
     )
     retired_ids = {task for path in (execution_dir(run_dir, execution_id) / "waves").glob("*.json")
                    for row in [read_json(path)] if row.get("status") == "superseded" for task in row["task_ids"]}
@@ -1655,7 +1724,29 @@ def _replan_future_locked(
             raise ExecutionError("REPLAN_REQUIRED", "replacement plan removes active history")
         prefix.append([by_id[task_id] for task_id in wave["task_ids"]])
         preserved += 1
-    new_waves = build_dependency_waves(tasks, wave_limit=limits["wave_task_limit"], prefix=prefix)
+    unresolved = [read_json(wave_path(run_dir, execution_id, name)) for name in old_wave_ids[:preserved]
+                  if read_json(wave_path(run_dir, execution_id, name)).get("status") == "failed"
+                  and not _wave_satisfied(run_dir, execution_id, coordinator, name)]
+    scheduling_prefix = prefix
+    if unresolved:
+        authority = _validated_wave_failure(run_dir, execution_id, unresolved[-1], active=True)
+        historical_ids = {task.task_id for wave in prefix for task in wave}
+        corrections = [task for task in tasks if task.task_id not in coordinator["task_waves"]
+                       and task.diagnosis_id == authority["diagnosis_id"]
+                       and task.regression_oracle == authority["oracle"]]
+        correction_ids = {task.task_id for task in corrections}
+        if any(set(task.dependencies) - historical_ids - correction_ids for task in corrections):
+            raise ExecutionError("REPLAN_REQUIRED", "corrective tasks cannot depend on untouched future work")
+        if corrections:
+            scheduling_prefix = build_dependency_waves(
+                [task for task in tasks if task.task_id in historical_ids | correction_ids],
+                prefix=prefix, wave_limit=limits["wave_task_limit"],
+            )
+    new_waves = build_dependency_waves(tasks, wave_limit=limits["wave_task_limit"], prefix=scheduling_prefix)
+    from workflow_validation import validate_plan, plan_path as validation_path, review_plan_revision
+    replacement_validation = validate_plan(read_json(validation_path(plan_path)), list(_wave_index(new_waves)))
+    revision = _impact("validation plan revision is not admitted", review_plan_revision,
+                       run_dir, execution_id, coordinator, plan_path, replacement_validation, unresolved)
     if len(new_waves) < preserved:
         raise ExecutionError(
             "REPLAN_REQUIRED", "replacement plan removes active history"
@@ -1787,6 +1878,9 @@ def _replan_future_locked(
                     "dispatched_at": None,
                     "worker_started_at": None,
                     "last_heartbeat_at": None,
+                    "dispatched_clock": None,
+                    "worker_started_clock": None,
+                    "last_heartbeat_clock": None,
                     "heartbeat_sequence": 0,
                     "heartbeat_phase": None,
                     "finish_intent": None,
@@ -1824,8 +1918,9 @@ def _replan_future_locked(
         updated = dict(coordinator)
         updated["plan_path"] = str(plan_path)
         updated["plan_digest"] = digest
-        from workflow_validation import validate_plan, plan_path as validation_path
-        updated["validation_plan_sha256"] = canonical_digest(validate_plan(read_json(validation_path(plan_path)), list(_wave_index(new_waves))))
+        updated["validation_plan_sha256"] = canonical_digest(replacement_validation)
+        if revision is not None:
+            updated["validation_revisions"] = [*coordinator.get("validation_revisions", []), revision]
         updated["capacity"] = capacity
         updated["wave_ids"] = new_wave_ids
         updated["task_waves"] = _wave_index(new_waves)
@@ -1897,7 +1992,7 @@ def seal_tdd_base(run_dir: Path, execution_id: str, message: str) -> dict[str, A
             integration,
             recorded_head,
             current_head,
-            str(coordinator["project_scope"]),
+            str(coordinator["project_scope"]), run_dir,
         )
     elif not clean(integration):
         append_journal(
@@ -1906,7 +2001,7 @@ def seal_tdd_base(run_dir: Path, execution_id: str, message: str) -> dict[str, A
         )
         git(integration, ["add", "-A"], "stage TDD base")
         try:
-            _verify_staged_integration(integration, str(coordinator["project_scope"]))
+            _verify_staged_integration(integration, str(coordinator["project_scope"]), run_dir)
             git(integration, ["commit", "--cleanup=whitespace", "-m", message], "commit TDD base")
         except ExecutionError:
             git(integration, ["restore", "--staged", ":/"], "unstage TDD base")
@@ -1948,6 +2043,9 @@ def _task_plan_from_state(value: dict[str, Any]) -> TaskPlan:
         ),
         ownership_complete=bool(raw["ownership_complete"]),
         feature_ids=tuple(raw.get("feature_ids", [])),
+        name=raw.get("name"),
+        primary_component=raw.get("primary_component"),
+        touched_components=tuple(raw.get("touched_components", [])),
     )
 
 
@@ -2001,7 +2099,8 @@ def _validate_assignment_record(assignment: dict[str, Any]) -> None:
     unsigned = dict(assignment)
     recorded = unsigned.pop("assignment_digest", None)
     if (
-        assignment.get("schema") != ASSIGNMENT_SCHEMA
+        bool(RETIRED_FIELDS.intersection(assignment))
+        or assignment.get("schema") != ASSIGNMENT_SCHEMA
         or not isinstance(recorded, str)
         or recorded != sha256_json(unsigned)
     ):
@@ -2015,6 +2114,14 @@ def _validate_assignment_record(assignment: dict[str, Any]) -> None:
     if (canonical_digest(basis) != fingerprint or assignment.get("owner") != basis["owner"]
             or basis["plan_digest"] != assignment["plan_digest"]):
         raise ExecutionError("BASIS_INVALID", "immutable assignment provenance changed")
+    from workflow_uat import normalize as normalize_uat
+    if (normalize_uat(basis.get("uat_policy")) != basis.get("uat_policy")
+            or canonical_digest(basis["uat_policy"]) != basis.get("uat_policy_sha256")
+            or assignment.get("uat_policy") != basis["uat_policy"]
+            or assignment.get("uat_policy_sha256") != basis["uat_policy_sha256"]):
+        raise ExecutionError("BASIS_INVALID", "assignment UAT policy differs from its frozen basis")
+    from workflow_task_acceptance import assignment_policy
+    assignment_policy(assignment)
     helper = Path(str(assignment.get("execution_helper") or ""))
     bound_run_dir = Path(str(assignment.get("run_dir") or ""))
     dependencies = assignment.get("dependencies")
@@ -2035,18 +2142,7 @@ def _validate_assignment_record(assignment: dict[str, Any]) -> None:
             "EXECUTION_STATE_INVALID", "worker assignment dependencies are invalid"
         )
     expected_profile = worker_liveness_profile(dependencies)
-    expected_liveness = {
-        "worker_profile": expected_profile["worker_profile"],
-        "heartbeat_seconds": WORKER_HEARTBEAT_SECONDS,
-        "start_seconds": WORKER_START_SECONDS,
-        "read_only_warning_seconds": expected_profile[
-            "read_only_warning_seconds"
-        ],
-        "read_only_seconds": expected_profile["read_only_seconds"],
-        "stall_seconds": WORKER_STALL_SECONDS,
-        "max_seconds": WORKER_MAX_SECONDS,
-        "worker_phases": list(WORKER_PHASES),
-    }
+    expected_liveness = {**expected_profile, "worker_phases": list(WORKER_PHASES)}
     expected_helper = Path(__file__).with_name("workflow_transition.py").resolve()
     project_spec_receipt = assignment.get("project_spec_receipt")
     if (
@@ -2107,11 +2203,15 @@ def _validate_result_record(result: dict[str, Any], assignment: dict[str, Any]) 
             or (result["status"] == "implemented" and (result.get("commit") != result["head"] or not result.get("changed_paths")))
             or (result["status"] == "verified_no_change" and (result.get("commit") is not None or result.get("changed_paths") != [] or result["head"] != assignment["base_head"]))):
         raise ExecutionError("RESULT_INVALID", "tagged result Git proof is invalid")
-    repository = Path(assignment["git_root"])
+    from workflow_task_acceptance import repository as acceptance_repository
+    repository = acceptance_repository(Path(assignment["run_dir"]))
     if git_common_dir(repository) != Path(assignment["git_common_dir"]):
         raise ExecutionError("RESULT_INVALID", "verified result repository identity changed")
     if git(repository, ["rev-parse", result["head"] + "^{tree}"], "verify result tree") != result["tree"]:
         raise ExecutionError("RESULT_INVALID", "verified result tree differs from Git")
+    from workflow_task_acceptance import verify_task
+    if result.get("task_acceptance_receipt_sha256") != verify_task(assignment, result["attempt"], result["tree"]):
+        raise ExecutionError("RESULT_INVALID", "SDLC task acceptance proof changed")
     if result["status"] == "verified_no_change":
         from workflow_validation import verify_recorded_task
         _impact("no-change acceptance proof is invalid", verify_recorded_task, assignment, result)
@@ -2228,6 +2328,8 @@ def _build_incoming_handoff(
     created_at: str,
     *, persist_index: bool = False,
 ) -> dict[str, Any]:
+    from workflow_task_acceptance import require_dependencies
+    require_dependencies(run_dir, execution_id, coordinator, task, base_head)
     predecessors: list[dict[str, Any]] = []
     predecessor_ids = list(dict.fromkeys(task.dependencies))
     task_waves = _task_wave_index(run_dir, execution_id, coordinator) if predecessor_ids else {}
@@ -2342,23 +2444,22 @@ def _validate_assignment_handoff(
 
 
 def prepare_wave(run_dir: Path, execution_id: str, wave_id: str) -> list[dict[str, Any]]:
+    coordinator = _load_coordinator(run_dir, execution_id)
+    _verify_execution_objective_impact(run_dir, execution_id, coordinator)
+    return _prepare_wave(run_dir, execution_id, wave_id, coordinator)
+
+
+def _prepare_wave(run_dir, execution_id, wave_id, coordinator):
+    """Private continuation; caller holds the owner lock and just verified basis."""
     from workflow_worker_results import require_dispatchable
     _impact("worker dispatch is fenced", require_dispatchable, run_dir, execution_id)
-    coordinator = _load_coordinator(run_dir, execution_id)
-    _impact(
-        "objective impact execution basis is stale",
-        verify_objective_impact_execution,
-        run_dir,
-        execution_id,
-        str(coordinator.get("plan_digest") or ""),
-        Path(str(coordinator["selected_project_root"])),
-    )
     impact_receipt, _impact_receipt_sha256 = _impact(
         "objective impact receipt is stale",
         verify_current_objective_impact,
         run_dir,
         Path(str(coordinator["selected_project_root"])),
     )
+    _require_steering(run_dir, execution_id)
     if coordinator["status"] not in {"tdd_sealed", "waves_running", "integrated", "repair_required"}:
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "wave preparation is not allowed"
@@ -2396,6 +2497,15 @@ def prepare_wave(run_dir: Path, execution_id: str, wave_id: str) -> list[dict[st
     if unresolved:
         latest = unresolved[-1]
         authority = _validated_wave_failure(run_dir, execution_id, latest, active=True)
+        if authority["classification"] == "PLAN_DEFECT":
+            from workflow_validation import verify_plan_revision
+            _, review = _impact("plan repair review is invalid", verify_plan_revision,
+                                run_dir, execution_id, coordinator, latest)
+            if (review["replacement_validation_plan_sha256"] != coordinator["validation_plan_sha256"]
+                    or review["replacement_plan_sha256"] != coordinator["plan_digest"]
+                    or any(review[key] != impact_receipt[key] for key in ("requirements_sha256", "design_sha256"))
+                    or review["objective_sha256"] != validate_run(run_dir)[1]["revisions"][-1]["sha256"]):
+                raise ExecutionError("REPLAN_REQUIRED", "corrective dispatch does not use the reviewed plan")
         if any(
             _validated_wave_failure(run_dir, execution_id, item)[key] != authority[key]
             for item in unresolved for key in ("blocker_key", "oracle")
@@ -2446,15 +2556,36 @@ def prepare_wave(run_dir: Path, execution_id: str, wave_id: str) -> list[dict[st
             "requirements_sha256": requirements_sha256,
             "design_sha256": design_sha256,
         }
+    from workflow_task_acceptance import require_dependencies
+    evidence_ready = []
+    for candidate_id in wave["ready_task_ids"]:
+        candidate_task = _task_plan_from_state(read_json(task_path(run_dir, execution_id, wave_id, candidate_id)))
+        try:
+            require_dependencies(run_dir, execution_id, coordinator, candidate_task, base_head)
+        except WorkflowError as error:
+            if error.code != "EVIDENCE_PENDING":
+                raise
+        else:
+            evidence_ready.append(candidate_id)
+    if wave["ready_task_ids"] and not evidence_ready and not wave["active_task_ids"]:
+        raise ExecutionError("EVIDENCE_PENDING", "resolve deferred prerequisites before dispatching their consumers")
+    from workflow_revision_retirement import retire_sealed_revision_workers
+    retire_sealed_revision_workers(run_dir, execution_id)
     reserve_wave(run_dir, Path(coordinator["git_root"]), execution_id, wave_id, wave["task_ids"])
     wave["status"] = "preparing"
     if wave["base_head"] is not None and wave["base_head"] != base_head:
         raise ExecutionError("REPLAN_REQUIRED", "wave base changed while refilling slots")
     wave["base_head"] = base_head
     free = max(0, effective_capacity(run_dir, limits["worker_limit"]) - len(wave["active_task_ids"]))
-    newly_selected = wave["ready_task_ids"][:free]
+    newly_selected = evidence_ready[:free]
+    if validate_run(run_dir)[0].get("shared_admission"):
+        from workflow_projects import reserve_resources
+        prefix = f"{execution_id}/{wave_id}/"
+        reserved = reserve_resources(run_dir, "workers", [prefix + task for task in newly_selected],
+                                     ceiling=effective_capacity(run_dir, limits["worker_limit"]))
+        newly_selected = [item.removeprefix(prefix) for item in reserved]
     wave["active_task_ids"].extend(newly_selected)
-    wave["ready_task_ids"] = wave["ready_task_ids"][free:]
+    wave["ready_task_ids"] = [task for task in wave["ready_task_ids"] if task not in newly_selected]
     selected = [task_id for task_id in wave["active_task_ids"]
                 if (lambda record: record["status"] == "planned" or record["status"] == "assigned" and record.get("dispatched_at") is None)(read_json(task_path(run_dir, execution_id, wave_id, task_id)))]
     write_json_atomic(wave_path(run_dir, execution_id, wave_id), wave)
@@ -2567,13 +2698,14 @@ def prepare_wave(run_dir: Path, execution_id: str, wave_id: str) -> list[dict[st
                 Path(__file__).with_name("workflow_transition.py").resolve()
             ),
             "run_dir": str(run_dir.resolve()),
-            "heartbeat_seconds": WORKER_HEARTBEAT_SECONDS,
-            "start_seconds": WORKER_START_SECONDS,
-            "stall_seconds": WORKER_STALL_SECONDS,
-            "max_seconds": WORKER_MAX_SECONDS,
             "worker_phases": list(WORKER_PHASES),
             "created_at": created_at,
         }
+        frozen_basis = read_json(run_dir / "bases" / execution_id / (assignment["basis_sha256"] + ".json"))
+        assignment.update(uat_policy=frozen_basis["uat_policy"], uat_policy_sha256=frozen_basis["uat_policy_sha256"])
+        if assignment["owner"] == "agentic-sdlc":
+            from workflow_task_acceptance import load_policy
+            assignment["task_acceptance"] = load_policy(run_dir, Path(coordinator["plan_path"]), list(coordinator["task_waves"]))["tasks"][task_id]
         assignment.update(worker_liveness_profile(task.dependencies))
         assignment["assignment_digest"] = sha256_json(assignment)
         selected_project_root = Path(str(coordinator["selected_project_root"]))
@@ -2703,9 +2835,10 @@ def refill_wave(run_dir: Path, execution_id: str, wave_id: str) -> list[dict[str
             raise ExecutionError("EXECUTION_STATE_INVALID", "only a running wave can refill slots")
         if not wave["ready_task_ids"] or len(wave["active_task_ids"]) >= effective_capacity(run_dir, coordinator["capacity"]):
             return []
+        _require_steering(run_dir, execution_id)
         wave["status"] = "preparing"
         write_json_atomic(path, wave)
-        return prepare_wave(run_dir, execution_id, wave_id)
+        return _prepare_wave(run_dir, execution_id, wave_id, coordinator)
 
 
 def admit_task(run_dir: Path, execution_id: str, wave_id: str, task_id: str,
@@ -2713,12 +2846,11 @@ def admit_task(run_dir: Path, execution_id: str, wave_id: str, task_id: str,
     """Validate result and independently observed native exit before freeing a slot."""
     with _execution_transition_lock(run_dir, execution_id):
         coordinator = _load_coordinator(run_dir, execution_id)
-        _verify_execution_objective_impact(run_dir, execution_id, coordinator)
+        current_basis = _verify_execution_objective_impact(run_dir, execution_id, coordinator)
         wave_file = wave_path(run_dir, execution_id, wave_id)
         wave = read_json(wave_file)
         assignment = read_json(assignment_path(run_dir, execution_id, wave_id, task_id))
         _validate_assignment_record(assignment)
-        current_basis = verify_objective_impact_execution(run_dir, execution_id, coordinator["plan_digest"], Path(coordinator["selected_project_root"]))
         if canonical_digest(current_basis) != assignment["basis_sha256"]:
             raise ExecutionError("REPLAN_REQUIRED", "result belongs to a superseded execution basis")
         task = read_json(task_path(run_dir, execution_id, wave_id, task_id))
@@ -2767,6 +2899,9 @@ def admit_task(run_dir: Path, execution_id: str, wave_id: str, task_id: str,
             wave["active_task_ids"].remove(task_id)
             wave["admitted_task_ids"].append(task_id)
             write_json_atomic(wave_file, wave)
+        if validate_run(run_dir)[0].get("shared_admission"):
+            from workflow_projects import release_resources
+            release_resources(run_dir, "workers", [f"{execution_id}/{wave_id}/{task_id}"])
         return receipt
 
 
@@ -2781,12 +2916,14 @@ def arm_task(
 ) -> dict[str, Any]:
     with _execution_transition_lock(run_dir, execution_id):
         coordinator = _load_coordinator(run_dir, execution_id)
-        _verify_execution_objective_impact(run_dir, execution_id, coordinator)
+        basis = _verify_execution_objective_impact(run_dir, execution_id, coordinator)
+        _require_steering(run_dir, execution_id)
         assignment = read_json(
             assignment_path(run_dir, execution_id, wave_id, task_id)
         )
         _validate_assignment_record(assignment)
-        _assert_current_assignment(run_dir, execution_id, coordinator, assignment)
+        _assert_assignment_basis(basis, assignment)
+        _require_shared_slot(run_dir, execution_id, wave_id, task_id)
         if assignment.get("assignment_digest") != assignment_digest:
             raise ExecutionError(
                 "EXECUTION_STATE_INVALID", "assignment digest mismatch"
@@ -2826,6 +2963,7 @@ def arm_task(
             )
         if task_record.get("dispatched_at") is None:
             task_record["dispatched_at"] = _clock_utc(clock)
+            task_record["dispatched_clock"] = _liveness_clock()
             write_json_atomic(task_record_path, task_record)
             append_journal(
                 journal_path(run_dir, execution_id, wave_id),
@@ -2908,6 +3046,7 @@ def requeue_task(
                 "WORKER_PRESTART_MUTATION", "prestart worker changed its worktree"
             )
         task_record["dispatched_at"] = None
+        task_record["dispatched_clock"] = None
         write_json_atomic(task_record_path, task_record)
         append_journal(
             journal_path(run_dir, execution_id, wave_id),
@@ -2952,10 +3091,11 @@ def _start_task_locked(
     clock: Callable[[], datetime],
 ) -> dict[str, Any]:
     coordinator = _load_coordinator(run_dir, execution_id)
-    _verify_execution_objective_impact(run_dir, execution_id, coordinator)
+    basis = _verify_execution_objective_impact(run_dir, execution_id, coordinator)
     assignment = read_json(assignment_path(run_dir, execution_id, wave_id, task_id))
     _validate_assignment_record(assignment)
-    _assert_current_assignment(run_dir, execution_id, coordinator, assignment)
+    _assert_assignment_basis(basis, assignment)
+    _require_shared_slot(run_dir, execution_id, wave_id, task_id)
     if assignment.get("assignment_digest") != assignment_digest:
         raise ExecutionError("EXECUTION_STATE_INVALID", "assignment digest mismatch")
     worktree_path = Path(assignment["worktree"])
@@ -2986,6 +3126,7 @@ def _start_task_locked(
             )
         _claim_worker_session(run_dir, execution_id, wave_id, task_id, session_hash)
         return assignment
+    _require_steering(run_dir, execution_id)
     from workflow_worker_results import require_dispatchable
     _impact("worker dispatch is fenced", require_dispatchable, run_dir, execution_id)
     dispatched_at = task_record.get("dispatched_at")
@@ -2994,10 +3135,6 @@ def _start_task_locked(
             "TASK_NOT_ARMED", "coordinator must arm a worker slot before task-start"
         )
     now_text = _clock_utc(clock)
-    elapsed = (
-        _time_value(now_text, "worker start time")
-        - _time_value(dispatched_at, "worker dispatch time")
-    ).total_seconds()
     observation = _worker_scope_observation(assignment)
     if observation["scope_violation"]:
         raise ExecutionError(
@@ -3006,10 +3143,6 @@ def _start_task_locked(
     if observation["progress_observed"]:
         raise ExecutionError(
             "WORKER_PRESTART_MUTATION", "worker changed its worktree before task-start"
-        )
-    if elapsed >= int(assignment["start_seconds"]):
-        raise ExecutionError(
-            "WORKER_PRESTART_TIMEOUT", "worker missed the task-start deadline"
         )
     for other in execution_dir(run_dir, execution_id).glob("tasks/*/*.json"):
         if other == task_record_path:
@@ -3026,6 +3159,8 @@ def _start_task_locked(
     task_record["status"] = "running"
     task_record["worker_started_at"] = now_text
     task_record["last_heartbeat_at"] = now_text
+    task_record["worker_started_clock"] = _liveness_clock()
+    task_record["last_heartbeat_clock"] = task_record["worker_started_clock"]
     task_record["heartbeat_sequence"] = 1
     task_record["heartbeat_phase"] = "preflight"
     task_record["worker_session_hash"] = session_hash
@@ -3056,12 +3191,50 @@ def _working_paths(worktree_path: Path) -> list[str]:
     return sorted(values)
 
 
+def _liveness_clock():
+    from workflow_statistics import safe_clock
+    return safe_clock()
+
+
+def _age_seconds(start, end):
+    from workflow_statistics_report import elapsed
+    duration = elapsed(start, end)
+    return duration // 1_000_000_000 if duration is not None else None
+
+
+def _observation_identity(assignment, task_record, observed):
+    return {
+        "clock": observed,
+        "age_basis": "compatible monotonic clocks; unavailable intervals are null",
+        "assignment_digest": assignment["assignment_digest"],
+        "worker_session_hash": task_record.get("worker_session_hash"),
+        "operation": {key: assignment[key] for key in ("execution_id", "wave_id", "task_id")},
+        "attempt": task_record.get("attempt", 0),
+    }
+
+
 def _validate_task_liveness(task_record: dict[str, Any]) -> None:
     _validated_session_history(task_record)
     if "finish_intent" not in task_record:
         raise ExecutionError(
             "EXECUTION_STATE_INVALID", "task finish intent state is missing"
         )
+    for field in ("dispatched_clock", "worker_started_clock", "last_heartbeat_clock"):
+        stamp = task_record.get(field)
+        if field not in task_record or (stamp is not None and (
+                not isinstance(stamp, dict)
+                or set(stamp) != {"utc", "monotonic_ns", "clock_id", "scope"}
+                or type(stamp["monotonic_ns"]) is not int or stamp["monotonic_ns"] < 0
+                or re.fullmatch(r"[0-9a-f]{32}|[0-9a-f]{64}", str(stamp["clock_id"])) is None
+                or not isinstance(stamp["scope"], str)
+                or stamp["scope"] not in {"machine-boot", "process-only"})):
+            raise ExecutionError("EXECUTION_STATE_INVALID", "worker clock provenance is invalid")
+        if stamp is not None:
+            _time_value(stamp["utc"], "worker observation clock")
+            timestamp = {"dispatched_clock": "dispatched_at", "worker_started_clock": "worker_started_at",
+                         "last_heartbeat_clock": "last_heartbeat_at"}[field]
+            if task_record.get(timestamp) is None:
+                raise ExecutionError("EXECUTION_STATE_INVALID", "worker clock lacks its observation")
     finish_intent = task_record.get("finish_intent")
     if finish_intent is not None:
         _validate_finish_intent(finish_intent)
@@ -3151,7 +3324,7 @@ def _worker_scope_observation(assignment: dict[str, Any]) -> dict[str, object]:
     claims = tuple(WriteClaim(**item) for item in assignment["write_claims"])
     project_scope = str(assignment["project_scope"])
     scope_violation = head(worker) != assignment["base_head"] or any(
-        not _path_in_project_scope(path, project_scope)
+        not _owned_path(path, project_scope, Path(assignment["run_dir"]))
         or not _path_allowed(path, claims)
         or _is_project_spec_path(path, project_scope)
         for path in paths
@@ -3180,35 +3353,31 @@ def _worker_guard_status(
     clock: Callable[[], datetime],
 ) -> dict[str, object]:
     now_text = _clock_utc(clock)
-    now = _time_value(now_text, "worker guard clock")
-    started = _time_value(task_record.get("worker_started_at"), "worker start time")
-    heartbeat = _time_value(
-        task_record.get("last_heartbeat_at"), "worker heartbeat time"
-    )
-    elapsed = max(0, int((now - started).total_seconds()))
-    heartbeat_age = max(0, int((now - heartbeat).total_seconds()))
+    observed_clock = _liveness_clock()
+    elapsed = _age_seconds(task_record["worker_started_clock"], observed_clock)
+    heartbeat_age = _age_seconds(task_record["last_heartbeat_clock"], observed_clock)
     observation = _worker_scope_observation(assignment)
     progress_observed = bool(observation["progress_observed"])
     scope_violation = bool(observation["scope_violation"])
-    if scope_violation:
-        status = "WORKER_SCOPE_VIOLATION"
-    elif elapsed >= int(assignment["max_seconds"]):
-        status = "WORKER_TIMEOUT"
-    elif not progress_observed and elapsed >= int(assignment["read_only_seconds"]):
-        status = "WORKER_READ_ONLY_TIMEOUT"
-    elif heartbeat_age >= int(assignment["stall_seconds"]):
-        status = "WORKER_STALLED"
-    else:
-        status = "ACTIVE"
-    warning = None
-    if status == "ACTIVE":
-        if int(assignment["max_seconds"]) - elapsed <= WORKER_DEADLINE_WARNING_SECONDS:
-            warning = "WORKER_DEADLINE_NEAR"
-        elif not progress_observed and elapsed >= int(assignment["read_only_warning_seconds"]):
-            warning = "READ_ONLY_DEADLINE_NEAR"
+    policy = assignment["health_policy"]
+    status = "WORKER_SCOPE_VIOLATION" if scope_violation else "ACTIVE"
+    reasons = []
+    if heartbeat_age is None or heartbeat_age >= policy["heartbeat_stale_observation_seconds"]:
+        reasons.append("HEALTH_UNKNOWN")
+    if elapsed is None:
+        reasons.append("CLOCK_INTERVAL_UNKNOWN")
+    elif elapsed >= policy["periodic_observation_seconds"]:
+        reasons.append("PROGRESS_REVIEW")
+    if not progress_observed and elapsed is not None and elapsed >= policy["read_only_observation_seconds"]:
+        reasons.append("READ_ONLY_REVIEW")
+    warning = reasons[0] if reasons else None
     return {
+        **_observation_identity(assignment, task_record, observed_clock),
         "status": status,
         "warning": warning,
+        "observation_reasons": reasons,
+        "health": "unknown" if "HEALTH_UNKNOWN" in reasons else "responsive",
+        "useful_progress": "unverified",
         "elapsed_seconds": elapsed,
         "heartbeat_age_seconds": heartbeat_age,
         "progress_observed": progress_observed,
@@ -3263,9 +3432,10 @@ def heartbeat_task(
         status = _worker_guard_status(assignment, task_record, clock=clock)
         if status["status"] != "ACTIVE":
             raise ExecutionError(
-                str(status["status"]), "worker liveness budget was exceeded"
+                str(status["status"]), "worker exceeded its authorized scope"
             )
         task_record["last_heartbeat_at"] = status["observed_at"]
+        task_record["last_heartbeat_clock"] = status["clock"]
         task_record["heartbeat_sequence"] = int(
             task_record["heartbeat_sequence"]
         ) + 1
@@ -3298,6 +3468,7 @@ def watch_task(
         _validate_task_liveness(task_record)
         if task_record.get("status") == "assigned":
             now_text = _clock_utc(clock)
+            observed_clock = _liveness_clock()
             observation = _worker_scope_observation(assignment)
             dispatched_at = task_record.get("dispatched_at")
             if observation["scope_violation"]:
@@ -3310,23 +3481,13 @@ def watch_task(
                 status = "QUEUED"
                 elapsed = 0
             else:
-                elapsed = max(
-                    0,
-                    int(
-                        (
-                            _time_value(now_text, "worker guard clock")
-                            - _time_value(dispatched_at, "worker dispatch time")
-                        ).total_seconds()
-                    ),
-                )
-                status = (
-                    "WORKER_PRESTART_TIMEOUT"
-                    if elapsed >= int(assignment["start_seconds"])
-                    else "PENDING_START"
-                )
+                elapsed = _age_seconds(task_record["dispatched_clock"], observed_clock)
+                status = "PENDING_START"
             return {
+                **_observation_identity(assignment, task_record, observed_clock),
                 "status": status,
-                "warning": None,
+                "warning": "CLOCK_INTERVAL_UNKNOWN" if elapsed is None else "STARTUP_REVIEW" if elapsed >= assignment["health_policy"]["startup_observation_seconds"] else None,
+                "health": "unknown", "useful_progress": "unverified",
                 "elapsed_seconds": elapsed,
                 "heartbeat_age_seconds": None,
                 "progress_observed": observation["progress_observed"],
@@ -3347,10 +3508,11 @@ def _verify_integration_paths(
     integration: Path,
     paths: Iterable[str],
     project_scope: str,
+    run_dir: Path | None = None,
 ) -> None:
     values = list(paths)
     outside = [
-        path for path in values if not _path_in_project_scope(path, project_scope)
+        path for path in values if not _owned_path(path, project_scope, run_dir)
     ]
     if outside:
         raise ExecutionError(
@@ -3376,7 +3538,7 @@ def _verify_integration_paths(
             )
 
 
-def _verify_staged_integration(integration: Path, project_scope: str) -> None:
+def _verify_staged_integration(integration: Path, project_scope: str, run_dir: Path | None = None) -> None:
     staged = _split_nul(
         git(
             integration,
@@ -3384,7 +3546,7 @@ def _verify_staged_integration(integration: Path, project_scope: str) -> None:
             "read staged integration paths",
         )
     )
-    _verify_integration_paths(integration, staged, project_scope)
+    _verify_integration_paths(integration, staged, project_scope, run_dir)
     staged_diff = git(
         integration,
         ["diff", "--cached", "--no-ext-diff", "--unified=0"],
@@ -3399,6 +3561,7 @@ def _verify_integration_commit(
     base_head: str,
     current_head: str,
     project_scope: str,
+    run_dir: Path | None = None,
 ) -> None:
     paths = _split_nul(
         git(
@@ -3413,7 +3576,7 @@ def _verify_integration_commit(
             "read integration commit paths",
         )
     )
-    _verify_integration_paths(integration, paths, project_scope)
+    _verify_integration_paths(integration, paths, project_scope, run_dir)
     committed_diff = git(
         integration,
         ["diff", "--no-ext-diff", "--unified=0", f"{base_head}..{current_head}"],
@@ -3589,12 +3752,17 @@ def _recover_task_locked(
         raise ExecutionError(
             "WORKSPACE_BUSY", "worker recovery attempt changed before transfer"
         )
-    from workflow_reconcile import recovery_path
+    from workflow_reconcile import recovery_path, recovery_failure_binding
     from workflow_state import digest as state_digest
     current_coordinator = validate_run(run_dir)[0]['coordinator_session_sha256']
     approval = read_json(recovery_path(run_dir, execution_id, task_id, expected_attempt, current_coordinator))
     observed = read_json(Path(str(approval.get('termination_path', ''))))
-    if (approval.get('schema') != 'workflow/recovery-authorization-v1'
+    if (set(approval) != {
+            'schema', 'assignment_digest', 'attempt', 'prior_worker_session_hash',
+            'next_worker_session_hash', 'coordinator_session_hash',
+            'termination_path', 'termination_sha256',
+            'worker_result_receipt_sha256', 'repair_authority',
+        } or approval.get('schema') != 'workflow/recovery-authorization-v2'
             or approval.get('assignment_digest') != assignment['assignment_digest']
             or approval.get('attempt') != expected_attempt
             or approval.get('prior_worker_session_hash') != task_record['worker_session_hash']
@@ -3602,11 +3770,12 @@ def _recover_task_locked(
             or approval.get('coordinator_session_hash') != current_coordinator
             or approval.get('termination_sha256') != state_digest(observed)):
         raise ExecutionError('OWNERSHIP_INVALID', 'recovery requires exact coordinator authorization and native exit evidence')
-    from workflow_worker_results import receipt_path, read_receipt
-    if receipt_path(assignment, task_record['attempt']).exists():
-        _, received = _impact('worker result receipt is invalid', read_receipt, assignment, task_record)
-        if received['worker_result']['status'] != 'blocked':
-            raise ExecutionError('REPLAN_REQUIRED', 'completed or specification-gap results cannot renew a worker attempt')
+    failure_binding = _impact(
+        'worker recovery failure authority is invalid', recovery_failure_binding,
+        run_dir, execution_id, coordinator, assignment, task_record,
+    )
+    if any(approval[key] != value for key, value in failure_binding.items()):
+        raise ExecutionError('REPAIR_NOT_AUTHORIZED', 'worker recovery failure authority changed after authorization')
     from workflow_resources import require_released
     require_released(run_dir, assignment)
     new_hash = _session_hash(session_identity)
@@ -3643,7 +3812,7 @@ def _recover_task_locked(
         worker,
         _working_paths(worker),
         claims,
-        str(assignment["project_scope"]),
+        str(assignment["project_scope"]), run_dir,
     )
     _claim_worker_session(run_dir, execution_id, wave_id, task_id, new_hash)
     recovered_at = _clock_utc(clock)
@@ -3653,6 +3822,9 @@ def _recover_task_locked(
     task_record["dispatched_at"] = recovered_at
     task_record["worker_started_at"] = recovered_at
     task_record["last_heartbeat_at"] = recovered_at
+    recovered_clock = _liveness_clock()
+    for field in ("dispatched_clock", "worker_started_clock", "last_heartbeat_clock"):
+        task_record[field] = recovered_clock
     task_record["heartbeat_sequence"] = 1
     task_record["heartbeat_phase"] = "preflight"
     task_record["recovered_at"] = recovered_at
@@ -3684,6 +3856,7 @@ def _verify_worker_paths(
     paths: Iterable[str],
     claims: tuple[WriteClaim, ...],
     project_scope: str = ".",
+    run_dir: Path | None = None,
 ) -> None:
     paths = tuple(paths)
     protected = [
@@ -3698,7 +3871,7 @@ def _verify_worker_paths(
     outside = [
         path
         for path in paths
-        if not _path_in_project_scope(path, project_scope)
+        if not _owned_path(path, project_scope, run_dir)
         or not _path_allowed(path, claims)
     ]
     if outside:
@@ -3740,12 +3913,15 @@ def _finish_no_change(run_dir, execution_id, wave_id, task_id, assignment, state
     if state["status"] not in {"running", "finished"} or state.get("finish_intent") is not None:
         raise ExecutionError("RESULT_INVALID", "no-change result cannot replace a commit intent")
     payload = received["worker_result"]
+    from workflow_task_acceptance import verify_task
+    task_acceptance_sha256 = verify_task(assignment, state["attempt"], acceptance["target"]["tree"])
     expected = {"schema": RESULT_SCHEMA, "owner": assignment["owner"], "basis_sha256": assignment["basis_sha256"],
         "worker_session_hash": state["worker_session_hash"], "execution_id": execution_id, "wave_id": wave_id,
         "task_id": task_id, "assignment_digest": assignment["assignment_digest"],
         "worker_result_receipt_sha256": received["receipt_sha256"], "status": "verified_no_change",
         "head": acceptance["target"]["head"], "tree": acceptance["target"]["tree"], "commit": None,
         "changed_paths": [], "acceptance_receipt_sha256": canonical_digest(acceptance),
+        "task_acceptance_receipt_sha256": task_acceptance_sha256,
         "regression_oracle_evidence": _build_regression_oracle_evidence(assignment, oracle, acceptance["target"]["head"]),
         "attempt": state["attempt"], **{key: payload[key] for key in ("summary", "decisions", "open_risks", "spec_gaps", "validation", "review")}}
     result_file = result_path(run_dir, execution_id, wave_id, task_id)
@@ -3875,7 +4051,7 @@ def _finish_task_locked(
         guard = _worker_guard_status(assignment, task_record, clock=clock)
         if guard["status"] != "ACTIVE":
             raise ExecutionError(
-                str(guard["status"]), "worker liveness budget was exceeded"
+                str(guard["status"]), "worker exceeded its authorized scope"
             )
         if not clean(worktree_path):
             git(worktree_path, ["add", "-A"], "stage worker task")
@@ -3895,7 +4071,7 @@ def _finish_task_locked(
             claims = tuple(WriteClaim(**item) for item in assignment["write_claims"])
             try:
                 _verify_worker_paths(
-                    worktree_path, staged, claims, str(assignment["project_scope"])
+                    worktree_path, staged, claims, str(assignment["project_scope"]), run_dir
                 )
                 if any(
                     pattern.search(path)
@@ -3923,6 +4099,8 @@ def _finish_task_locked(
                 )
                 raise
             tree = git(worktree_path, ["write-tree"], "record worker task tree")
+            from workflow_task_acceptance import verify_task
+            verify_task(assignment, task_record["attempt"], tree)
             intent = _finish_intent_record(
                 assignment,
                 tree=tree,
@@ -3996,7 +4174,7 @@ def _finish_task_locked(
     )
     claims = tuple(WriteClaim(**item) for item in assignment["write_claims"])
     _verify_worker_paths(
-        worktree_path, changed_paths, claims, str(assignment["project_scope"])
+        worktree_path, changed_paths, claims, str(assignment["project_scope"]), run_dir
     )
     if any(
         pattern.search(path)
@@ -4018,6 +4196,8 @@ def _finish_task_locked(
     oracle_evidence = _build_regression_oracle_evidence(
         assignment, regression_oracle_evidence, task_head
     )
+    from workflow_task_acceptance import verify_task
+    task_acceptance_sha256 = verify_task(assignment, task_record["attempt"], commit_tree)
     expected_result: dict[str, Any] = {
         "schema": RESULT_SCHEMA,
         "owner": assignment["owner"],
@@ -4032,6 +4212,7 @@ def _finish_task_locked(
         "head": task_head,
         "tree": commit_tree,
         "acceptance_receipt_sha256": None,
+        "task_acceptance_receipt_sha256": task_acceptance_sha256,
         "commit": task_head,
         "changed_paths": changed_paths,
         "summary": summary_value,
@@ -4289,6 +4470,10 @@ def _complete_wave_locked(
         wave["blocker"] = "CLEANUP_BLOCKED"
         write_json_atomic(wave_file, wave)
         raise ExecutionError("CLEANUP_BLOCKED", "worker resources remain")
+    if validate_run(run_dir)[0].get("shared_admission"):
+        from workflow_projects import release_resources, complete_wave as rotate_capacity
+        release_resources(run_dir, "worktrees", [f"{execution_id}/{wave_id}/{task}" for task in wave["task_ids"]])
+        rotate_capacity(run_dir)
     wave["status"] = "failed" if failure is not None else "done"
     wave.pop("blocker", None)
     write_json_atomic(wave_file, wave)
@@ -4339,6 +4524,14 @@ def _validated_wave_failure(run_dir, execution_id, wave, *, active=False):
     authority = _repair_authority(run_dir, execution_id, failure["authority"], active=active)
     if authority["integration_commit"] != wave["integration_head"]:
         raise ExecutionError("EXECUTION_STATE_INVALID", "failed wave commit drifted")
+    if authority["classification"] == "PLAN_DEFECT":
+        from workflow_validation import verify_failed_wave_receipt
+        receipt = _impact("failed validation identity changed", verify_failed_wave_receipt,
+                          run_dir, execution_id, failure.get("validation_failure"))
+        if (receipt["target"]["head"] != wave["integration_head"]
+                or receipt["target"]["wave_id"] != wave["wave_id"]
+                or receipt["target"]["task_id"] is not None):
+            raise ExecutionError("EXECUTION_STATE_INVALID", "plan failure targets a different wave")
     return authority
 
 
@@ -4378,6 +4571,10 @@ def fail_wave(run_dir, execution_id, wave_id, classification_id, dispatch_id, ev
             "integration_head": wave["integration_head"], "authority": authority,
             "evidence": evidence.strip(),
         }
+        if authority["classification"] == "PLAN_DEFECT":
+            from workflow_validation import failed_wave_receipt
+            failure["validation_failure"] = _impact("plan repair needs exact failed producer evidence",
+                failed_wave_receipt, run_dir, execution_id, wave_id)
         failure["digest"] = sha256_json(failure)
         return _complete_wave_locked(run_dir, execution_id, wave_id, evidence, failure=failure)
 
@@ -4448,6 +4645,10 @@ def _resolution_record(run_dir, execution_id, failed, correcting):
         "corrective_wave": correcting["wave_id"], "integration_head": correcting["integration_head"],
         "authority": authority, "result_digests": proofs, "combined_evidence": correcting["combined_evidence"],
     }
+    if failed_authority["classification"] == "PLAN_DEFECT":
+        from workflow_validation import verify_plan_revision_chain
+        value["validation_review_sha256s"] = _impact("plan repair review chain is invalid",
+            verify_plan_revision_chain, run_dir, execution_id, coordinator, failed, correcting)
     value["digest"] = sha256_json(value)
     return value
 
@@ -4596,6 +4797,9 @@ def _seal_feature_locked(
     coordinator = _load_coordinator(run_dir, execution_id)
     _verify_execution_objective_impact(run_dir, execution_id, coordinator)
     _require_resolved_failures(run_dir, execution_id, coordinator)
+    if coordinator.get("authoring_checkpoints"):
+        from workflow_validation import verify
+        verify(run_dir, execution_id, None)
     from workflow_issue_resolution import seal_evidence, objective_context
     normalized_issues = seal_evidence(run_dir, issue_evidence)
     if coordinator["status"] == "sealed":
@@ -4635,7 +4839,7 @@ def _seal_feature_locked(
             integration,
             recorded_head,
             current_head,
-            str(coordinator["project_scope"]),
+            str(coordinator["project_scope"]), run_dir,
         )
     elif not clean(integration):
         append_journal(
@@ -4648,7 +4852,7 @@ def _seal_feature_locked(
         )
         git(integration, ["add", "-A"], "stage final feature changes")
         try:
-            _verify_staged_integration(integration, str(coordinator["project_scope"]))
+            _verify_staged_integration(integration, str(coordinator["project_scope"]), run_dir)
             git(integration, ["commit", "--cleanup=whitespace", "-m", message], "commit final feature changes")
         except ExecutionError:
             git(
@@ -4678,6 +4882,8 @@ def promote_feature(run_dir: Path, execution_id: str, evidence: str) -> dict[str
         raise ExecutionError("PROMOTION_BLOCKED", "final evidence is empty")
     coordinator = _load_coordinator(run_dir, execution_id)
     _require_resolved_failures(run_dir, execution_id, coordinator)
+    from workflow_revision_retirement import retire_sealed_revision_workers
+    retire_sealed_revision_workers(run_dir, execution_id, verify_only=True)
     _impact(
         "objective impact execution basis is stale",
         verify_objective_impact_execution,
@@ -4834,6 +5040,7 @@ def promote_feature(run_dir: Path, execution_id: str, evidence: str) -> dict[str
 
 
 def describe_status(run_dir: Path, execution_id: str) -> dict[str, Any]:
+    from workflow_timing import summary as timing_summary
     coordinator = _load_coordinator(run_dir, execution_id)
     worker_liveness: list[dict[str, object]] = []
     active_wave = coordinator.get("active_wave")
@@ -4873,6 +5080,7 @@ def describe_status(run_dir: Path, execution_id: str) -> dict[str, Any]:
         "promoted_head": coordinator["promoted_head"],
         "cleanup_retained": coordinator["cleanup_retained"],
         "worker_liveness": worker_liveness,
+        "timing": timing_summary(run_dir, coordinator, worker_liveness),
         "failed_waves": [
             {"wave_id": item, "failure": wave.get("combined_failure"),
              "resolution": wave.get("failure_resolution")}
@@ -4888,9 +5096,31 @@ def _serialized_transition(function):
     @wraps(function)
     def serialized(run_dir, *args, **kwargs):
         from workflow_state import lock, WorkflowError
+        from workflow_timing import measure, scope, flush
         try:
-            with lock(Path(run_dir).parent):
-                return function(run_dir, *args, **kwargs)
+            with scope(Path(run_dir)), lock(Path(run_dir).parent):
+                try:
+                    from workflow_statistics import safe_clock, safe_record
+                    started = safe_clock()
+                except Exception:
+                    safe_record, started = None, None
+                stages = {"prepare_execution": "preparation", "prepare_wave": "preparation",
+                          "refill_wave": "admission", "admit_task": "admission", "arm_task": "launch",
+                          "start_task": "launch", "integrate_wave": "integration", "complete_wave": "cleanup",
+                          "promote_feature": "cleanup", "recover_task": "repair", "replan_future": "repair"}
+                stage = stages.get(function.__name__)
+                if stage is None:
+                    result = function(run_dir, *args, **kwargs)
+                else:
+                    with measure(Path(run_dir), stage):
+                        result = function(run_dir, *args, **kwargs)
+                flush()
+                if function.__name__ != "heartbeat_task" and safe_record is not None:
+                    try:
+                        safe_record(Path(run_dir), function.__name__, started=started)
+                    except Exception:
+                        pass  # Observations cannot reverse a successful transition.
+                return result
         except WorkflowError as error:
             raise ExecutionError(error.code, str(error)) from error
     return serialized

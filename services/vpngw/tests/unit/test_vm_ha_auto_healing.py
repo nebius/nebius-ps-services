@@ -336,7 +336,28 @@ def test_activation_initialize_discards_legacy_advisory_heartbeat_only(
     )
     generation_store = AtomicGenerationStore(tmp_path / "generation-store")
     replay = ReplayState("peer-boot", 7)
-    generation_store.save_replay_state(peer.node_id, replay)
+    generation_store.save_accepted_peer_heartbeat(
+        peer.node_id,
+        PeerHeartbeat(
+            cluster_id=binding.cluster_id,
+            node_id=peer.node_id,
+            boot_id=replay.current_boot_id,
+            sequence=replay.highest_sequence,
+            sent_at="2026-08-27T00:00:00Z",
+            configured_role="active",
+            observed_owner_id=peer.node_id,
+            generation_id=binding.generation_id,
+            mtls_epoch=1,
+            certificate_fingerprint="d" * 64,
+            digests=DigestSet(binding.generation_id, "b" * 64, "c" * 64),
+            service_healthy=True,
+            route_ready=True,
+            promotion_ready=True,
+            auto_healing_policy_state="enabled",
+            auto_healing_policy_digest="e" * 64,
+        ),
+        replay_state=replay,
+    )
     legacy_heartbeat = {
         "boot_id": "peer-boot",
         "certificate_fingerprint": "d" * 64,

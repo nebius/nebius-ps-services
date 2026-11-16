@@ -1,6 +1,6 @@
 ---
 name: agent-nebius-auth-setup
-description: "Use only when explicitly invoked to bootstrap or repair current-project Codex Agent Nebius auth: account/tenant access, credentials/profile, repair lease, or separately requested auth hooks."
+description: "Use when explicitly invoked or delegated by an authorized test-live-on-nebius run to bootstrap or repair current-project Codex Agent Nebius auth: account/tenant access, credentials/profile, repair lease, or separately requested auth hooks."
 disable-model-invocation: true
 ---
 
@@ -37,8 +37,11 @@ leases, and hook installation as separate boundaries.
 
 ## Invocation Policy
 
-This skill is explicit-only. Direct invocation authorizes one bounded
-convergence for the resolved target. Do not ask for another confirmation and do
+This skill is explicit-only for ordinary selection. Direct invocation authorizes one bounded
+convergence for the resolved target. A named delegation from an
+authorized `test-live-on-nebius` run also authorizes one `ensure` for its exact
+project and asserted tenant. This exception does not authorize repair leases,
+hook installation, unrelated credential replacement or tenant write roles. Do not ask for another confirmation and do
 not require a dry-run or plan digest before executing `ensure`.
 
 Use `--dry-run` only when the user asks to preview, inspect, or review the
@@ -46,7 +49,7 @@ changes. A dry-run is read-only and does not create authority for a later run;
 the later direct invocation is the authority.
 
 Do not mutate IAM, credentials, profiles, selectors, repair leases, or hooks
-when this skill was not explicitly invoked. Use
+without direct invocation or that exact authorized live-test delegation. Use
 `$agent-nebius-auth-diagnose` for implicit read-only diagnosis.
 
 ## Discover the Current Session Project
@@ -116,8 +119,11 @@ Optional arguments:
 - `--dry-run` displays the resolved target, required actions, and any bounded
   conditional credential replacement without mutation.
 
-The live path takes its local locks first, validates the current non-agent
-administrative profile by minting a human-user access token with
+The live path takes its local locks first and selects the effective non-agent
+administrative profile. If the runtime selects an agent profile, use the
+configured active profile only when non-agent, without changing it or searching
+other stored identities. Missing or agent-only selections stop before IAM.
+Validate the selected profile by minting a human-user access token with
 `nebius iam get-access-token` while discarding stdout and provider stderr, resolves authoritative
 project metadata once, and performs one convergence pass. It never prints or
 persists that human token. All bootstrap IAM and authorized-key operations use
@@ -127,7 +133,7 @@ exact-permit group, ensures one membership, maintains the canonical credential
 and profile, and verifies project access plus tenant quota-allowance listing.
 
 Live `ensure` allows the CLI to open browser sign-in within a three-minute
-authentication bound. Run it directly after explicit invocation; an expired
+authentication bound. Run it directly after explicit invocation or authorized live-test delegation; an expired
 human login is not a reason to ask the user to run a separate terminal command
 or repeat permission. If browser sign-in cannot complete, report
 `blocked-admin-auth` and the actual browser or authentication blocker. Never

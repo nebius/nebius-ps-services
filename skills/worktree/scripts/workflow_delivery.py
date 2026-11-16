@@ -11,9 +11,10 @@ from urllib.parse import quote
 from workflow_state import WorkflowError, digest, lock, read, write
 from workflow_objectives import _git, authorize_coordinator, check_dispatch
 from workflow_program import accepted
-from workflow_qualification import target, verify_receipt, require
+from workflow_qualification import target, require
+from workflow_delivery_admission import verify_receipt
 
-CONTRACT = "workflow/sdlc-delivery-v1"
+CONTRACT = "workflow/sdlc-delivery-v2"
 
 
 def broker():
@@ -72,38 +73,33 @@ def _scope(expected, execution_id, repository, *, merge=False):
             "unattended delivery requires the unmanaged source checkout")
 
 
-def attest(run_dir, execution_id, review, qualification):
+def attest(run_dir, execution_id, review, admission):
     _authorize(run_dir, effects=True)
     root = _root(run_dir, execution_id)
     with lock(run_dir.parent), lock(root):
         _authorize(run_dir, effects=True)
         require(not (root / "submission.json").exists(), "submitted deliveries cannot be re-attested")
         expected = target(run_dir, execution_id)
-        receipt = verify_receipt(run_dir, qualification)
-        require(receipt["execution_id"] == execution_id, "qualification belongs to another slice")
+        receipt = verify_receipt(run_dir, admission)
+        require(receipt["execution_id"] == execution_id, "admission belongs to another slice")
         _scope(expected, execution_id, review["repository"])
         gate, _completion = broker()
         api = gate.GitHub(review["repository"])
         policy = _remote(api, expected["completion"]) if expected["completion"]["boundary"] == "merge-verified" else None
         pr = api.api(f"pulls/{review['pr']}")
         require(review["head"] == expected["head"] and review["base_sha"] == pr["base"]["sha"], "review/promotion/base drift")
-        if not receipt["plan"]["live"]:
-            files = api.pages(f"pulls/{review['pr']}/files")
-            require(len(files) == pr["changed_files"] and files
-                    and all(f["filename"].endswith((".md", ".txt", ".rst"))
-                            and not f["filename"].startswith((".github/", ".agents/", ".codex/")) for f in files),
-                    "live N/A is limited to reviewed prose-only changes")
         evidence = {**review, "sdlc": {"schema": CONTRACT, "execution_id": execution_id,
                     "objective_sha256": expected["objective_sha256"], "basis_sha256": expected["basis_sha256"],
-                    "qualification_sha256": qualification["sha256"], "candidate": receipt["candidate"],
-                    "live": receipt["plan"]["live"], "criteria": sorted(receipt["criteria"])}}
+                    "admission_sha256": admission["sha256"],
+                    "candidate": {"head": receipt["head"], "tree": receipt["tree"]},
+                    "uat": receipt["uat"], "criteria": sorted(receipt["criteria"])}}
         # The caller performed report-only review; the broker authenticates its
         # COMMENT attestation. This does not masquerade as a GitHub approval.
         _authorize(run_dir, effects=True)
         require(target(run_dir, execution_id) == expected, "review authority changed before publication")
         posted = gate.attest(api, review["pr"], evidence)
         value = {"schema": CONTRACT, "execution_id": execution_id, "status": "reviewed-pr",
-                 "review_id": posted["id"], "review": evidence, "qualification": qualification,
+                 "review_id": posted["id"], "review": evidence, "admission": admission,
                  "policy_sha256": digest(policy)}
         write(root / "review.json", value)
         return value
@@ -119,8 +115,8 @@ def submit(run_dir, execution_id):
         reviewed = read(root / "review.json")
         review = reviewed["review"]
         _scope(expected, execution_id, review["repository"], merge=True)
-        receipt = verify_receipt(run_dir, reviewed["qualification"])
-        require(receipt["execution_id"] == execution_id and review["sdlc"]["qualification_sha256"] == digest(receipt)
+        receipt = verify_receipt(run_dir, reviewed["admission"])
+        require(receipt["execution_id"] == execution_id and review["sdlc"]["admission_sha256"] == digest(receipt)
                 and review["sdlc"]["objective_sha256"] == expected["objective_sha256"], "review admission is stale")
         gate, _completion = broker()
         api = gate.GitHub(review["repository"])
@@ -128,7 +124,7 @@ def submit(run_dir, execution_id):
         require(digest(policy) == reviewed["policy_sha256"], "protected policy changed; review again")
         allowed = _operators(api)
         pr, _files, remote_review = gate.snapshot(api, review["pr"], expected["head"], policy, reviewed["review_id"], allowed_ids=allowed)
-        require(pr["base"]["sha"] == review["base_sha"], "base drift requires corrective integration and fresh qualification")
+        require(pr["base"]["sha"] == review["base_sha"], "base drift requires corrective integration and fresh admission")
         # Strict review_record validation binds this exact SDLC receipt remotely.
         require(remote_review == review, "remote review differs from the admitted evidence")
         actor = gate.gh(["api", "--hostname", "github.com", "user"])["id"]
@@ -188,7 +184,7 @@ def reconcile(run_dir, execution_id):
         _match_intent(intent, value)
         reviewed = read(root / "review.json")
         require(digest(reviewed) == value["review_sha256"] and intent.get("sdlc") == reviewed["review"]["sdlc"],
-                "protected intent differs from the admitted qualification")
+                "protected intent differs from the admitted admission")
         try:
             result = completion.merged_result(api, intent)
         except gate.Pending:
@@ -224,11 +220,11 @@ def verify_completion(run_dir, value):
             and value["pages"]["outcome"] in {"pages-verified", "not-applicable"}, "merged-result evidence changed")
     _match_intent(value["intent"], submission)
     require(digest(value["review"]) == submission["review_sha256"], "review evidence changed")
-    verify_receipt(run_dir, value["review"]["qualification"], current=False)
+    verify_receipt(run_dir, value["review"]["admission"], current=False)
     return value
 
 
-def phase_exit(run_dir, phase_id, qualifications):
+def phase_exit(run_dir, phase_id, admissions):
     _authorize(run_dir)
     run, _latest, snapshot = accepted(run_dir)
     from workflow_program import verify_inputs
@@ -238,8 +234,8 @@ def phase_exit(run_dir, phase_id, qualifications):
     slices = [s["id"] for s in program["slices"] if s["phase"] == phase_id]
     for slice_id in slices:
         verify_completion(run_dir, read(_root(run_dir, slice_id) / "completion.json"))
-    value = {"schema": "workflow/phase-exit-v1", "phase": phase_id, "definition_sha256": digest(phase),
-             "inputs": snapshot["inputs"], "qualifications": qualifications, "slices": slices}
+    value = {"schema": "workflow/phase-exit-v2", "phase": phase_id, "definition_sha256": digest(phase),
+             "inputs": snapshot["inputs"], "admissions": admissions, "slices": slices}
     verify_phase_exit(run_dir, value, phase)
     write(run_dir / "program" / "phase-exits" / (phase_id + ".json"), value)
     return value
@@ -263,21 +259,22 @@ def verify_phase_exit(run_dir, value, phase):
 
 
 def _verify_phase_record(run_dir, value, phase, program):
-    require(value.get("schema") == "workflow/phase-exit-v1" and value.get("phase") == phase["id"]
+    require(value.get("schema") == "workflow/phase-exit-v2" and value.get("phase") == phase["id"]
             and value.get("definition_sha256") == digest(phase),
             "phase exit basis is stale")
     require(value["slices"] == [s["id"] for s in program["slices"] if s["phase"] == phase["id"]],
             "phase completion omits frozen slice membership")
-    require(isinstance(value["qualifications"], list) and value["qualifications"], "phase has no executed exit evidence")
+    require(isinstance(value["admissions"], list) and value["admissions"], "phase has no executed exit evidence")
     from workflow_program import verify_inputs
     run = accepted(run_dir)[0]
     current_basis = verify_inputs(run_dir, Path(run["project_root"]))["bundle"]["obligation_basis"]
     covered = set()
-    for reference in value["qualifications"]:
+    for reference in value["admissions"]:
         receipt = verify_receipt(run_dir, reference, current=False)
         require(receipt["execution_id"] in value["slices"] + ["PHASE:" + phase["id"]], "phase evidence belongs elsewhere")
         covered.update(c for c in receipt["criteria"] if receipt["obligation_basis"].get(c) == current_basis.get(c))
-    require(set(phase["exit_criteria"]) <= covered, "phase exit obligations are incomplete")
+    required = set(phase["exit_criteria"]) - set(program["uat_criteria"])
+    require(set(required) <= covered, "phase implementation exit obligations are incomplete")
     for slice_id in value["slices"]:
         verify_completion(run_dir, read(_root(run_dir, slice_id) / "completion.json"))
 

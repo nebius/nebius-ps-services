@@ -129,7 +129,7 @@ Use LangChain components where they reduce integration work. Use LangGraph when
 explicit graph state, checkpoints, interrupts, replay, or fault recovery are
 requirements, not merely because an application contains more than one step.
 
-### Provider-Native Agent SDKs
+### Agent SDKs And Specialized Harnesses
 
 - OpenAI Agents SDK: <https://openai.github.io/openai-agents-python/>
 - OpenAI Agents SDK models: <https://openai.github.io/openai-agents-python/models/>
@@ -141,12 +141,13 @@ requirements, not merely because an application contains more than one step.
 - Claude Agent SDK deployment security: <https://code.claude.com/docs/en/agent-sdk/secure-deployment>
 - Claude Managed Agents: <https://platform.claude.com/docs/en/agents-and-tools/managed-agents/overview>
 
-Treat provider-native SDKs as separate specialized runtimes when a named native
-harness behavior is part of the product requirement. Evaluate the portable
-Pydantic AI path first, never nest the native runtime inside it, and retain
-application-owned state, tool, policy, budget, telemetry, and evaluation
-controls. Review lifecycle status, tracing export defaults, and data policy
-before production use.
+OpenAI Agents SDK is the preferred general agent kernel unless explicitly
+overridden; this preference is policy, not evidence of universal superiority.
+Read `openai-agents-sdk-integration.md` for the 2026-11-13 source review.
+Separate model-provider support from harness features. Evaluate alternatives
+under explicit overrides/fixed choices, never nest kernels, and retain
+application-owned state, tools, policy, budgets, telemetry and evaluation.
+Review lifecycle, tracing export defaults and data policy before use.
 
 ### Codex Engineering Specialists
 

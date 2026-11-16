@@ -21,6 +21,8 @@ from .ssh_policy import SSHTrustPolicy, build_openssh_base_command
 from .vm_ha_cloud import (
     nebius_request_error_code_is,
     operation_status_lookup_unsupported,
+    read_vm_ha_cloud,
+    vm_ha_observation_budget,
     vm_ha_request_kwargs,
     wait_vm_ha_operation,
 )
@@ -332,18 +334,21 @@ class NebiusSDKRouteBackend:
     def _raw_routes(self, route_table_id: str) -> tuple[object, ...]:
         client_type, list_request, *_rest = self._client_types()
         client = client_type(self.sdk)
-        return collect_nebius_pages(
-            lambda page_token: client.list(
-                list_request(
-                    parent_id=route_table_id,
-                    page_size=1000,
-                    page_token=page_token,
+        with vm_ha_observation_budget():
+            return collect_nebius_pages(
+                lambda page_token: read_vm_ha_cloud(
+                    lambda kwargs: client.list(
+                        list_request(
+                            parent_id=route_table_id,
+                            page_size=1000,
+                            page_token=page_token,
+                        ),
+                        **kwargs,
+                    ).wait()
                 ),
-                **vm_ha_request_kwargs(),
-            ),
-            context="VM HA route",
-            item_identity=nebius_resource_id,
-        )
+                context="VM HA route",
+                item_identity=nebius_resource_id,
+            )
 
     def verify_target(self, target: VMHARouteTarget) -> None:
         """Freshly prove the full declared parent chain before route authority is used."""
@@ -357,65 +362,73 @@ class NebiusSDKRouteBackend:
             SubnetServiceClient,
         )
 
-        subnet = (
-            SubnetServiceClient(self.sdk)
-            .get(
-                GetSubnetRequest(id=target.workload_subnet_id),
-                **vm_ha_request_kwargs(),
+        with vm_ha_observation_budget():
+            subnet = read_vm_ha_cloud(
+                lambda kwargs: (
+                    SubnetServiceClient(self.sdk)
+                    .get(
+                        GetSubnetRequest(id=target.workload_subnet_id),
+                        **kwargs,
+                    )
+                    .wait()
+                )
             )
-            .wait()
-        )
-        route_table = (
-            RouteTableServiceClient(self.sdk)
-            .get(
-                GetRouteTableRequest(id=target.route_table_id),
-                **vm_ha_request_kwargs(),
+            route_table = read_vm_ha_cloud(
+                lambda kwargs: (
+                    RouteTableServiceClient(self.sdk)
+                    .get(
+                        GetRouteTableRequest(id=target.route_table_id),
+                        **kwargs,
+                    )
+                    .wait()
+                )
             )
-            .wait()
-        )
-        subnet_metadata = getattr(subnet, "metadata", None)
-        subnet_spec = getattr(subnet, "spec", None)
-        table_metadata = getattr(route_table, "metadata", None)
-        table_spec = getattr(route_table, "spec", None)
-        effective = getattr(getattr(subnet, "status", None), "route_table", None)
-        explicit_table = str(getattr(subnet_spec, "route_table_id", "") or "")
-        observed = VMHARouteTarget(
-            project_id=str(getattr(subnet_metadata, "parent_id", "") or ""),
-            network_id=str(getattr(subnet_spec, "network_id", "") or ""),
-            workload_subnet_id=str(getattr(subnet_metadata, "id", "") or ""),
-            route_table_id=str(getattr(table_metadata, "id", "") or ""),
-        )
-        if (
-            observed != target
-            or str(getattr(effective, "id", "") or "") != target.route_table_id
-            or (explicit_table and explicit_table != target.route_table_id)
-            or str(getattr(table_metadata, "parent_id", "") or "") != target.project_id
-            or str(getattr(table_spec, "network_id", "") or "") != target.network_id
-        ):
-            raise RuntimeError("VM-HA route target membership changed")
-
-        if not explicit_table:
-            # An inherited attachment has no spec.route_table_id. Prove its
-            # effective table against the owning network instead of treating
-            # an empty specification as drift or trusting status alone.
-            assignment = getattr(getattr(route_table, "status", None), "assignment", None)
-            if getattr(effective, "default", None) is not True or set(
-                getattr(assignment, "subnets", ()) or ()
-            ) != {target.workload_subnet_id}:
-                raise RuntimeError("VM-HA route target membership changed")
-            network = (
-                NetworkServiceClient(self.sdk)
-                .get(GetNetworkRequest(id=target.network_id), **vm_ha_request_kwargs())
-                .wait()
+            subnet_metadata = getattr(subnet, "metadata", None)
+            subnet_spec = getattr(subnet, "spec", None)
+            table_metadata = getattr(route_table, "metadata", None)
+            table_spec = getattr(route_table, "spec", None)
+            effective = getattr(getattr(subnet, "status", None), "route_table", None)
+            explicit_table = str(getattr(subnet_spec, "route_table_id", "") or "")
+            observed = VMHARouteTarget(
+                project_id=str(getattr(subnet_metadata, "parent_id", "") or ""),
+                network_id=str(getattr(subnet_spec, "network_id", "") or ""),
+                workload_subnet_id=str(getattr(subnet_metadata, "id", "") or ""),
+                route_table_id=str(getattr(table_metadata, "id", "") or ""),
             )
-            metadata = getattr(network, "metadata", None)
-            status = getattr(network, "status", None)
             if (
-                str(getattr(metadata, "id", "") or "") != target.network_id
-                or str(getattr(metadata, "parent_id", "") or "") != target.project_id
-                or str(getattr(status, "default_route_table_id", "") or "") != target.route_table_id
+                observed != target
+                or str(getattr(effective, "id", "") or "") != target.route_table_id
+                or (explicit_table and explicit_table != target.route_table_id)
+                or str(getattr(table_metadata, "parent_id", "") or "") != target.project_id
+                or str(getattr(table_spec, "network_id", "") or "") != target.network_id
             ):
                 raise RuntimeError("VM-HA route target membership changed")
+
+            if not explicit_table:
+                # An inherited attachment has no spec.route_table_id. Prove its
+                # effective table against the owning network instead of treating
+                # an empty specification as drift or trusting status alone.
+                assignment = getattr(getattr(route_table, "status", None), "assignment", None)
+                if getattr(effective, "default", None) is not True or set(
+                    getattr(assignment, "subnets", ()) or ()
+                ) != {target.workload_subnet_id}:
+                    raise RuntimeError("VM-HA route target membership changed")
+                network = read_vm_ha_cloud(
+                    lambda kwargs: (
+                        NetworkServiceClient(self.sdk)
+                        .get(GetNetworkRequest(id=target.network_id), **kwargs)
+                        .wait()
+                    )
+                )
+                metadata = getattr(network, "metadata", None)
+                status = getattr(network, "status", None)
+                if (
+                    str(getattr(metadata, "id", "") or "") != target.network_id
+                    or str(getattr(metadata, "parent_id", "") or "") != target.project_id
+                    or str(getattr(status, "default_route_table_id", "") or "")
+                    != target.route_table_id
+                ):
+                    raise RuntimeError("VM-HA route target membership changed")
 
     def verify_migration_route(self, binding: VMHAMigrationRouteBinding) -> bool:
         """Reobserve one exact approval-bound route without adopting by name."""
@@ -430,11 +443,17 @@ class NebiusSDKRouteBackend:
             raise RuntimeError("VM-HA migration route identity is ambiguous")
         if not matches:
             return False
-        route = matches[0]
+        return self._migration_snapshot_matches(matches[0], binding)
+
+    @staticmethod
+    def _migration_snapshot_matches(route: object, binding: VMHAMigrationRouteBinding) -> bool:
+        """Compare one observed object to its exact approved predecessor."""
+
         metadata = getattr(route, "metadata", None)
         prefix = RouteManager._route_destination_network(route)
         return bool(
-            RouteManager._metadata_name(route) == binding.name
+            RouteManager._metadata_id(route) == binding.route_id
+            and RouteManager._metadata_name(route) == binding.name
             and prefix is not None
             and str(prefix) == binding.prefix
             and RouteManager._route_next_hop_allocation_id(route) == binding.allocation_id
@@ -484,9 +503,23 @@ class NebiusSDKRouteBackend:
             local_ownership = combined_ownership.get(route_id)
             if local_ownership is not None and has_cloud_authority:
                 if cloud_ownership != local_ownership:
-                    raise RuntimeError(
-                        "VM-HA cloud route authority conflicts with the durable ledger"
-                    )
+                    migration = self._migration_routes.get(route_id)
+                    labels = self._route_labels(route)
+                    if not (
+                        migration is not None
+                        and target in self._authority_targets
+                        and migration.route_target == target == local_ownership.route_target
+                        and str(getattr(getattr(route, "metadata", None), "parent_id", ""))
+                        == target.route_table_id
+                        and local_ownership.cluster_id == self._authority_cluster_id
+                        and labels.get(self._AUTHORITY_MANAGED_LABEL) == "ordinary-v1"
+                        and self._AUTHORITY_LABEL_KEYS & labels.keys()
+                        == {self._AUTHORITY_MANAGED_LABEL}
+                        and self._migration_snapshot_matches(route, migration)
+                    ):
+                        raise RuntimeError(
+                            "VM-HA cloud route authority conflicts with the durable ledger"
+                        )
             elif local_ownership is None and cloud_ownership is not None:
                 combined_ownership[route_id] = cloud_ownership
         return RouteManager(None)._vm_ha_route_snapshots(
@@ -728,16 +761,21 @@ class NebiusSDKRouteBackend:
         return f"vpngw-ha-{hashlib.sha256(identity.encode()).hexdigest()[:24]}"
 
     def _resume_operation(self, cloud_operation_id: str) -> t.Any:
-        from nebius.api.nebius.common.v1 import GetOperationRequest, OperationServiceClient
+        from nebius.api.nebius.common.v1 import GetOperationRequest
+        from nebius.api.nebius.vpc.v1 import RouteServiceClient
 
-        return (
-            OperationServiceClient(self.sdk)
+        operation = (
+            RouteServiceClient(self.sdk)
+            .operation_service()
             .get(
                 GetOperationRequest(id=cloud_operation_id),
                 **vm_ha_request_kwargs(),
             )
             .wait()
         )
+        if str(getattr(operation, "id", "") or "") != cloud_operation_id:
+            raise RuntimeError("VM-HA route operation identity changed")
+        return operation
 
     @staticmethod
     def _operation_succeeded(operation: t.Any) -> bool:

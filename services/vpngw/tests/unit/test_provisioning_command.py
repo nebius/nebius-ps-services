@@ -49,7 +49,8 @@ def scope(tmp_path, monkeypatch):
     # resource/route discovery have their own SDK emulator tests.
     discoveries = []
 
-    def resources(_manager, _sdk, _spec, indices, **kwargs):
+    def resources(_manager, _sdk, _spec, indices, *, retained_disks=None, **kwargs):
+        assert not retained_disks
         discoveries.append(indices)
         result = resource_plan()
         result.update(kwargs)
@@ -154,6 +155,59 @@ def test_fresh_command_resumes_published_keys_without_discovering_a_new_image(sc
         assert published.identity_for("gateway-0").private_key == private
         assert scope.journal.path.read_bytes() == original
     assert scope.discoveries == [(0,)] and not scope.submissions
+
+
+def test_precompute_settlement_verifies_real_published_ssh_owner_before_retirement(
+    scope, monkeypatch
+):
+    from nebius.api.nebius.compute import v1 as compute
+    from test_credential_enrollment import missing
+
+    from nebius_vpngw.deploy.apply_command import ReplanReady
+    from nebius_vpngw.deploy.apply_result import ApplyReport
+    from nebius_vpngw.deploy.provisioning_journal import ProvisioningJournal
+
+    first = inspect(scope)
+    native = ProvisioningJournal.verified
+
+    def interrupt(self, recipe, request):
+        if recipe.key == "disk":
+            raise TimeoutError("disk settled before receipt acknowledgement")
+        return native(self, recipe, request)
+
+    with scope.journal:
+        first.begin()
+        policy = first.publish_trust()
+        original_identity = policy.identity_for("gateway-0").private_key
+        with monkeypatch.context() as patch:
+            patch.setattr(ProvisioningJournal, "verified", interrupt)
+            with pytest.raises(TimeoutError):
+                first.provision(policy)
+
+    def absent(*_a, **_kw):
+        raise missing()
+
+    monkeypatch.setattr(compute, "InstanceServiceClient", lambda _: NS(get_by_name=absent))
+    monkeypatch.setattr(cli, "_ordinary_ssh_trust_scope", lambda *a, **kw: scope.trust)
+    monkeypatch.setattr(cli, "_approve_disruption", lambda *a, **kw: True)
+    with pytest.raises(ReplanReady):
+        cli._review_provisioning_prefix(
+            scope.journal,
+            manager=scope.manager,
+            deployment=scope.deployment,
+            local={**scope.local, "changed": True},
+            lifecycle_store=NS(read=lambda **_: None),
+            supplied=None,
+            dry_run=False,
+            report=ApplyReport(),
+            artifact="f" * 64,
+            tenant_id="tenant",
+            region_id="region",
+        )
+    assert scope.journal.pending() is None
+    assert [kind for kind, *_ in scope.submissions] == ["disk"]
+    current = owner.policy(scope.manager, scope.deployment, scope.trust, first.intents["ssh"])
+    assert current.identity_for("gateway-0").private_key == original_identity
 
 
 @pytest.mark.parametrize("drift", ["configuration", "artifact", "retained-target"])

@@ -1,0 +1,36 @@
+name: GitHub AI release intake
+'on':
+  workflow_run:
+    workflows:
+    - Merge completion
+    types:
+    - completed
+permissions:
+  contents: read
+  pull-requests: read
+  actions: write
+jobs:
+  dispatch:
+    if: github.event.workflow_run.head_branch == github.event.repository.default_branch && github.event.workflow_run.conclusion
+      == 'success'
+    environment: github-ai-automation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      with:
+        version: 0.13.7
+        enable-cache: false
+    - env:
+        AI_AUTOMATION_RELEASE_PUBLISH: ${{ vars.AI_AUTOMATION_RELEASE_PUBLISH || 'false' }}
+        AI_AUTOMATION_STATE_BUCKET: ${{ secrets.AI_AUTOMATION_STATE_BUCKET }}
+        AI_AUTOMATION_STATE_ENDPOINT: ${{ secrets.AI_AUTOMATION_STATE_ENDPOINT }}
+        AI_AUTOMATION_STATE_ACCESS_KEY_ID: ${{ secrets.AI_AUTOMATION_STATE_ACCESS_KEY_ID }}
+        AI_AUTOMATION_STATE_SECRET_ACCESS_KEY: ${{ secrets.AI_AUTOMATION_STATE_SECRET_ACCESS_KEY }}
+        GH_TOKEN: ${{ github.token }}
+        PRODUCER_RUN: ${{ github.event.workflow_run.id }}
+      run: uv run --locked --project github-ai-automation github-ai-automation release-intake "$PRODUCER_RUN"

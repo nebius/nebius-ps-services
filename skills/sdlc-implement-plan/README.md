@@ -21,16 +21,39 @@ unexpected executed failure still requires the blocked handoff. Recovery uses
 the existing shared engine with a stopped predecessor, released runtime,
 unchanged assignment and fresh identity; it never grants permission itself.
 
+Every blocked SDLC recovery additionally requires active counted classification
+bound to its canonical worker-result receipt, integration commit and current
+fingerprints. Both authorization and transfer enforce the
+[shared v2 contract](../worktree/references/workflow-contract.md). Include
+`evidence_digests.worker_result` as `sha256:` plus the receipt's `receipt_sha256`
+when classifying. Do not complete the repair before its authorized worker runs.
+Discover existing project instruction files before reading them; absent optional
+`AGENTS.md` or `AGENTS.override.md` files are not required artifacts.
+
 A proven `ENVIRONMENT_DEFECT` during `active_task` at exactly
 `sdlc-implement-plan` now routes through `existing_task_attempt`. Establish an
 in-scope remedy and new evidence/hypothesis, then consume a counted localized
 repair dispatch before authorizing the shared fresh-worker recovery. Preserve
 the blocked receipt and observe termination and runtime release. Rerun the
 original failed operation through an authorized mechanism, complete the
-assignment's validation and normal task/wave completion, then record the actual
-remediation result. Success requires the existing downstream revalidation
+assignment's validation and normal task completion, then record the actual
+remediation result before completing an interrupted parent's corrective wave. Success requires the existing downstream revalidation
 cursor; it does not erase failure history or grant permission. Other active
 phases, policy/human blockers and later lifecycle boundaries gain no authority.
+
+When a new independent failure interrupts a counted pending repair,
+`repair-control-v3` retains its full context in immutable suspended evidence.
+After the intervening worker has performed and verified the actual repair,
+record its successful completion before the original corrective wave completes.
+The owner returns `resumed_dispatch_id` and restores the pending parent only
+when its ordered gates cover every remaining invalidation. Refresh checkpoint
+repair pointers from the returned control. Both budgets, the child completion
+and deferred cursor, and all failure evidence remain. No historical receipt
+becomes active by itself; no new dispatch is charged. Failed, changed, exhausted
+or broader obligations stop restoration. The original wave still needs fresh
+combined validation, and its later repair completion reruns all invalidated
+gates. Completion replay cannot rewind a later owner. Obsolete v2 control state
+is rejected without conversion; install the source repair before a fresh run.
 
 ## What It Does
 
@@ -43,7 +66,7 @@ validated result admission. Every task in a wave uses the same frozen base;
 integration waits for the full wave.
 Every assignment binds a private dependency handoff, and every task uses a
 worker session identity that has never owned another task in the run.
-`workflow/worker-assignment-v2` also binds the accepted root-intent digest and exact canonical
+`workflow/worker-assignment-v4` also binds the accepted root-intent digest and exact canonical
 project-spec receipt. Workers never reclassify user intent or edit specs; they
 return typed `spec_gaps` to the root coordinator, and any non-empty list stops
 before task commit for reconciliation and replanning. The sequential launcher
@@ -61,7 +84,10 @@ Native arm/recovery admission validates the selected home, project/run and
 coordinator before declaring required project-state and runtime-lease write
 directories. Adapters preserve sandbox and approval controls; directory grants
 do not authorize unrelated state edits. The sequential adapter admits before
-spawning. Missing host capability blocks execution.
+spawning. Verify capabilities before arming: supported explicit command cwd and
+existing inherited directory grants can satisfy the envelope without spawn
+setters. Worker prompts name the startup/heartbeat cwd separately from frozen
+validation cwd. Missing host capability blocks execution.
 An early exit before `task-start` remains `WORKER_FAILED`; a validated bounded
 `prestart_result` supplies diagnosis only, never result or recovery authority.
 
@@ -72,10 +98,10 @@ coordinator—not the worker—performs the sensitive-content gate and task comm
 Workers must start through the bound private helper, emit direct bounded
 heartbeats targeting 30 seconds, and never run a background heartbeat
 process. The coordinator arms only available slots and watches each active
-worker for prestart, scope, read-only, stall, and maximum-runtime violations.
-The shared startup window is five minutes from arming to `task-start`, followed
-by the one-hour work limit. Prepare handoff details before arming, spawn
-immediately, and persist observations afterward. Repeated arming never renews time.
+worker for identity/scope violations and health observations. Delayed startup,
+read-only work and stale observations prompt diagnosis without healthy-work
+expiry. Prepare handoffs before arming, spawn immediately and persist observations
+afterward. See [execution health](../worktree/references/execution-health.md).
 The sequential launcher places each worker and its descendants in one dedicated
 process group and terminates that group on every post-spawn failure. A worker
 that never starts is requeued only after confirmed termination and an exact

@@ -1,0 +1,123 @@
+# Single release effect owner; candidate builds receive no environment secrets.
+name: GitHub AI release
+run-name: ai-release-${{ inputs.project }}-pr-${{ inputs.pr_number }}
+'on':
+  workflow_dispatch:
+    inputs:
+      project:
+        description: Registered package
+        required: true
+        type: choice
+        options:
+        - vpngw
+        - nebius-cxcli
+      pr_number:
+        description: Merged PR with completion evidence
+        required: true
+        type: string
+      completion_run:
+        description: Successful Merge completion run
+        required: true
+        type: string
+      tag:
+        description: Optional expected tag; must equal fragment-derived version
+        default: ''
+        type: string
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+concurrency:
+  group: ai-release-${{ github.repository }}-${{ inputs.project }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: github-ai-automation
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+    outputs:
+      tag: ${{ steps.prepare.outputs.tag }}
+      source_sha: ${{ steps.prepare.outputs.source_sha }}
+      needs_build: ${{ steps.prepare.outputs.needs_build }}
+    steps:
+    - &id001
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - &id002
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      with:
+        version: 0.13.7
+        enable-cache: false
+    - id: prepare
+      name: Reserve exact release intent
+      env:
+        AI_AUTOMATION_STATE_BUCKET: ${{ secrets.AI_AUTOMATION_STATE_BUCKET }}
+        AI_AUTOMATION_STATE_ENDPOINT: ${{ secrets.AI_AUTOMATION_STATE_ENDPOINT }}
+        AI_AUTOMATION_STATE_ACCESS_KEY_ID: ${{ secrets.AI_AUTOMATION_STATE_ACCESS_KEY_ID }}
+        AI_AUTOMATION_STATE_SECRET_ACCESS_KEY: ${{ secrets.AI_AUTOMATION_STATE_SECRET_ACCESS_KEY }}
+        GH_TOKEN: ${{ github.token }}
+        AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+        AI_AUTOMATION_RELEASE_PUBLISH: ${{ vars.AI_AUTOMATION_RELEASE_PUBLISH || 'false' }}
+        PROJECT: ${{ inputs.project }}
+        PR_NUMBER: ${{ inputs.pr_number }}
+        COMPLETION_RUN: ${{ inputs.completion_run }}
+        REQUESTED_TAG: ${{ inputs.tag }}
+      run: uv run --locked --project github-ai-automation github-ai-automation release-prepare "$PROJECT" "$PR_NUMBER"
+        "$COMPLETION_RUN" "$RUNNER_TEMP/release-intent.json" --tag "$REQUESTED_TAG"
+  vpngw:
+    needs: prepare
+    if: needs.prepare.outputs.needs_build == 'true' && inputs.project == 'vpngw'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/vpngw-release.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+  cxcli:
+    needs: prepare
+    if: needs.prepare.outputs.needs_build == 'true' && inputs.project == 'nebius-cxcli'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/nebius-cxcli-release.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+      source_sha: ${{ needs.prepare.outputs.source_sha }}
+  publish:
+    needs:
+    - prepare
+    - vpngw
+    - cxcli
+    if: always() && needs.prepare.result == 'success' && (needs.prepare.outputs.needs_build == 'false' || needs.vpngw.result
+      == 'success' || needs.cxcli.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: github-ai-automation
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+    steps:
+    - *id001
+    - *id002
+    - name: Publish and verify original assets
+      env:
+        AI_AUTOMATION_STATE_BUCKET: ${{ secrets.AI_AUTOMATION_STATE_BUCKET }}
+        AI_AUTOMATION_STATE_ENDPOINT: ${{ secrets.AI_AUTOMATION_STATE_ENDPOINT }}
+        AI_AUTOMATION_STATE_ACCESS_KEY_ID: ${{ secrets.AI_AUTOMATION_STATE_ACCESS_KEY_ID }}
+        AI_AUTOMATION_STATE_SECRET_ACCESS_KEY: ${{ secrets.AI_AUTOMATION_STATE_SECRET_ACCESS_KEY }}
+        GH_TOKEN: ${{ github.token }}
+        AI_AUTOMATION_REPOSITORY_ID: ${{ vars.AI_AUTOMATION_REPOSITORY_ID }}
+        AI_AUTOMATION_RELEASE_PUBLISH: ${{ vars.AI_AUTOMATION_RELEASE_PUBLISH || 'false' }}
+        PROJECT: ${{ inputs.project }}
+        SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        RELEASE_BUILD_RESULT: ${{ needs.vpngw.result == 'success' && 'success' || needs.cxcli.result }}
+      run: uv run --locked --project github-ai-automation github-ai-automation release-publish "$PROJECT" "$SOURCE_SHA"
+        "$RELEASE_TAG"

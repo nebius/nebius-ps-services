@@ -35,6 +35,7 @@ def kernel_scope():
         "reqid": 1,
         "dir": "out",
         "index": 9,
+        "priority": 367231,
         "tmpl_src": "192.0.2.1",
         "tmpl_dst": "192.0.2.2",
     }
@@ -50,6 +51,7 @@ def test_scoped_deletions_preserve_unrelated_kernel_objects(kernel_scope):
     before = copy.deepcopy((states, rules))
     commands = deletions(policy, states, rules, links, addresses)
     assert commands == (
+        ("ip", "xfrm", "policy", "delete", "index", "9", "dir", "out", "if_id", "100"),
         (
             "ip",
             "xfrm",
@@ -64,7 +66,6 @@ def test_scoped_deletions_preserve_unrelated_kernel_objects(kernel_scope):
             "spi",
             "0x1234",
         ),
-        ("ip", "xfrm", "policy", "delete", "index", "9", "dir", "out", "if_id", "100"),
     )
     assert (states, rules) == before
 
@@ -97,6 +98,10 @@ def test_kernel_sa_requires_unambiguous_managed_scope(kernel_scope, field, value
         ("tmpl_dst", "203.0.113.2"),
         ("index", 0),
         ("index", None),
+        ("priority", None),
+        ("priority", True),
+        ("priority", -1),
+        ("priority", 2**32),
         ("dir", "unknown"),
         ("mark", 0),
     ],
@@ -127,6 +132,29 @@ def test_kernel_rekey_overlap_has_separate_exact_deletions(kernel_scope):
     assert [c[-1] for c in commands if c[2] == "state"] == ["0x1234", "0x1235"]
 
 
+def test_orphan_traps_are_removed_before_negotiated_policies_expose_them(kernel_scope):
+    policy, states, rules, links, addresses = kernel_scope
+    rules.append({**rules[0], "index": 17, "reqid": 2, "priority": 383616})
+    rules.append({**rules[0], "index": 25, "reqid": 3, "priority": 384640})
+    commands = deletions(policy, states, rules, links, addresses)
+    assert [command[5] for command in commands if command[2] == "policy"] == ["25", "17", "9"]
+    assert commands[-1][2] == "state"
+
+
+@pytest.mark.parametrize("overlap", [True, False])
+def test_equal_precedence_different_reqids_require_disjoint_selectors(kernel_scope, overlap):
+    policy, states, rules, links, addresses = kernel_scope
+    rules[0]["src"] = "10.1.0.0/24"
+    rules.append(
+        {**rules[0], "index": 17, "reqid": 2, "src": "10.1.0.0/25" if overlap else "10.2.0.0/24"}
+    )
+    if overlap:
+        with pytest.raises(ValueError, match="precedence is ambiguous"):
+            deletions(policy, states, rules, links, addresses)
+    else:
+        assert len(deletions(policy, states, rules, links, addresses)) == 3
+
+
 def test_cross_interface_sa_identity_collision_blocks_cleanup(kernel_scope):
     kernel_scope[1].append({**kernel_scope[1][0], "if_id": 777})
     with pytest.raises(ValueError, match="shared outside"):
@@ -151,6 +179,7 @@ def test_policy_text_retains_deletion_identity_and_ambiguous_mark():
 """
     (record,) = xfrm_records(raw, policy=True)
     assert record["index"] == "9"
+    assert record["priority"] == "375423"
     assert record["mark"] == "0x1/0xffffffff"
     assert record["if_id"] == "0x64"
 

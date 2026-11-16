@@ -23,7 +23,7 @@ RECEIPT_SCHEMA = "agentic-sdlc/browser-stage-v1"
 BROWSER_NAME = "Google Chrome (headless)"
 STAGES = ("capability-discovery", "evaluate", "uat-before-restart", "uat-after-restart")
 ASSETS = Path(__file__).resolve().parents[1] / "assets/headless-browser"
-STAGE_TIMEOUT_SECONDS = 300
+OBSERVATION_INTERVAL_SECONDS = 30
 BUNDLE_FILES = (
     "package.json", "package-lock.json", "playwright.config.mjs",
     "acceptance.spec.mjs", "completion-control.mjs",
@@ -32,6 +32,42 @@ BUNDLE_FILES = (
 
 class BrowserOwnershipError(RuntimeError):
     """Browser execution or ownership could not be established."""
+
+
+def process_owner():
+    from verification_suites import scheduler
+    return scheduler().source_module("workflow_process", Path(__file__).resolve().parents[2] / "worktree/scripts/workflow_process.py")
+
+
+def install_dependencies(bundle, environment):
+    owner = process_owner()
+    private_json(bundle / "dependency-start.json", {"schema": "workflow/browser-dependency-operation-v1"})
+    result = owner.run_owned(["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+                             cwd=bundle, env=environment,
+                             on_observation=lambda row: print("Browser dependency setup continues; observation checkpoint.", flush=True))
+    if (result["stop_reason"] != "exited" or not result["local_group_quiescent"]
+            or not all(result[key]["complete"] for key in ("stdout", "stderr"))):
+        error = BrowserOwnershipError("Browser dependency setup termination is unproven; retain this trial.")
+        error.observation = result
+        raise error
+    private_json(bundle / "dependency-complete.json", {
+        "schema": "workflow/browser-dependency-operation-v1", "quiescent": True,
+        "exit_code": result["exit_code"]})
+    return subprocess.CompletedProcess([], result["exit_code"])
+
+
+def require_dependency_quiescence(run_root):
+    bundle = safe_path(run_root / "private/browser/bundle", run_root)
+    started = safe_path(bundle / "dependency-start.json", run_root)
+    complete = safe_path(bundle / "dependency-complete.json", run_root)
+    if started.exists():
+        try:
+            value = json.loads(complete.read_text())
+            if (value.get("schema") != "workflow/browser-dependency-operation-v1"
+                    or value.get("quiescent") is not True or type(value.get("exit_code")) is not int):
+                raise ValueError()
+        except (OSError, ValueError, AttributeError):
+            raise BrowserOwnershipError("Browser dependency writer is unresolved; retain the owned trial.") from None
 
 
 def utc_now() -> str:
@@ -155,6 +191,7 @@ def _processes() -> list[tuple[int, int, str]]:
 
 def close(run_root: Path, verification_id: str, value: dict, *, reap=None) -> dict:
     validate_state(value, verification_id)
+    require_dependency_quiescence(run_root)
     if value["active"] is None:
         return {**value, "status": "CLOSED"}
     active = value["active"]
@@ -269,7 +306,7 @@ def recover_interrupted_stage(state: dict) -> None:
 
 
 def run_stage(
-    state: dict, stage: str, target: dict, *, persist, checkpoint, record=None
+    state: dict, stage: str, target: dict, *, persist, checkpoint, record=None, revalidation=None
 ) -> dict:
     if stage not in STAGES:
         raise BrowserOwnershipError("Unsupported browser stage.")
@@ -312,6 +349,7 @@ def run_stage(
             for k in ("verification_id", "attempt_id", "stage", "endpoint")
         },
         "target": target,
+        "revalidation": revalidation,
         "started_at": utc_now(),
         "headless": True,
         "browser": "chrome",
@@ -322,66 +360,60 @@ def run_stage(
         "checks": [],
     }
     process = None
+    capture = None
     failure = None
     try:
         if not (bundle / "node_modules/@playwright/test/cli.js").is_file():
-            with (output / "install.log").open("w") as log:
-                installed = subprocess.run(
-                    ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
-                    cwd=bundle,
-                    env=env,
-                    stdout=log,
-                    stderr=log,
-                    timeout=120,
-                )
+            installed = install_dependencies(bundle, env)
             if installed.returncode:
                 raise BrowserOwnershipError(
                     "Pinned Playwright dependency installation failed."
                 )
-        with (output / "runner.log").open("w") as log:
-            process = subprocess.Popen(
-                [
-                    "node",
-                    str(bundle / "node_modules/@playwright/test/cli.js"),
-                    "test",
-                    "--config",
-                    str(private / "playwright.config.mjs"),
-                ],
-                cwd=bundle,
-                env=env,
-                stdout=log,
-                stderr=log,
-                start_new_session=True,
+        process = subprocess.Popen(
+            [
+                "node",
+                str(bundle / "node_modules/@playwright/test/cli.js"),
+                "test",
+                "--config",
+                str(private / "playwright.config.mjs"),
+            ],
+            cwd=bundle,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        state["browser_instance"] = {
+            **initial_state(state["verification_id"]),
+            "status": "RUNNING",
+            "active": {"attempt_id": attempt_id, "pid": process.pid},
+        }
+        persist()
+        capture = process_owner().PipeCapture(process)
+        next_observation = time.monotonic() + OBSERVATION_INTERVAL_SECONDS
+        seen = set()
+        while process.poll() is None:
+            if time.monotonic() >= next_observation:
+                print("Owned browser stage continues; observation checkpoint.", flush=True)
+                next_observation = time.monotonic() + OBSERVATION_INTERVAL_SECONDS
+            for name in ("blank", "created", "completed", "post-restart"):
+                request = safe_path(output / ("request-" + name + ".json"), root)
+                if request.exists() and name not in seen:
+                    value = json.loads(request.read_text())
+                    checkpoint(name, value)
+                    receipt["checks"].append(
+                        {"name": name, "record": value, "observed_at": utc_now()}
+                    )
+                    private_json(
+                        output / ("response-" + name + ".json"), {"ok": True}
+                    )
+                    seen.add(name)
+            capture.drain(.05)
+        receipt["exit_code"] = process.returncode
+        if process.returncode:
+            raise BrowserOwnershipError(
+                "Headless browser assertions failed; inspect the preserved trace and report."
             )
-            state["browser_instance"] = {
-                **initial_state(state["verification_id"]),
-                "status": "RUNNING",
-                "active": {"attempt_id": attempt_id, "pid": process.pid},
-            }
-            persist()
-            deadline = time.monotonic() + STAGE_TIMEOUT_SECONDS
-            seen = set()
-            while process.poll() is None:
-                if time.monotonic() >= deadline:
-                    raise BrowserOwnershipError("Headless browser stage timed out.")
-                for name in ("blank", "created", "completed", "post-restart"):
-                    request = safe_path(output / ("request-" + name + ".json"), root)
-                    if request.exists() and name not in seen:
-                        value = json.loads(request.read_text())
-                        checkpoint(name, value)
-                        receipt["checks"].append(
-                            {"name": name, "record": value, "observed_at": utc_now()}
-                        )
-                        private_json(
-                            output / ("response-" + name + ".json"), {"ok": True}
-                        )
-                        seen.add(name)
-                time.sleep(0.05)
-            receipt["exit_code"] = process.returncode
-            if process.returncode:
-                raise BrowserOwnershipError(
-                    "Headless browser assertions failed; inspect the preserved trace and report."
-                )
         observations = json.loads(
             safe_path(output / "observations.json", root).read_text()
         )
@@ -418,7 +450,7 @@ def run_stage(
         RuntimeError,
     ) as error:
         failure = error
-        receipt["error"] = type(error).__name__  # raw output stays in private artifacts
+        receipt["error"] = type(error).__name__  # raw runner output is never persisted
     finally:
         try:
             if process is not None and process.poll() is not None:
@@ -437,6 +469,15 @@ def run_stage(
             failure = error
             receipt["cleanup"] = "FAIL"
             receipt["outcome"] = "FAIL"
+        if capture is not None:
+            try:
+                diagnostics = capture.finish()
+                private_json(output / "runner-output.json", diagnostics)
+                if not all(row["complete"] for row in diagnostics.values()):
+                    raise BrowserOwnershipError("Browser output completeness is unproven.")
+            except (OSError, BrowserOwnershipError) as error:
+                failure = failure or error
+                receipt["outcome"] = "FAIL"
         receipt["finished_at"] = utc_now()
         for item in sorted(output.iterdir()):
             safe_path(item, root)
@@ -461,6 +502,20 @@ def run_stage(
     if failure is not None:
         raise BrowserOwnershipError(str(failure)) from failure
     return receipt
+
+
+def validate_stage_order(stages, *, complete=False):
+    """Bound append-only history: capability, evaluations, restart UAT pair."""
+    if not isinstance(stages, list):
+        raise BrowserOwnershipError("Browser stage history must be a list.")
+    evaluations = stages.count("evaluate")
+    prefix = ["capability-discovery"] + ["evaluate"] * evaluations
+    expected = prefix + ["uat-before-restart", "uat-after-restart"]
+    if (evaluations > 5
+            or stages != expected[:len(stages)]
+            or (len(stages) > 1 and evaluations == 0)
+            or complete and (evaluations < 1 or stages != expected)):
+        raise BrowserOwnershipError("Browser history requires four ordered roles with bounded repair evaluations.")
 
 
 def validate_receipts(state: dict, *, require_complete: bool = True) -> list[dict]:
@@ -583,15 +638,32 @@ def validate_receipts(state: dict, *, require_complete: bool = True) -> list[dic
                     "Screenshot observations do not match owned artifacts."
                 )
         receipts.append(value)
+    validate_stage_order([r["stage"] for r in receipts], complete=require_complete)
+    evaluations = [value for value in receipts if value["stage"] == "evaluate"]
+    seen_cursors = set()
+    for previous, value in zip(evaluations, evaluations[1:]):
+        binding = value.get("revalidation")
+        if (not isinstance(binding, dict) or binding.get("cursor_id") in seen_cursors
+                or value["target"]["head"] == previous["target"]["head"]
+                or previous["outcome"] != "PASS"):
+            raise BrowserOwnershipError("Repeated evaluation requires a distinct candidate and repair cursor.")
+        seen_cursors.add(binding.get("cursor_id"))
+        import three_tier_target
+        from agent_runtime import agent_name
+        try:
+            three_tier_target.browser_revalidation(
+                state, value["target"], skills_root=Path(__file__).resolve().parents[2],
+                agent=agent_name(), binding=binding, require_complete=require_complete)
+        except three_tier_target.TargetError as error:
+            raise BrowserOwnershipError(str(error)) from error
     if require_complete:
         if (
-            tuple(r["stage"] for r in receipts) != STAGES
-            or state["browser_instance"]["status"] != "CLOSED"
+            state["browser_instance"]["status"] != "CLOSED"
         ):
             raise BrowserOwnershipError(
                 "PASS requires four ordered fresh stages and closed browsers."
             )
-        before, after = receipts[2:]
+        before, after = receipts[-2:]
         if (
             before.get("record") != after.get("record")
             or before["target"] != after["target"]

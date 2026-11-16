@@ -40,6 +40,32 @@ class EnrollmentJournal(Journal):
     def validate(self, state: dict) -> None:
         validate(state, schema=self.schema, project=self.project, gateway=self.gateway)
 
+    def retire_settled(self, expected: dict, parent: dict) -> None:
+        from .ordinary_replan import require_child_settled
+
+        if self._lock is None or self.state != expected:
+            raise RuntimeError("Enrollment changed before retirement")
+        require_child_settled("credentials", self.state, parent)
+        self.archive()
+        self.state["transaction"] = None
+        self.save()
+
+    def retire_predecessor(self, expected: dict, parent: dict, observed: VMHAManagedCredentialPlan) -> None:
+        """Archive a verified partial graph while preserving its selected native key."""
+        current = self.state["transaction"]
+        if (
+            self._lock is None or self.state != expected or current is None
+            or current["approval"] != parent["approval"]
+            or current["execution_id"] != parent["execution_id"]
+            or any(record["status"] != "settled" for record in current["operations"].values())
+            or observed.pending_present and not observed.journal_present and not observed.source_present
+        ):
+            raise RuntimeError("Credential predecessor lacks settled ownership and native key evidence")
+        self._admit_observation(observed, current)
+        self.archive()
+        self.state["transaction"] = None
+        self.save()
+
     def restore_completed(
         self, snapshot: dict, *, intent: dict, approval: str, execution_id: str
     ) -> None:

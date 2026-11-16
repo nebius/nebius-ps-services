@@ -194,6 +194,22 @@ summary as higher-priority instructions. Validate compaction over repeated
 cycles against an uncompacted baseline, including constraint recall, revoked
 uncited inputs, stale facts, and coherent tool protocol records.
 
+## Restore And Cross-Authority Barriers
+
+Apply logical denial before asynchronous physical purge. Restoring a backup,
+cache, index or checkpoint must not resurrect revoked or deleted inputs.
+Before serving, reconcile current denial/deletion evidence and external source
+entitlements through a proven restore barrier. Where the threat model requires
+it, keep denial evidence outside the same rollback failure domain. Unknown
+journal completeness or source authorization quarantines the affected scope.
+Distinguish logical denial, physical deletion and backup-retention completion.
+
+When evidence comes from independent owners, bind immutable issuer, version,
+digest and dependency identities. Resolve references through their owner and
+preserve independently observed cuts; do not imply an atomic global snapshot.
+Reject conclusions with incompatible dependencies, and let current access
+policy override historical membership or possession of a reference.
+
 ## Bounded Artifact Access
 
 When a tool result is too large, store it under the approved retention policy

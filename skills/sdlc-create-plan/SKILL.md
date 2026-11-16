@@ -43,6 +43,14 @@ public command menu but remains available to the verified coordinator.
 
 ## Purpose
 
+Read `../worktree/references/optional-uat.md` for the shared acceptance policy.
+No UAT by default; requested UAT runs at a meaningful ready objective/release
+scope (or explicitly selected coherent milestone). Missing optional prerequisites
+remain pending without blocking implementation or otherwise eligible PR/merge.
+Keep required development checks and correctness dependencies mandatory. Use
+container/Nebius testing skills only when explicitly requested; an existing
+environment uses its own project harness directly.
+
 Create a local, locked execution plan for one admitted delivery slice, preserving its REQ/FEAT mappings.
 Preserve vertical end-to-end feature slices while expressing implementation as
 a dependency-safe task graph.
@@ -51,10 +59,13 @@ a dependency-safe task graph.
 
 - A ready `FEAT-*` needs an execution plan.
 - Design or context changed and the old plan must be superseded.
-- After an admitted active-task design revision is sealed and objective impact
-  refreshed, retain started task definitions and append fresh corrective tasks.
+- After an admitted active-task design or test revision is sealed and current
+  objective impact verified, retain started definitions and append corrective tasks.
   The execution owner preserves historical waves as a prefix; new tasks need
   neither artificial conflicts nor dependencies on superseded tasks.
+  Preserve prior task-acceptance policies; new tasks need their own criteria and
+  checks. Replanning after test revision must produce a fresh basis and repeat
+  preparation/TDD evidence before worker dispatch.
 - The SDLC loop reaches the planning phase for the current feature.
 - A proven post-evaluation implementation defect occurs after execution waves
   completed and requires corrective plan vN+1.
@@ -76,13 +87,12 @@ a dependency-safe task graph.
 
 ## Required Reads
 
-- `../worktree/references/document-delivery.md` for source coverage, phase/slice
-  identities, shared-skill caller contracts and protected completion policy.
-
-- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
-  assignment/ownership and evidence to the current immutable execution basis.
-  Before preparation, bind evidence to the accepted objective and applicable
-  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+- `../worktree/references/workflow-invariants.md` for shared ownership,
+  evidence, failure and conditional-read rules.
+- `../worktree/references/workflow-contract.md` for execution lifecycle operations.
+- Read `../worktree/references/document-delivery.md` when accepted inputs include
+  a source manifest/program, this phase handles SLICE/source coverage or phase
+  barriers, or it handles delivery admission, phase exit or protected completion.
 
 - `docs/requirements.md`.
 - `docs/design.md`.
@@ -99,7 +109,25 @@ a dependency-safe task graph.
 - `corrective-plan-validation-v1` from
   `scripts/corrective_plan.py` for a corrective version.
 
+## Task Statistics
+
+Follow `../worktree/references/statistics.md`. Supply readable task names, one
+primary component reference and additional touched components. Preserve stable
+identities across revisions; use explicit unknown metadata when unresolved.
+Component grouping does not change vertical slices or serial dependency waves.
+Report known tasks alongside undecomposed slices after each accepted plan.
+Refresh resolved inventory gap statements through the statistics inventory owner
+before publishing the plan's report. Task decomposition is no longer a pending
+gap for a slice whose accepted tasks are now recorded; retain unresolved scope.
+
 ## Process
+
+Before authoring a plan, run the private `workflow_transition.py planning-check`
+with the exact `--run-dir` and `--execution`, plus the applicable `--plan` if present.
+Missing or stale readiness returns to `sdlc-auto-steering` without a repair charge.
+After locking a changed plan and its validation/acceptance sidecars, refresh steering
+against those inputs before execution preparation. Serial waves remain mandatory;
+group only proven independent tasks within a wave and refill freed slots promptly.
 
 - Use `assets/templates/feature-plan.md.template` for plan shape.
 - Confirm feature status is ready and dependencies are complete or explicitly allowed.
@@ -130,6 +158,11 @@ a dependency-safe task graph.
   oracle. Never reinterpret completed work under a new plan digest.
 - Run `scripts/corrective_plan.py` before routing to execution. If append-only
   correction cannot preserve history safely, stop for human direction.
+- For an integrated `PLAN_DEFECT`, use a proven `plan_defect` diagnosis and
+  counted localized repair. Follow the shared worker-wave validation-plan
+  review contract before `replan-future`. Preserve task definitions and append
+  corrective tasks; execution schedules these before untouched future work.
+  A command-only repair can use `verified_no_change` with independent checks.
 
 ## Idempotency
 
@@ -166,6 +199,9 @@ Follow the shared worker wave and acceptance contract in the required sibling
 Before preparation, freeze execution policy and the executable `<plan>.validation.json`
 sidecar covering every task and combined checks. No-change results require independent
 acceptance; all waves require a producer receipt before cleanup and dependency release.
+Also follow the sibling `worktree/references/task-acceptance.md` contract: freeze
+`<plan>.acceptance.json`, execute applicable checks before worker success, retain
+explicit deferred obligations, and preserve requested meaningful-scope UAT.
 
 ## Completion Criteria
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -144,6 +145,7 @@ from workflow_interop import (  # noqa: E402 — verified bootstrap precedes run
 
 from agent_runtime import native_session_id  # noqa: E402
 from workflow_state import WorkflowError  # noqa: E402
+from workflow_process import ProcessCleanupError  # noqa: E402
 
 
 PRIVATE_OUTPUT_KEYS = {
@@ -203,6 +205,24 @@ def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     sub = value.add_subparsers(dest="command", required=True)
 
+    for name in ("steering-inputs", "steering-ready", "planning-check"):
+        command = sub.add_parser(name)
+        command.add_argument("--run-dir", type=Path, required=True)
+        command.add_argument("--execution", required=True)
+        command.add_argument("--plan", type=Path)
+        if name == "steering-ready":
+            command.add_argument("--inputs-sha256", required=True)
+    for name in ("corrections-pause", "corrections-resume"):
+        command = sub.add_parser(name)
+        command.add_argument("--run-dir", type=Path, required=True)
+    diagnostics = sub.add_parser("diagnostic-admit")
+    diagnostics.add_argument("--run-dir", type=Path, required=True)
+    diagnostics.add_argument("--event", type=Path, required=True)
+    diagnostics.add_argument("--questions", type=Path, required=True)
+    result_check = sub.add_parser("check-result")
+    result_check.add_argument("--assignment", type=Path, required=True)
+    result_check.add_argument("--result", type=Path, required=True)
+
     specs = sub.add_parser("prepare-specs")
     specs.add_argument("--run-dir", type=Path, required=True)
     specs.add_argument("--project-root", type=Path, required=True)
@@ -234,6 +254,21 @@ def parser() -> argparse.ArgumentParser:
     revision_seal.add_argument("--publication-operation-id", required=True)
     revision_seal.add_argument("--message", required=True)
 
+    test_revision = sub.add_parser("prepare-test-revision")
+    test_revision.add_argument("--run-dir", type=Path, required=True)
+    test_revision.add_argument("--execution", required=True)
+    test_revision.add_argument("--classification-id", required=True)
+    test_revision.add_argument("--dispatch-id", required=True)
+    test_revision.add_argument("--termination", type=Path, action="append", required=True)
+    test_revision.add_argument("--file", action="append", required=True)
+
+    test_seal = sub.add_parser("seal-test-revision")
+    test_seal.add_argument("--run-dir", type=Path, required=True)
+    test_seal.add_argument("--execution", required=True)
+    test_seal.add_argument("--revision-id", required=True)
+    test_seal.add_argument("--review", type=Path, required=True)
+    test_seal.add_argument("--message", required=True)
+
     wave = sub.add_parser("wave-prepare")
     wave.add_argument("--run-dir", type=Path, required=True)
     wave.add_argument("--execution", required=True)
@@ -249,6 +284,14 @@ def parser() -> argparse.ArgumentParser:
         reconciliation.add_argument("--" + name, required=True)
     reconciliation.add_argument("--run-dir", type=Path, required=True)
     reconciliation.add_argument("--termination", type=Path, required=True)
+
+    accept = sub.add_parser("task-accept")
+    accept.add_argument("--assignment", type=Path, required=True)
+    resolve = sub.add_parser("acceptance-resolve")
+    resolve.add_argument("--run-dir", type=Path, required=True)
+    resolve.add_argument("--candidate", type=Path, required=True)
+    resolve.add_argument("--criterion", action="append")
+    resolve.add_argument("--repair-dispatch", type=Path)
 
     for command in ("runtime-acquire", "runtime-verify", "runtime-release"):
         resource = sub.add_parser(command)
@@ -380,6 +423,16 @@ def parser() -> argparse.ArgumentParser:
     failed.add_argument("--dispatch", required=True)
     failed.add_argument("--evidence", required=True)
 
+    candidate = sub.add_parser("validate-candidate")
+    candidate.add_argument("--run-dir", type=Path, required=True)
+    candidate.add_argument("--execution", required=True)
+
+    checkpoint = sub.add_parser("checkpoint-authoring")
+    checkpoint.add_argument("--run-dir", type=Path, required=True)
+    checkpoint.add_argument("--execution", required=True)
+    checkpoint.add_argument("--operation-id", required=True)
+    checkpoint.add_argument("--message", required=True)
+
     seal = sub.add_parser("seal-feature")
     seal.add_argument("--run-dir", type=Path, required=True)
     seal.add_argument("--execution", required=True)
@@ -412,7 +465,7 @@ def parser() -> argparse.ArgumentParser:
 
 def execute(args: argparse.Namespace) -> Any:
     from workflow_state import lock
-    if args.command == "validate-target":
+    if args.command in {"validate-target", "validate-candidate", "task-accept", "acceptance-resolve"}:
         # Producer owns short admission/publication locks; evaluators must not
         # block independent worker heartbeats behind the outer CLI lock.
         return _execute(args)
@@ -424,7 +477,18 @@ def execute(args: argparse.Namespace) -> Any:
 
 def _execute(args: argparse.Namespace) -> Any:
     from workflow_objectives import authorize_coordinator
+    if args.command == "check-result":
+        from workflow_worker_contract import load_assignment, result_feedback
+        from workflow_state import read
+        assignment = load_assignment(args.assignment)
+        return {**result_feedback(read(args.result), assignment), "read_only": True}
     session = runtime_session_identity()
+    if args.command == "task-accept":
+        from workflow_task_acceptance import produce
+        return produce(args.assignment, session)
+    if args.command == "acceptance-resolve":
+        from workflow_task_acceptance import resolve
+        return resolve(args.run_dir, args.candidate, session, args.criterion, args.repair_dispatch)
     if args.command.startswith("runtime-"):
         import workflow_resources
         from agent_runtime import agent_home
@@ -433,7 +497,37 @@ def _execute(args: argparse.Namespace) -> Any:
         return action(agent_home(), args.assignment, args.resource, session, **options)
     worker_actions = {"task-start", "task-heartbeat", "task-recover"}
     if args.command not in worker_actions | {"status", "task-watch"}:
-        authorize_coordinator(args.run_dir, session)
+        coordinator_run, _ = authorize_coordinator(args.run_dir, session)
+    if args.command in {"corrections-pause", "corrections-resume"}:
+        from workflow_corrections import pause
+        from workflow_state import read
+        if args.command == "corrections-pause" and read(args.run_dir / "current-state.json").get("status") != "paused":
+            raise WorkflowError("CORRECTION_INVALID", "pause only after the coordinator records a user pause")
+        pause(args.run_dir, args.command == "corrections-pause", session)
+        from workflow_statistics import safe_record
+        safe_record(args.run_dir, "pause" if args.command == "corrections-pause" else "resume")
+        return {"status": "paused" if args.command == "corrections-pause" else "active"}
+    if args.command in {"steering-inputs", "steering-ready", "planning-check"}:
+        from workflow_readiness import inputs, issue, require
+        if args.command == "steering-inputs":
+            projection = inputs(args.run_dir, args.execution, args.plan)
+            command = [sys.executable, str(Path(__file__).resolve()), "steering-ready", "--run-dir",
+                       str(args.run_dir), "--execution", args.execution,
+                       "--inputs-sha256", projection["inputs_sha256"]]
+            if args.plan is not None:
+                command += ["--plan", str(args.plan)]
+            return {**projection, "ready_command": command,
+                    "working_directory": coordinator_run["project_root"]}
+        if args.command == "steering-ready":
+            return issue(args.run_dir, args.execution, args.inputs_sha256, session, args.plan)
+        return require(args.run_dir, args.execution, args.plan)
+    if args.command == "diagnostic-admit":
+        from workflow_diagnostics import reserve
+        from workflow_state import read
+        # Current CLI hosts do not expose effective per-child tool restrictions.
+        # The native adapter seam accepts a live observer only, never JSON claims.
+        return reserve(args.run_dir, read(args.event), read(args.questions)["questions"],
+                       session, remaining_seconds=300)
     if args.command == "task-result":
         from workflow_worker_results import ingest_result
         from workflow_state import read
@@ -465,13 +559,21 @@ def _execute(args: argparse.Namespace) -> Any:
     if args.command == "seal-tdd":
         return seal_tdd_base(args.run_dir, args.execution, args.message)
     if args.command == "prepare-design-revision":
-        from workflow_design_revision import prepare_design_revision
+        from workflow_revision import prepare_design_revision
         return prepare_design_revision(args.run_dir, args.execution, args.classification_id,
                                        args.dispatch_id, args.termination, session)
     if args.command == "seal-design-revision":
-        from workflow_design_revision import seal_design_revision
+        from workflow_revision import seal_design_revision
         return seal_design_revision(args.run_dir, args.execution, args.revision_id,
                                     args.publication_operation_id, args.message, session)
+    if args.command == "prepare-test-revision":
+        from workflow_revision import prepare_test_revision
+        return prepare_test_revision(args.run_dir, args.execution, args.classification_id,
+                                     args.dispatch_id, args.termination, args.file, session)
+    if args.command == "seal-test-revision":
+        from workflow_revision import seal_test_revision
+        return seal_test_revision(args.run_dir, args.execution, args.revision_id,
+                                  args.review, args.message, session)
     if args.command == "wave-prepare":
         return prepare_wave(args.run_dir, args.execution, args.wave)
     if args.command == "wave-refill":
@@ -574,6 +676,12 @@ def _execute(args: argparse.Namespace) -> Any:
     if args.command == "validate-target":
         from workflow_validation import produce
         return produce(args.run_dir, args.execution, args.wave, args.task, session=session)
+    if args.command == "validate-candidate":
+        from workflow_validation import produce
+        return produce(args.run_dir, args.execution, None, session=session)
+    if args.command == "checkpoint-authoring":
+        from workflow_candidate import checkpoint
+        return checkpoint(args.run_dir, args.execution, args.operation_id, args.message, session=session)
     if args.command == "configure-policy":
         from workflow_capacity import configure
         return configure(args.run_dir, args.worker_limit, args.wave_task_limit, args.worker_worktree_limit, session)
@@ -613,11 +721,14 @@ def _execute(args: argparse.Namespace) -> Any:
 def main() -> int:
     try:
         result = execute(parser().parse_args())
-    except (ExecutionError, ExecutionInteropError, WorkflowError) as exc:
-        code = exc.code if isinstance(exc, (ExecutionError, WorkflowError)) else "WORKTREE_CONFLICT"
+    except (ExecutionError, ExecutionInteropError, WorkflowError, ProcessCleanupError) as exc:
+        code = getattr(exc, "code", "WORKTREE_CONFLICT")
         print(
             json.dumps(
-                {"status": "error", "code": code, "message": str(exc)},
+                {"status": "pending" if code in {"STEERING_PENDING", "CONTEXT_PENDING"} else "error",
+                 "code": code, "message": str(exc),
+                 **({"next_recommended_skill": "sdlc-auto-steering" if code == "STEERING_PENDING"
+                     else "sdlc-gather-context"} if code in {"STEERING_PENDING", "CONTEXT_PENDING"} else {})},
                 sort_keys=True,
             )
         )

@@ -1,0 +1,23 @@
+{
+  "skill_name": "implement",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Implement the accepted application scope; no UAT campaign was requested and no live environment exists.",
+      "expected_output": "Run mandatory development checks, retain not_requested UAT, and allow otherwise eligible delivery without runtime identities or synthetic PASS.",
+      "files": [],
+      "assertions": [
+        "Run mandatory development checks, retain not_requested UAT, and allow otherwise eligible delivery without runtime identities or synthetic PASS."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "UAT was requested after implementation, but a required external service is unavailable when the scope is complete.",
+      "expected_output": "Record pending UAT and missing prerequisites with the exact candidate handoff; do not retry optional setup indefinitely or block eligible PR/merge. Preserve any actual failed assertions.",
+      "files": [],
+      "assertions": [
+        "Record pending UAT and missing prerequisites with the exact candidate handoff; do not retry optional setup indefinitely or block eligible PR/merge. Preserve any actual failed assertions."
+      ]
+    }
+  ]
+}

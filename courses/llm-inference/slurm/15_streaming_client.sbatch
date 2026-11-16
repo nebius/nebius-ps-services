@@ -169,14 +169,15 @@ mkdir -p "${COURSE_JOB_DIR}/logs" "${COURSE_RESULTS_DIR}"
 port=$((20000 + SLURM_JOB_ID % 20000))
 server_log="${COURSE_JOB_DIR}/logs/vllm-stream-server-run-${COURSE_RUN_ID}.log"
 
-setsid env -u DEBUGINFOD_URLS timeout --signal=TERM --kill-after=15s 900s nsys profile --trace=cuda,nvtx,osrt \
+server_watchdog_log="${server_log}.watchdog"
+setsid env -u DEBUGINFOD_URLS LC_ALL=C timeout --verbose --preserve-status --signal=TERM --kill-after=15s 900s bash -c 'exec "$@" 2>&1' bash nsys profile --trace=cuda,nvtx,osrt \
   --cuda-trace-scope=process-tree --sample=none --cpuctxsw=none \
   --discard-environment=true --force-overwrite=false \
   --duration=300 --kill=none --wait=all \
   --output "$COURSE_PROFILES_DIR/nsys-%q{SLURM_JOB_ID}-%q{SLURM_STEP_ID}-%q{SLURM_PROCID}-%p" \
   --trace-fork-before-exec=true --cuda-graph-trace=node --capture-range=cudaProfilerApi --capture-range-end=stop "${COURSE_VLLM:?run lab-setup.py}" serve --profiler-config.profiler cuda "${model}" --revision "${revision}" --tokenizer-revision "${revision}" \
   --host 127.0.0.1 --port "${port}" --dtype bfloat16 \
-  --max-model-len 2048 >"${server_log}" 2>&1 &
+  --max-model-len 2048 >"${server_log}" 2>"${server_watchdog_log}" &
 server_pid=$!
 stop_server() {
   local pid=${server_pid:-} status=0 attempt
@@ -198,6 +199,13 @@ stop_server() {
     return 2
   fi
   wait "$pid" || status=$?
+  # Keep watchdog diagnostics separate from profiler output. Only a requested
+  # INT is a graceful stop; deadline TERM, escalation and read errors fail closed.
+  local watchdog_status=0
+  grep -qv '^timeout: sending signal INT to command ' "$server_watchdog_log" || watchdog_status=$?
+  [[ $watchdog_status == 1 ]] || {
+    printf 'ERROR: server/profiler watchdog expired or failed.\n' >&2; return 2;
+  }
   [[ $status == 0 || $status == 130 ]] || {
     printf 'ERROR: server/profiler exited with status %s.\n' "$status" >&2; return 2;
   }

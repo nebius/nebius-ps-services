@@ -34,7 +34,10 @@ def wireguard_api(*, credentials_file: str | None = None) -> Iterator[SecretStas
     """Human identity is strict. Automation must explicitly select a credential file."""
     from nebius.sdk import SDK
 
+    from .preconfigured_auth import reject_managed_operation
     from .sdk_auth import NEBIUS_SDK_USER_AGENT_PREFIX, acquire_operator_access_token
+
+    reject_managed_operation("WireGuard authentication")
 
     if credentials_file:
         sdk = SDK(

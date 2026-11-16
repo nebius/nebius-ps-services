@@ -1,5 +1,10 @@
 # Merge PR
 
+[The shared PR lifecycle](../review-pr/references/pr-lifecycle.md) aligns contribution assessment,
+status labels, failed-test repair, one replacement PR and independent issue
+completion. Plain review and report-only limits remain binding; issue closure
+requires its own verified resolution and authority.
+
 Eligible fork PRs use the same protected broker, with independently bound
 numeric base/head repository identities. Parent-owned review-pr assesses
 contribution safety/compatibility, repairs defects and reconciles each project's
@@ -187,3 +192,13 @@ to create-pr, and merge/issue-state verification to merge-pr. GitHub performs
 native issue closure on default-branch merge when enabled. A partial fix or mere
 issue mention never qualifies. Each delivery owner retains its explicit authority;
 review does not start implementation, PR creation or merge.
+
+## Enrolled repository automation
+
+Shared Actions authority: enrolled repositories route laptop and hosted requests through one merge/release controller; PR lifetime waivers are durable policy, not labels. See the skill contract and sibling merge-pr automation-authority reference.
+
+For enrolled automation, new PRs enroll once and terminal PRs need a fresh manual
+request. Candidate CI and protected merge bind the active request and both source
+and destination identities. Fork merge eligibility defaults off through
+`AI_AUTOMATION_MERGE_FORK_CONTRIBUTION`; enabling it grants no fork branch writes.
+See [the authority contract](../merge-pr/references/automation-authority.md).

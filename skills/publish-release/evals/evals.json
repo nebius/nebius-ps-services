@@ -87,6 +87,29 @@
         "Only the parent completes its separately authorized prior checkout effects. User dirt may block that switch-back without discarding edits or invalidating the completed private repair.",
         "Never integrates default history or advances an unfinished publication target merely to pause review; report-only and already-merged observation restrictions remain."
       ]
+    },
+    {
+      "id": "enrolled-setup-single-entry-point",
+      "prompt": "Offline contract simulation only; no external calls or mutations. Use $publish-release --mode setup in an enrolled repository after its project-local publisher scripts were removed. One project is not in the release registry. Explain what setup may create and how publication is requested.",
+      "expected_output": "Keeps publish-release as the sole maintainer entry point and preserves shared Actions ownership.",
+      "files": [],
+      "assertions": [
+        "Does not regenerate project-local publisher scripts or expose private helper commands as public alternatives.",
+        "Keeps setup non-publishing and automatic intake on the same shared Actions publisher.",
+        "An unregistered project blocks until separately enrolled; setup does not add enrollment or fall back to local publication.",
+        "Keeps maintainer publishing procedures in skill documentation and preserves product release-consumption guidance."
+      ]
+    },
+    {
+      "id": "enrolled-release-authority",
+      "prompt": "Offline contract simulation only; no external calls or mutations. Use $publish-release --resume in an enrolled repository while a prior version reservation is interrupted and another PR has merged.",
+      "expected_output": "Reconciles the existing reservation and retains later demand.",
+      "files": [],
+      "assertions": [
+        "Uses the same Actions coordinator for laptop and automatic publication.",
+        "Does not create a local tag, changelog rollover or extra release-preparation PR.",
+        "Uses original asset hashes; later source cannot overwrite pending reservation."
+      ]
     }
   ]
 }

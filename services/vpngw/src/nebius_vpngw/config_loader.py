@@ -446,9 +446,16 @@ def load_local_config(
     allow_missing_tunnel_psk_placeholders: bool = False,
     validate_schema: bool = True,
     region_override: str | None = None,
+    project_override: str | None = None,
 ) -> dict:
     with path.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
+    if not isinstance(raw, dict):
+        raise ValueError("Local configuration must contain a YAML mapping")
+    if project_override is not None:
+        if not str(project_override).strip():
+            raise ValueError("--project-id must resolve to a non-empty Nebius project.")
+        raw["project_id"] = str(project_override).strip()
     if region_override is not None:
         normalized_region_override = str(region_override).strip()
         if not normalized_region_override:
@@ -466,7 +473,8 @@ def load_local_config(
         unknown = set(gateway) - set(schema.GatewayConfig.model_fields)
         if unknown:
             raise ingress_policy.IngressPolicyError(
-                "Unsupported gateway configuration fields: " + ", ".join(sorted(unknown))
+                "Unsupported gateway configuration fields: " + ", ".join(sorted(unknown)),
+                fields=tuple(sorted(unknown)),
             )
     vm_ha_was_provided = "vm_ha" in (expanded.get("gateway_group") or {})
     # Allow optional placeholders: if NETWORK_ID is missing and the value

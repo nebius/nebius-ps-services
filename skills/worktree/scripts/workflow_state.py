@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import fcntl
 import hashlib
 import json
@@ -268,15 +268,17 @@ def _lock_once(root: Path, name: str):
         descriptor = os.open(name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=parent)
         try:
             _regular(os.fstat(descriptor))
-            deadline = time.monotonic() + 10
-            while True:
-                try:
-                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        raise WorkflowError("WORKFLOW_BUSY", "another transition is active")
-                    time.sleep(0.05)
+            from workflow_timing import observed
+            with nullcontext() if name == "timing.lock" else observed("coordination_wait"):
+                deadline = time.monotonic() + 10
+                while True:
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise WorkflowError("WORKFLOW_BUSY", "another transition is active")
+                        time.sleep(0.05)
             yield
         finally:
             fcntl.flock(descriptor, fcntl.LOCK_UN)

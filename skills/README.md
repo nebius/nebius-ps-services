@@ -1,5 +1,28 @@
 # Skills
 
+Implement and SDLC share [workflow invariants](worktree/references/workflow-invariants.md)
+and load detailed contracts when their operation requires them. Statistics reuse
+source reads within one checked observation; execution authority and evidence
+remain freshly checked at effect boundaries. This source update does not activate
+installed catalogs or convert active frozen runs.
+
+SDLC worker runtime verification also supports counted same-assignment validation
+recovery through the shared owner's read-only authority check. Exact worker,
+termination, scope and exclusive runtime lease checks remain required.
+
+Implement and Agentic SDLC use [optional UAT](worktree/references/optional-uat.md):
+no UAT by default; requested testing waits for a meaningful ready scope; missing
+optional prerequisites do not block implementation or eligible PR/merge. Required
+development tests and observed product failures retain their existing gates.
+Requested whole-objective UAT uses the combined delivered candidate and includes
+phase-only acceptance criteria; execution IDs do not determine completion order.
+Late-testing handoffs preserve that inventory, and resolving a prior failure
+requires a covering PASS for the same acceptance requirements.
+
+The [shared PR lifecycle](review-pr/references/pr-lifecycle.md) aligns review,
+bounded repair, Nebius validation, protected merge, replacement PRs and independent
+issue completion. Status labels describe evidence; they never grant authority.
+
 Ordinary PR review now assesses accepted behavior, safety and existing-user
 compatibility before safe repairs and root-owned canonical spec reconciliation.
 [The review contract](review-pr/references/contribution-assessment.md) covers
@@ -54,6 +77,12 @@ Implement records per-issue acceptance evidence, create-pr adds verified closing
 references when requested, and merge-pr checks actual issue states. GitHub performs
 native closure on default-branch merge; review remains a triage/planning workflow.
 
+Counted SDLC repairs now retain interrupted repair contexts. Successful worker
+recovery can resume the exact parent without another dispatch, while preserving
+all budgets, failed evidence and later validation obligations. See the
+[classifier contract](sdlc-classify-failure/README.md); v3 repair controls require
+a fresh run after installation.
+
 For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Table of Contents
@@ -64,6 +93,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 - [Source Hook Catalog](#source-hook-catalog)
 - [Native Plugins and npx](#native-plugins-and-npx)
 - [Skills Installer](#skills-installer)
+- [Ordinary PR and publication completion](#ordinary-pr-and-publication-completion)
 
 ## Skill Catalog
 
@@ -81,7 +111,20 @@ Implement and Agentic SDLC keep separate coordinators over one
 [Worktree execution core](worktree/references/workflow-contract.md). They share
 worker launch contracts, result ingestion, dependency waves, runtime leases and
 recovery. Both use `maintain-project-specs` for canonical requirements/design
-publication.
+publication. The [portable workflow presentation](docs/parallel-project-workflow.html)
+explains the original → outer → integration → task hierarchy, distinct worktree
+roles, scoped automatic admission and pending-delivery continuation. Clean projects
+may start while unrelated siblings are dirty; final promotion waits for the whole
+original checkout to be clean.
+Start independent objectives from `project-a` and `project-b` in separate native
+sessions; both coordinators retain original-folder identities and share admission
+and worker capacity. See the [two-project Implement example](implement/README.md).
+Worker prompts include their exact executable task checks and Git-root working
+directory from the immutable execution basis. Missing or changed validation
+evidence blocks launch; independent acceptance remains with the coordinator.
+Native launch checks happen before arming. Explicit command cwd and verified
+inherited directory grants can satisfy the shared envelope without spawn-level
+setters; sandbox, approval, scope and failure controls remain in force.
 Managed SDLC completion freshly validates separately recorded source-integration
 proof. Seal creation, interrupted recovery and historical verification share
 the execution owner's full-message contract, retaining failed hook-rewrite
@@ -92,13 +135,21 @@ Known permission prerequisites use supported native approvals. Proven active
 worker environment failures return through the same fresh-worker recovery;
 SDLC additionally requires its classified, counted dispatch and downstream
 revalidation. Recovery never grants permissions or reopens completed work.
+Every blocked SDLC recovery binds active counted classification to the exact
+worker-result receipt, integration commit and current fingerprints. The shared
+v2 authorization and ownership transfer both reject stale or missing authority;
+ordinary Implement and interruption without a result keep their own contracts.
+Worker prompts discover existing project instruction files before reading them.
+Integrated plan-command failures retain their failed receipts and use reviewed,
+counted corrective work before untouched future tasks. Terminal cancellation
+retains unresolved integration evidence without certifying validation success.
 Environment gate records preserve the failed phase while invalidations use the
 existing canonical gate surface. Unsupported phases remain blocked and preserve
 earlier repair obligations.
 The live verifier isolates native configuration and checks project overrides
 within the validated Git checkout boundary.
-The shared policy separates a five-minute worker startup window from the
-one-hour work limit; both coordinators prepare handoffs before arming and
+Both workflows use observation thresholds to diagnose delayed startup and
+progress without expiring healthy work. Prepare handoffs before arming and
 dispatch immediately afterward.
 
 The [catalog alignment report](docs/agent-portability-alignment.md) records each
@@ -184,6 +235,7 @@ measuring performance.
 | `nebius-audit-log` | Explicit only | Verify caller and tenant audit access, then query explicit resource, actor or tenant scope with bounded, sanitized results. |
 | `nebius-grafana-query` | Implicit allowed | Query authorized metrics, logs, dashboards, and traces through human-authenticated Nebius Grafana, returning either ranked reports or bounded structured evidence facts. |
 | `optimize-pytest` | Implicit allowed | Measure, review, and safely optimize pytest suite performance with phased evidence, cumulative-cost analysis, and like-for-like validation. |
+| `test-live-on-nebius` | Implicit allowed; cloud effects task-scoped | Infer, provision, test and clean Nebius live environments using cxcli first and reviewed SDK adapters; human-console quota requests. |
 | `test-software-in-container` | Implicit allowed | Test the current project source in containers, plus explicit installed-image, install, upgrade, patch and migration tests. |
 | `project-agent-instructions` | Explicit only | Conditionally render and terminally seal concise selected-project rules from shared-owner specs, including explicit existing-user compatibility intent, with nearest-marker discovery, registry-backed managed-tail ownership, guarded retirement, and fail-closed recovery. |
 | `python-project` | Implicit allowed | Scaffold or harden Python projects with one uv and `pyproject.toml`/`uv.lock` workflow, profile-selected dependencies, `src/` layout, tests, and locked CI. |
@@ -196,6 +248,17 @@ measuring performance.
 | `troubleshoot` | Implicit allowed | Adaptively trace failures across code, compute, storage and networks; choose bounded distinguishing evidence and verify causal repair. |
 
 ### Agentic SDLC Workflow
+
+SDLC uses [applicable task acceptance](worktree/references/task-acceptance.md),
+explicit deferred obligations and final integrated UAT. Container trials reuse
+verified immutable bases while isolating writable state. Implement remains
+unchanged; provider live tests may be invoked manually before a PR.
+Container receipt retrieval is bounded before host storage, and live catalog
+snapshots freeze the SDLC-specific dependency closure.
+Physical-host memory monitoring remains with the declared caller or outer owner;
+the container adapter owns its client process and exact container cleanup.
+Export permissions support the nonroot container without exposing private host
+temporary directories.
 
 All `sdlc-*` skills are explicit-only. The phase skills run through the
 Agentic SDLC workflow, starting with
@@ -620,30 +683,24 @@ Before selecting products, it consumes the four-class capability map frozen by
 `ai-agent-design`. A direct stack-only request may make only a provisional
 lower-bound classification and routes disputed behavior, topology, policy, or
 contracts to `ai-agent-design`; it receives the frozen contract back and then
-selects components once. Portable Python
-direct-call behavior uses either Pydantic AI's low-level direct API or a
-no-tools single-request `Agent` when typed parsing, validation retries, or
-typed dependencies are required; the primitive does not change the behavior
-classification. Intentionally provider-specific tasks may use their official
-task APIs. Portable Python model-directed agents across supported providers use
-Pydantic AI `Agent` by default; capabilities and Harness are conditional
-specialist layers. Provider-native agent SDKs are separate evaluated runtime
-escapes for named harness requirements and are never nested inside Pydantic AI.
-Coding-focused engineering specialists may use the Codex SDK. Graph and durable
-orchestration remain an independent axis.
+selects components once. Direct requests use a task API or qualified existing
+adapter; deterministic workflows remain ordinary code. General agents prefer
+OpenAI Agents SDK unless explicitly overridden or an accepted fixed project
+stack applies. A failed hard gate requires a reported blocker and explicit
+framework override. The preference neither forces OpenAI models nor triggers
+migration of an existing fixed stack. Codex SDK remains a bounded specialist
+option for coding-harness requirements.
 
-The application retains the logical runtime facade, canonical run and
-conversation state, model-routing governance, tools, authorization, budgets,
-telemetry, evaluation, and release identity. The facade stays in-process until
-a scale or ownership trigger justifies a service; gateways, queues, multiple
-stores, durable engines, and multi-agent topologies remain conditional.
+The application retains canonical state, authority, tools, budgets, routing,
+recovery, telemetry and evaluation. Qualify exact SDK/provider capabilities,
+keep one history strategy, reconcile unknown effects, bound helper work and
+concurrency, and configure trace export before execution. SDK state and hooks
+do not supply distributed authority or independent outcome verification.
+The facade stays in-process until an ownership or operational trigger warrants
+a service. Graphs, durable engines, gateways and extra stores are conditional.
 
-The skill keeps its dated baseline replaceable: Pydantic AI model/provider
-profiles for portable execution, an additional custom provider protocol only
-for a proven cross-runtime consumer, LangGraph only for explicit graph
-semantics, a qualified workflow engine for durable execution, official Tier 1
-MCP SDKs as conformance authority, and benchmark-gated PyTorch, serving,
-retrieval, MLflow, and OpenTelemetry layers. Use `app-stack` for the
+The dated technology baseline remains subject to current official evidence and
+target measurement. Use `app-stack` for the
 surrounding product stack,
 `research` for deep due diligence on one choice, and `design` for cross-layer
 synthesis and `/plan`. Its optional implementation handoff is logical-only and
@@ -884,6 +941,12 @@ remote, external-worktree, generation, or Docker ambiguity blocks replacement
 rather than creating a second instance. Explicit destroy or replacement also
 removes inspection edits inside the exact disposable owned run.
 
+The Implement verifier freezes a successful deterministic preflight and physical
+installed dependency catalog for each fresh `--create` trial. Its lifecycle owns
+Playwright UI, API/database correlation, restart and browser cleanup evidence;
+prose cannot satisfy browser acceptance. Root ownership and active generation
+versions are checked separately, and observed native failures remain FAIL.
+
 ### `sdlc-workflow-test`
 
 The verifier now groups suite failures separately from dependent capability
@@ -892,10 +955,21 @@ lightweight and live fixtures, preserves reports and resumes exact cleanup
 checkpoints. Startup source discovery and native hook activation are distinct
 receipts; fresh Codex qualification requires both. See the skill README for
 setup, supported native evidence and ownership limits.
+After completed cleanup and proven native absence, the owner archives terminal
+process registrations before retiring the active ledger. Historical trials
+therefore retain their evidence without consuming a fresh trial's bounded capacity.
+Failed static or fixture prerequisites stop before regression suites launch.
+Changed source or design preserves an existing fixture context for owned cleanup;
+fresh preflight follows cleanup. Recovery of an already replaced context requires
+its original recorded hash, unchanged remaining ownership and an inactive fixture.
 Native lifecycle operations also bind one physical installed catalog. Source
 checks remain separate, and live semantic validation runs in a fresh process
 from the configured installed owner so cached source imports cannot change the
 execution basis.
+Classifier observations can follow an exact pending integrated repair through
+its immutable suspension chain to the current counted child. The repair owner
+validates lineage, commit, obligations and budgets without restoring mutation
+authority; clean target and quiescence checks remain mandatory.
 
 Prepared SDLC execution supports admitted active-task design correction through
 the shared Worktree owners. Failed worker artifacts remain retained; semantic
@@ -914,12 +988,30 @@ value matches the bound owned origin default; unknown or executable settings
 remain rejected, and ordinary Git configuration stays unchanged.
 Read-only classifier and TDD observations may inspect unsealed registered
 integration files at their matching checkpoints, including documented TDD output
-before sealing. Runtime and acceptance cleanliness gates remain unchanged;
+before sealing. TDD output uses `current_phase: tests_red` or `tests_ready` with
+root `status: running` in both current state and its immutable checkpoint.
+Runtime and acceptance cleanliness gates remain unchanged;
 observation never authorizes a deployment or application test.
-The classifier can observe a pending design revision only after the Worktree
-owner validates its active design authority, immutable preparation, retained
-writer proofs and quiescence. A material replan requires fresh observations of
-invalidated phases after revalidation; previous attempts remain immutable.
+The classifier can observe a pending design or test revision only after Worktree
+validates its active typed authority, immutable preparation, retained
+writer proofs and quiescence. The same owner admits pending test-revision TDD
+output before sealing. After native `wave-fail`, classification can observe the
+clean `repair_required` integration before replanning only with exact failed-wave
+identity, active classified and counted authority, frozen validation binding and
+quiescent workers, validators and runtime leases. Runtime remains blocked.
+Corrective preparation observes a clean repair boundary
+only after the completed owner replan, active failed-wave authority and reviewed
+plan evidence pass; it leaves the corrective tasks untouched and runtime blocked.
+The subsequent corrective TDD observation reuses these proofs at its documented
+checkpoints while execution remains `repair_required`. It requires the clean
+failed commit and existing sealed tests; test authoring still needs typed revision
+authority, and runtime remains blocked.
+A material replan requires fresh observations of invalidated phases after
+revalidation; previous attempts remain immutable.
+Proven test fixtures found during an active unmerged wave use
+[guarded late TDD repair](sdlc-prepare-execution/references/execution-plane.md#late-test-revision):
+retain failed workers, seal only exact reviewed test files, and append fresh
+assignments. Original TDD and independent acceptance harnesses remain intact.
 
 Final certification retains original TDD evidence across appended corrective
 waves only when owner replan records, locked plans, completed task definitions
@@ -930,6 +1022,10 @@ ancestry. Later acceptance uses the current basis.
 Three-tier test acceptance uses owner-executed result receipts tied to the
 clean promoted image; free-form logs cannot certify PASS. Post-UAT documentation
 assessment is read-only, and required edits use a corrective run with fresh gates.
+The concurrent Implement companion uses available native agent tools for its
+single worker; its frozen request does not equate serial work with nested CLI
+dispatch. CLI fallback requires host support and preserves the same permissions.
+Failed launches remain recorded blockers rather than automatic retries.
 
 Worker runtime teardown uses owned `stop web db` before lease release; final
 resource deletion belongs to lifecycle cleanup. Helper help lists its admitted
@@ -1124,10 +1220,11 @@ execution, TDD, implementation, validation, tests, evaluation, documentation,
 alignment, commit, UAT, and any separately authorized PR/merge phases. Shared
 Worktree execution uses frozen bases, ready slots, immutable worker evidence,
 and exclusive shared-runtime leases. It never nests another coordinator.
-Each worker attempt has a one-hour wall-clock limit, including external waits,
-builds, tests, review and handoff, with a warning five minutes before expiry.
-Thirty-second heartbeats and four-minute stale-heartbeat detection remain
-independent. Progress never renews the deadline; large tasks should be split.
+Healthy worker attempts, builds, tests and external waits have no elapsed-time
+cap. Direct heartbeats target 30 seconds; startup, stale-observation and periodic
+progress thresholds request diagnosis. Unknown health retains ownership.
+Confirmed failures retain their existing time and attempt repair budgets.
+See [execution health](worktree/references/execution-health.md).
 
 Worker output schemas use the native provider's supported subset; local
 validators enforce status-dependent spec gaps and unique typed IDs. Native
@@ -1758,7 +1855,7 @@ owner after a failed counted repair. It requires causal proof, bounded scope and
 the original regression check. Active handoffs use only diagnosis v3; earlier
 active records are rejected while historical reports remain intact.
 
-Agentic SDLC uses its own authoritative `repair-control-v2`: two localized
+Agentic SDLC uses its own authoritative `repair-control-v3`: two localized
 attempts, one design-scale attempt, three total attempts and 60 active minutes
 per stable blocker tranche, plus four repair dispatches per feature. A failed
 first direct repair requires troubleshooting before attempt two. Each retry
@@ -2149,7 +2246,49 @@ Old active workflow schemas remain on disk and require explicit recovery.
 
 ### Repair obligation continuity
 
+Typed design/test revisions free exact stopped worker slots and preserve failed
+candidates through sealing. Fresh wave preparation then verifies a private
+[candidate archive](worktree/references/revision-retirement.md), retires the exact
+checkout and releases physical capacity. Promotion checks that recovery evidence
+again; failed work never becomes an admitted implementation through cleanup.
+
 SDLC retains prior invalidations across successive failures and archives earlier
 cursor progress. A new successful repair reruns the combined ordered gates under
 its own authority. The final admitted repair may complete revalidation without
 raising the dispatch ceiling. Both workflows still share the Worktree engine.
+
+SDLC recovery distinguishes bounded owner-proven input correction from counted
+feature repair. Known heading, record-terminator and literal-route formatting
+corrections share one checkpoint-bound allowance; classified failures keep their
+original accounting. Coordinator steering receipts gate planning and new dispatch;
+serial wave barriers and the default 4/8/16 worker limits remain. See
+[the correction contract](sdlc-classify-failure/references/input-correction.md).
+The readiness helper returns the authorized run's selected project as its command
+working directory so the owned Git profile admits the invocation.
+
+Completed waves retain their original evidence when canonical authoring needs a
+new validation candidate. The execution owner checkpoints the reviewed pair and
+validates the clean candidate before final sealing. Counted browser re-evaluation
+requires a distinct candidate and the current repair gate, retains all attempts,
+and cannot erase a failure. Validation preserves virtualenv interpreter paths.
+
+### Factual workflow statistics
+
+Observed tool and lock-wait timings use batched counters with monotonic clock
+provenance and explicit unknown intervals. Overlapping totals are not campaign
+elapsed time. Healthy work remains nonexpiring; clock loss requests observation.
+
+Agentic SDLC and Implement report known architecture before execution, task progress during
+execution and complete or partial terminal outcomes. Named component inventories
+are independent of incremental task planning. Private Markdown/JSON reports and
+`$sdlc-start status` share one read-only projector; no ETA is generated. See the
+[statistics contract](worktree/references/statistics.md).
+The statistics command loads its shared runtime directly, so initial inventory
+capture also works in a fresh process before other workflow helpers have run.
+Progress distinguishes submitted or blocked results from active work and reserved
+slots. Terminal summaries retain retired tasks and earlier accepted results,
+while counted repair dispatches remain distinct from worker recovery operations.
+Task definition fingerprints remain stable when an unchanged locked plan enters
+execution preparation, so preparation alone does not report changed scope.
+Peak observed worker count uses coherent owner states even when clocks cannot
+measure overlap duration. A point sample does not fill missing elapsed intervals.

@@ -8,6 +8,7 @@ from enum import Enum
 from .apply_command import CommandJournal
 from .apply_diagnostics import Failure, first_failure, latest_failure, unavailable_observation
 from .apply_plan import Evidence, Outcome, Progress, Result
+from .recovery import CURRENT, Recovery, advice
 
 
 class OutputFormat(str, Enum):
@@ -18,6 +19,7 @@ class OutputFormat(str, Enum):
 @dataclass
 class ApplyReport:
     dry_run: bool = False
+    ha: dict | None = None
     journal: CommandJournal | None = None
     resumed: bool = False
     started: bool = False
@@ -31,6 +33,8 @@ class ApplyReport:
     failure: Failure | None = None
     latest: Failure | None = None
     pending_reason: str | None = None
+    recovery: Recovery | None = None
+    cancelled: bool = False
     result: Result = field(
         default_factory=lambda: Result(
             Outcome.BLOCKED, Evidence.UNKNOWN, Evidence.UNKNOWN, Evidence.UNKNOWN, Evidence.UNKNOWN
@@ -86,11 +90,18 @@ class ApplyReport:
         self.pending_reason = None
 
     def failed(self, error: BaseException | None = None) -> None:
+        context = CURRENT.get()
+        if context is not None:
+            self.recovery = advice(context, error)
         self.failure = self.failure or first_failure(error)
         self.latest = latest_failure(error) or Failure("apply", "operation-failed")
         unavailable = unavailable_observation(error)
         pending = unavailable is not None and getattr(unavailable, "retryable", True)
-        self.pending_reason = "waiting-for-authority" if pending else None
+        self.pending_reason = (
+            "repair-worker-pending"
+            if pending and self.latest.predicate == "repair-worker-pending"
+            else "waiting-for-authority" if pending else None
+        )
         if self.journal is not None and self.started:
             try:
                 if self.failure is not None:
@@ -124,6 +135,7 @@ class ApplyReport:
                     ).mapping(),
                     "dry_run": self.dry_run,
                     "approval": self.review_approval or self.approval,
+                    **({"recovery": self.recovery.mapping()} if self.recovery else {}),
                     **({"failure": self.failure.mapping()} if self.failure is not None else {}),
                     **(
                         {"latest_failure": self.latest.mapping()} if self.latest is not None else {}
@@ -149,8 +161,11 @@ class ApplyReport:
         )
         return {
             **result.mapping(),
+            **({"ha": self.ha} if self.ha is not None else {}),
             "dry_run": self.dry_run,
             "approval": self.review_approval or self.approval,
+            **({"cancelled": True} if self.cancelled else {}),
+            **({"recovery": self.recovery.mapping()} if self.recovery else {}),
             **({"failure": self.failure.mapping()} if self.failure is not None else {}),
             **({"latest_failure": self.latest.mapping()} if self.latest is not None else {}),
             **({"pending_reason": self.pending_reason} if self.pending_reason is not None else {}),

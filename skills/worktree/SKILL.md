@@ -126,6 +126,9 @@ $worktree remove <generated-worktree-name>
   worker worktrees and ready slots. It reuses these Git lifecycle primitives.
   Obsolete lane state is rejected and retained without conversion or deletion.
   See [workflow-contract.md](references/workflow-contract.md).
+- For shared Implement or SDLC execution, follow
+  [statistics.md](references/statistics.md) for observational reporting. Preserve
+  owner transitions when reporting fails; reporting cannot authorize execution.
 
 ## Process
 
@@ -270,9 +273,9 @@ $worktree remove <generated-worktree-name>
   checkout as clean and does not create a duplicate commit.
 - Repeating `remove` resumes from remaining exact local resources. Missing
   resources are accepted only when the durable manifest proves their identity.
-- Nested lease release persists a schema-v4 terminal receipt. Replays require
+- Nested lease release persists a schema-v5 terminal receipt. Replays require
   the exact owner, token, promoted head, clean outer checkout, and absent
-  resources; the receipt is removed only with the outer lifecycle. Schema-v4
+  resources; the receipt is removed only with the outer lifecycle. Schema-v5
   ownership manifests retain the lease participation state and exact identity,
   while ordered promotion heads permit successive Implement waves only
   through expected-head compare-and-set. Outer removal retains an exact private

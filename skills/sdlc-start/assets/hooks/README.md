@@ -23,7 +23,7 @@ local Codex home.
   recommended skill.
 - When `current-state.json` has an
   `agentic-sdlc/repair-state-pointer-v1`, the Stop hook validates that its
-  `failure-event-v2`, optional `diagnosis-v3`, and `repair-control-v2` remain
+  `failure-event-v2`, optional `diagnosis-v3`, and `repair-control-v3` remain
   inside the run and agree on feature, event, and stable blocker identity. It
   stops on exhausted budgets or semantic-cycle status, requires
   diagnosis-required work to route to `troubleshoot`, and requires a recorded
@@ -71,7 +71,8 @@ local Codex home.
   exact command/target. Force cleanup and identity drift remain denied.
 - Active-run Git pushes, `gh pr create`, and GitHub PR-creation MCP calls
   require short-lived `create-pr` authorization whose branch and expected HEAD
-  match the clean promoted checkout and whose UAT status is `passed`. GitHub PR
+  match the clean promoted checkout and whose UAT disposition and policy digest match the accepted objective. Pending
+  or unrequested UAT permits eligible delivery; observed failures remain enforced. GitHub PR
   reads and review inspection remain read-only and do not consume PR-creation
   authorization. The push must target exactly `origin` plus one
   `HEAD:<authorized-branch>` refspec; CLI `--head` and MCP `head` values must

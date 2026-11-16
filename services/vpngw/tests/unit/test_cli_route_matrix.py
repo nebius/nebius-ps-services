@@ -79,7 +79,6 @@ def test_applicability_registry_covers_every_executable_leaf_and_action_mode() -
         "pair apply",
         "pair status",
         "create-config",
-        "vm-ha",
         "prep-network",
         "validate-config",
         "apply",
@@ -87,7 +86,7 @@ def test_applicability_registry_covers_every_executable_leaf_and_action_mode() -
         "failover tunnel",
         "failback tunnel",
         "access add-operator",
-        "vm-ha --rotate-mtls",
+        "apply --rotate-mtls",
         "add-routes-local",
         "list-routes-local",
         "list-routes-remote",
@@ -121,7 +120,6 @@ def test_every_executable_leaf_has_a_four_mode_applicability_contract(
         "failover tunnel",
         "failback tunnel",
         "create-config",
-        "vm-ha",
         "prep-network",
         "validate-config",
         "apply",
@@ -134,7 +132,7 @@ def test_every_executable_leaf_has_a_four_mode_applicability_contract(
     }
     ordinary_only = {"restart-tunnel"}
     vm_ha_only = {
-        "vm-ha --rotate-mtls",
+        "apply --rotate-mtls",
         "failover vm",
         "failback vm",
     }
@@ -173,8 +171,8 @@ def test_every_executable_leaf_has_a_four_mode_applicability_contract(
         ("failover vm", True, "static", True),
         ("failback vm", False, "static", False),
         ("failback vm", True, "bgp", True),
-        ("vm-ha --rotate-mtls", False, "bgp", False),
-        ("vm-ha --rotate-mtls", True, "static", True),
+        ("apply --rotate-mtls", False, "bgp", False),
+        ("apply --rotate-mtls", True, "static", True),
         ("add-routes-local", False, "static", True),
         ("add-routes-local", False, "bgp", True),
         ("add-routes-local", True, "static", True),
@@ -685,7 +683,7 @@ def test_vm_ha_tunnel_transfer_dispatches_controller_before_ordinary_effects(
 @pytest.mark.parametrize(
     "argv",
     (
-        ("vm-ha", "--rotate-mtls", "--dry-run"),
+        ("apply", "--rotate-mtls", "--dry-run"),
         ("failover", "vm"),
         ("failback", "vm"),
     ),
@@ -733,6 +731,7 @@ def test_public_command_parameter_and_alias_manifest_is_exact() -> None:
         ("pair", "apply"): (
             ("manifest",),
             ("--dry-run",),
+            ("--repair",),
             ("--prepare-network",),
             ("--approve-a",),
             ("--approve-b",),
@@ -752,17 +751,6 @@ def test_public_command_parameter_and_alias_manifest_is_exact() -> None:
             ("--interactive",),
             ("--no-interactive",),
         ),
-        ("vm-ha",): (
-            ("--local-config-file", "-c"),
-            ("--rotate-mtls",),
-            ("--output", "-o"),
-            ("--force", "-f"),
-            ("--standby-auto-healing",),
-            ("--region",),
-            ("--dry-run",),
-            ("--approve",),
-            ("--output-format",),
-        ),
         ("prep-network",): (
             ("--local-config-file", "-c"),
             ("--region",),
@@ -773,6 +761,7 @@ def test_public_command_parameter_and_alias_manifest_is_exact() -> None:
         ("apply",): (
             ("--local-config-file", "-c"),
             ("--recreate-gw", "--no-recreate-gw"),
+            ("--repair",),
             ("--sa",),
             ("--project-id",),
             ("--region",),
@@ -784,6 +773,12 @@ def test_public_command_parameter_and_alias_manifest_is_exact() -> None:
             ("--recover-vm-ha-migration",),
             ("--output-format",),
             ("--replace-failed-vm-ha-passive",),
+            ("--convert-to-ha",),
+            ("--output", "-o"),
+            ("--force", "-f"),
+            ("--rotate-mtls",),
+            ("--standby-auto-healing",),
+            ("--approve",),
         ),
         ("status",): (
             ("--local-config-file", "-c"),

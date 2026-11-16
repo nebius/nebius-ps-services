@@ -7,9 +7,12 @@ from pathlib import Path
 
 # Exact canonical readers, loaded in dependency order into a fresh guest process.
 SOURCES = (
+    ("_vpngw_dependency_scope", "dependency_scope.py"),
     ("_vpngw_ingress", "ingress_policy.py"),
     ("_vpngw_ordinary_operations", "ordinary_operations.py"),
     ("_vpngw_runtime_migration", "runtime_migration.py"),
+    ("_vpngw_repair_state", "repair_state.py"),
+    ("_vpngw_repair_guest", "repair_guest.py"),
     ("nebius_vpngw.faults", "faults.py"),
     ("nebius_vpngw.apply_lock", "apply_lock.py"),
     ("_vpngw_ha_tunnel_policy", "ha_tunnel_policy.py"),
@@ -21,10 +24,13 @@ SOURCES = (
     ("nebius_vpngw.deploy.operator_guest", "deploy/operator_guest.py"),
     ("nebius_vpngw.deploy.operator_keys", "deploy/operator_keys.py"),
     ("nebius_vpngw.deploy.replacement", "deploy/replacement.py"),
+    ("nebius_vpngw.nebius_pagination", "nebius_pagination.py"),
     ("nebius_vpngw.deploy.vm_ha_cloud", "deploy/vm_ha_cloud.py"),
     ("nebius_vpngw.deploy.replacement_cloud", "deploy/replacement_cloud.py"),
     ("nebius_vpngw.deploy.ordinary_route_policy", "deploy/ordinary_route_policy.py"),
     ("nebius_vpngw.deploy.ordinary_route_ownership", "deploy/ordinary_route_ownership.py"),
+    ("nebius_vpngw.deploy.ordinary_route_plan", "deploy/ordinary_route_plan.py"),
+    ("nebius_vpngw.deploy.ordinary_route_conversion", "deploy/ordinary_route_conversion.py"),
     ("nebius_vpngw.ordinary_route_binding", "ordinary_route_binding.py"),
     ("nebius_vpngw.agent.ordinary_route_authority", "agent/ordinary_route_authority.py"),
     ("nebius_vpngw.agent.vm_ha_controller", "agent/vm_ha_controller.py"),

@@ -53,6 +53,11 @@ in default preparation. Their prepared artifacts need their own readiness,
 response-correctness and GPU checks;
 preparation does not build a GPU engine or qualify serving performance.
 
+Native Nsight Systems serving captures wait for graceful server shutdown and
+report export. The 900-second watchdog still fails the job if its deadline
+expires, even when the server writes a report while stopping. Inspect both the
+server log and its `.watchdog` companion when capture shutdown fails.
+
 ## Completion
 
 Keep mechanics and serving evidence separate. Use Lab 32's trials experiment

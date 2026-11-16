@@ -265,6 +265,8 @@ def fixture_setup(function):
                     ctx.report_path or ctx.verification_root / "report.md",
                 )
                 fresh = not (ctx.disposable_project / ".git").exists()
+                if (ctx.verification_root / RECEIPT).exists():
+                    _validate_receipt(ctx.verification_root, _json(ctx.verification_root / RECEIPT))
                 if function(ctx):
                     register_fixture(
                         ctx.verification_root,
@@ -362,7 +364,7 @@ def register_fixture(root: Path, *, fresh: bool, report: Path) -> None:
         )
 
 
-def _validate_receipt(root: Path, receipt: dict) -> None:
+def _validate_receipt_header(root: Path, receipt: dict) -> None:
     if (
         set(receipt)
         != {
@@ -382,6 +384,10 @@ def _validate_receipt(root: Path, receipt: dict) -> None:
     ):
         raise WorkspaceError("Workspace fixture receipt is invalid.")
     _report_allowed(root, root / receipt["report"])
+
+
+def _validate_receipt(root: Path, receipt: dict) -> None:
+    _validate_receipt_header(root, receipt)
     context = _json(root / "verification-context.json")
     if (
         str(_manifest_path(root, context, receipt["report"]).relative_to(root))
@@ -398,6 +404,84 @@ def _validate_receipt(root: Path, receipt: dict) -> None:
         != receipt["context_sha256"]
     ):
         raise WorkspaceError("Workspace verification context changed.")
+
+
+def restore_context(value: Path, original_path: Path) -> dict:
+    """Restore a proven original context; never adopt a new fixture generation."""
+    with operation(value) as root:
+        _canonical(root / NATIVE)
+        require_native_absent(root)
+        active = _canonical(root / "three-tier-live/active.json")
+        runs = _canonical(root / "three-tier-live/runs")
+        if active.exists() or active.is_symlink() or runs.is_symlink() or (runs.exists() and any(runs.iterdir())):
+            raise WorkspaceError("Context restoration requires no live fixture.")
+        journal = _canonical(root / JOURNAL)
+        if journal.exists() and _json(journal).get("status") != "DESTROYED":
+            raise WorkspaceError("Context restoration cannot alter an active cleanup checkpoint.")
+        original_path = _canonical(original_path)
+        archive = root / ARCHIVE
+        if original_path.parent != archive:
+            raise WorkspaceError("Original context evidence must be directly under the owned archive.")
+        _identity(archive)
+        receipt_path = root / RECEIPT
+        receipt_raw = _read(receipt_path, private=True)
+        receipt = _json(receipt_path)
+        _validate_receipt_header(root, receipt)
+        if re.fullmatch(r"[0-9a-f]{32}", receipt["generation"]) is None:
+            raise WorkspaceError("Fixture generation is invalid.")
+        for name, identity in receipt["targets"].items():
+            if name != "verification-context.json" and _identity(root / name) != identity:
+                raise WorkspaceError("Workspace fixture path was replaced.")
+        original_raw = _read(original_path, private=True)
+        if hashlib.sha256(original_raw).hexdigest() != receipt["context_sha256"]:
+            raise WorkspaceError("Original context does not match its recorded hash.")
+        original = _json(original_path)
+        if original_raw != (json.dumps(original, indent=2, sort_keys=True) + "\n").encode():
+            raise WorkspaceError("Original context encoding is not canonical.")
+        context_path = root / "verification-context.json"
+        current_raw = _read(context_path, private=True)
+        current = _json(context_path)
+        keys = {"schema", "verification_id", "project_root", "git_root", "baseline_head", "live_results"}
+        if (set(original) != keys or set(current) != keys
+                or any(current[key] != original[key] for key in keys - {"verification_id"})
+                or any(not isinstance(row["verification_id"], str)
+                       or re.fullmatch(r"[0-9a-f]{64}", row["verification_id"]) is None
+                       for row in (original, current))):
+            raise WorkspaceError("Context replacement changed the frozen fixture scope.")
+        manifest = _manifest_path(root, original, receipt["report"])
+        if str(manifest.relative_to(root)) != receipt["manifest"] or manifest.exists() or manifest.is_symlink():
+            raise WorkspaceError("Context restoration requires no live evidence manifest.")
+        import owned_git_origin
+
+        try:
+            owned_git_origin.validate(root / "disposable-project", root, "lightweight", require_clean=True)
+        except owned_git_origin.OriginError as error:
+            raise WorkspaceError(str(error)) from error
+        if _read(root / "disposable-project" / FIXTURE_MARKER).decode() != FIXTURE_CONTENT:
+            raise WorkspaceError("Lightweight public fixture marker changed.")
+        if current_raw == original_raw and _identity(context_path) == receipt["targets"]["verification-context.json"]:
+            _validate_receipt(root, receipt)
+            return {"status": "ALREADY_RESTORED", "generation": receipt["generation"]}
+        audit_path = archive / ("context-restoration-" + receipt["generation"] + ".json")
+        if audit_path.exists():
+            audit = _json(audit_path)
+            if (set(audit) != {"schema", "receipt", "superseded_context", "superseded_identity"}
+                    or audit["schema"] != "agentic-sdlc/context-restoration-v1"
+                    or audit["receipt"] != receipt
+                    or current not in (original, audit["superseded_context"])
+                    or current != original and _identity(context_path) != audit["superseded_identity"]):
+                raise WorkspaceError("Context restoration evidence changed.")
+        else:
+            _write(audit_path, {"schema": "agentic-sdlc/context-restoration-v1", "receipt": receipt,
+                               "superseded_context": current, "superseded_identity": _identity(context_path)}, exclusive=True)
+        if _read(receipt_path, private=True) != receipt_raw or _read(context_path, private=True) != current_raw:
+            raise WorkspaceError("Context restoration target changed before writing.")
+        if current_raw != original_raw:
+            _write(context_path, original)
+        restored = {**receipt, "targets": {**receipt["targets"], "verification-context.json": _identity(context_path)}}
+        _write(receipt_path, restored)
+        _validate_receipt(root, restored)
+        return {"status": "RESTORED", "generation": receipt["generation"], "evidence": str(audit_path.relative_to(root))}
 
 
 def _manifest_path(root: Path, context: dict, report: str) -> Path:
@@ -607,50 +691,86 @@ def _tree(root: Path, names: list[str]) -> dict[str, dict]:
     return result
 
 
-def register_native(root: Path) -> None:
-    """Bind the exact launcher process before exec; never expose native inputs."""
+def register_native(root: Path, *, pid: int | None = None) -> None:
+    """Record each exact launcher before exec, under one generation owner."""
+    pid = os.getpid() if pid is None else pid
+    if type(pid) is not int or pid <= 1:
+        raise WorkspaceError("Native coordinator process identity is invalid.")
     with operation(root):
-        if (root / NATIVE).exists():
-            require_native_absent(root)
-        observed = subprocess.run(
-            ["ps", "-o", "lstart=", "-p", str(os.getpid())],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
+        path = root / NATIVE
+        value = _json(path) if path.exists() else {"schema": "agentic-sdlc/workspace-native-v2", "processes": []}
+        _native_records(value)
+        observed = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
+                                  capture_output=True, text=True, check=True).stdout.strip()
         if not observed:
             raise WorkspaceError("Native coordinator identity is unavailable.")
-        _write(
-            root / NATIVE,
-            {
-                "schema": "agentic-sdlc/workspace-native-v1",
-                "pid": os.getpid(),
-                "started": observed,
-            },
-        )
+        record = {"pid": pid, "started": observed}
+        if record not in value["processes"]:
+            if len(value["processes"]) >= 64:
+                raise WorkspaceError("Native invocation inventory exceeds its bound.")
+            value["processes"].append(record)
+        _write(path, value)
+
+
+def _native_records(value):
+    if (set(value) != {"schema", "processes"} or value["schema"] != "agentic-sdlc/workspace-native-v2"
+            or not isinstance(value["processes"], list) or len(value["processes"]) > 64
+            or any(not isinstance(row, dict) or set(row) != {"pid", "started"}
+                   or type(row["pid"]) is not int or row["pid"] <= 1
+                   or not isinstance(row["started"], str) or not row["started"] for row in value["processes"])):
+        raise WorkspaceError("Native coordinator ownership is invalid.")
+    if len({(row["pid"], row["started"]) for row in value["processes"]}) != len(value["processes"]):
+        raise WorkspaceError("Native coordinator ownership has duplicate records.")
+    return value["processes"]
 
 
 def require_native_absent(root: Path) -> None:
     if not (root / NATIVE).exists():
         return
-    value = _json(root / NATIVE)
-    if (
-        set(value) != {"schema", "pid", "started"}
-        or value["schema"] != "agentic-sdlc/workspace-native-v1"
-        or not isinstance(value["pid"], int)
-        or value["pid"] <= 1
-        or not isinstance(value["started"], str)
-    ):
+    for value in _native_records(_json(root / NATIVE)):
+        result = subprocess.run(["ps", "-o", "lstart=", "-p", str(value["pid"])], capture_output=True, text=True)
+        if result.returncode not in {0, 1}:
+            raise WorkspaceError("Native coordinator absence cannot be measured.")
+        if result.returncode == 0 and result.stdout.strip() == value["started"]:
+            raise WorkspaceError("WORKSPACE_BUSY: an owned native coordinator is still active.")
+
+
+def _retire_native_history(root: Path) -> bool:
+    """Archive a quiescent terminal ledger before retiring its active path."""
+    path = root / NATIVE
+    if not path.exists() and not path.is_symlink():
+        return False
+    raw = _read(path, maximum=1048576, private=True)
+    try:
+        ledger = json.loads(raw)
+    except ValueError as error:
+        raise WorkspaceError("Native coordinator ownership is invalid.") from error
+    if not isinstance(ledger, dict):
         raise WorkspaceError("Native coordinator ownership is invalid.")
-    result = subprocess.run(
-        ["ps", "-o", "lstart=", "-p", str(value["pid"])], capture_output=True, text=True
-    )
-    if result.returncode not in {0, 1}:
-        raise WorkspaceError("Native coordinator absence cannot be measured.")
-    if result.returncode == 0 and result.stdout.strip() == value["started"]:
-        raise WorkspaceError(
-            "WORKSPACE_BUSY: the owned native coordinator is still active."
-        )
+    _native_records(ledger)
+    entries = _tree(root, [NATIVE])
+    if hashlib.sha256(raw).hexdigest() != entries[NATIVE]["sha256"]:
+        raise WorkspaceError("Native coordinator ownership changed before retirement.")
+    require_native_absent(root)
+    history = {
+        "schema": "agentic-sdlc/workspace-native-history-v1",
+        "root": _identity(root),
+        "ledger": ledger,
+        "ledger_sha256": entries[NATIVE]["sha256"],
+    }
+    archive = _canonical(root / ARCHIVE)
+    archive.mkdir(mode=0o700, exist_ok=True)
+    _identity(archive)
+    if not archive.is_dir() or archive.stat().st_mode & 0o077:
+        raise WorkspaceError("Native history archive must be a private directory.")
+    saved = archive / ("native-" + _digest(history) + ".json")
+    if not saved.exists() and not saved.is_symlink():
+        _write(saved, history, exclusive=True)
+    if _json(saved) != history:
+        raise WorkspaceError("Native history archive differs; preserve it for diagnosis.")
+    require_native_absent(root)
+    _delete_checked(root, NATIVE, entries[NATIVE], entries, history["root"])
+    return True
 
 
 def _checkpoint(root: Path) -> tuple[dict, dict]:
@@ -821,13 +941,38 @@ def product_quiescence(root: Path, live):
         yield
         return
     _, state = live.load_active(root)
-    home = Path(state["private_root"]) / (live.agent_name() + "-home")
-    runs = home / "sdlc-runs"
     if state.get("filesystem_cleanup") is not None:
         live.validate_filesystem_cleanup(root, state)
         require_native_absent(root)
         yield
         return
+    home = Path(state["private_root"]) / (live.agent_name() + "-home")
+    companion = Path(state["evidence_root"]) / "companion"
+    if (companion / "launch.json").exists():
+        terminal = _json(companion / "finished.json")
+        groups = terminal.get("process_groups")
+        if (terminal.get("verification_id") != state["verification_id"]
+                or terminal.get("status") not in {"PASS", "PARTIAL", "FAIL"}
+                or terminal.get("cleanup_verified") is not True
+                or not isinstance(groups, list) or len(groups) > 2
+                or any(type(pid) is not int or pid <= 1 for pid in groups)):
+            raise WorkspaceError("Companion launch has no terminal generation proof.")
+        for pid in groups:
+            try:
+                os.killpg(pid, 0)
+            except ProcessLookupError:
+                continue
+            raise WorkspaceError("Companion native process group remains active.")
+        for path in companion.glob("*-invocation.json"):
+            value = _json(path)
+            if value.get("cleanup_verified") is not True:
+                raise WorkspaceError("Companion native cleanup is incomplete.")
+            try:
+                os.killpg(value["process_group"], 0)
+            except ProcessLookupError:
+                continue
+            raise WorkspaceError("Companion native process group remains active.")
+    runs = home / "sdlc-runs"
     launched = (
         bool(state.get("workflow_startup")) or runs.exists() and any(runs.iterdir())
     )
@@ -858,7 +1003,17 @@ def product_quiescence(root: Path, live):
                 validate_run(run_dir)
                 _writers_quiescent(run_dir)
                 require_released(run_dir)
-                yield
+                from contextlib import ExitStack
+                with ExitStack() as stack:
+                    for peer in sorted((home / "implement").glob("*/run-*/run.json")):
+                        peer_dir = peer.parent
+                        stack.enter_context(lock(peer_dir.parent))
+                        peer_run, _ = validate_run(peer_dir, owner="implement")
+                        if Path(peer_run.get("logical_project_root", "")) != Path(state["project_root"]) / "project-b":
+                            raise WorkspaceError("Companion objective has foreign project identity.")
+                        _writers_quiescent(peer_dir)
+                        require_released(peer_dir)
+                    yield
     except (OSError, ValueError, RuntimeError) as error:
         if isinstance(error, WorkspaceError):
             raise
@@ -926,11 +1081,11 @@ def _destroy_locked(root: Path, live) -> dict:
             _write(root / JOURNAL, journal)
         journal["status"] = "DESTROYED"
         _write(root / JOURNAL, journal)
-    if (root / NATIVE).exists():
-        # Terminal process receipt is minimal ownership history, not raw state.
-        require_native_absent(root)
+    retired_native = _retire_native_history(root)
     result = (
-        "DESTROYED" if snapshot or live_status == "DESTROYED" else "ALREADY_DESTROYED"
+        "DESTROYED"
+        if snapshot or live_status == "DESTROYED" or retired_native
+        else "ALREADY_DESTROYED"
     )
     return {
         "status": result,
@@ -942,13 +1097,19 @@ def _destroy_locked(root: Path, live) -> dict:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--verification-root", type=Path, required=True)
-    parser.add_argument("action", choices=("destroy",))
+    parser.add_argument("action", choices=("destroy", "restore-context"))
+    parser.add_argument("--original-context", type=Path)
     args = parser.parse_args(argv)
+    if (args.action == "restore-context") != (args.original_context is not None):
+        parser.error("Only restore-context requires --original-context.")
     try:
-        print(json.dumps(destroy(args.verification_root), sort_keys=True))
+        result = (restore_context(args.verification_root, args.original_context)
+                  if args.action == "restore-context" else destroy(args.verification_root))
+        print(json.dumps(result, sort_keys=True))
         return 0
     except (WorkspaceError, OSError, RuntimeError) as error:
-        print(f"CLEANUP_FAILED: {error}", file=sys.stderr)
+        label = "CONTEXT_RESTORE_FAILED" if args.action == "restore-context" else "CLEANUP_FAILED"
+        print(f"{label}: {error}", file=sys.stderr)
         return 2
 
 

@@ -19,6 +19,7 @@ from typing import Any, Generic
 import yaml
 
 from ... import ipsec_observation
+from ...deploy.vm_ha_cloud import AmbiguousHACloudError, RetryableHACloudError
 from ...ha_tunnel_policy import (
     ConnectionPolicy,
     connection_policies,
@@ -34,7 +35,7 @@ from ..strongswan_renderer import (
     authorized_configuration,
 )
 from ..vm_ha_checkpoint import controller_checkpoint_from_dict
-from ..vm_ha_controller import ActionKind, DataPlaneMode
+from ..vm_ha_controller import ActionKind, ControllerAction, DataPlaneMode
 from . import kernel_teardown
 from .runtime import (
     CommandRunner,
@@ -833,6 +834,10 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             raise RuntimeError("HA tunnel emergency fence could not be verified")
 
 
+class _AuthorityObservationUnavailable(Exception):
+    """Abort this tunnel pass without treating an unknown read as a local fault."""
+
+
 class ControllerTunnelRuntime:
     """Called by the existing HA controller service, under its writer exclusion."""
 
@@ -870,9 +875,63 @@ class ControllerTunnelRuntime:
         ports.data_plane.effective_export_provider = self.current_exports
         ports.data_plane.ipsec_configuration_provider = self.current_ipsec_configuration
         ports.data_plane.ipsec_configuration_observer = self.observe_ipsec_configuration
+        ports.data_plane.ipsec_reload_preparer = self.prepare_daemon_reload
 
         self.restart_pending = True
         self.preferred_observations: dict[str, Any] = {}
+
+    def prepare_daemon_reload(self, action: ControllerAction, deadline: float) -> None:
+        """Complete one admitted component repair without entering selector authority."""
+        from .daemon_recovery import reconcile_lost_daemon_kernel
+
+        plane = self.ports.data_plane
+        expected = self.current_ipsec_configuration()
+        if expected is None:
+            raise RuntimeError("daemon reload policy is unavailable")
+        guard_bytes = plane.guard_path.read_bytes()
+        state_bytes = plane.state_path.read_bytes()
+        guard, state = json.loads(guard_bytes), json.loads(state_bytes)
+        if not (
+            isinstance(guard, dict)
+            and guard.get("schema") == "nebius-vpngw/vm-ha-status-v1"
+            and guard.get("guard_boot_id") == action.boot_id
+            and guard.get("data_plane_mode") == action.repair_mode.value
+            and guard.get("node_id") == action.target_node_id
+            and guard.get("allocation_id") == action.allocation_id
+            and guard.get("generation_id") == action.generation_id
+            and guard.get("digests") == asdict(action.digests)
+            and isinstance(state, dict)
+            and state.get("schema") == "nebius-vpngw/vm-ha-data-plane-v1"
+            and state.get("boot_id") == action.boot_id
+            and state.get("mode") == action.repair_mode.value
+        ):
+            raise RuntimeError("daemon reload current-boot authority is unproven")
+
+        def permitted() -> bool:
+            return bool(
+                plane.monotonic_clock() < deadline
+                and not (self.state_dir / "apply.lock").exists()
+                and plane.guard_path.read_bytes() == guard_bytes
+                and plane.state_path.read_bytes() == state_bytes
+                and plane.mode() is action.repair_mode
+                and self.current_ipsec_configuration() == expected
+                and plane.monotonic_clock() < deadline
+            )
+
+        reconcile_lost_daemon_kernel(
+            self.cfg,
+            self.state_dir,
+            expected=expected,
+            permitted=permitted,
+            runner=plane.runner,
+            deadline=deadline,
+            clock=plane.monotonic_clock,
+        )
+        # Teardown only revokes local objects under the original cloud admission.
+        # A second fresh provider/peer proof is mandatory before granting loading.
+        self.ports.require_repair_authority(action)
+        if not permitted():
+            raise RuntimeError("daemon reload authority changed after kernel recovery")
 
     def current_ipsec_configuration(self) -> ipsec_observation.ConfigurationInventory | None:
         """Read-only policy proof; pending selection never authorizes a reload."""
@@ -1065,7 +1124,14 @@ class ControllerTunnelRuntime:
 
     def _authority(self, *, preparation: bool) -> Authority | None:
         checkpoint = self.controller.controller.checkpoints.load()
-        snapshot = self.controller.snapshots.observe()
+        try:
+            snapshot = self.controller.snapshots.observe()
+        except (AmbiguousHACloudError, RetryableHACloudError) as error:
+            # Only a pure authority read may defer tunnel work. A separate
+            # signal bypasses native-effect RuntimeError handlers, preserving
+            # admitted intent and preventing an unknown read from selecting a
+            # repair or using last_snapshot as confirmed ownership drift.
+            raise _AuthorityObservationUnavailable from error
         state = read_state(self.state_dir / STATE_NAME)
         operation = state["operation"]
         policy = next(
@@ -1285,5 +1351,10 @@ class ControllerTunnelRuntime:
                     if peer in exports and not tunnel_exports(effective, connection, tunnel):
                         exports[peer] = frozenset()
             self.ports.data_plane.expected_bgp_exports = exports
+        except _AuthorityObservationUnavailable:
+            # The enclosing VM controller still obtains its own fresh snapshot
+            # and retains its ordinary fail-closed path if authority is absent.
+            # This does not authorize effects or continue from cached evidence.
+            return
         finally:
             os.close(descriptor)

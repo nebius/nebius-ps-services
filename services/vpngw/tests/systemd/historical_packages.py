@@ -144,6 +144,7 @@ def run_historical(args) -> None:
                 "install_predecessor.py",
                 "verify_predecessor.py",
                 "package_repeat.py",
+                "package_route_transport.py",
             )
         },
         "topology": args.topology,
@@ -175,6 +176,7 @@ def run_historical(args) -> None:
                 "package_upgrade_driver.py",
                 "package_diagnostics.py",
                 "package_repeat.py",
+                "package_route_transport.py",
                 "install_predecessor.py",
                 "verify_predecessor.py",
             ):
@@ -407,6 +409,20 @@ def run_historical(args) -> None:
                             verify_case_identity(case, result)
                             if result["candidate_sha256"] != summary["candidate_sha256"]:
                                 raise RuntimeError("Trial candidate differs from frozen artifact")
+                            if release["version"] == "0.6.4":
+                                transport = result["preinstall_route_transport"]
+                                if (
+                                    transport["predecessor"] != "0.6.4"
+                                    or transport["fixture_removed"] is not True
+                                    or set(transport["cases"])
+                                    != {"uncontended", "released", "deadline"}
+                                    or any(
+                                        row["unchanged"] is not True
+                                        or row["exit"] != (1 if name == "deadline" else 0)
+                                        for name, row in transport["cases"].items()
+                                    )
+                                ):
+                                    raise RuntimeError("Pre-install route transport is unverified")
                             if result.get("repeat", {}).get("status") != "passed":
                                 raise RuntimeError("Package repeat convergence was not qualified")
                             if result["probe"]["architecture"] != args.platform.removeprefix(

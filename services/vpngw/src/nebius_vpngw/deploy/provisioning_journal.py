@@ -213,6 +213,8 @@ class ProvisioningJournal(Journal):
             raise ValueError("Provisioning journal is invalid") from error
 
     def begin(self, plan: dict, *, approval: str, execution_id: str) -> None:
+        from . import provisioning_retirement
+
         requests_from_plan(plan)
         current = self.state["transaction"]
         if current:
@@ -221,9 +223,13 @@ class ProvisioningJournal(Journal):
                 and current["approval"] == approval
                 and current["execution_id"] == execution_id
             ):
+                if provisioning_retirement.receipt(self, self.state) is not None:
+                    raise RuntimeError("Retired provisioning requires a newly approved successor")
                 return
             if current["phase"] != "complete" or current["execution_id"] == execution_id:
-                raise RuntimeError("Provisioning requires its original command and intent")
+                if current["execution_id"] == execution_id or provisioning_retirement.receipt(self, self.state) is None:
+                    raise RuntimeError("Provisioning requires its original command and intent")
+                provisioning_retirement.require_successor(self, plan)
             self.archive()
             self.state["bindings"] = {}
         self.state["transaction"] = {

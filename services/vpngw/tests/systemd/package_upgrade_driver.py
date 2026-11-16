@@ -15,6 +15,7 @@ from pathlib import Path
 
 from package_diagnostics import failure_diagnostic, loader_code
 from package_repeat import verify_repeat
+from package_route_transport import verify_predecessor_route_transport
 from packaging.utils import parse_wheel_filename
 
 from nebius_vpngw import handoff_bootstrap, ordinary_bootstrap
@@ -115,13 +116,36 @@ print(json.dumps({'package_components':'complete','runtime_inhibited':(migration
 """
 
 
-INTERRUPTION_HOOK = r"""
+INTERRUPTION_ASSETS = r"""
+import hashlib,stat
+from pathlib import Path
+def interruption_assets(assets):
+    assert assets, 'Empty service asset inventory'
+    result={}
+    for name in sorted(assets):
+        path=Path(name)
+        try:
+            info=path.lstat()
+        except FileNotFoundError:
+            result[name]={'kind':'absent'}
+            continue
+        assert stat.S_ISREG(info.st_mode), 'Service asset must be a regular file'
+        result[name]={'kind':'file','sha256':hashlib.sha256(path.read_bytes()).hexdigest(),
+            'mode':stat.S_IMODE(info.st_mode),'uid':info.st_uid,'gid':info.st_gid,
+            'inode':info.st_ino,'mtime_ns':info.st_mtime_ns}
+    return result
+"""
+
+INTERRUPTION_HOOK = INTERRUPTION_ASSETS + r"""
 import os,json,sys
 from pathlib import Path
 import _vpngw_ordinary_remote as remote
 import _vpngw_runtime_migration as migration
 original_command=remote.command
 def interrupt_after_effect(arguments,*args,**kwargs):
+    before_assets=None
+    if INTERRUPTION=='product-wheel' and arguments[:5]==[sys.executable,'-B','-m','pip','install']:
+        before_assets=interruption_assets(migration.state()['manifest']['assets'])
     result=original_command(arguments,*args,**kwargs)
     value=migration.state()
     wheel=migration.verify_staged(value['plan'])/'payload'/value['manifest']['wheel_name']
@@ -134,6 +158,9 @@ def interrupt_after_effect(arguments,*args,**kwargs):
     if hit:
         receipt={'boundary':INTERRUPTION,'operation':value['operation'],
             'plan_digest':value['plan_digest'],'manifest_digest':migration.digest(value['manifest'])}
+        if INTERRUPTION=='product-wheel':
+            assert before_assets is not None
+            receipt['assets_before_product_install']=before_assets
         with Path('/qualification/interruption.json').open('x') as output:
             json.dump(receipt,output);output.flush();os.fsync(output.fileno())
         os._exit(86)
@@ -141,7 +168,7 @@ def interrupt_after_effect(arguments,*args,**kwargs):
 remote.command=interrupt_after_effect
 """
 
-INTERRUPTION_OBSERVATION = r"""
+INTERRUPTION_OBSERVATION = INTERRUPTION_ASSETS + r"""
 import hashlib,json,sys,time
 from pathlib import Path
 import _vpngw_ordinary_operations as ops
@@ -177,7 +204,7 @@ else:
     assert value['phase']=='installed'
     import importlib.metadata
     assert importlib.metadata.version('nebius-vpngw')==value['manifest']['version']
-    assert any(not Path(path).exists() or hashlib.sha256(Path(path).read_bytes()).hexdigest()!=item['sha256'] for path,item in value['manifest']['assets'].items())
+    assert interruption_assets(value['manifest']['assets'])==receipt['assets_before_product_install']
 print(json.dumps(receipt))
 """
 
@@ -224,6 +251,10 @@ def main():
     )
     before = remote({"action": "inspect-package", "manifest": manifest})["observation"]
     assert before["package_version"] == baseline["version"]
+    route_transport = None
+    if baseline["version"] == "0.6.4":
+        route_transport = verify_predecessor_route_transport(system_python, clean_environment())
+        Path("/qualification/route-preinstall.json").write_text(json.dumps(route_transport))
     ordinary_apply.verify_asset_predecessors(manifest, before)
     manifest["runtime_plan"] = before["runtime_plan"]
     manifest["ha_parent"] = "package-qualification"
@@ -357,6 +388,7 @@ print(json.dumps({'versions':versions,'import_path':nebius_vpngw.__file__,'check
         "probe": probe,
         "selected_dependencies": manifest["dependency_wheels"],
         "package_receipt": result,
+        "preinstall_route_transport": route_transport,
         "interruption": args.interrupt_after,
         "repeat": repeat,
         "not_qualified": [

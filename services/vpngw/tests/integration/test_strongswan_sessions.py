@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import os
 import re
 import secrets
@@ -67,6 +68,15 @@ class Endpoint:
     ids=["ikev2", "ikev2-prior-peer", "ikev1", "ikev1-prior-peer"],
 )
 def endpoints(tmp_path, request):
+    yield from _endpoints(tmp_path, *request.param, duplicate_negotiation=True)
+
+
+@pytest.fixture(params=[2, 1], ids=["ikev2", "ikev1"])
+def restart_endpoints(tmp_path, request):
+    yield from _endpoints(tmp_path, request.param, False, duplicate_negotiation=False)
+
+
+def _endpoints(tmp_path, ike_version, prior_peer, *, duplicate_negotiation):
     assert sys.platform == "linux" and os.geteuid() == 0
     assert Path("/.dockerenv").is_file()
     assert Path("/proc/1/comm").read_text().strip() == "systemd"
@@ -80,7 +90,6 @@ def endpoints(tmp_path, request):
     logs = []
     result = []
     psk = secrets.token_hex(32)
-    ike_version, prior_peer = request.param
     try:
         for namespace in namespaces:
             run("ip", "netns", "add", namespace)
@@ -130,7 +139,11 @@ def endpoints(tmp_path, request):
             run(*prefix, "tc", "qdisc", "add", "dev", "eth0", "root", "netem", "delay", "500ms")
             config = {
                 "gateway": {
-                    "local_prefixes": [f"10.200.{index}.1/32"],
+                    "local_prefixes": (
+                        [f"10.200.{index}.1/32"]
+                        if duplicate_negotiation
+                        else [f"10.200.{index}.0/24", "169.254.210.0/30"]
+                    ),
                 },
                 "defaults": {
                     "allow_ikev1": ike_version == 1,
@@ -183,7 +196,6 @@ def endpoints(tmp_path, request):
 charon {
   load_modular = yes
   install_routes = no
-  reuse_ikesa = no
   plugins {
     include /etc/strongswan.d/charon/*.conf
     ha {
@@ -196,6 +208,8 @@ charon {
             # rather than inheriting upstream defaults in the native fixture.
             with settings.open("a") as stream:
                 stream.write(rendered[STRONGSWAN_CONF_DIR.parent / "nebius-vpngw.conf"])
+                if duplicate_negotiation:
+                    stream.write("\ncharon { reuse_ikesa = no }\n")
             log_path = tmp_path / f"charon-{index}.log"
             log = log_path.open("w")
             logs.append(log)
@@ -204,6 +218,8 @@ charon {
             bootstrap = (
                 "import os,subprocess; "
                 "subprocess.run(['mount','-t','tmpfs','tmpfs','/run'],check=True); "
+                f"subprocess.run(['mount','--bind',{str(swanctl)!r},"
+                "'/etc/swanctl/swanctl.conf'],check=True); "
                 f"os.execv({charon!r},[{charon!r}])"
             )
             process = subprocess.Popen(
@@ -282,7 +298,9 @@ charon {
             run("ip", "netns", "delete", namespace, check=False)
 
 
-def establish(endpoints: list[Endpoint], ike_version: int) -> None:
+def establish(
+    endpoints: list[Endpoint], ike_version: int, *, duplicate_negotiation: bool = True
+) -> None:
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         results = list(
             pool.map(
@@ -320,7 +338,7 @@ def establish(endpoints: list[Endpoint], ike_version: int) -> None:
         time.sleep(0.2)
     for endpoint in endpoints:
         endpoint.command("tc", "qdisc", "del", "dev", "eth0", "root")
-    if ike_version == 1:
+    if ike_version == 1 or not duplicate_negotiation:
         # IKEv1 always reuses an existing IKE SA. Its separate coverage checks
         # simultaneous startup, encrypted traffic and peer-close recovery.
         return
@@ -403,6 +421,224 @@ def tcp179(server: Endpoint, client: Endpoint, *, recovering: bool = False) -> N
         if listener.poll() is None:
             listener.terminate()
             listener.wait(timeout=5)
+
+
+def policy_identity(endpoint: Endpoint) -> tuple[set[int], set[int], int]:
+    sas = endpoint.command("swanctl", "--list-sas").stdout
+    policies = endpoint.command("ip", "xfrm", "policy").stdout
+    stats = endpoint.command("cat", "/proc/net/xfrm_stat").stdout
+    children = {int(n) for n in re.findall(r"fixture: #\d+, reqid (\d+), INSTALLED,", sas)}
+    templates = {
+        int(n) for n in re.findall(r"proto esp(?: spi 0x[0-9a-f]+)? reqid (\d+)", policies)
+    }
+    mismatches = re.search(r"^XfrmInTmplMismatch\s+(\d+)$", stats, re.M)
+    assert mismatches, "kernel template mismatch counter unavailable"
+    return children, templates, int(mismatches[1])
+
+
+def ping_packets(endpoint: Endpoint, target: str, count: int = 30) -> tuple[int, int]:
+    result = run(
+        "nsenter",
+        "-t",
+        str(endpoint.process.pid),
+        "-m",
+        "-n",
+        "--",
+        "ping",
+        "-n",
+        "-c",
+        str(count),
+        "-i",
+        ".2",
+        "-W",
+        "1",
+        target,
+        check=False,
+    )
+    match = re.search(r"(\d+) packets transmitted, (\d+) received", result.stdout)
+    assert match and result.returncode in (0, 1), "native traffic observation unavailable"
+    return int(match[1]), int(match[2])
+
+
+def restart_ipsec(endpoint: Endpoint) -> None:
+    result = subprocess.run(
+        [
+            "nsenter",
+            "-t",
+            str(endpoint.process.pid),
+            "-m",
+            "-n",
+            "--",
+            sys.executable,
+            "-B",
+            "-c",
+            "import time; from nebius_vpngw.tunnel_restart import Restart; "
+            "assert Restart(time.monotonic()+132).restart_ipsec({'name':'fixture','if_id':100})",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=145,
+    )
+    assert result.returncode == 0, "product tunnel restart did not complete"
+
+
+def session_identities(endpoint: Endpoint, *, child: bool) -> set[str]:
+    """Return only authenticated sessions with the fixture's installed ESP CHILD."""
+    code = (
+        "import json; from nebius_vpngw.ipsec_observation import snapshot; "
+        "inventory=snapshot(timeout=5).require_complete(); "
+        "ready=[sa for sa in inventory.sas if sa.name=='fixture' "
+        "and sa.state=='ESTABLISHED' "
+        "and any(c.ready('fixture',100) for c in sa.children)]; print(json.dumps("
+        + (
+            "[c.fields.get('spi-out') for sa in ready for c in sa.children "
+            "if c.ready('fixture',100)]"
+            if child
+            else "[sa.unique_id for sa in ready]"
+        )
+        + "))"
+    )
+    values = json.loads(endpoint.command(sys.executable, "-B", "-c", code).stdout)
+    assert all(isinstance(value, str) and value for value in values)
+    return set(values)
+
+
+def test_simultaneous_restart_preserves_narrowed_policy_identity(restart_endpoints) -> None:
+    endpoints, ike_version = restart_endpoints
+    establish(endpoints, ike_version, duplicate_negotiation=False)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        # Warmup is separate from every strict steady-state assertion. Initial
+        # simultaneous negotiation can still be settling after its first CHILD.
+        list(pool.map(lambda i: ping_packets(endpoints[i], endpoints[1 - i].address, 10), (0, 1)))
+        assert (
+            list(pool.map(lambda i: ping_packets(endpoints[i], endpoints[1 - i].address), (0, 1)))
+            == [(30, 30)] * 2
+        )
+        for _ in range(6):
+            before = list(pool.map(policy_identity, endpoints))
+            probes = []
+            try:
+                for index, endpoint in enumerate(endpoints):
+                    probes.append(
+                        subprocess.Popen(
+                            [
+                                "nsenter",
+                                "-t",
+                                str(endpoint.process.pid),
+                                "-m",
+                                "-n",
+                                "--",
+                                "ping",
+                                "-n",
+                                "-i",
+                                ".2",
+                                "-w",
+                                "160",
+                                endpoints[1 - index].address,
+                            ],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    )
+                time.sleep(2)
+                list(pool.map(restart_ipsec, endpoints))
+                time.sleep(5)
+                traffic = list(
+                    pool.map(lambda i: ping_packets(endpoints[i], endpoints[1 - i].address), (0, 1))
+                )
+                after = list(pool.map(policy_identity, endpoints))
+                assert traffic == [(30, 30)] * 2, "successful restart lost encrypted traffic"
+                assert all(children == templates == {100} for children, templates, _ in after)
+                assert [row[2] for row in after] == [row[2] for row in before]
+            finally:
+                for process in probes:
+                    if process.poll() is None:
+                        process.terminate()
+                    process.wait(timeout=5)
+    if ike_version == 1:
+        return
+    # Rekey and reauthentication must create genuinely new SA identities while
+    # preserving the policy identity through authenticated overlap.
+    for phase in ("child-rekey", "ike-rekey", "ike-reauth"):
+        before = [policy_identity(endpoint) for endpoint in endpoints]
+        child = phase == "child-rekey"
+        identities = [session_identities(endpoint, child=child) for endpoint in endpoints]
+        assert all(identities), "baseline authenticated ESP sessions are not ready"
+        args = ["swanctl", "--rekey"]
+        if phase == "child-rekey":
+            args.extend(["--child", "fixture"])
+        else:
+            args.extend(["--ike-id", str(endpoints[0].sas()[0][0])])
+        if phase == "ike-reauth":
+            args.append("--reauth")
+        endpoints[0].command(*args)
+        deadline = time.monotonic() + 30
+        # A new IKE ID can be CONNECTING before authentication and CHILD install.
+        # Keep that transition outside the strict steady-state traffic sample.
+        while not all(
+            session_identities(endpoint, child=child) - previous
+            for endpoint, previous in zip(endpoints, identities, strict=True)
+        ):
+            assert time.monotonic() < deadline, "native replacement identity was not observed"
+            time.sleep(0.2)
+        assert time.monotonic() < deadline, "authenticated replacement exceeded its deadline"
+        for index, endpoint in enumerate(endpoints):
+            assert ping_packets(endpoint, endpoints[1 - index].address) == (30, 30)
+        after = [policy_identity(endpoint) for endpoint in endpoints]
+        assert all(children == templates == {100} for children, templates, _ in after)
+        assert [row[2] for row in after] == [row[2] for row in before]
+
+
+@pytest.mark.parametrize("restart_endpoints", [2], indirect=True, ids=["ikev2"])
+def test_running_daemon_separates_fixed_and_dynamic_reqids(restart_endpoints) -> None:
+    endpoints, ike_version = restart_endpoints
+    establish(endpoints, ike_version, duplicate_negotiation=False)
+    for index, endpoint in enumerate(endpoints):
+        ping_packets(endpoint, endpoints[1 - index].address, 10)
+        assert ping_packets(endpoint, endpoints[1 - index].address) == (30, 30)
+    for index, endpoint in enumerate(endpoints, 1):
+        # A deliberately unmanaged CHILD exercises the real daemon allocator,
+        # independently of assertions about the rendered reqid_base setting.
+        dynamic = endpoint.config.with_name(f"dynamic-{index}.conf")
+        original = endpoint.config.read_text()
+        child = re.search(r"(?ms)^      fixture \{\n.*?^      \}\n", original)
+        assert child is not None
+        text = child[0].replace("fixture {", "dynamic-fixture {", 1)
+        text = re.sub(r"^\s+reqid = 100\n", "\n", text, flags=re.M)
+        text = text.replace("if_id_in = 100", "if_id_in = 101").replace(
+            "if_id_out = 100", "if_id_out = 101"
+        )
+        text = text.replace("start_action = trap|start", "start_action = none")
+        text = text.replace(f"10.200.{index}.0/24,169.254.210.0/30", f"10.201.{index}.0/24")
+        # Distinct selectors on both sides force the responder to choose the
+        # unmanaged CHILD instead of narrowing its broad request to fixture.
+        text = text.replace("remote_ts = 0.0.0.0/0", f"remote_ts = 10.201.{3 - index}.0/24")
+        assert "reqid = " not in text and f"10.201.{index}.0/24" in text
+        assert f"remote_ts = 10.201.{3 - index}.0/24" in text
+        # Updating this peer's children also updates its existing IKE sessions.
+        # A separate equivalent peer config would reuse an IKE session whose
+        # responder still has only the original CHILD configuration.
+        dynamic.write_text(original[: child.end()] + text + original[child.end() :])
+        dynamic.chmod(0o600)
+        loaded = endpoint.command("swanctl", "--load-conns", "--file", str(dynamic))
+        assert "1 connections, 0 unloaded" in loaded.stdout
+        names = endpoint.command("swanctl", "--list-conns").stdout
+        assert re.search(r"^fixture:", names, re.M)
+        assert re.search(r"^\s+fixture:", names, re.M)
+        assert re.search(r"^\s+dynamic-fixture:", names, re.M)
+    endpoints[0].command("swanctl", "--initiate", "--child", "dynamic-fixture", "--timeout", "10")
+    for index, endpoint in enumerate(endpoints):
+        sas = endpoint.command("swanctl", "--list-sas").stdout
+        dynamic_ids = [
+            int(n) for n in re.findall(r"dynamic-fixture: #\d+, reqid (\d+), INSTALLED,", sas)
+        ]
+        managed_ids = [
+            int(n) for n in re.findall(r"^\s+fixture: #\d+, reqid (\d+), INSTALLED,", sas, re.M)
+        ]
+        assert dynamic_ids and min(dynamic_ids) >= 65536
+        assert managed_ids and set(managed_ids) == {100}
+        ping_packets(endpoint, endpoints[1 - index].address, 10)
+        assert ping_packets(endpoint, endpoints[1 - index].address) == (30, 30)
 
 
 def test_simultaneous_start_converges_and_peer_close_recovers(endpoints) -> None:

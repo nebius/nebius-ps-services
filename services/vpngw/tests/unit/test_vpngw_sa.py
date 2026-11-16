@@ -349,6 +349,22 @@ def test_service_account_existing_identity_is_exact_and_token_is_impersonated(
     assert token_call.call_args.kwargs["service_account_id"] == "service-account"
 
 
+@pytest.mark.parametrize("create", [False, True])
+def test_managed_identity_reconciliation_never_requires_cli_token(monkeypatch, create):
+    client = SimpleNamespace(sync_close=Mock())
+    services = _identity_services(create=create)
+    monkeypatch.setattr(vpngw_sa, "_init_client", lambda *args: (client, True))
+    monkeypatch.setattr(vpngw_sa, "_iam_services", lambda _: services)
+    monkeypatch.setattr(vpngw_sa, "_cli_access_token", lambda **_: pytest.fail("unnecessary CLI token"))
+    identity = vpngw_sa.ensure_vm_ha_service_account_identity(
+        "gateway-runtime", None, "project-test", None, verified_role_ids=("editor",),
+    )
+    assert identity == vpngw_sa.ServiceAccountIdentity("service-account", "gateway-runtime")
+    assert not hasattr(identity, "token")
+    assert all(service.create_calls == int(create) for service in services)
+    client.sync_close.assert_called_once_with()
+
+
 def test_service_account_creation_rereads_every_identity_and_permission(monkeypatch) -> None:
     client = SimpleNamespace(sync_close=Mock())
     services = _identity_services(create=True)

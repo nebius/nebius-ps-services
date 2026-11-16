@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -62,6 +63,14 @@ def streamed_bootstrap() -> str:
 
 class OperationBlocked(RuntimeError):
     """Safe, closed diagnostic; never includes command or configuration contents."""
+
+
+class ManagerBusy(OperationBlocked):
+    """Known manager work can settle while a complete inspection is retried."""
+
+
+class RoutingLockDeadline(TimeoutError):
+    """The guest route lock remained held throughout this request's budget."""
 
 
 def digest(value: Any) -> str:
@@ -439,15 +448,28 @@ def wait_quiet(manager: Manager, admission: Callable[[], Any]) -> None:
 
 
 @contextlib.contextmanager
-def mutation_lock() -> Iterator[None]:
+def mutation_lock(*, deadline: float | None = None) -> Iterator[None]:
     """Guest-side admission, including callers streamed to older guest packages."""
     import fcntl
 
     ROUTING_LOCK.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     fd = os.open(ROUTING_LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        while True:
+            if deadline is not None:
+                require_idle()
+                if time.monotonic() >= deadline:
+                    raise RoutingLockDeadline("ordinary_routing_lock_deadline")
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if deadline is None:
+                    raise
+                time.sleep(min(0.1, max(0, deadline - time.monotonic())))
         require_idle()
+        if deadline is not None and time.monotonic() >= deadline:
+            raise RoutingLockDeadline("ordinary_routing_lock_deadline")
         yield
     finally:
         os.close(fd)
@@ -601,15 +623,51 @@ class Manager:
         # Admission can plan stopping a known management service between its
         # restart attempts. This is never settlement: execution still journals
         # the stop and proves processes, cgroups and jobs gone before installing.
-        if 'name="EnqueueUnitJob"' not in xml or not self.quiet(
-            (*MANAGEMENT, *DATAPLANE), allow_management_restart_wait=True
-        ):
+        if 'name="EnqueueUnitJob"' not in xml:
             raise OperationBlocked("ordinary_manager_not_ready")
+        names = (*MANAGEMENT, *DATAPLANE)
+        if not self.quiet(names, allow_management_restart_wait=True):
+            # Only known transitional work is retryable. Missing/malformed
+            # manager evidence must not be reclassified as a busy service.
+            for row in self.jobs():
+                if (
+                    not isinstance(row, list)
+                    or len(row) != 6
+                    or type(row[0]) is not int
+                    or row[0] <= 0
+                    or not all(isinstance(item, str) for item in row[1:])
+                ):
+                    raise OperationBlocked("ordinary_manager_response_invalid")
+            for name in names:
+                unit = self.unit(name)
+                job = unit.get("Job")
+                if (
+                    unit.get("LoadState") not in {"loaded", "not-found"}
+                    or unit.get("ActiveState")
+                    not in {
+                        "active",
+                        "inactive",
+                        "failed",
+                        "activating",
+                        "deactivating",
+                        "reloading",
+                    }
+                    or not isinstance(job, list)
+                    or len(job) != 2
+                    or type(job[0]) is not int
+                    or job[0] < 0
+                    or not isinstance(job[1], str)
+                    or type(unit.get("ControlPID", 0)) is not int
+                    or unit.get("ControlPID", 0) < 0
+                ):
+                    raise OperationBlocked("ordinary_manager_response_invalid")
+            raise ManagerBusy("ordinary_manager_not_ready")
 
     def environment(self) -> dict[str, Any]:
         self.preflight()
         files = {}
         missing_failure_units = set()
+        repair_guard = None
         for name in (*MANAGEMENT, *DATAPLANE):
             unit = self.unit(name)
             if any(unit.get(key) for key in ("OnSuccess", "Upholds")):
@@ -648,7 +706,28 @@ class Manager:
                         rb"(?m)^\s*(Wants|Requires|BindsTo|Upholds|OnFailure|OnSuccess)\s*=\s*\S",
                         raw,
                     ):
-                        raise OperationBlocked("ordinary_service_scope_unknown")
+                        if path.name != "00-vpngw-repair.conf":
+                            raise OperationBlocked("ordinary_service_scope_unknown")
+                        if repair_guard is None:
+                            try:
+                                repair_guard = importlib.import_module("_vpngw_repair_guest")
+                            except ModuleNotFoundError:
+                                repair_guard = importlib.import_module(".repair_guest", __package__)
+                        if (
+                            name not in repair_guard.UNITS
+                            or path != repair_guard.SYSTEMD / (name + ".d") / path.name
+                            or raw != repair_guard.service_guard()
+                        ):
+                            raise OperationBlocked("ordinary_service_scope_unknown")
+        if repair_guard is not None:
+            # Reconstruction retains its independent fence through activation.
+            # Admit only the canonical dependency after verifying its complete
+            # boot protection and effective startup conditions; hash it above
+            # like every other environment input.
+            repair = repair_guard.storage.Journal(repair_guard.ROOT).load()
+            if repair is None:
+                raise OperationBlocked("ordinary_service_scope_unknown")
+            repair_guard.verify_guard(repair["id"])
         return {
             "network": self.network(),
             "unit_files": files,

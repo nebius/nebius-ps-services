@@ -80,3 +80,17 @@ two/three-worker limits require measurement; they are not established optima.
 - [Orchestrator-worker pattern](https://www.anthropic.com/index/building-effective-agents)
 - [Kubernetes live debugging effects](https://kubernetes.io/docs/tasks/debug/debug-application/debug-running-pod/)
 - [DCGM diagnostic levels](https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/dcgm-diagnostics.html)
+
+For SDLC, request admission through the existing shared transition helper's private
+`diagnostic-admit --run-dir PATH --event PATH --questions PATH`. The questions
+file contains a `questions` list of distinct `question` strings and scoped private
+`evidence` paths. The current CLI adapter returns serial fallback because it
+cannot verify effective per-child tool restrictions. Never substitute a role
+name, local agent TOML or caller-authored capability JSON for native enforcement.
+A host adapter with a live restriction observer may use the shared diagnostic
+owner: normally two, maximum three assignments, at most 300 seconds or remaining
+shared budget, no worktrees and the same native capacity pool as implementations.
+It journals identities before capacity claims, reconciles exact terminal handles,
+retains contradictions and charges the interval union once before diagnosis.
+No helper classifies failure or spends a repair dispatch. The coordinator returns
+one `diagnosis-v3`; unconfirmed termination or incomplete accounting blocks it.

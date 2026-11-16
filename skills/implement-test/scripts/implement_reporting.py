@@ -31,6 +31,8 @@ LIVE_STAGE_DEFINITIONS = (
     ("compose-validation", "Compose validation"),
     ("runtime-launch", "Runtime launch"),
     ("application-semantics", "Application and database semantics"),
+    ("workflow-statistics", "Before, during and after workflow reporting"),
+    ("browser-uat", "Playwright browser acceptance"),
     ("results-validation", "Canonical results validation"),
     ("report-generation", "Report generation"),
     ("cleanup", "Owned-resource cleanup"),

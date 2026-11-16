@@ -4,7 +4,7 @@ Ordinary create-pr, review-pr and publication skills use this GitHub.com
 protocol. Agentic SDLC uses the same protected primitives through its own
 `workflow_delivery.py` adapter and accepted run-level authority; it never invokes
 ordinary merge orchestration. SDLC admission requires the installed policy field
-`"sdlc_contract": "workflow/sdlc-delivery-v1"`. COMMENT attestations remain
+`"sdlc_contract": "workflow/sdlc-delivery-v2"`. COMMENT attestations remain
 operator statements, not GitHub approvals. All agent review and repairs run locally;
 Actions runs deterministic helpers with its built-in `GITHUB_TOKEN`. No custom
 App, PAT, agent runtime or credential copied from the laptop is required.
@@ -88,7 +88,7 @@ The trusted default workflow separates permissions by job: CI status writes,
 read-only admission, then Contents/PR write for approval and merge. Before any
 approval it uploads an immutable exact-head/base `merge-intent/v2` artifact.
 Admission consumes the structured review from the same validated snapshot.
-For SDLC, changing or removing its qualification evidence after approval blocks
+For SDLC, changing or removing its implementation admission or UAT disposition after approval blocks
 merge submission; a stable review ID alone does not prove unchanged evidence.
 The effect job requires that receipt, independently repeats CI/review gates,
 reuses an existing exact-head Actions approval, then rechecks before requesting

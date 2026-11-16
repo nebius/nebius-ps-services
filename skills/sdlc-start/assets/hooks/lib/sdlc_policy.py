@@ -348,6 +348,7 @@ def auth_valid(
     expected_phase: str | None = None,
     expected_head: str | None = None,
     expected_uat_status: str | None = None,
+    expected_uat_policy_sha256: str | None = None,
     expected_command: str | None = None,
     expected_pr: str | None = None,
     expected_checks_status: str | None = None,
@@ -402,6 +403,8 @@ def auth_valid(
             f"{filename} has UAT status {auth.get('uat_status')}, "
             f"not {expected_uat_status}",
         )
+    if expected_uat_policy_sha256 and auth.get("uat_policy_sha256") != expected_uat_policy_sha256:
+        return False, f"{filename} UAT policy is stale"
     if expected_command and auth.get("exact_command") != expected_command:
         return False, f"{filename} exact_command does not match this action"
     if expected_pr and str(auth.get("pr") or "") != expected_pr:
@@ -669,6 +672,8 @@ def gh_pr_create_base_matches(words: list[str], base: str) -> bool:
 
 
 def pr_auth_valid(active: ActiveRun | None, project_root: Path) -> tuple[bool, str]:
+    if active is None:
+        return False, "no active SDLC run"
     branch = detect_current_branch(project_root)
     default_branch, default_head = detect_default_identity(project_root)
     current_head = git_head(project_root)
@@ -678,13 +683,34 @@ def pr_auth_valid(active: ActiveRun | None, project_root: Path) -> tuple[bool, s
         return False, "current checkout has no resolvable HEAD"
     if not default_branch or not default_head:
         return False, "origin default branch and HEAD cannot be resolved"
+    if active is not None:
+        import subprocess
+        import sys
+        from agent_runtime import installed_skills_dir
+        source = Path(__file__).resolve().parents[4]
+        catalog = source if (source / "worktree/scripts/workflow_task_acceptance.py").is_file() else installed_skills_dir()
+        helper = catalog / "worktree/scripts/workflow_task_acceptance.py"
+        try:
+            if helper.is_symlink() or not helper.is_file():
+                return False, "SDLC task acceptance owner is unavailable"
+            checked = subprocess.run([sys.executable, "-B", str(helper), "--run-dir", str(active.run_dir),
+                                      "--repository", str(project_root), "--head", current_head],
+                                     capture_output=True, timeout=30)
+            if checked.returncode:
+                return False, "SDLC implementation acceptance or observed UAT failure is unverified"
+            uat = json.loads(checked.stdout)
+            if uat.get("delivery_eligible") is not True:
+                return False, "SDLC delivery admission is unavailable"
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return False, "SDLC task acceptance verification is unavailable"
     return auth_valid(
         active,
         "pr-authorization.json",
         branch,
         expected_phase="create-pr",
         expected_head=current_head,
-        expected_uat_status="passed",
+        expected_uat_status=uat["status"],
+        expected_uat_policy_sha256=uat["policy_sha256"],
         expected_base=default_branch,
         expected_base_head=default_head,
     )
@@ -946,4 +972,27 @@ def spec_warning_or_denial(
             return warn_context(
                 f"SDLC warning: {path.name} is normally updated only during {expected}; current phase is {phase}."
             )
+    return None
+
+
+def steering_readiness_reason(active: ActiveRun, current: dict) -> str | None:
+    """Observe the canonical owner; hooks never issue readiness or route phases."""
+    import subprocess
+    import sys
+    from agent_runtime import installed_skills_dir
+    execution = current.get("current_execution")
+    if re.fullmatch(r"(?:FEAT|SLICE)-[0-9]{3,}", str(execution)) is None:
+        return "SDLC readiness is pending: select the current execution before planning."
+    source = Path(__file__).resolve().parents[4]
+    catalog = source if (source / "worktree/scripts/workflow_readiness.py").is_file() else installed_skills_dir()
+    helper = catalog / "worktree/scripts/workflow_readiness.py"
+    try:
+        if helper.is_symlink() or not helper.is_file():
+            return "SDLC readiness owner is unavailable."
+        checked = subprocess.run([sys.executable, "-B", str(helper), "--run-dir", str(active.run_dir),
+                                  "--execution", execution], capture_output=True, timeout=30)
+        if checked.returncode:
+            return "SDLC readiness is pending: the coordinator must complete sdlc-auto-steering."
+    except (OSError, subprocess.TimeoutExpired):
+        return "SDLC readiness could not be verified."
     return None

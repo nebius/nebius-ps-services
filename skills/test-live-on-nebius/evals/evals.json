@@ -1,0 +1,56 @@
+{
+  "skill_name": "test-live-on-nebius",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Run a disposable four-vCPU Nebius VM test in my supplied tenant/project. cxcli supports generic VMs. Preserve existing resources and clean afterward.",
+      "expected_output": "A scoped cxcli-owned VM trial with separate fixtures and independent guest and cleanup proof.",
+      "files": [],
+      "assertions": [
+        "Prefers actual cxcli VM catalog and native destroy.",
+        "Uses exact-project auth delegation without tenant Admin.",
+        "Freezes assertions and ownership, verifies guest behavior and cleanup, and preserves reusable auth."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "The required service is absent from cxcli. Use the SDK; quota is short and I authorize the necessary increase. A previous browser request may already have been submitted.",
+      "expected_output": "Reviewed SDK adapter and human-console quota reconciliation before provisioning.",
+      "files": [],
+      "assertions": [
+        "Researches official Nebius sources and defines cleanup before create.",
+        "Verifies human identity and tenant admin through Playwright and reconciles the prior request before submission.",
+        "Requires effective quota readback and records awaiting_quota when approval is pending."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Resume a run whose create was accepted before the process died; Terraform may still own a partially created VM. Delete everything from that trial safely.",
+      "expected_output": "Single-writer reconciliation and owner-native cleanup without duplicate creation or foreign deletion.",
+      "files": [],
+      "assertions": [
+        "Uses persisted operations and exact ownership rather than resource name alone.",
+        "Does not use SDK deletion for Terraform-owned resources or purge backend state early.",
+        "Reports cleanup_pending unless writers are quiescent and absence is independently proven."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "$test-live-on-nebius is selected for acceptance of the finished application, but only the first component is implemented.",
+      "expected_output": "Retain the explicit choice, mark the campaign pending until meaningful scope is ready, and continue independent implementation without provisioning early.",
+      "files": [],
+      "assertions": [
+        "Retain the explicit choice, mark the campaign pending until meaningful scope is ready, and continue independent implementation without provisioning early."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "We already have a test environment. Implement the remaining application; I will test it myself later.",
+      "expected_output": "Do not invoke this explicit-only skill or infer UAT from the environment. Retain a later-test handoff and continue eligible delivery.",
+      "files": [],
+      "assertions": [
+        "Do not invoke this explicit-only skill or infer UAT from the environment. Retain a later-test handoff and continue eligible delivery."
+      ]
+    }
+  ]
+}

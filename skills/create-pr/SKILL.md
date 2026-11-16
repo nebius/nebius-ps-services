@@ -1,6 +1,6 @@
 ---
 name: create-pr
-description: "Use only when explicitly asked to create a GitHub PR from unmanaged work: validate, commit, code-review before publication, push, and verify PR readiness. Stop at the reviewed PR by default; explicit merge intent delegates merge-pr. In active Agentic SDLC, publish only the exact promoted SHA after UAT. Reject managed worktrees."
+description: "Use only when explicitly asked to create a GitHub PR from unmanaged work: validate, commit, code-review before publication, push, and verify PR readiness. Stop at the reviewed PR by default; explicit merge intent delegates merge-pr. Active Agentic SDLC requires exact promoted SHA, core admission and eligible optional UAT status. Reject managed worktrees."
 disable-model-invocation: true
 ---
 
@@ -30,6 +30,10 @@ Use available native tools; an unavailable required capability is a blocker,
 never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
+
+For SDLC callers, read `../worktree/references/optional-uat.md`. Required
+implementation evidence, CI, review and exact-SHA authority gate publication.
+UAT is opt-in; not-requested/pending UAT does not block eligible PR/merge.
 
 Use this skill to turn local repository work or named branches into GitHub pull
 requests with a safe default-branch workflow. It can prepare a single PR or one
@@ -66,7 +70,7 @@ merge-pr.
 - Returning PR numbers, URLs, readiness state, and merge order so the user can
   inspect completion evidence or continue an explicitly preparation-only task.
 - In an Agentic SDLC run, publishing or reusing the PR only after
-  `sdlc-uat-tests` passes for the clean exact SHA promoted by `sdlc-commit`.
+  required implementation admission passes for the clean exact SHA promoted by `sdlc-commit`; optional UAT may remain pending.
 
 ## When Not To Use
 
@@ -75,7 +79,7 @@ Managed children must finish their owning integration workflow first.
 
 ## Inputs
 
-Public usage: `$create-pr [<branch> ...]`. `-h, --help` shows help only.
+Public usage: `$create-pr [<branch> ...] [--waive-live-test REASON]`. `-h, --help` shows help only.
 No additional public flags. Default completion creates/reuses and reviews the
 PR without merging. A request such as "create a PR and merge it" additionally
 authorizes delegation to merge-pr, including an action request phrased as
@@ -115,7 +119,7 @@ Before any push or PR creation/reuse:
 - Reload the active run, current checkpoint, feature evidence, execution
   coordinator, commit evidence, and UAT evidence.
 - Require the run to route to `create-pr`, have no managed outer-integration
-  state, have passed UAT, and have a clean current named non-default branch.
+  state, have policy-valid implementation admission, and have a clean current named non-default branch.
 - If managed interop is `leased`, `pending`, or `integrated`, do not publish the
   child. Route `leased` back through the active SDLC run. For `pending`, stop
   and tell the user to switch to the recorded primary checkout and invoke the
@@ -134,7 +138,7 @@ promoted commit. Fetching refs and reading PR/check state are allowed. If the
 base moved, the PR conflicts, a branch-owned check fails, or any code/docs/test
 change is needed, record the blocker and route it through
 `sdlc-classify-failure` and `sdlc-start`. The responsible validation,
-evaluation, documentation, alignment, commit, and UAT gates must produce and
+evaluation, documentation, alignment, commit, and applicable acceptance gates must produce and
 promote a new exact SHA before publication is retried.
 
 Immediately before each authorized push or GitHub PR creation call, write a
@@ -142,7 +146,9 @@ short-lived `permissions/pr-authorization.json` containing at least
 `allowed: true`, `phase: "create-pr"`, the exact branch,
 `expected_head: <promoted_head>`, the dynamically resolved
 `base_branch: <origin-default>`, `base_head: <recorded-default-head>`,
-`uat_status: "passed"`, and `expires_at`. Re-resolve the symbolic remote
+`uat_status: <owner-reported status>`, `uat_policy_sha256: <frozen policy digest>`,
+and `expires_at`. Missing optional UAT permits eligible publication; actual
+failed assertions or unproven cleanup do not. Re-resolve the symbolic remote
 default immediately before authorization and reject either branch or HEAD
 drift.
 Publish with one direct `git push origin HEAD:<branch>` action, and create a PR
@@ -212,6 +218,21 @@ Agentic SDLC ends at its exact promoted PR head and does not use this loop.
 
 Read [branch preparation](references/branch-preparation.md) for local check
 order, branch selection and base synchronization before the process below.
+
+## Enrolled automation repositories and live-test waivers
+
+Read the sibling `merge-pr/references/automation-authority.md` contract
+before publication in an enrolled repository. Existing checkout, commit and PR
+creation ownership remains canonical. Add the repository-required semver
+fragments before final review. After creation, the shared Actions controller owns
+repair, qualification and merge; do not start a second local merge loop.
+
+Public optional input: `--waive-live-test REASON` requests a live-test waiver for
+this PR's entire lifetime. Create the PR as draft, register the waiver using the
+creator's human dispatch identity, wait for success, then mark ready. A pending
+or failed registration leaves the PR draft. Reuse the immutable PR identity;
+never infer a waiver from a label. `--waive-live-test` does not grant merge intent
+or bypass any other check. Explicit revocation uses the same waiver owner.
 
 ## Process
 

@@ -15,7 +15,7 @@
   ],
   "properties": {
     "schema": {
-      "const": "implement-test/live-results-v1"
+      "const": "implement-test/live-results-v2"
     },
     "generation_id": {
       "type": "string",
@@ -120,7 +120,8 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "application"
+        "application",
+        "browser"
       ],
       "properties": {
         "application": {
@@ -139,6 +140,30 @@
               "pattern": "^[0-9a-f]{64}$"
             }
           }
+        },
+        "browser": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "properties": {
+                "path": {
+                  "const": "evidence/browser.json"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            }
+          ]
         }
       }
     }

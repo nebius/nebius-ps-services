@@ -166,12 +166,15 @@ requires a newly reviewed candidate and token, not a repeated user invocation.
      revalidates all Git state, stages the real index, and runs normal commit
      hooks under the shared repository lock.
 7. Push the current branch.
-   - Resolve the effective pre-push and reference-transaction hook paths. If
-     either executable hook exists or a path cannot be inspected safely, stop;
-     do not use `--no-verify`.
-   - If the branch has no upstream, use `git push -u origin HEAD:<branch>`.
-   - If the branch already tracks `origin/<branch>`, use
-     `git push origin HEAD:<branch>`.
+   - Use the canonical commit transaction helper's private `push-current` action
+     with this task's authorization, current native session, repository root and
+     exact reviewed HEAD. This includes a clean branch with existing commits.
+   - The helper holds the shared repository lock, rejects active aggregation
+     reservations and unsafe hooks, performs a non-forced exact-SHA push to the
+     authorized origin branch, verifies remote readback, and sets that branch's
+     upstream. Do not use a raw Git push or disable hooks.
+   - If another project is aggregating, wait for its guarded promotion and
+     re-review the new source HEAD through the owning transaction before retry.
 8. Verify and report.
    - Run `git status --short --branch`.
    - After publication is verified, close the task with private `finish

@@ -219,5 +219,4 @@ def test_pagination_audit_covers_the_complete_public_command_tree() -> None:
         ("restart-tunnel",),
         ("status",),
         ("validate-config",),
-        ("vm-ha",),
     }

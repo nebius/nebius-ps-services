@@ -357,7 +357,9 @@ def test_active_locked_owner_continuation_never_dispatches_service_repair(tmp_pa
 
 
 @pytest.mark.parametrize("materialized", [False, None, True])
-def test_activation_resume_requires_positive_configuration_evidence(tmp_path, materialized):
+def test_activation_resume_requires_positive_configuration_evidence(
+    tmp_path, monkeypatch, materialized
+):
     """Compose the real driver and reopened ledger; guest controls are synthetic."""
     import time
     from types import SimpleNamespace as NS
@@ -420,7 +422,19 @@ def test_activation_resume_requires_positive_configuration_evidence(tmp_path, ma
     resumed = Recovery(tmp_path, execution=owner.execution, authority=owner.authority)
     unavailable = False
     if materialized is None:
-        with pytest.raises(RuntimeError, match="no proven safe local repair"):
+        from nebius_vpngw.deploy import activation_driver
+        from nebius_vpngw.deploy.apply_diagnostics import ObservationUnavailable
+
+        observed_at, elapsed = time.monotonic(), [0.0]
+        monkeypatch.setattr(
+            activation_driver,
+            "time",
+            NS(
+                monotonic=lambda: observed_at + elapsed[0],
+                sleep=lambda seconds: elapsed.__setitem__(0, elapsed[0] + seconds),
+            ),
+        )
+        with pytest.raises(ObservationUnavailable):
             run(resumed)
     else:
         run(resumed)
@@ -441,4 +455,5 @@ def test_activation_resume_requires_positive_configuration_evidence(tmp_path, ma
         assert resumed.history()[0]["cleaned"]
     else:
         assert effects == [] and resumed.history() == []
-        assert [item["action"] for item in controls] == ["inspect"]
+        assert controls and all(item["action"] == "inspect" for item in controls)
+        assert len(controls) > 1 if materialized is None else len(controls) == 1

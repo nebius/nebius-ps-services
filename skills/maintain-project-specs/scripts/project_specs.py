@@ -31,6 +31,9 @@ def _parser() -> argparse.ArgumentParser:
     validate_parser.add_argument("--project-root", type=Path, required=True)
     validate_parser.add_argument("--output", type=Path)
     validate_parser.add_argument("--session-id")
+    candidate_parser = subparsers.add_parser("check-candidates")
+    candidate_parser.add_argument("--requirements-candidate", type=Path, required=True)
+    candidate_parser.add_argument("--design-candidate", type=Path, required=True)
     publish_parser = subparsers.add_parser("publish")
     publish_parser.add_argument("--project-root", type=Path, required=True)
     publish_parser.add_argument("--requirements-candidate", type=Path, required=True)
@@ -47,7 +50,11 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str]) -> int:
     args = _parser().parse_args(argv)
     try:
-        if args.command == "inspect":
+        if args.command == "check-candidates":
+            from project_specs_lib.candidates import check_pair
+            output = check_pair(_read_file(args.requirements_candidate, "requirements candidate")[0],
+                                _read_file(args.design_candidate, "design candidate")[0])
+        elif args.command == "inspect":
             output = inspect_project(args.project_root, require_tracked=False)
         elif args.command == "validate":
             output = (

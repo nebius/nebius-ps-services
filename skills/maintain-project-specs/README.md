@@ -27,6 +27,10 @@ checkout owns publication again; unrelated ordinary maintenance stays independen
 Implement's initial pre-plan checkout requires the accepted objective digest
 without a basis digest. Only a completed integration allocation permits that
 publication; the execution owner commits the pair before freezing the plan.
+An unregistered project keeps an unbound publication receipt when no objective
+or basis is supplied, even when a sibling project has registered an owner in
+the same Git repository. The no-op project guard preserves supplied identities;
+registered owners still enforce objective, basis and checkout at every write.
 
 ## What Advisory Means
 
@@ -190,3 +194,12 @@ Focused tests cover:
   publication, owner-aware reader serialization, guarded rollback, and explicit
   v1/legacy migration recovery;
 - Implement and Agentic SDLC adapter parity and workflow independence.
+
+The read-only `project_specs.py check-candidates` action checks unpublished pairs.
+Heading spacing/depth, unambiguous missing record terminators and literal HTTP
+route code formatting receive narrow correction feedback only after the known
+transformations yield a complete canonical pair. Missing acceptance content,
+mismatched IDs, generic HTML and semantic edits have no exemption. The unchanged
+rejected pair must reach the paired publisher to reserve the bounded correction
+allowance before edits; the read-only check creates no allowance. Publication and
+semantic validation remain owned by the paired transaction.

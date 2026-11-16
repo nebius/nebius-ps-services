@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import sys
@@ -8,6 +9,19 @@ from pathlib import Path
 import pytest
 
 from nebius_vpngw import runtime_migration as migration
+
+
+def test_package_inventory_uses_native_identity_without_adopting_foreign_arch(monkeypatch):
+    def run(args):
+        if args == ["dpkg", "--print-architecture"]:
+            return "arm64\n"
+        return "libstrongswan:arm64\t5.9\tinstalled\nlibstrongswan:amd64\t5.8\tinstalled\n"
+
+    monkeypatch.setattr(migration, "run", run)
+    assert migration.packages() == {
+        "libstrongswan": ["5.9", "installed"],
+        "libstrongswan:amd64": ["5.8", "installed"],
+    }
 
 
 def test_unowned_read_command_is_output_bounded(monkeypatch):
@@ -105,7 +119,10 @@ def test_fresh_apt_workspace_is_bounded_and_removed_on_error(monkeypatch):
         raise RuntimeError("repository unavailable")
 
     monkeypatch.setattr(migration, "run", run)
-    with pytest.raises(RuntimeError, match="repository unavailable"), migration.apt_indexes():
+    with (
+        pytest.raises(RuntimeError, match="Signed Ubuntu repository metadata is unavailable"),
+        migration.apt_indexes(),
+    ):
         pytest.fail("failed index refresh must not provide a resolver")
     assert len(calls) == 1
     assert not calls[0][2].exists()
@@ -140,6 +157,89 @@ def checkpoint_files(monkeypatch, tmp_path):
     return tmp_path
 
 
+@pytest.mark.parametrize("original", [None, b"#!/bin/sh\n# private-policy-fixture\nexit 0\n"])
+def test_policy_plan_has_only_identity_and_resume_restores_exact_local_payload(
+    checkpoint_files, monkeypatch, original
+):
+    policy = migration.POLICY
+    if original is not None:
+        migration.write(policy, original, 0o750)
+
+    def payload():
+        return (
+            None
+            if not policy.exists()
+            else {
+                "content": base64.b64encode(policy.read_bytes()).decode(),
+                "mode": policy.stat().st_mode & 0o777,
+            }
+        )
+
+    monkeypatch.setattr(migration, "policy_payload", payload)
+    approved = {
+        "before": {},
+        "desired": {},
+        "remove": [],
+        "unit_policy": {},
+        "startup_policy": migration.policy_snapshot(),
+    }
+    monkeypatch.setattr(migration, "packages", lambda: {})
+    monkeypatch.setattr(migration, "unit_policy", lambda: {})
+    monkeypatch.setattr(migration, "verify_staged", lambda _: checkpoint_files)
+    monkeypatch.setattr(migration, "native", lambda: {"ready": True})
+    monkeypatch.setattr(migration, "CHECK", lambda: None)
+    monkeypatch.setattr(migration, "run", lambda _: "")
+    expected_payload = payload()
+    migration.begin(approved, "a" * 32, {"runtime_plan": approved})
+    assert migration.state()["policy"] == expected_payload
+    assert "content" not in json.dumps(migration.state()["plan"])
+    migration.inhibit()
+    migration.begin(approved, "a" * 32, {"runtime_plan": approved})
+    assert migration.state()["policy"] == expected_payload
+    migration.release()
+    assert payload() == expected_payload
+
+
+def test_changed_policy_blocks_before_local_checkpoint(checkpoint_files, monkeypatch):
+    approved = {"before": {}, "unit_policy": {}, "startup_policy": None}
+    monkeypatch.setattr(migration, "packages", lambda: {})
+    monkeypatch.setattr(migration, "unit_policy", lambda: {})
+    monkeypatch.setattr(migration, "policy_payload", lambda: {"content": "bmV3", "mode": 0o750})
+    with pytest.raises(RuntimeError, match="startup policy predecessor changed"):
+        migration.begin(approved, "b" * 32, {})
+    assert not migration.STATE.exists()
+
+
+def test_completed_corrective_policy_cannot_adopt_an_unapproved_second_read(monkeypatch):
+    monkeypatch.setattr(migration, "policy_payload", lambda: {"content": "bmV3", "mode": 0o750})
+    with pytest.raises(RuntimeError, match="corrective package startup policy changed"):
+        migration.corrective_policy({"phase": "complete"}, {"startup_policy": None})
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"content": "bmV3", "mode": 0o755},
+        {"sha256": "bad", "mode": 0o755},
+        {"sha256": "a" * 64, "mode": 0o777},
+        {"sha256": "a" * 64, "mode": True},
+    ],
+)
+def test_plan_rejects_payload_or_malformed_policy_identity(policy):
+    approved = {
+        "schema": migration.SCHEMA,
+        "before": {},
+        "desired": {},
+        "install": {},
+        "remove": [],
+        "archives": {},
+        "unit_policy": {},
+        "startup_policy": policy,
+    }
+    with pytest.raises(RuntimeError, match="startup policy identity"):
+        migration.validate_plan(approved)
+
+
 @pytest.mark.parametrize(
     ("step", "interrupted"),
     [
@@ -163,7 +263,7 @@ def test_reinhibition_preserves_readable_package_checkpoint(
         "manifest": {"artifact": "same saved request"},
         "phase": "packages",
         "package_step": step,
-        "policy": {"content": None, "mode": None},
+        "policy": None,
     }
     migration.save(value)
     monkeypatch.setattr(migration, "policy_snapshot", lambda: value["policy"])
@@ -210,7 +310,7 @@ def test_inhibition_outside_package_resume_reestablishes_inhibited_phase(
         "plan_digest": migration.digest(approved),
         "manifest": {},
         "phase": phase,
-        "policy": {"content": None, "mode": None},
+        "policy": None,
     }
     migration.save(value)
     monkeypatch.setattr(migration, "policy_snapshot", lambda: value["policy"])
@@ -267,6 +367,12 @@ def test_staged_archive_resume_never_refreshes_repository_metadata(monkeypatch, 
     directory.mkdir()
     (directory / "present.deb").touch()
     verified = []
-    monkeypatch.setattr(migration, "verify_staged", lambda value: verified.append(value))
+    monkeypatch.setattr(
+        migration,
+        "verify_staged",
+        lambda value, *, root: (
+            verified.append(value) if root == tmp_path else pytest.fail("wrong stage root")
+        ),
+    )
     assert migration.stage(approved) == directory
     assert verified == [approved]

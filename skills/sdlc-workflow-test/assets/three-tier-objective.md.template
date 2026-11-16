@@ -7,7 +7,10 @@
 ## Ask
 
 Create a disposable, local-only three-tier web application named SDLC Task
-Board and ship it through the complete Agentic SDLC workflow. Do not push,
+Board in project-a and ship it through the complete Agentic SDLC workflow.
+A separate public Implement session owns project-b in the same monorepo and
+native home. Use Git-root-relative write claims prefixed project-a/. Complete
+automatic outer aggregation and cleanup after your inner final gates. Do not push,
 publish, create a pull request, or depend on a non-local runtime service.
 
 ## Outcome
@@ -26,11 +29,19 @@ logical tiers do not imply three containers.
 The Compose project is `{{COMPOSE_PROJECT}}`. Let Compose apply its canonical
 `com.docker.compose.project` and `com.docker.compose.service` labels. Apply the
 custom label `sdlc-workflow-test.verification-id={{VERIFICATION_ID}}` to the web
-image, both services, the private network, and the database volume. Do not
+image, both services, the project-owned network, and the database volume. Do not
 manually declare labels in Docker's reserved `com.docker.compose` namespace.
 
 ## Constraints
 
+- The outer verifier owns physical-host memory monitoring for this trial, with
+  a fresh reliable prelaunch observation and an active bounded monitor. It owns
+  exact cancellation at the existing critical/unknown visibility boundary.
+  Repeat this setup context in every worker assignment. Sandboxed workers may
+  rely on that active owner without duplicating an unavailable host probe; do
+  not claim the worker measured the host. Preserve tool output and exit status
+  before reading an optional session handle. Immediate completion has no running
+  session; never store or poll a missing handle.
 - Run the web application and PostgreSQL as exactly two Compose services named
   `web` and `db`.
 - Create and validate the Compose files, but do not invoke Docker Compose from
@@ -50,13 +61,21 @@ manually declare labels in Docker's reserved `com.docker.compose` namespace.
   Startup completion does not end the lease. The UAT restart remains a separate
   owned action and must preserve the existing volume and task data.
 - Bind a Docker-assigned web port to loopback only; never publish PostgreSQL.
+  Use one project-owned normal bridge network shared by both services. Do not
+  set `internal: true`: an internal-only bridge can suppress host-port
+  publication even when a loopback mapping is configured. Database privacy
+  means no published database port; application behavior remains local-only.
 - Generate database credentials in a private mode-0600 environment file under
   `{{PRIVATE_ROOT}}`; inject it through environment and never commit or print it.
+- Use the exact `not-a-secret` placeholder for synthetic credential values in
+  offline mocks, patched environments and expected-call assertions. Repeat
+  this constraint in every task that authors credential mocks. Runtime
+  credentials belong in the protected environment file, not these test mocks.
 - Keep normalized objectives, plans, run state, and bounded evidence under
   `{{PRIVATE_ROOT}}`, using its isolated native agent home.
 - Keep scenario evidence and screenshots under `{{EVIDENCE_ROOT}}`.
-- Limit writes to the disposable project `{{PROJECT_ROOT}}`, the private and
-  evidence roots, the named Compose project, its exactly labelled resources,
+- Limit writes to the disposable project `{{PROJECT_ROOT}}`, its exactly owned
+  outer/candidate parent `{{PROJECT_ROOT}}-worktrees`, the private and evidence roots, the named Compose project, its exactly labelled resources,
   loopback HTTP, and fresh verifier-owned headless Chrome processes and isolated contexts.
 
 ## Acceptance criteria
@@ -73,7 +92,51 @@ manually declare labels in Docker's reserved `com.docker.compose` namespace.
 - [ ] README and CHANGELOG document local start, endpoint discovery, health,
   browser, reset, and troubleshooting.
 
+## Task acceptance
+
+Freeze the mandatory `<locked-plan>.acceptance.json` policy before preparation.
+Read the owner-built container check from
+`{{PRIVATE_ROOT}}/task-acceptance-profile.json`. Preserve the seeded
+`acceptance_fixture/task_domain_acceptance.py` as independent fixture evidence;
+never edit it or copy its assertions into product TDD tests.
+
+The early domain task implements `tasks/domain.py::normalize_title(value)`,
+stripping surrounding whitespace and raising `ValueError` for blank input. The
+API must use it. Its criterion has `purpose: implementation` and uses the exact container profile and
+its unique `runtime:<resource>` conflict domain. Run `task-accept` before native
+worker success. Collection and execution use fresh isolated writable containers
+with the same verified dependency image; they do not touch the Compose app.
+Apply that same frozen title check to a later task that integrates the domain
+behavior into the API, using its declared runtime conflict domain. The observer
+requires two admitted task assignments with distinct trial containers and the
+same immutable image, proving preparation reuse across tasks.
+
+Record a deferred criterion for `tasks/domain.py::filter_tasks(records, state)`:
+its prerequisite is the later filtering implementation; resolution stage is
+`before_delivery`, with `purpose: implementation`. The API must use this function to select `active` or `completed`
+records, preserving IDs and values. Freeze its command check as
+`["{python}", "-B", "acceptance_fixture/task_domain_acceptance.py", "check", "filter"]`.
+Resolve it from each clean registered `project-a` candidate before final UAT and
+again for the aggregate tree. Applicable later task checks still execute;
+only a genuinely documentation-only task may use a justified N/A disposition.
+Task acceptance supplements all final tests and browser/persistence UAT below.
+
 ## Verification
+
+This verifier explicitly requests whole-objective UAT against its existing
+verifier-owned Compose target after the complete application scope is ready.
+Normalize `uat.requested: true`, backend `existing`, and objective scope. The
+verifier owns environment setup; this does not invoke either general testing
+skill. The scenario below requires actual browser and persistence results.
+
+After accepting the objective, perform the coordinator's initial phase
+initialization. While the checkpoint still names `sdlc-start`, report your actual
+native session identity to the outer verifier and await its observation receipt
+before advancing, creating plans/execution state, or changing the baseline Git
+revision. The outer verifier observes this state; it must not initialize or
+advance the workflow for you. At each later phase boundary, request and await
+the corresponding observation before starting dependent work. The launch
+handoff defines the communication channel; do not invent passing receipts.
 
 Use test-first development. Product-owned tests remain separate from the
 verifier-owned acceptance bundle. The frozen interface for independent checks is:
@@ -127,7 +190,7 @@ a standalone browser smoke test does not certify agent continuity.
 
 Capture five independently produced sanitized screenshots under `{{EVIDENCE_ROOT}}`: empty
 state, validation error, created task, completed filter, and post-restart. Write
-the `agentic-sdlc/three-tier-results-v3` semantic manifest incrementally to
+the `agentic-sdlc/three-tier-results-v4` semantic manifest incrementally to
 `{{EVIDENCE_ROOT}}/three-tier-results.json`.
 
 ## Live Experiment Environment

@@ -233,11 +233,36 @@ timeout and exact resume command. Report skipped or unverified lanes explicitly.
 - `scripts/publish-release-doer.sh`: content, local tag, exact push and wheel checks.
 - `assets/`: optional changelog and runnable helper templates.
 
+## Enrolled automation repositories
+
+This skill is the sole supported maintainer entry point for GitHub Releases.
+Project-local publisher scripts and direct helper commands are not public release
+interfaces. Keep maintainer publication procedures in this skill and its references;
+project READMEs retain installation, versioning and release-consumption guidance.
+
+Before the ordinary process above, read the sibling merge-pr
+`merge-pr/references/automation-authority.md` contract. In enrolled
+repositories use immutable per-change semver fragments in the original PR and
+the shared Actions release coordinator. This replaces local changelog rollover,
+release-prep PRs, tag creation, tag pushes and independent release publication.
+The fragment contract supplies the next version; `--tag` asserts that version.
+Complete/publish/resume requests dispatch or observe the same project reservation
+using exact merged-result completion evidence. Setup and prep remain non-publishing
+boundaries. The ordinary un-enrolled protocol above does not run in this profile.
+Setup must not generate project-local publisher scripts in an enrolled repository.
+The shared client and Actions publisher are private implementation components used
+by this skill and automatic post-merge intake, with one reservation and effect owner.
+An unregistered project remains unavailable until separately enrolled; do not use
+local primitives or generate a script as a fallback.
+
 ## Workflow ownership and existing releases
 
-Use `$github-workflows` for release YAML setup and its canonical
-`project-name-release-publish.yml.template`; this skill owns the local publication
-sequence. Preserve the exact workflow filename and service asset contract.
+Use `$github-workflows` for release YAML setup. In enrolled repositories,
+validate and preserve the shared Actions publisher and build-only service
+workflows; do not replace them with the standalone release template. Only
+non-enrolled repositories use `project-name-release-publish.yml.template` and
+this skill's local publication sequence. Preserve the exact workflow filename
+and service asset contract in either profile.
 Existing releases require trusted pre-publication hashes and downloaded-byte
 verification. Missing or expired evidence is a reconciliation blocker, not a
 reason to overwrite or recreate a release. The workflow must compare any

@@ -66,6 +66,9 @@ def reconcile_worker(run_dir: Path, feature: str, wave: str, task: str, evidence
         write(wave_file, record)
         state["status"] = "superseded"
         write(task_path(run_dir, feature, wave, task), state)
+        if run.get("shared_admission"):
+            from workflow_projects import release_resources
+            release_resources(run_dir, "workers", [f"{feature}/{wave}/{task}"])
         return receipt
 
 
@@ -80,9 +83,20 @@ def retire_fenced_waves(run_dir: Path, session: str):
     retained = []
     for path in sorted((run_dir / "execution").glob("*/waves/*.json")):
         wave = read(path)
-        if wave["status"] in {"planned", "done", "failed", "superseded"}:
+        if wave["status"] == "superseded":
+            from workflow_capacity import reconcile_retired_wave
+            reconcile_retired_wave(run_dir, path.parent.parent.name, wave)
+            continue
+        if wave["status"] in {"planned", "done", "failed"}:
             continue
         if wave.get("integrated_task_ids") or wave["status"] in {"integrating", "integrated"}:
+            if run.get("fence") == "cancelled":
+                # Terminal cancellation retains uncertainty; it neither changes
+                # the execution basis nor certifies an unfinished integration.
+                retained.append({"kind": "unresolved-integration", "path": str(path.relative_to(run_dir)),
+                                 "sha256": digest(wave), "status": wave["status"],
+                                 "disposition": "retained-recovery"})
+                continue
             raise WorkflowError("RECOVERY_REQUIRED", "reconcile the existing integration journal before changing its basis")
         feature = path.parent.parent.name
         assignments = []
@@ -112,6 +126,8 @@ def retire_fenced_waves(run_dir: Path, session: str):
             write(retention_path, retention, exclusive=True)
         wave.update(status="superseded", ready_task_ids=[])
         write(path, wave)
+        from workflow_capacity import reconcile_retired_wave
+        reconcile_retired_wave(run_dir, feature, wave)
     for path in sorted((run_dir / "execution").glob("*/reconciliations/*.json")):
         retained.append(read(path))
     return retained + resource_inventory(run_dir)
@@ -121,6 +137,7 @@ def cancel_complete(run_dir: Path, session: str):
     with lock(run_dir.parent):
         run, _ = authorize_coordinator(run_dir, session)
         if run["status"] == "cancelled":
+            _release_resource_free_cancellation(run_dir, run)
             return {"status": "CANCELLED", "retained_effects": run.get("retained_effects", [])}
         if run.get("fence") != "cancelled":
             raise WorkflowError("RECONCILIATION_INVALID", "cancellation must be accepted before reconciliation")
@@ -128,7 +145,65 @@ def cancel_complete(run_dir: Path, session: str):
         # A retained branch/worktree is an explicit recovery artifact, not a rollback.
         run.update(status="cancelled", retained_effects=retained, updated_at=now())
         write(run_dir / "run.json", run)
+        _release_resource_free_cancellation(run_dir, run)
         return {"status": "CANCELLED", "retained_effects": retained}
+
+
+def _release_resource_free_cancellation(run_dir: Path, run: dict) -> None:
+    """Release metadata-only cancellation after exact owner cleanup, never delete."""
+    if not run.get("shared_admission"):
+        return
+    import workflow_projects as projects
+    from worktree_state import matching_manifests
+    row = projects.get(run_dir)
+    if row is None:
+        raise WorkflowError("PROJECT_REGISTRY_INVALID", "cancelled admission is missing")
+    if row["state"] == "cancelled":
+        projects.release(run_dir)
+        return
+    _writers_quiescent(run_dir)
+    if resource_inventory(run_dir):
+        return  # Retained recovery resources still own their scope and capacity.
+    if matching_manifests(Path(row["source_root"]), scope=row["scope"], task_slug=run_dir.name):
+        return  # Includes interrupted creation before the outer allocation checkpoint.
+    if row["state"] not in {"requested", "admitted", "allocated"}:
+        raise WorkflowError("RECOVERY_REQUIRED", "cancelled project has an unresolved aggregation")
+    # No execution allocation or outer manifest may be forgotten. Metadata-only
+    # queued/admitted runs have nothing to retain. Uncertain execution stays owned.
+    if any((run_dir / "execution").glob("*/coordinator.json")):
+        return
+    if row.get("outer"):
+        _release_removed_outer_cancellation(run_dir, row)
+        return
+    projects.release(run_dir)
+    projects.update(run_dir, expected=row["state"], state="cancelled")
+
+
+def _release_removed_outer_cancellation(run_dir: Path, row: dict) -> None:
+    """Reconcile interrupted, unleased intake after the Worktree owner removed it."""
+    import workflow_projects as projects
+    import worktree_manager as manager
+    import worktree_interop as interop
+    from worktree_state import load_manifest
+
+    primary, outer = Path(row["source_root"]), row["outer"]
+    name = outer["name"]
+    manager._validate_name(name)
+    with interop.interop_lock(primary):
+        if (Path(outer["worktree"]) != manager.checked_worktree_parent(primary) / name
+                or outer["branch"] != manager._branch_for_name(name)):
+            raise WorkflowError("OWNERSHIP_INVALID", "cancelled outer identity changed")
+        if (load_manifest(primary, name, required=False) is not None
+                or any(loader(primary, name) is not None for loader in (
+                    interop.load_lease, interop.load_lease_removal,
+                    interop.load_reservation, interop.load_preparation))):
+            return  # Unfinished owner cleanup still owns the project claim.
+        try:
+            manager._assert_outer_absent(primary, name, None)
+        except manager.WorktreeError:
+            return  # Missing paths alone do not establish branch/registration absence.
+        projects.release(run_dir)
+        projects.update(run_dir, expected=row["state"], state="cancelled")
 
 
 def resume_replanned(run_dir: Path, session: str):
@@ -220,6 +295,36 @@ def recovery_path(run_dir, feature, task, attempt, coordinator_session_hash):
             / f'{task}-{attempt}-{coordinator_session_hash}.json')
 
 
+def recovery_failure_binding(run_dir, feature, coordinator, assignment, state):
+    """Bind a blocked attempt to its owning repair; interruption is not a failure."""
+    from workflow_worker_results import receipt_path, read_receipt
+    binding = {'worker_result_receipt_sha256': None, 'repair_authority': None}
+    path = receipt_path(assignment, state['attempt'])
+    if not path.exists() and not path.is_symlink():
+        return binding
+    _, result = read_receipt(assignment, state)
+    if result['worker_result']['status'] != 'blocked':
+        raise WorkflowError('REPLAN_REQUIRED', 'completed or specification-gap results cannot renew a worker attempt')
+    binding['worker_result_receipt_sha256'] = result['receipt_sha256']
+    if assignment['owner'] != 'agentic-sdlc':
+        return binding
+    import sys
+    scripts = Path(__file__).resolve().parents[2] / 'sdlc-classify-failure/scripts'
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    from repair_control import RepairControlError, worker_recovery_authority
+    try:
+        binding['repair_authority'] = worker_recovery_authority(
+            run_dir, feature, result['receipt_sha256'], coordinator['integration_head'],
+        )
+    except (RepairControlError, OSError, ValueError, KeyError, TypeError) as error:
+        raise WorkflowError(
+            'REPAIR_NOT_AUTHORIZED',
+            'blocked SDLC recovery requires exact classified repair authority',
+        ) from error
+    return binding
+
+
 def authorize_recovery(run_dir, feature, wave, task, evidence, session, next_session_sha256):
     from workflow_execution import _load_coordinator, _assert_current_assignment
     import re
@@ -227,21 +332,19 @@ def authorize_recovery(run_dir, feature, wave, task, evidence, session, next_ses
         from workflow_validation import require_quiescent
         require_quiescent(run_dir, feature, wave_id=wave, task_id=task)
         assignment, state, observation = termination(run_dir, feature, wave, task, evidence, session)
-        _assert_current_assignment(run_dir, feature, _load_coordinator(run_dir, feature), assignment)
+        coordinator = _load_coordinator(run_dir, feature)
+        _assert_current_assignment(run_dir, feature, coordinator, assignment)
         if state['status'] != 'running':
             raise WorkflowError('RECOVERY_REQUIRED', 'only a running task can authorize recovery')
-        from workflow_worker_results import receipt_path, read_receipt
-        if receipt_path(assignment, state['attempt']).exists():
-            _, result = read_receipt(assignment, state)
-            if result['worker_result']['status'] != 'blocked':
-                raise WorkflowError('REPLAN_REQUIRED', 'completed or specification-gap results cannot renew a worker attempt')
+        failure_binding = recovery_failure_binding(run_dir, feature, coordinator, assignment, state)
         if re.fullmatch(r'[0-9a-f]{64}', next_session_sha256) is None:
             raise WorkflowError('OWNERSHIP_INVALID', 'fresh native worker identity is required')
-        receipt = {'schema': 'workflow/recovery-authorization-v1', 'assignment_digest': assignment['assignment_digest'],
+        receipt = {'schema': 'workflow/recovery-authorization-v2', 'assignment_digest': assignment['assignment_digest'],
                    'attempt': state['attempt'], 'prior_worker_session_hash': state['worker_session_hash'],
                    'next_worker_session_hash': next_session_sha256,
                    'coordinator_session_hash': validate_run(run_dir)[0]['coordinator_session_sha256'],
-                   'termination_path': str(evidence), 'termination_sha256': digest(observation)}
+                   'termination_path': str(evidence), 'termination_sha256': digest(observation),
+                   **failure_binding}
         path = recovery_path(run_dir, feature, task, state['attempt'], receipt['coordinator_session_hash'])
         if path.exists():
             if read(path) != receipt:
@@ -254,6 +357,66 @@ def authorize_recovery(run_dir, feature, wave, task, evidence, session, next_ses
             assignment_path(run_dir, feature, wave, task), assignment,
             recovery_attempt=state['attempt'],
         )}
+
+
+def observe_worker_repair(run_dir, feature, wave, task):
+    """Read the still-active charged repair of an already recovered SDLC worker."""
+    from workflow_execution import (
+        _assert_current_assignment, _execution_transition_lock, _load_coordinator,
+        _validate_assignment_record, _validate_task_liveness, _validated_session_history,
+        assignment_path, task_path,
+    )
+    with _execution_transition_lock(run_dir, feature):
+        run, _ = validate_run(run_dir)
+        coordinator = _load_coordinator(run_dir, feature)
+        assignment = read(assignment_path(run_dir, feature, wave, task))
+        _validate_assignment_record(assignment)
+        _assert_current_assignment(run_dir, feature, coordinator, assignment)
+        state = read(task_path(run_dir, feature, wave, task))
+        _validate_task_liveness(state)
+        history = _validated_session_history(state)
+        attempt = state.get('attempt')
+        if (assignment.get('owner') != 'agentic-sdlc' or state.get('status') != 'running'
+                or type(attempt) is not int or attempt < 2 or len(history) != attempt):
+            raise WorkflowError('REPAIR_NOT_AUTHORIZED', 'a recovered active SDLC worker is required')
+        previous = {**state, 'attempt': attempt - 1, 'worker_session_hash': history[-2]}
+        binding = recovery_failure_binding(run_dir, feature, coordinator, assignment, previous)
+        if binding['worker_result_receipt_sha256'] is None or binding['repair_authority'] is None:
+            raise WorkflowError('REPAIR_NOT_AUTHORIZED', 'recovery has no classified blocked result')
+        coordinator_hash = run['coordinator_session_sha256']
+        approval = read(recovery_path(run_dir, feature, task, attempt - 1, coordinator_hash))
+        expected_fields = {
+            'schema', 'assignment_digest', 'attempt', 'prior_worker_session_hash',
+            'next_worker_session_hash', 'coordinator_session_hash',
+            'termination_path', 'termination_sha256',
+            'worker_result_receipt_sha256', 'repair_authority',
+        }
+        if (set(approval) != expected_fields
+                or approval.get('schema') != 'workflow/recovery-authorization-v2'
+                or approval.get('assignment_digest') != assignment['assignment_digest']
+                or type(approval.get('attempt')) is not int
+                or approval.get('attempt') != attempt - 1
+                or approval.get('prior_worker_session_hash') != history[-2]
+                or approval.get('next_worker_session_hash') != state['worker_session_hash']
+                or approval.get('coordinator_session_hash') != coordinator_hash
+                or any(approval[key] != value for key, value in binding.items())):
+            raise WorkflowError('REPAIR_NOT_AUTHORIZED', 'active worker recovery authority changed')
+        termination_path = Path(str(approval.get('termination_path')))
+        if (not termination_path.is_absolute()
+                or termination_path.parent != run_dir / 'execution' / feature / 'terminations'):
+            raise WorkflowError('OWNERSHIP_INVALID', 'recovery termination must belong to this execution')
+        observed = read(termination_path)
+        if (digest(observed) != approval['termination_sha256']
+                or observed.get('schema') != 'workflow/worker-termination-v1'
+                or observed.get('assignment_digest') != assignment['assignment_digest']
+                or observed.get('worker_session_hash') != history[-2]
+                or observed.get('observer_session_hash') != coordinator_hash
+                or observed.get('status') != 'terminated'
+                or not observed.get('native_handle') or not observed.get('observation')):
+            raise WorkflowError('WRITER_NOT_QUIESCENT', 'recovery termination proof changed')
+        return {'assignment_digest': assignment['assignment_digest'], 'attempt': attempt,
+                'worker_session_hash': state['worker_session_hash'],
+                'repair_authority': binding['repair_authority']}
 
 
 def validate_takeover(run_dir, run, evidence, session):

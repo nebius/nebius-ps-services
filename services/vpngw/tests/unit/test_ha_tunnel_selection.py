@@ -90,6 +90,234 @@ class Effects:
         self.calls.append(("fence",))
 
 
+def _authority_read_runtime(tmp_path, mode, failure, fail_at):
+    """Exercise the native composition's real authority boundary and selector."""
+    from types import SimpleNamespace
+
+    import yaml
+
+    from nebius_vpngw.agent.vm_ha.tunnel_runtime import ControllerTunnelRuntime
+    from nebius_vpngw.agent.vm_ha_controller import ControllerCheckpoint, DataPlaneMode
+
+    cfg = config(mode)
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(cfg))
+    snapshot = SimpleNamespace(
+        cluster_id=AUTH.cluster,
+        local_node_id=AUTH.owner,
+        local_generation_id=AUTH.generation,
+        boot_id="boot-a",
+        guard_boot_id="boot-a",
+        data_plane_mode=DataPlaneMode.ACTIVE,
+        apply_locked=False,
+        transfer_inhibited=False,
+        transfer_intent=None,
+        emergency_active_only=False,
+        standby_replacement_inhibited=False,
+        readiness=SimpleNamespace(service_healthy=True, sample_complete=True, local_defects=()),
+        cloud=SimpleNamespace(
+            authoritative=True,
+            allocation_id=AUTH.allocation,
+            ownership_epoch=AUTH.epoch,
+            observed_owner_node_id=AUTH.owner,
+            local_attachment_exact=lambda node: node == AUTH.owner,
+        ),
+        peer_heartbeat=SimpleNamespace(tunnel_capability=True, generation_id=AUTH.generation),
+        peer_received_at=100,
+        now=101,
+    )
+    reads = []
+
+    def observe():
+        reads.append(len(reads) + 1)
+        if len(reads) == fail_at:
+            raise failure
+        snapshots.last_snapshot = snapshot
+        return snapshot
+
+    # A stale foreign-owner snapshot must not turn unavailable evidence into
+    # confirmed drift or retire the outstanding operation.
+    snapshots = SimpleNamespace(
+        observe=observe,
+        last_snapshot=SimpleNamespace(
+            cloud=SimpleNamespace(authoritative=True, observed_owner_node_id="foreign"),
+            local_node_id=AUTH.owner,
+        ),
+        providers=SimpleNamespace(apply_lock_operation_id=lambda: None),
+    )
+    controller = SimpleNamespace(
+        snapshots=snapshots,
+        controller=SimpleNamespace(
+            checkpoints=SimpleNamespace(
+                load=lambda: ControllerCheckpoint(
+                    pending_action=None,
+                    ownership_incarnation=AUTH.incarnation,
+                    ownership_continuity_invalidated=False,
+                )
+            )
+        ),
+    )
+    ports = SimpleNamespace(
+        routes=SimpleNamespace(),
+        data_plane=SimpleNamespace(mode=lambda: snapshot.data_plane_mode),
+    )
+    runtime = ControllerTunnelRuntime(path, tmp_path, controller, ports, clock=lambda: 101)
+    effects = Effects()
+    effects.revalidate = runtime.revalidate
+    runtime.effects = effects
+    return runtime, effects, reads, snapshot
+
+
+@pytest.mark.parametrize("mode", ["static", "bgp"])
+@pytest.mark.parametrize("fail_at", [1, 2])
+@pytest.mark.parametrize("category", ["retryable", "ambiguous"])
+def test_tunnel_authority_read_outage_defers_without_effect_or_drift(
+    tmp_path, mode, fail_at, category
+):
+    from nebius_vpngw.deploy.vm_ha_cloud import AmbiguousHACloudError, RetryableHACloudError
+
+    error = (RetryableHACloudError if category == "retryable" else AmbiguousHACloudError)(
+        "Compute observation unavailable"
+    )
+    runtime, effects, reads, _ = _authority_read_runtime(tmp_path, mode, error, fail_at)
+    selector = TunnelController(runtime.cfg, tmp_path / "tunnel-selection.json", Effects())
+    selector.request("failover", "backup", AUTH, 100)
+    before = (tmp_path / "tunnel-selection.json").read_bytes()
+
+    runtime.step()
+
+    assert len(reads) == fail_at
+    assert effects.calls == []
+    assert (tmp_path / "tunnel-selection.json").read_bytes() == before
+    # No cached success or reset: the next pass obtains fresh authority and
+    # continues the same admitted operation under its original deadline.
+    runtime.step()
+    after = read_state(tmp_path / "tunnel-selection.json")
+    assert len(reads) > fail_at
+    assert effects.calls
+    assert after["operation"]["id"] == selector.state["operation"]["id"]
+    assert after["operation"]["deadline"] == selector.state["operation"]["deadline"]
+
+
+@pytest.mark.parametrize("mode", ["static", "bgp"])
+@pytest.mark.parametrize("category", ["permission", "malformed"])
+def test_tunnel_authority_terminal_errors_still_escape(tmp_path, mode, category):
+    from nebius_vpngw.deploy.vm_ha_cloud import PermanentHACloudError
+
+    error = (
+        PermanentHACloudError("permission denied")
+        if category == "permission"
+        else ValueError("malformed identity")
+    )
+    runtime, effects, _, _ = _authority_read_runtime(tmp_path, mode, error, 1)
+    with pytest.raises(type(error), match=str(error)):
+        runtime.step()
+    assert effects.calls == []
+
+
+@pytest.mark.parametrize("mode", ["static", "bgp"])
+def test_unavailable_native_effect_revalidation_preserves_pending_phase(tmp_path, mode):
+    from nebius_vpngw.deploy.vm_ha_cloud import AmbiguousHACloudError
+
+    error = AmbiguousHACloudError("read unavailable at native effect boundary")
+    runtime, effects, _, _ = _authority_read_runtime(tmp_path, mode, error, 100)
+    selector = TunnelController(runtime.cfg, tmp_path / "tunnel-selection.json", Effects())
+    selector.request("failover", "backup", AUTH, 100)
+    original = selector.state["operation"].copy()
+    observe = runtime.controller.snapshots.observe
+
+    def unavailable():
+        raise error
+
+    def guarded_effect(*_args):
+        runtime.controller.snapshots.observe = unavailable
+        runtime.revalidate(AUTH)
+        pytest.fail("An unavailable read must not admit a native effect")
+
+    method = "suspend" if mode == "static" else "activate"
+    original_effect = getattr(effects, method)
+    setattr(effects, method, guarded_effect)
+    runtime.step()
+    pending = read_state(tmp_path / "tunnel-selection.json")["operation"]
+    assert pending["id"] == original["id"]
+    assert pending["phase"] == original["phase"]
+    assert pending["result"] == "outstanding"
+    assert pending["attempted"] == original["attempted"]
+    assert pending["deadline"] <= original["deadline"]
+    assert effects.calls == []
+
+    runtime.controller.snapshots.observe = observe
+    setattr(effects, method, original_effect)
+    runtime.step()
+    assert len(effects.calls) == 1
+    resumed = read_state(tmp_path / "tunnel-selection.json")["operation"]
+    assert resumed["id"] == original["id"]
+    assert resumed["deadline"] == pending["deadline"]
+
+
+@pytest.mark.parametrize("fail_at", [1, 2])
+def test_fenced_bgp_preparation_defers_unavailable_authority(tmp_path, fail_at):
+    from nebius_vpngw.agent.vm_ha_controller import DataPlaneMode
+    from nebius_vpngw.deploy.vm_ha_cloud import RetryableHACloudError
+
+    runtime, effects, reads, snapshot = _authority_read_runtime(
+        tmp_path, "bgp", RetryableHACloudError("read unavailable"), fail_at
+    )
+    snapshot.data_plane_mode = DataPlaneMode.PASSIVE
+    selector = TunnelController(runtime.cfg, tmp_path / "tunnel-selection.json", Effects())
+    selector.request("failover", "backup", AUTH, 100)
+    before = (tmp_path / "tunnel-selection.json").read_bytes()
+    runtime.step()
+    assert len(reads) == fail_at
+    assert effects.calls == []
+    assert (tmp_path / "tunnel-selection.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("mode", ["static", "bgp"])
+@pytest.mark.parametrize("main_available", [True, False])
+def test_deferred_tunnel_read_still_requires_fresh_main_controller_authority(
+    tmp_path, mode, main_available
+):
+    from types import SimpleNamespace
+
+    from nebius_vpngw.agent.main import VMHAControllerRuntime
+    from nebius_vpngw.deploy.vm_ha_cloud import RetryableHACloudError
+
+    error = RetryableHACloudError("cloud read unavailable")
+    tunnel, effects, reads, snapshot = _authority_read_runtime(tmp_path, mode, error, 2)
+    observe = tunnel.controller.snapshots.observe
+
+    def fresh_observation():
+        if len(reads) >= 2 and not main_available:
+            reads.append(len(reads) + 1)
+            raise error
+        return observe()
+
+    snapshots = tunnel.controller.snapshots
+    snapshots.observe = fresh_observation
+    main = object.__new__(VMHAControllerRuntime)
+    main.tunnel_step = tunnel.step
+    main.snapshots = snapshots
+    main.controller = SimpleNamespace(
+        step=fresh_observation,
+        checkpoints=tunnel.controller.controller.checkpoints,
+    )
+    main._write_status = lambda result: result
+    guards = []
+    main.guard = lambda: guards.append("fenced")
+
+    if main_available:
+        assert main.step() is snapshot
+        assert len(reads) == 3
+        assert guards == []
+    else:
+        with pytest.raises(RetryableHACloudError, match="cloud read unavailable"):
+            main.step()
+        assert len(reads) >= 3
+        assert guards == ["fenced"]
+    assert effects.calls == []
+
+
 def test_ordinary_static_uses_shared_preferred_policy():
     cfg = config()
     del cfg["vm_ha"]
@@ -167,6 +395,66 @@ def test_manual_progress_is_persisted_and_retry_is_idempotent(tmp_path):
     assert selector.state["operation"]["phase"] == "succeeded"
     assert selector.state["selected"] == {"site": "backup"}
     assert effects.calls == [("suspend", "site"), ("activate", "backup")]
+
+
+@pytest.mark.parametrize("mode", ["static", "bgp"])
+@pytest.mark.parametrize("unchanged", [False, True])
+@pytest.mark.parametrize("boundary", ["health", "verification", "authority"])
+def test_native_verification_cannot_complete_selection_after_deadline(
+    tmp_path, monkeypatch, mode, unchanged, boundary
+):
+    from nebius_vpngw.agent.vm_ha import tunnels
+
+    elapsed = [0.0]
+    monkeypatch.setattr(tunnels, "monotonic", lambda: elapsed[0], raising=False)
+    effects = Effects()
+    selector = TunnelController(config(mode), tmp_path / "state", effects)
+    selector.request(
+        "failback" if unchanged else "failover",
+        "preferred" if unchanged else "backup",
+        AUTH,
+        100,
+    )
+    for _ in range(3):
+        selector.tick(AUTH, 101)
+        if selector.state["operation"]["successes"] >= 1:
+            break
+    assert selector.state["operation"]["successes"] == 1
+    operation_id = selector.state["operation"]["id"]
+    deadline = selector.state["operation"]["deadline"]
+    method = (
+        "revalidate"
+        if boundary == "authority"
+        else "observe"
+        if boundary == "health" and mode == "static"
+        else "verify"
+    )
+    original = getattr(effects, method)
+    calls = []
+    delayed_call = 2 if boundary == "verification" and mode == "bgp" else 1
+
+    def delayed_observation(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == delayed_call:
+            elapsed[0] = 2.0
+        return original(*args, **kwargs)
+
+    setattr(effects, method, delayed_observation)
+    selector.tick(AUTH, deadline - 1)
+    assert selector.state["operation"]["phase"] != "succeeded"
+    assert selector.state["operation"]["id"] == operation_id
+    assert selector.state["operation"]["deadline"] == deadline
+    assert len(calls) >= delayed_call
+    if unchanged:
+        assert selector.state["operation"]["result"] == "unchanged-path-unverified"
+        assert effects.calls == []
+    else:
+        for now in range(int(deadline) + 2, int(deadline) + 7):
+            selector.tick(AUTH, now)
+        assert selector.state["operation"]["phase"] == "failed"
+        assert selector.state["operation"]["result"] == (
+            "normal-policy-restored" if mode == "bgp" else "previous-path-restored"
+        )
 
 
 @pytest.mark.parametrize("mode", ["static", "bgp"])
@@ -256,6 +544,59 @@ def test_unknown_does_not_initiate_switch(tmp_path):
     selector.tick(AUTH, 100)
     assert selector.state["operation"] is None
     assert selector.state["episode"] is None
+
+
+@pytest.mark.parametrize("mode", ["static", "bgp"])
+@pytest.mark.parametrize("completion", ["fresh-health", "confirmed-down", "request-expiry"])
+def test_pending_unknown_does_not_restore_at_candidate_attempt_deadline(
+    tmp_path, monkeypatch, mode, completion
+):
+    monkeypatch.setattr("nebius_vpngw.agent.vm_ha.tunnels.monotonic", lambda: 0.0)
+    effects = Effects()
+    path = tmp_path / "state"
+    selector = TunnelController(config(mode), path, effects)
+    operation_id = selector.request("failover", "backup", AUTH, 100)
+    for now in (101, 102):
+        selector.tick(AUTH, now)
+    assert selector.state["operation"]["phase"] == "verify"
+    deadline = selector.state["operation"]["deadline"]
+    effects.health["backup"] = Health.UNKNOWN
+    calls = effects.calls.copy()
+
+    # A restarted reader can observe a candidate whose probe hysteresis is
+    # still incomplete. An attempt timer is not positive path-failure proof.
+    selector = TunnelController(config(mode), path, effects)
+    selector.tick(AUTH, 111)
+
+    assert selector.state["operation"]["phase"] == "verify"
+    assert selector.state["operation"]["successes"] == 0
+    assert selector.state["selected"] == {"site": "backup"}
+    assert effects.calls == calls
+    assert selector.state["operation"]["id"] == operation_id
+    assert selector.state["operation"]["deadline"] == deadline
+    if completion == "fresh-health":
+        effects.health["backup"] = Health.HEALTHY
+        selector.tick(AUTH, 112)
+        selector.tick(AUTH, 113)
+        assert selector.state["operation"]["phase"] == "succeeded"
+        assert effects.calls == calls
+    elif completion == "confirmed-down":
+        effects.health["backup"] = Health.DOWN
+        selector.tick(AUTH, 112)
+        assert selector.state["operation"]["phase"] == ("activate" if mode == "bgp" else "restore")
+        assert selector.state["operation"]["id"] == operation_id
+        assert selector.state["operation"]["deadline"] == deadline
+    else:
+        # Unknown remains bounded by the original request; expiry retains the
+        # existing cleanup authority without renewing the operation or budget.
+        for now in range(int(deadline) + 1, int(deadline) + 5):
+            selector.tick(AUTH, now)
+        assert selector.state["operation"]["phase"] == "failed"
+        assert selector.state["operation"]["result"] == (
+            "normal-policy-restored" if mode == "bgp" else "previous-path-restored"
+        )
+        assert selector.state["operation"]["id"] == operation_id
+        assert selector.state["operation"]["deadline"] == deadline
 
 
 def test_episode_not_extended_by_restart_config_retry_or_second_failure(tmp_path):
@@ -792,6 +1133,7 @@ def test_static_suspension_removes_orphan_kernel_objects_after_daemon_loss(tmp_p
             "dst": "0.0.0.0/0",
             "dir": "out",
             "index": if_id * 8 + 1,
+            "priority": 367231,
             "if_id": if_id,
             "tmpl": [{"src": local, "dst": peer, "proto": "esp", "mode": "tunnel", "reqid": 1}],
         }

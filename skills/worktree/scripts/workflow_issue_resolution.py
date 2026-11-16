@@ -142,12 +142,15 @@ def completion_receipt(run_dir, records):
     results = evidence(context, record.get("issue_evidence"))
     require(record.get("issue_evidence_head") == head
             and record.get("issue_objective_sha256") == revision["sha256"], "stale issue evidence")
+    from workflow_uat import context as uat_context, outcome as uat_outcome
+    uat_policy, uat_result = uat_context(run_dir)[2], uat_outcome(run_dir, head)
     rows = []
     for row in results["issues"]:
         passed = [check["status"] == "passed" for check in row["criteria"]]
         status = "resolved" if all(passed) else "partial" if any(passed) else "unresolved"
         rows.append({**row, "resolution": status,
-                     "eligible": context["close_after_merge"] and status == "resolved"})
+                     "eligible": context["close_after_merge"] and status == "resolved"
+                     and (not uat_policy["requested"] or uat_result["status"] == "passed")})
     return {"schema": RECEIPT_SCHEMA, "owner": "implement", "run_id": run["run_id"],
             "objective_id": binding["objective_id"], "objective_sha256": revision["sha256"],
             "plan_path": context["plan_path"], "plan_sha256": context["plan_sha256"],

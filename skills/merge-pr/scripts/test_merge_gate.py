@@ -682,6 +682,24 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(self.api.effects[0][0], f"statuses/{HEAD}")
         self.assertEqual(len(self.api.effects), 1)
 
+    def test_enrolled_v2_status_uses_candidate_admission_without_pr_runs(self):
+        import types
+        import sys
+        adapter = types.ModuleType("github_ai_automation.merge")
+        adapter.verify_review = lambda *a, **k: {"automation": {"ci": [{"workflow": "ci.yml"}]}}
+        contracts = types.ModuleType("github_ai_automation.contracts")
+        contracts.Blocked = RuntimeError
+        self.api.review.update(user={"id": gate.ACTIONS_BOT_ID},
+                               body=json.dumps({"schema": "github-ai-automation/review-v2"}))
+        self.api.runs = []
+        with patch.dict(sys.modules, {"github_ai_automation.merge": adapter, "github_ai_automation.contracts": contracts}):
+            result = gate.publish_ci(self.api, 1, HEAD, {**POLICY, "automation_required": True})
+        self.assertEqual(result["state"], "success")
+
+    def test_enrolled_recovery_does_not_scan_open_prs(self):
+        with patch.object(self.api, "pages", side_effect=AssertionError("Backlog read")):
+            self.assertEqual(gate.ci_targets(self.api, {}, {**POLICY, "automation_required": True}, recovery=True), [])
+
     def test_ci_run_must_belong_to_this_pr(self):
         self.api.runs[0]["pull_requests"] = [{"number": 2}]
         result = gate.publish_ci(self.api, 1, HEAD, POLICY)
@@ -743,14 +761,15 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(len(self.api.effects), 1)
 
     def sdlc_policy(self):
-        policy = {**POLICY, "sdlc_contract": "workflow/sdlc-delivery-v1"}
+        policy = {**POLICY, "sdlc_contract": "workflow/sdlc-delivery-v2"}
         value = evidence()
         value["sdlc"] = {
-            "schema": "workflow/sdlc-delivery-v1", "execution_id": "SLICE-001",
+            "schema": "workflow/sdlc-delivery-v2", "execution_id": "SLICE-001",
             "objective_sha256": "1" * 64, "basis_sha256": "2" * 64,
-            "qualification_sha256": "3" * 64, "live": True, "criteria": ["AC-001"],
-            "candidate": {"head": HEAD, "artifact_sha256": "4" * 64,
-                          "configuration_sha256": "5" * 64},
+            "admission_sha256": "3" * 64, "criteria": ["AC-001"],
+            "candidate": {"head": HEAD, "tree": "4" * 40},
+            "uat": {"status": "not_requested", "reason": "No campaign requested.",
+                    "policy_sha256": "5" * 64, "delivery_eligible": True, "head": HEAD},
         }
         self.api.review["body"] = json.dumps(value)
         self.api.intent = gate.admitted_intent(self.api, 1, HEAD, 10, "squash", policy)
@@ -764,7 +783,7 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(self.api.requests.count("pulls/1/reviews/10"), 1)
 
     def test_sdlc_evidence_change_after_approval_blocks_merge(self):
-        for mutation in ("qualification", "remove"):
+        for mutation in ("admission", "remove"):
             with self.subTest(mutation=mutation):
                 self.api = API()
                 policy = self.sdlc_policy()
@@ -774,7 +793,7 @@ class MergeTests(unittest.TestCase):
                     if mutation == "remove":
                         del value["sdlc"]
                     else:
-                        value["sdlc"]["qualification_sha256"] = "6" * 64
+                        value["sdlc"]["admission_sha256"] = "6" * 64
                     api.review["body"] = json.dumps(value)
 
                 self.api.on_approve = change_review
@@ -1036,13 +1055,23 @@ class MergeTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[3]
         if not (root / ".github/workflows/skills-merge-pr.yml").exists():
             self.skipTest("Installed skill without repository deployment")
-        broker = (root / ".github/workflows/skills-merge-pr.yml").read_text()
-        self.assertNotIn("DEPENDABOT_AUTOMERGE_TOKEN", broker)
-        self.assertNotIn("pull_request.head", broker)
-        self.assertNotIn("secrets.", broker)
-        self.assertIn("persist-credentials: false", broker)
-        self.assertNotIn("create-github-app-token", broker)
-        self.assertIn("types: [in_progress, completed]", broker)
+        for path, expected_secrets in (
+            (root / ".github/workflows/skills-merge-pr.yml", set()),
+            (root / "github-ai-automation/deployment/workflows/skills-merge-pr.yml.template", {
+                "AI_AUTOMATION_STATE_BUCKET", "AI_AUTOMATION_STATE_ENDPOINT",
+                "AI_AUTOMATION_STATE_ACCESS_KEY_ID", "AI_AUTOMATION_STATE_SECRET_ACCESS_KEY",
+            }),
+        ):
+            with self.subTest(workflow=path):
+                broker = path.read_text()
+                self.assertNotIn("DEPENDABOT_AUTOMERGE_TOKEN", broker)
+                self.assertNotIn("pull_request.head", broker)
+                self.assertEqual(set(re.findall(r"secrets\.([A-Z_]+)", broker)), expected_secrets)
+                self.assertNotIn("AI_AUTOMATION_TF_API_KEY", broker)
+                self.assertIn("GH_TOKEN: ${{ github.token }}", broker)
+                self.assertIn("persist-credentials: false", broker)
+                self.assertNotIn("create-github-app-token", broker)
+                self.assertIn("types: [in_progress, completed]", broker)
 
     def test_each_result_ci_preserves_sha_and_push_equivalent_execution(self):
         root = Path(__file__).resolve().parents[3]
@@ -1055,9 +1084,11 @@ class MergeTests(unittest.TestCase):
                 value = (root / ".github/workflows" / workflow["file"]).read_text()
                 group = re.search(r"^  group: (.+)$", value, re.M)[1]
                 self.assertIn("inputs.result_sha", group)
-                self.assertIn(
-                    "cancel-in-progress: ${{ inputs.result_sha == '' }}", value
-                )
+                candidate_inputs = "      candidate_head:" in value
+                cancellation = "inputs.result_sha == ''"
+                if candidate_inputs:
+                    cancellation += " && inputs.candidate_head == ''"
+                self.assertIn("cancel-in-progress: ${{ " + cancellation + " }}", value)
                 self.assertIn('test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"', value)
                 self.assertNotIn(
                     "ref: ${{ needs.merge-inputs.outputs.checkout_sha }}", value
@@ -1069,7 +1100,7 @@ class MergeTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     value.count("      actions: read"),
-                    checkout_steps + 2,  # identity and terminal evidence jobs
+                    checkout_steps + 2 + int(candidate_inputs),  # identity/result, optional candidate evidence
                 )
                 self.assertIn("CI_EXPECTED_JOBS:", value)
                 self.assertIn("ci-evidence --workflow " + workflow["file"], value)
@@ -1087,16 +1118,22 @@ class MergeTests(unittest.TestCase):
         if not (root / ".github/workflows/skills-merge-pr.yml").exists():
             self.skipTest("Installed skill without repository deployment")
         templates = root / "skills/github-workflows/assets/protected-merge"
-        for name in ("skills-merge-pr", "merge-completion"):
-            value = (root / f".github/workflows/{name}.yml").read_text()
-            value = value.replace("skills/merge-pr/scripts/", ".github/scripts/")
-            triggers = (
-                '["Protected merge", "CI"]' if name == "merge-completion" else '["CI"]'
-            )
-            value = re.sub(
-                r"^    workflows:.*$", f"    workflows: {triggers}", value, flags=re.M
-            )
-            self.assertEqual(value, (templates / f"{name}.yml.template").read_text())
+        for directory, suffix, profile_suffix in (
+            (root / ".github/workflows", ".yml", ""),
+            (root / "github-ai-automation/deployment/workflows", ".yml.template", "-automation"),
+        ):
+            for name in ("skills-merge-pr", "merge-completion"):
+                with self.subTest(workflow=name, profile=profile_suffix or "ordinary"):
+                    value = (directory / (name + suffix)).read_text()
+                    value = value.replace("skills/merge-pr/scripts/", ".github/scripts/")
+                    triggers = (
+                        '["Protected merge", "CI"]' if name == "merge-completion" else '["CI"]'
+                    )
+                    value = re.sub(
+                        r"^    workflows:.*$", f"    workflows: {triggers}", value, flags=re.M
+                    )
+                    profile = name + profile_suffix
+                    self.assertEqual(value, (templates / f"{profile}.yml.template").read_text())
 
 
 class MergedResultTests(unittest.TestCase):

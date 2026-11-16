@@ -35,14 +35,13 @@ Owned by `ai-stack` when present:
 - Application-owned logical runtime facade, prompt and agent version
   resolution, deterministic routing policy, normalized events, run budgets,
   and canonical run identity.
-- Current portable Python default: Pydantic AI's low-level direct model API for
-  direct requests that need `ModelResponse` control, a no-tools single-request
-  `Agent` for direct-call behavior that needs typed parsing or validation
-  services, and Pydantic AI `Agent` for bounded model-directed loops across
-  supported providers.
-- Pydantic AI capabilities or Harness are conditional specialist layers.
-  Provider-native agent SDKs are separate evaluated runtime escapes, not model
-  adapters and not nested inside Pydantic AI.
+- Preferred general agent kernel: OpenAI Agents SDK unless explicitly
+  overridden or an accepted fixed project choice applies. Keep direct model
+  calls on task APIs or qualified existing adapters and deterministic workflows
+  in application code. A failed preferred-SDK gate blocks selection.
+- Specialists have explicit bounded contracts; separate harnesses need a real
+  requirement. Do not nest agent kernels.
+
 - May be absent for intentionally provider-specific direct inference or
   deterministic application logic that already owns its model requests.
 
@@ -72,11 +71,11 @@ Owned by capability providers and `ai-stack` integration owners:
 
 Owned by `ai-stack` and platform owners:
 
-- Pydantic AI model/provider implementations and resolved profiles, explicit
+- Selected SDK provider seams and qualified capability profiles, explicit
   provider settings, supplemental operational and governance metadata,
   credential injection, routing, fallback, rate limits, budgets, and provider
   telemetry.
-- Add a custom cross-runtime provider contract only when shared non-Pydantic
+- Add a custom cross-runtime provider contract only when cross-runtime
   consumers create real semantic portability requirements.
 - Use agentgateway when a shared platform needs common policy across LLM, MCP,
   A2A, HTTP, and gRPC traffic. Keep it Conditional for a small single-provider
@@ -150,8 +149,8 @@ It is normal for one application to combine:
 
 ```text
 deterministic application logic and workflows
-  + Pydantic AI direct model calls at explicit portable steps
-  + bounded Pydantic AI agents for genuinely dynamic tasks
+  + direct model calls at explicit steps
+  + bounded OpenAI Agents SDK agents unless explicitly overridden
   + Codex for coding-focused engineering tasks
 ```
 

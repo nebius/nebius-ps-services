@@ -1,11 +1,9 @@
-#!/usr/bin/env python3
 """Cross-skill contract tests for Nebius agent authentication."""
 
 from __future__ import annotations
 
-from pathlib import Path
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DIAGNOSE = ROOT / "agent-nebius-auth-diagnose"
@@ -91,6 +89,12 @@ class AgentNebiusAuthContractTest(unittest.TestCase):
         self.assertIn("No explicit task project", setup_evals)
         self.assertIn("discover_default_profile_project", hook)
         self.assertIn("default_profile_discovery_environment", hook)
+
+    def test_live_test_delegation_is_scoped(self) -> None:
+        skill = self.read(SETUP / "SKILL.md")
+        self.assertIn("authorized `test-live-on-nebius` run", skill)
+        self.assertIn("exception does not authorize repair leases", skill)
+        self.assertIn("disable-model-invocation: true", skill)
 
     def test_explicit_setup_needs_no_second_confirmation(self) -> None:
         skill = self.read(SETUP / "SKILL.md")

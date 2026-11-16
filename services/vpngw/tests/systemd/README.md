@@ -9,11 +9,14 @@ for the complete lane. Missing XFRM support fails fixture setup, rather than
 skipping route-retirement coverage.
 
 The preceding 104-case native suite took nearly 15 minutes on the qualification VM,
-excluding image construction. The runner bounds image construction at ten
-minutes and test execution at twenty minutes to include the additional Static
-activation/crash regressions. CI reserves thirty-five minutes for
-both phases, startup and cleanup; individual product recovery deadlines remain
-unchanged.
+excluding image construction. The expanded 134-case suite includes additional
+bounded HA restart scenarios. On the CI runner, 89 cases passed before the old
+twenty-minute aggregate limit expired while the next case was still running.
+The runner now bounds image construction at ten minutes and test execution at
+forty minutes. CI reserves fifty-five minutes for both phases, startup and cleanup.
+Individual test and product recovery deadlines remain unchanged. Qualification
+reports retain setup, call and teardown durations for completed phases, including
+when the overall lane fails or times out.
 
 Run `python3 tests/systemd/run.py --ssh-bootstrap-only` to test SSH bootstrap on
 kernels without XFRM support. This selection executes the generated cloud-init
@@ -139,6 +142,12 @@ file timestamps/inodes and execution logs are excluded from payload convergence.
 These exclusions never permit payload, recovery authority or safety-policy drift.
 This check proves package convergence; mutation-free full apply remains a live-VM
 requirement. Fixture hashes bind each report separately from the candidate wheel.
+The authentic 0.6.4 cases also inspect a fixture route reservation before upgrading
+the guest package. The selected command runs against the predecessor interpreter
+and real Linux lock, covering immediate admission, a released lock and deadline
+expiry. Each case verifies unchanged route authority; the fixture reservation is
+then removed before the package transition. This is transport proof, not live
+cloud-route reconciliation.
 
 The base image contains systemd, fixture prerequisites and the legacy native
 daemon. It removes the minimal Ubuntu image's documentation exclusions before

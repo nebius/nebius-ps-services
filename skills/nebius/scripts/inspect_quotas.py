@@ -14,7 +14,6 @@ from sdk.runtime import (
     CloudError,
     collect_pages,
     init_nebius_sdk,
-    verify_identity,
 )
 
 
@@ -42,6 +41,7 @@ class QuotaRow:
     state: str
     usage_state: str
     usage_percentage: str
+    inherited: bool = False
 
 
 def _list_quotas(
@@ -60,8 +60,14 @@ def _list_quotas(
         lambda token: ListQuotaAllowancesRequest(
             parent_id=parent_id, page_size=500, page_token=token
         ),
+        key=lambda item: (
+            item.metadata.parent_id,
+            item.metadata.name,
+            item.spec.region,
+        ),
     ):
-        verify_identity(item, parent_id=parent_id)
+        if item.metadata.parent_id != parent_id:
+            raise CloudError("RESOURCE_IDENTITY_MISMATCH")
         metadata = getattr(item, "metadata", None)
         spec = getattr(item, "spec", None)
         status = getattr(item, "status", None)
@@ -81,7 +87,17 @@ def _list_quotas(
         active = (
             getattr(status, "state", None) == QuotaAllowanceStatus.State.STATE_ACTIVE
         )
-        if not measured or not active:
+        # Project list includes unconfigured allowance dimensions without IDs
+        # or optional limits. They constrain no tenant headroom; frozen/deleted,
+        # unknown usage and malformed non-project rows remain unresolved.
+        inherited = (
+            scope == "project"
+            and not item.metadata.id
+            and limit is None
+            and status.state == QuotaAllowanceStatus.State.STATE_UNSPECIFIED
+            and measured
+        )
+        if not measured or (not active and not inherited):
             usage = None
         items[(name, region)] = QuotaRow(
             scope=scope,
@@ -98,6 +114,7 @@ def _list_quotas(
                 getattr(getattr(status, "usage_state", None), "name", None)
             ),
             usage_percentage=_as_text(getattr(status, "usage_percentage", None)),
+            inherited=inherited,
         )
     return items
 
@@ -142,6 +159,7 @@ def _effective_rows(
 
         unresolved = any(
             row is not None
+            and not row.inherited
             and (
                 row.state != "STATE_ACTIVE"
                 or (row.limit is not None and row.usage is None)
@@ -183,6 +201,7 @@ def _effective_rows(
                 "tenant_state": tenant.state if tenant else None,
                 "tenant_usage_state": tenant.usage_state if tenant else None,
                 "project_state": project.state if project else None,
+                "project_inherited": project.inherited if project else False,
                 "project_usage_state": project.usage_state if project else None,
             }
         )

@@ -251,12 +251,15 @@ def test_sdk_read_uses_remaining_deadline_budget() -> None:
     with patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service):
         client.get_instance("instance-a")
 
-    assert service.get.call_args.kwargs == {
-        "auth_timeout": 4.5,
-        "per_retry_timeout": 4.5,
-        "retries": 3,
-        "timeout": 4.5,
-    }
+    assert service.get.call_args.kwargs == pytest.approx(
+        {
+            "auth_timeout": 4.3,
+            "per_retry_timeout": 4.3,
+            "retries": 1,
+            "timeout": 4.3,
+        },
+        abs=0.01,
+    )
 
 
 def test_sdk_read_rejects_expired_deadline_before_submission() -> None:

@@ -2457,6 +2457,72 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
 
         self.assertEqual(self.read_state()["inherited_auth_attempts"], 0)
 
+    def test_runtime_agent_profile_uses_configured_human_for_setup(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+        self.write_credential()
+        env = self.env.copy()
+        env["NEBIUS_PROFILE"] = AGENT_PROFILE
+
+        self.assert_setup_succeeds(env=env)
+        state = self.read_state()
+
+        self.assertEqual(state["active"], HUMAN_PROFILE)
+        self.assertEqual(state["group_get_by_name_calls"], 1)
+        self.assertEqual(state["agent_iam_attempts"], 0)
+
+    def test_runtime_agent_profile_allows_read_only_human_preview(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+        self.write_credential()
+        env = self.env.copy()
+        env["NEBIUS_PROFILE"] = AGENT_PROFILE
+
+        result = self.run_dry_run(env=env)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = self.read_state()
+        self.assertEqual(state["active"], HUMAN_PROFILE)
+        self.assertEqual(state["agent_iam_attempts"], 0)
+        self.assertEqual(state["profile_create_calls"], 0)
+        self.assertEqual(state["profile_update_calls"], 0)
+
+    def test_runtime_agent_without_active_human_fails_before_iam(self) -> None:
+        for active in ("", AGENT_PROFILE):
+            with self.subTest(active=active):
+                self.write_state(active=active, profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+                self.write_credential()
+                env = self.env.copy()
+                env["NEBIUS_PROFILE"] = AGENT_PROFILE
+
+                result = self.run_setup(env=env)
+                state = self.read_state()
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("blocked-admin-auth", result.stderr)
+                self.assertEqual(state["active"], active)
+                self.assertEqual(state["group_get_by_name_calls"], 0)
+                self.assertEqual(state["agent_iam_attempts"], 0)
+
+    def test_runtime_agent_rejects_unavailable_active_human_before_iam(self) -> None:
+        self.write_state(profiles=[HUMAN_PROFILE, AGENT_PROFILE])
+        state = self.read_state()
+        state.update(human_login_expired=True, human_login_rejected=True)
+        self.state_path.write_text(json.dumps(state), encoding="utf-8")
+        env = self.env.copy()
+        env["NEBIUS_PROFILE"] = AGENT_PROFILE
+
+        result = self.run_setup(env=env)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("blocked-admin-auth", result.stderr)
+        state = self.read_state()
+        self.assertEqual(state["human_token_calls"], 1)
+        self.assertEqual(state["project_get_calls"], 0)
+        self.assertEqual(state["auth_public_key_generate_calls"], 0)
+        self.assertEqual(state["agent_iam_attempts"], 0)
+        self.assertEqual(state["active"], HUMAN_PROFILE)
+        self.assertNotIn("fixture-private", result.stdout + result.stderr)
+        self.assertNotIn("fixture-sensitive", result.stdout + result.stderr)
+
     def test_nebius_profile_env_restores_when_no_profile_is_active(self) -> None:
         self.write_state(
             active="",

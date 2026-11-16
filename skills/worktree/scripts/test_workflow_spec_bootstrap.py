@@ -58,17 +58,29 @@ class SdlcContractPreparationTests(unittest.TestCase):
             "provenance": {"kind": "direct_request", "source_sha256": "a" * 64},
         }
 
-    def publish_and_plan(self):
+    def publish_and_plan(self, *, bind_publication=True, sibling=None):
         from project_specs_lib.impact import statement_inventory
         self.run_dir = Path(objectives.accept(
             self.project, self.home, "agentic-sdlc", self.session, self.objective
         )["run_dir"])
+        if sibling is not None:
+            from workflow_publication import register, registry_path
+            with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "peer-coordinator"}):
+                peer_run = Path(objectives.accept(
+                    sibling, self.home, "agentic-sdlc", "peer-coordinator", self.objective
+                )["run_dir"])
+                selected_peer = Path(read(peer_run / "run.json")["project_root"])
+                register(peer_run, "FEAT-001", selected_peer)
+                self.peer_registry = registry_path(selected_peer)
+                self.peer_registration = self.peer_registry.read_bytes()
         for path, body in getattr(self, "bundle_files", {}).items():
             target = self.project / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(body)
         objective = objectives.validate_run(self.run_dir)[1]["revisions"][-1]["sha256"]
-        contract_fixtures.DirectExecutionTests.publication(self, self.project, objective=objective)
+        self.publication_receipt = contract_fixtures.DirectExecutionTests.publication(
+            self, self.project, objective=objective if bind_publication else None
+        )
         if hasattr(self, "program"):
             from workflow_program import admit, admit_inputs
             admit(self.run_dir, self.program)
@@ -98,7 +110,7 @@ class SdlcContractPreparationTests(unittest.TestCase):
         write_private(self.run_dir / "host-capacity.json", capacity_fixture(self.run_dir, 1))
 
     def prepare(self):
-        return fixture_prepare_execution(self.run_dir, self.project, "FEAT-001", self.plan, None)
+        return fixture_prepare_execution(self.run_dir, self.project, "FEAT-001", self.plan, None, session=self.session)
 
     def test_initial_pair_is_committed_once_before_execution(self):
         self.publish_and_plan()
@@ -121,6 +133,23 @@ class SdlcContractPreparationTests(unittest.TestCase):
         self.assertEqual(result["project_scope"], "service")
         self.assertEqual(git(self.repo, "diff", "--name-only", self.base, "HEAD").splitlines(),
                          ["service/docs/design.md", "service/docs/requirements.md"])
+
+    def test_unregistered_contract_prepares_with_registered_sibling(self):
+        peer = self.repo / "peer"
+        peer.mkdir()
+        (peer / "README.md").write_text("independent project\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "add sibling project")
+        git(self.repo, "push", "-q", "origin", "main")
+        self.base = git(self.repo, "rev-parse", "HEAD")
+        self.project = self.repo / "service"
+        self.publish_and_plan(bind_publication=False, sibling=peer)
+        result = self.prepare()
+        self.assertNotIn("workflow_identity", self.publication_receipt)
+        self.assertEqual(result["base_head"], git(self.repo, "rev-parse", "HEAD"))
+        self.assertEqual(git(self.repo, "diff", "--name-only", self.base, "HEAD").splitlines(),
+                         ["service/docs/design.md", "service/docs/requirements.md"])
+        self.assertEqual(self.peer_registry.read_bytes(), self.peer_registration)
 
     def test_unrelated_dirt_blocks_contract_commit(self):
         self.publish_and_plan()
@@ -265,11 +294,11 @@ class SdlcContractPreparationTests(unittest.TestCase):
                           "requirements": ["REQ-001"], "features": ["FEAT-001"], "reason": "required pair"}],
         }
         raw = json.dumps(manifest).encode()
-        self.program = {"schema": "workflow/program-v1", "phases": [
+        self.program = {"schema": "workflow/program-v2", "uat_criteria": [], "phases": [
             {"id": "P1", "depends_on": [], "exit_criteria": ["AC-001"]}], "slices": [
                 {"id": "SLICE-001", "phase": "P1", "depends_on": [], "feature_ids": ["FEAT-001"],
                  "requirement_ids": ["REQ-001"], "criteria": ["AC-001"], "regression_criteria": [],
-                 "change_kind": "non-runtime"}]}
+                 "change_kind": "non-runtime", "implementation_coverage": {"AC-001": ["fixture-readme"]}}]}
         self.objective["inputs"] = {"manifest": "docs/contracts/manifest.json",
                                     "manifest_sha256": hashlib.sha256(raw).hexdigest(),
                                     "program_sha256": digest(self.program)}
@@ -277,7 +306,7 @@ class SdlcContractPreparationTests(unittest.TestCase):
         self.publish_and_plan()
         self.plan.write_text(self.plan.read_text().replace("# FEAT-001", "# SLICE-001")
                              .replace("- Requirements: REQ-001", "- Requirements: REQ-001\n- Features: FEAT-001"))
-        result = fixture_prepare_execution(self.run_dir, self.project, "SLICE-001", self.plan, None)
+        result = fixture_prepare_execution(self.run_dir, self.project, "SLICE-001", self.plan, None, session=self.session)
         self.assertEqual(result["base_head"], git(self.repo, "rev-parse", "HEAD"))
         self.assertEqual(set(git(self.repo, "diff", "--name-only", self.base, "HEAD").splitlines()),
                          set(self.bundle_files) | {"docs/design.md", "docs/requirements.md"})

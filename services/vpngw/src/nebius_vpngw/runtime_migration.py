@@ -36,6 +36,17 @@ REQUIRED = (
     "nftables",
 )
 LEGACY = ("strongswan", "strongswan-starter", "strongswan-charon")
+REPAIR_REQUIRED = (
+    *REQUIRED,
+    "frr",
+    "frr-pythontools",
+    "libstrongswan",
+    "strongswan-libcharon",
+    "libstrongswan-standard-plugins",
+    "python3-pip",
+    "python3-setuptools",
+    "python3-wheel",
+)
 UNITS = (
     "strongswan.service",
     "strongswan-starter.service",
@@ -124,7 +135,7 @@ def run(args: list[str], *, timeout: int = 60, cwd: Path | None = None) -> str:
             child.stdout.close()
 
 
-def policy_snapshot() -> dict | None:
+def policy_payload() -> dict | None:
     try:
         info = POLICY.lstat()
     except FileNotFoundError:
@@ -135,6 +146,30 @@ def policy_snapshot() -> dict | None:
         "content": base64.b64encode(POLICY.read_bytes()).decode(),
         "mode": stat.S_IMODE(info.st_mode),
     }
+
+
+def policy_identity(payload: dict | None) -> dict | None:
+    if payload is None:
+        return None
+    if not (
+        isinstance(payload, dict)
+        and set(payload) == {"content", "mode"}
+        and isinstance(payload["content"], str)
+        and type(payload["mode"]) is int
+        and 0 <= payload["mode"] <= 0o7777
+        and not payload["mode"] & 0o022
+    ):
+        raise RuntimeError("saved startup policy is unsafe")
+    try:
+        raw = base64.b64decode(payload["content"], validate=True)
+    except ValueError as error:
+        raise RuntimeError("saved startup policy is malformed") from error
+    return {"sha256": hashlib.sha256(raw).hexdigest(), "mode": payload["mode"]}
+
+
+def policy_snapshot() -> dict | None:
+    """Only metadata leaves the guest; rollback bytes stay in its local journal."""
+    return policy_identity(policy_payload())
 
 
 def command_policy(raw: str) -> dict[str, Any]:
@@ -303,10 +338,17 @@ def state() -> dict | None:
 
 
 def packages() -> dict[str, list[str]]:
+    architecture = run(["dpkg", "--print-architecture"]).strip()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", architecture):
+        raise RuntimeError("native package architecture is unavailable")
     output = run(["dpkg-query", "-W", "-f=${binary:Package}\t${Version}\t${db:Status-Status}\\n"])
     result = {}
     for line in output.splitlines():
         name, version, status = line.split("\t")
+        # APT uses an unqualified name for the native architecture; dpkg adds
+        # the architecture to Multi-Arch:same packages. Keep foreign packages
+        # qualified so they can never satisfy a native runtime dependency.
+        name = name.removesuffix(":" + architecture)
         if status != "not-installed":
             result[name] = [version, status]
     return result
@@ -389,7 +431,12 @@ def apt_indexes() -> Iterator[list[str]]:
             'APT::Get::AllowUnauthenticated "false";\n'
         )
         options = ["-c", str(config)]
-        run(["apt-get", *options, "update", "-qq"], timeout=120, cwd=directory)
+        try:
+            run(["apt-get", *options, "update", "-qq"], timeout=120, cwd=directory)
+        except (RuntimeError, TimeoutError) as error:
+            # Keep repository output/URLs private, but do not misreport a
+            # network, signature or repository failure as a checkpoint conflict.
+            raise RuntimeError("Signed Ubuntu repository metadata is unavailable") from error
         yield options
 
 
@@ -397,15 +444,21 @@ def plan(parent: str | None = None) -> dict:
     existing = state()
     if existing is not None and pending(parent) is not None:
         return existing["plan"]
+    return plan_current()
+
+
+def plan_current(*, reinstall: bool = False) -> dict:
+    """Read-only package proposal; it grants no replacement of pending work."""
     before = packages()
-    if run(["dpkg", "--audit"]).strip():
+    if run(["dpkg", "--audit"]).strip() and not reinstall:
         raise RuntimeError("unowned incomplete package work requires reconciliation")
-    installed = all(before.get(k, [None, None])[1] == "installed" for k in REQUIRED)
+    required = REPAIR_REQUIRED if reinstall else REQUIRED
+    installed = all(before.get(k, [None, None])[1] == "installed" for k in required)
     old = [k for k in LEGACY if before.get(k, [None, None])[1] == "installed"]
     install: dict[str, str] = {}
     remove = []
     archives: dict[str, dict] = {}
-    if not installed or old:
+    if reinstall or not installed or old:
         with apt_indexes() as options:
             simulated = run(
                 [
@@ -413,8 +466,9 @@ def plan(parent: str | None = None) -> dict:
                     *options,
                     "-s",
                     "--no-install-recommends",
+                    *(["--reinstall"] if reinstall else []),
                     "install",
-                    *REQUIRED,
+                    *required,
                     *(k + "-" for k in old),
                 ]
             )
@@ -468,10 +522,22 @@ def plan(parent: str | None = None) -> dict:
                     "size": int(size),
                     "sha256": checksum,
                 }
-    desired = {k: before[k] for k in REQUIRED if k in before}
+    if reinstall:
+        if not set(required).issubset(install):
+            raise RuntimeError("Repair did not resolve the complete managed runtime")
+        incomplete = {
+            name
+            for name, (_version, status) in before.items()
+            if status not in {"installed", "config-files", "not-installed"}
+        }
+        if not incomplete.issubset(set(install) | set(remove)):
+            raise RuntimeError("Unrelated incomplete OS package work requires reconciliation")
+    desired = {k: before[k] for k in required if k in before}
     desired.update({k: [v, "installed"] for k, v in install.items()})
-    policy = unit_policy()
-    if any(v.get("UnitFileState") in {"masked", "masked-runtime"} for v in policy.values()):
+    policy = {} if reinstall else unit_policy()
+    if not reinstall and any(
+        v.get("UnitFileState") in {"masked", "masked-runtime"} for v in policy.values()
+    ):
         raise RuntimeError("operator service masks inhibit runtime migration")
     return {
         "unit_policy": policy,
@@ -507,6 +573,17 @@ def validate_plan(approved: dict) -> None:
         )
     ):
         raise RuntimeError("runtime plan schema is invalid")
+    policy = approved["startup_policy"]
+    if policy is not None and not (
+        isinstance(policy, dict)
+        and set(policy) == {"sha256", "mode"}
+        and isinstance(policy["sha256"], str)
+        and re.fullmatch(r"[a-f0-9]{64}", policy["sha256"])
+        and type(policy["mode"]) is int
+        and 0 <= policy["mode"] <= 0o7777
+        and not policy["mode"] & 0o022
+    ):
+        raise RuntimeError("runtime startup policy identity is invalid; rerun apply --repair")
     selected = {}
     for name, item in approved["archives"].items():
         if (
@@ -526,9 +603,9 @@ def validate_plan(approved: dict) -> None:
         raise RuntimeError("runtime closure is incomplete")
 
 
-def verify_staged(approved: dict) -> Path:
+def verify_staged(approved: dict, *, root: Path | None = None) -> Path:
     validate_plan(approved)
-    directory = ROOT / digest(approved)
+    directory = (root or ROOT) / digest(approved)
     for name, item in approved["archives"].items():
         path = directory / name
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -544,15 +621,16 @@ def verify_staged(approved: dict) -> Path:
     return directory
 
 
-def stage(approved: dict) -> Path:
+def stage(approved: dict, *, root: Path | None = None) -> Path:
     validate_plan(approved)
-    directory = ROOT / digest(approved)
+    staging_root = root or ROOT
+    directory = staging_root / digest(approved)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     missing = [
         item for name, item in approved["archives"].items() if not (directory / name).exists()
     ]
     if missing:
-        if (ROOT / "inhibited").exists():
+        if (staging_root / "inhibited").exists():
             raise RuntimeError("inhibited operation has lost its staged archive")
         with apt_indexes() as options:
             for item in missing:
@@ -561,7 +639,7 @@ def stage(approved: dict) -> Path:
                     timeout=120,
                     cwd=directory,
                 )
-    verify_staged(approved)
+    verify_staged(approved, root=staging_root)
     write(directory / "plan.json", json.dumps(approved, sort_keys=True).encode())
     return directory
 
@@ -610,8 +688,47 @@ def pending(parent: str | None = None) -> dict | None:
     return {"operation": value["operation"], "manifest": value["manifest"], "phase": value["phase"]}
 
 
-def begin(approved: dict, operation: str, manifest: dict) -> None:
+def corrective_policy(previous: dict, approved: dict) -> dict | None:
+    """Carry the original operator policy through an unfinished HA activation."""
+    if previous["phase"] == "complete":
+        policy = policy_payload()
+        if policy_identity(policy) != approved["startup_policy"]:
+            raise RuntimeError("corrective package startup policy changed")
+        return policy
+    policy = previous["policy"]
+    original_policy = policy_identity(policy)
+    transaction_policy = {"sha256": hashlib.sha256(POLICY_BYTES).hexdigest(), "mode": 0o755}
+    if approved["startup_policy"] not in (original_policy, transaction_policy):
+        raise RuntimeError("corrective package startup policy changed")
+    current = startup_states(approved)
+    for name, expected in startup_states(previous["plan"]).items():
+        if name in {"strongswan-starter.service", "strongswan-swanctl.service"}:
+            continue
+        if expected in {"enabled", "enabled-runtime", "disabled"} and current.get(name) != expected:
+            raise RuntimeError("corrective operator boot policy changed")
+    return policy
+
+
+def begin(
+    approved: dict, operation: str, manifest: dict, *, superseded_sha256: str | None = None
+) -> None:
     existing = state()
+    superseded = None
+    if superseded_sha256 is not None and (existing is None or existing["operation"] != operation):
+        # Only the guarded handoff owner supplies this after archiving the exact
+        # completed package history and persisting its new child reservation.
+        if not (
+            existing is not None
+            and existing["phase"] in {"installed", "activating", "complete"}
+            and digest(existing) == superseded_sha256
+            and re.fullmatch(r"[a-f0-9]{64}", existing["manifest"].get("ha_parent", ""))
+            and re.fullmatch(r"[a-f0-9]{64}", manifest.get("ha_parent", ""))
+            and manifest["ha_parent"] != existing["manifest"]["ha_parent"]
+        ):
+            raise RuntimeError("corrective runtime predecessor differs")
+        verify_packages(existing["plan"])
+        superseded = existing
+        existing = None
     if existing is not None and (
         existing["phase"] != "complete" or existing["operation"] == operation
     ):
@@ -627,14 +744,22 @@ def begin(approved: dict, operation: str, manifest: dict) -> None:
     current = packages()
     if {k: current.get(k) for k in approved["before"]} != approved["before"]:
         raise RuntimeError("runtime package predecessor changed")
-    if policy_snapshot() != approved["startup_policy"] or unit_policy() != approved["unit_policy"]:
+    current_policy = policy_payload()
+    if (
+        policy_identity(current_policy) != approved["startup_policy"]
+        or unit_policy() != approved["unit_policy"]
+    ):
         raise RuntimeError("runtime startup policy predecessor changed")
     if any(value in {"masked", "masked-runtime"} for value in startup_states(approved).values()):
         # Publishing a canonical unit must never replace an operator /dev/null
         # mask. Stop before inhibition or package effects; maintenance remains.
         raise RuntimeError("operator service masks inhibit runtime migration")
     verify_staged(approved)
-    policy = approved["startup_policy"]
+    policy = (
+        current_policy
+        if superseded is None or superseded["phase"] == "complete"
+        else corrective_policy(superseded, approved)
+    )
     value = {
         "schema": SCHEMA,
         "operation": operation,
@@ -655,8 +780,8 @@ def inhibit() -> None:
         raise RuntimeError("runtime inhibition requires a canonical operation owner")
     CHECK()
     current_policy = policy_snapshot()
-    transaction_policy = {"content": base64.b64encode(POLICY_BYTES).decode(), "mode": 0o755}
-    if current_policy not in (value["policy"], transaction_policy):
+    transaction_policy = {"sha256": hashlib.sha256(POLICY_BYTES).hexdigest(), "mode": 0o755}
+    if current_policy not in (policy_identity(value["policy"]), transaction_policy):
         raise RuntimeError("package startup policy changed")
     # Persist intent first. A crash while publishing any subset remains resumable.
     # Re-publishing the fence must retain an interrupted package subphase.
@@ -899,8 +1024,8 @@ def release() -> None:
     value["phase"] = "releasing"
     save(value)
     previous = value["policy"]
-    transaction_policy = {"content": base64.b64encode(POLICY_BYTES).decode(), "mode": 0o755}
-    if policy_snapshot() not in (transaction_policy, previous):
+    transaction_policy = {"sha256": hashlib.sha256(POLICY_BYTES).hexdigest(), "mode": 0o755}
+    if policy_snapshot() not in (transaction_policy, policy_identity(previous)):
         raise RuntimeError("package startup policy changed during migration")
     if previous is None:
         unlink(POLICY)

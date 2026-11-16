@@ -69,13 +69,13 @@ Convert user intent into durable, testable product requirements in `docs/require
 
 ## Required Reads
 
-- `../worktree/references/document-delivery.md` for source coverage, phase/slice
-  identities, shared-skill caller contracts and protected completion policy.
-
-- `../worktree/references/workflow-contract.md`; bind this phase's inputs,
-  assignment/ownership and evidence to the current immutable execution basis.
-  Before preparation, bind evidence to the accepted objective and applicable
-  spec receipts. Stale evidence cannot authorize dispatch or promotion.
+- `../worktree/references/workflow-invariants.md` for shared ownership,
+  evidence, failure and conditional-read rules.
+- Read `../worktree/references/workflow-contract.md` before this phase performs
+  execution planning, reconciliation or any execution lifecycle operation.
+- Read `../worktree/references/document-delivery.md` when accepted inputs include
+  a source manifest/program, this phase handles SLICE/source coverage or phase
+  barriers, or it handles delivery admission, phase exit or protected completion.
 
 - `references/objective-refinement.md` for accepted-objective extraction, source
   precedence, selective clarification, and stable question handling.
@@ -96,6 +96,14 @@ Convert user intent into durable, testable product requirements in `docs/require
 - A local run-history change summary when an SDLC run is active.
 
 ## Process
+
+Check unpublished candidates through the canonical `project_specs.py check-candidates`
+helper. Follow the bounded input-correction contract supplied by `sdlc-classify-failure`
+only for owner-issued structural feedback; missing acceptance content is not exempt.
+Submit an eligible rejected pair unchanged through the paired publisher before
+editing, so `correction_pending` archives it and reserves the bounded allowance.
+The initialized coordinator checkpoint must name requirements as its active or
+next owning phase. Read-only checks alone do not authorize repeated corrections.
 
 - Use `assets/templates/requirements.md.template` when creating the file.
 - If either canonical document is absent, return to the coordinator for the

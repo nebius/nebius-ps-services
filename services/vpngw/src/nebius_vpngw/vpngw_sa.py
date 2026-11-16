@@ -37,6 +37,14 @@ _IAM_PAGE_SIZE = 1000
 
 
 @dataclass(frozen=True)
+class ServiceAccountIdentity:
+    """One reconciled service-account identity, without issuing credentials."""
+
+    service_account_id: str
+    service_account_name: str
+
+
+@dataclass(frozen=True)
 class ServiceAccountTokenIdentity:
     """One exact selected service account and its short-lived token."""
 
@@ -875,7 +883,7 @@ def ensure_service_account_and_token(
     ).token
 
 
-def ensure_service_account_identity_and_token(
+def ensure_service_account_identity(
     sa_name: str,
     tenant_id: str | None,
     project_id: str | None,
@@ -885,8 +893,8 @@ def ensure_service_account_identity_and_token(
     ownership_labels: t.Mapping[str, str] | None = None,
     reconciliation_plan: VMHAIAMReconciliationPlan | None = None,
     cloud_factory: t.Callable[[t.Any], Cloud] | None = None,
-) -> ServiceAccountTokenIdentity:
-    """Ensure and return the exact selected identity plus its ephemeral token."""
+) -> ServiceAccountIdentity:
+    """Ensure the exact selected IAM identity without requesting a token."""
 
     if project_id is None or not project_id.strip():
         raise ValueError("Service Account provisioning requires project_id")
@@ -949,6 +957,28 @@ def ensure_service_account_identity_and_token(
     finally:
         _close_client(client)
 
+    return ServiceAccountIdentity(service_account_id=service_account_id, service_account_name=sa_name)
+
+
+def ensure_service_account_identity_and_token(
+    sa_name: str,
+    tenant_id: str | None,
+    project_id: str | None,
+    region_id: str | None,
+    *,
+    role_ids: tuple[str, ...] = ("editor",),
+    ownership_labels: t.Mapping[str, str] | None = None,
+    reconciliation_plan: VMHAIAMReconciliationPlan | None = None,
+    cloud_factory: t.Callable[[t.Any], Cloud] | None = None,
+) -> ServiceAccountTokenIdentity:
+    """Issue an ephemeral token only for an explicitly selected token workflow."""
+    identity = ensure_service_account_identity(
+        sa_name, tenant_id, project_id, region_id, role_ids=role_ids,
+        ownership_labels=ownership_labels, reconciliation_plan=reconciliation_plan,
+        cloud_factory=cloud_factory,
+    )
+    service_account_id = identity.service_account_id
+
     token = _cli_access_token(
         timeout_seconds=60,
         service_account_id=service_account_id,
@@ -990,7 +1020,7 @@ def ensure_vm_ha_service_account_and_token(
     )
 
 
-def ensure_vm_ha_service_account_identity_and_token(
+def ensure_vm_ha_service_account_identity(
     sa_name: str,
     tenant_id: str | None,
     project_id: str | None,
@@ -1000,7 +1030,7 @@ def ensure_vm_ha_service_account_identity_and_token(
     ownership_labels: t.Mapping[str, str] | None = None,
     reconciliation_plan: VMHAIAMReconciliationPlan | None = None,
     cloud_factory: t.Callable[[t.Any], Cloud] | None = None,
-) -> ServiceAccountTokenIdentity:
+) -> ServiceAccountIdentity:
     """Provision and return the exact reviewed VM-HA service account identity."""
 
     roles = tuple(dict.fromkeys(role.strip() for role in verified_role_ids if role.strip()))
@@ -1011,7 +1041,7 @@ def ensure_vm_ha_service_account_identity_and_token(
         raise ValueError(f"VM HA rejects roles outside its reviewed allowlist: {unexpected}")
     if set(roles) != VM_HA_ROLE_ALLOWLIST:
         raise ValueError("VM HA requires the reviewed project role 'editor'")
-    return ensure_service_account_identity_and_token(
+    return ensure_service_account_identity(
         sa_name,
         tenant_id,
         project_id,

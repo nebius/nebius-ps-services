@@ -3,8 +3,24 @@
 These are private helper calls, not additional public skill flags. Resolve paths
 from this skill's installation. The agent orchestrates existing owners; the
 checkpoint helper does not create grants, commit, merge or approve anything.
-Use the shell helper from its canonical skill location; the generated project
-helper has the same primitive contract and project-specific defaults.
+Use the shell helper from its canonical skill location for the non-enrolled
+profile. Enrolled repositories use the shared Actions publisher; setup must not
+create project-local publication scripts or a local fallback.
+
+## Enrolled release requests
+
+The public entry point is publish-release. Resolve the selected project against
+the live release registry and pass its verified repository identity explicitly
+to the private shared client. The Actions coordinator retains all publication
+effects and serializes manual requests with automatic post-merge intake.
+
+An optional `--tag` asserts the fragment-derived tag. It enters durable recovery
+only after validation. If another source has a pending reservation, an explicit
+tag request is rejected without enqueueing: retry after that reservation completes,
+or omit the assertion to queue the source. Never replace the pending reservation.
+An unregistered project blocks publication; do not enroll it as incidental setup.
+
+The ordinary intake/preparation steps below apply only to non-enrolled repositories.
 
 ## Intake and preparation
 

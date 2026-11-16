@@ -12,14 +12,14 @@ import tempfile
 from typing import Any
 
 
-SCHEMA = 4
+SCHEMA = 5
 STATE_DIRECTORY = ".worktree-skill"
 STATUSES = {"planned", "active", "recovery", "integrated"}
 NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,94}[a-z0-9])?$")
 TASK_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 OBJECT_ID_RE = re.compile(r"^[0-9a-f]{40,64}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
-LEASE_STATES = {"none", "active", "released"}
+LEASE_STATES = {"none", "active", "aggregation-ready", "released"}
 LEASE_OWNERS = {"implement", "agentic-sdlc"}
 
 
@@ -203,7 +203,7 @@ def load_manifest(
         raise StateError(f"ownership manifest is invalid JSON: {path}") from error
     if not isinstance(payload, dict):
         raise StateError(f"ownership manifest must contain an object: {path}")
-    if payload.get("schema") in {1, 2, 3}:
+    if payload.get("schema") in {1, 2, 3, 4}:
         raise StateError(
             "WORKFLOW_UPGRADE_REQUIRED: unfinished ownership manifest schema is unsupported"
         )

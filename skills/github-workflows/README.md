@@ -92,3 +92,17 @@ publication ordering and reviewer/image behavior. The latter requires PyYAML
 and a repository checkout. Current actionlint 1.7.12 needs a narrowly scoped
 ignore for its unknown `concurrency.queue` key; contract tests still require
 `queue: max` with noncanceling publication locks.
+
+## Enrolled repository automation
+
+Shared Actions authority: enrolled repositories route laptop and hosted requests through one merge/release controller; PR lifetime waivers are durable policy, not labels. See the skill contract and sibling merge-pr automation-authority reference.
+
+For enrolled automation, new PRs enroll once and terminal PRs need a fresh manual
+request. Candidate CI and protected merge bind the active request and both source
+and destination identities. Repository Actions variable `AI_AUTOMATION_PR_REVIEW`
+selects `disabled`, `report`, `repair`, or `merge`, defaulting to `disabled`;
+`AI_AUTOMATION_RELEASE_PUBLISH` independently defaults to `false`.
+Keep these controls at repository scope without environment shadows.
+Fork merge eligibility defaults off through
+`AI_AUTOMATION_MERGE_FORK_CONTRIBUTION`; enabling it grants no fork branch writes.
+See [the authority contract](../merge-pr/references/automation-authority.md).

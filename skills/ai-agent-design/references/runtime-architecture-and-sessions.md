@@ -37,6 +37,24 @@ These are responsibility boundaries, not mandatory services. Co-locate them
 when one owner, failure domain, and scale allow it. Split a boundary only for a
 named isolation, ownership, scaling, recovery, compliance, or deployment need.
 
+## Framework Integration Boundary
+
+Let the selected SDK own its supported model/tool loop. Framework handoffs,
+nested runners, hooks, retries and sessions do not grant distributed child
+execution, spending, approval or recovery authority. Route distributed work
+through the existing deterministic admission owner, and keep one retry owner
+per failure class.
+
+Scope mutable clients, history and route configuration to the admitted task
+and identity. Set finite execution concurrency separately from model-side
+parallel tool emission. Use supported extension seams; pin and qualify any
+required non-public seam explicitly instead of silently patching internals.
+
+Choose one canonical history strategy. Persisted opaque framework state needs
+trusted origin, integrity, release compatibility, current policy and fencing;
+otherwise reconstruct its working view from application checkpoints and effect
+receipts. SDK state serialization alone does not prove safe recovery.
+
 ## Provider-Neutral Interfaces
 
 Define only the interfaces required by the accepted workload:

@@ -26,6 +26,7 @@ def test_ordinary_cli_reuses_original_approval_after_partial_effects(monkeypatch
         close=lambda: None,
     )
     monkeypatch.setattr(ordinary_apply, "inspect_plan", lambda *args, **kwargs: item)
+    monkeypatch.setattr(ordinary_apply, "remote", lambda *args, **kwargs: {"observation": item.observation})
     approval = []
     original = cli._approve_disruption
     monkeypatch.setattr(
@@ -67,7 +68,7 @@ def test_ordinary_cli_reuses_original_approval_after_partial_effects(monkeypatch
                 artifact_sha256="a" * 64,
             )
             assert result[2] is True
-            with pytest.raises(RuntimeError, match="reviewed successor"):
+            with pytest.raises(RuntimeError, match="package-parent-changed"):
                 cli._prepare_ordinary_apply(
                     manager,
                     None,

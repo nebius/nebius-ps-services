@@ -20,3 +20,9 @@ implement-test-codex-portability,true,$implement-test $implement-test
 implement-test-claude-portability,true,/implement-test $implement-test
 implement-test-quoted-command,false,"Treat ""/skills:implement-test"" as sample text in this punctuation exercise; count its punctuation characters only."
 implement-test-positive-nochange-proof,true,Use $implement-test to verify the completed workflow including historical no-change task acceptance and combined-wave receipts.
+multi-project-live,true,"$implement-test --create and verify two original-folder project sessions share capacity and aggregate safely, then clean up."
+implement-test-reporting,true,"$implement-test --create and verify immutable initial and terminal statistics, browser acceptance and sanitized retention before cleanup."
+healthy-long-execution,true,$implement-test --create Verify healthy long-running implementation and exact cleanup.
+companion-validation-scope,true,$implement-test --create Verify the companion Python checks preserve exact write claims and permit authorized worker recovery.
+mock-credential-fixtures,true,$implement-test --create Verify explicit placeholder credentials in offline mocks without weakening secret screening or runtime checks.
+statistics-stage-ownership,true,$implement-test --create Verify reporting through semantic admission without manually pre-recording the statistics PASS stage.

@@ -301,11 +301,14 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
     extracted = tmp_path / "frozen-sources"
     for relative in (
         "ordinary_bootstrap.py",
+        "dependency_scope.py",
         "ingress_policy.py",
         "ordinary_operations.py",
         "runtime_migration.py",
         "package_worker.py",
         "python_package_recovery.py",
+        "repair_state.py",
+        "repair_guest.py",
         "ordinary_routes.py",
         "ha_tunnel_policy.py",
         "tunnel_state.py",

@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 import zipfile
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,16 @@ STAGING = Path("/var/lib/nebius-vpngw/ha-package")
 STAGED_CONFIG = Path("/etc/nebius-vpngw/vm-ha-staged")
 STARTUP_HELPER = Path("/var/lib/nebius-vpngw/ordinary-startup.py")
 SYSTEMD_ROOT = Path("/etc/systemd/system")
+# Drain restart producers before their dependencies. Route maintenance can
+# otherwise restart FRR/strongSwan and cancel their required controller's stop.
+REPLAN_WRITERS = (
+    *ops.MANAGEMENT,
+    *ops.HA_WRITERS,
+    "frr.service",
+    "strongswan-starter.service",
+    "strongswan-swanctl.service",
+    "strongswan.service",
+)
 PACKAGE_FIELDS = (
     "boot_id",
     "config_sha256",
@@ -49,19 +60,20 @@ PACKAGE_FIELDS = (
 )
 
 
-def package_exclusion(function):
+def package_exclusion(function, *, always: bool = False):
     """Hold dpkg's native frontend lock for one prepared package phase only."""
 
     @functools.wraps(function)
     def run(*args, **kwargs):
-        if not remote.DURABLE_PACKAGES:
+        if not remote.DURABLE_PACKAGES and not always:
             return function(*args, **kwargs)
         from nebius_vpngw import package_worker
 
-        with package_worker.native_lock("/var/lib/dpkg/lock-frontend"):
+        lock_options = {"deadline": remote.DEADLINE} if always else {}
+        with package_worker.native_lock("/var/lib/dpkg/lock-frontend", **lock_options):
             # Direct dpkg writers need not hold the frontend lock. Observe their
             # backend exclusion too, then let dpkg take its own native lock.
-            with package_worker.native_lock("/var/lib/dpkg/lock"):
+            with package_worker.native_lock("/var/lib/dpkg/lock", **lock_options):
                 pass
             previous = os.environ.get("DPKG_FRONTEND_LOCKED")
             try:
@@ -820,9 +832,225 @@ def corrective_inspect(request: dict) -> dict:
     }
 
 
-def corrective_fence(expected: dict) -> None:
+def replan_inspect(request: dict) -> dict:
+    """Observe the separately journaled settlement, never start a successor."""
+    operation = request["operation"]
+    if (
+        not isinstance(operation, str)
+        or len(operation) != 64
+        or any(c not in "0123456789abcdef" for c in operation)
+    ):
+        raise ValueError("HA settlement identity is invalid")
+    root = repair.STATE / "replanning" / operation
+    adoption = repair.STATE / "apply-owner-adoption.json"
+    if adoption.exists() or adoption.is_symlink():
+        repair.read_json(adoption)
+        adoption_sha = remote.sha(adoption.read_bytes())
+    else:
+        adoption_sha = None
+    reservation = request.get("package_reservation")
+    worker = None
+    if reservation is not None:
+        from nebius_vpngw import package_worker
+
+        worker = package_worker.settled_reservation(reservation)
+    result = {
+        "children": corrective_children(),
+        "boot_id": ops.BOOT.read_text().strip(),
+        "adoption_sha256": adoption_sha,
+        "package_worker": worker,
+        "intent": repair.read_json(root / "intent.json")
+        if (root / "intent.json").exists()
+        else None,
+        "settlement": ops.Journal(root / "operation.json").read(),
+    }
+    if request.get("terminal_runtime"):
+        if reservation is None or result["children"]["runtime"]["phase"] != "complete":
+            raise RuntimeError("Terminal HA attachment requires its completed package owner")
+        manifest = reservation["request"]["package"]["desired"]
+        runtime = remote.migration.state()
+        from nebius_vpngw.apply_approval import manifest_identity
+
+        if (
+            runtime is None
+            or ops.digest(runtime) != result["children"]["runtime"]["digest"]
+            or manifest_identity(runtime["manifest"]) != manifest_identity(manifest)
+        ):
+            raise RuntimeError("Terminal HA attachment package manifest changed")
+        remote.migration.verify_packages(runtime["plan"])
+        installed = package_observation(manifest)
+        expected = dict(
+            files=manifest["files"],
+            package_version=manifest["version"],
+            dependencies=manifest["expected_dependencies"],
+            requirements=manifest["expected_requirements"],
+            assets={path: item["sha256"] for path, item in manifest["assets"].items()},
+            asset_modes={path: [item["mode"], 0, 0] for path, item in manifest["assets"].items()},
+        )
+        if any(installed[key] != value for key, value in expected.items()):
+            raise RuntimeError("Terminal HA attachment installed package changed")
+        if (
+            corrective_children() != result["children"]
+            or package_worker.settled_reservation(reservation) != worker
+            or ops.BOOT.read_text().strip() != result["boot_id"]
+        ):
+            raise RuntimeError("Terminal HA attachment package owner changed during observation")
+        result["installed"] = ops.digest(expected)
+    return result
+
+
+def _stop_replan_writers(operation: ops.Operation) -> None:
+    manager = operation.manager
+    for unit in REPLAN_WRITERS:
+        if not manager.unit(unit).get("missing") and not manager.stopped(unit):
+            operation.service("stop", unit, timeout=max(0, manager.deadline - time.monotonic()))
+        if not manager.unit(unit).get("missing") and not manager.stopped(unit):
+            raise RuntimeError("HA predecessor writer is not stopped")
+
+
+@functools.partial(package_exclusion, always=True)
+def settle_replan(request: dict) -> dict:
+    """Stop old writers under their old fence; no new package or generation work.
+
+    Service operations use the native operation owner and its original request IDs,
+    in a separate journal. The completed package histories remain canonical until
+    the separately approved successor takes over.
+    """
+    initial = replan_inspect(request)
+    operation_id = request["operation"]
+    key = {
+        name: request[name]
+        for name in (
+            "operation",
+            "previous_lock",
+            "children",
+            "boot_id",
+            "adoption_sha256",
+            "package_reservation",
+        )
+    }
+    root = repair.STATE / "replanning" / operation_id
+    manager = ops.Manager(remote.DEADLINE)
+    descriptor = os.open(remote.LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    operation = None
+    exclusions = ExitStack()
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        current = replan_inspect(request)
+        if current != initial or any(
+            current[name] != key[name] for name in ("children", "boot_id", "adoption_sha256")
+        ):
+            raise RuntimeError("HA settlement predecessor changed")
+        children = current["children"]
+        if not (
+            children["runtime"]["phase"] in {"installed", "activating", "complete"}
+            and children["ordinary"]["state"] == "complete"
+            and children["runtime"]["operation"] == children["ordinary"]["id"]
+            and (children["conversion"] is None or children["conversion"]["phase"] == "completed")
+        ):
+            raise RuntimeError("HA settlement requires completed predecessor packages")
+        remote.migration.verify_packages(remote.migration.state()["plan"])
+        with repair.writer_locks(deadline=manager.deadline):
+            corrective_fence(key["previous_lock"])
+        if current["intent"] is not None and current["intent"] != key:
+            raise RuntimeError("HA settlement approval changed")
+        if request["package_reservation"] is not None:
+            from nebius_vpngw import package_worker
+
+            exclusions.enter_context(
+                package_worker.archive_settled_reservation(request["package_reservation"])
+            )
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        metadata = root.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_mode & 0o077
+        ):
+            raise RuntimeError("HA settlement directory is unsafe")
+        # Owner archives precede any service effect. Never rewrite package state
+        # as complete, or run old unsubmitted package/activation steps.
+        for name, value in (
+            ("runtime", remote.migration.state()),
+            ("ordinary", ops.Journal().read()),
+        ):
+            target = root / (name + ".json")
+            if target.exists():
+                if repair.read_json(target) != value:
+                    raise RuntimeError("HA settlement archive changed")
+            else:
+                repair.publish(target, json.dumps(value, sort_keys=True).encode())
+        if current["intent"] is None:
+            repair.publish(root / "intent.json", json.dumps(key, sort_keys=True).encode())
+        journal = ops.Journal(root / "operation.json")
+        old = journal.read()
+        if old is not None and old["state"] == "complete":
+            if any(
+                not manager.unit(unit).get("missing") and not manager.stopped(unit)
+                for unit in REPLAN_WRITERS
+            ):
+                raise RuntimeError("HA settled writer restarted")
+            with repair.writer_locks(deadline=manager.deadline):
+                corrective_fence(key["previous_lock"])
+            return replan_inspect(request)
+        operation = ops.Operation.begin(
+            request=operation_id[:32],
+            config=ops.digest(key["previous_lock"]),
+            artifact=children["runtime"]["artifact"],
+            predecessor=ops.digest(key),
+            manager=manager,
+            network=manager.network(),
+            previous=ops.digest(old),
+            journal=journal,
+            purpose="ha-handoff",
+            resume_inhibited_quiescence=True,
+        )
+        _stop_replan_writers(operation)
+        with repair.writer_locks(deadline=manager.deadline):
+            corrective_fence(key["previous_lock"])
+            if (
+                corrective_children() != key["children"]
+                or ops.BOOT.read_text().strip() != key["boot_id"]
+            ):
+                raise RuntimeError("HA settlement authority changed before completion")
+            repair.cold_guard(state_dir=repair.STATE, boot_id=key["boot_id"])
+            operation.complete()
+        return replan_inspect(request)
+    finally:
+        if operation is not None:
+            operation.fail()
+        exclusions.close()
+        os.close(descriptor)
+
+
+def corrective_plan(request: dict) -> dict:
+    """Propose a closure without changing the predecessor or its pending phase."""
+    current = corrective_inspect(request)
+    if current["reservation"] is not None or current["children"] != request["children"]:
+        raise RuntimeError("corrective package proposal predecessor changed")
+    children = current["children"]
+    if not (
+        children["runtime"]["phase"] in {"installed", "activating", "complete"}
+        and children["ordinary"]["state"] == "complete"
+        and children["runtime"]["operation"] == children["ordinary"]["id"]
+        and (children["conversion"] is None or children["conversion"]["phase"] == "completed")
+    ):
+        raise RuntimeError("corrective package work is incomplete")
+    runtime = remote.migration.state()
+    remote.migration.verify_packages(runtime["plan"])
+    manifest = {**request["manifest"], "runtime_plan": remote.migration.plan_current()}
+    remote.migration.corrective_policy(runtime, manifest["runtime_plan"])
+    if manifest.get("ha_parent") != request["operation"]:
+        raise RuntimeError("corrective package proposal parent differs")
+    inspection = remote.inspect_for_plan(manifest, runtime_admission=False)
+    if corrective_inspect(request) != current:
+        raise RuntimeError("corrective package proposal changed during observation")
+    return inspection
+
+
+def corrective_fence(expected: dict, *, installed_generation: str | None = None) -> None:
     """Retained apply admission preserves terminal restoration/transfer history."""
-    from nebius_vpngw.checkpoint_upgrade import inspect_checkpoint
+    from nebius_vpngw.checkpoint_upgrade import inspect_checkpoint, require_recovery_controller
 
     repair.exact_lock(expected)
     guard = repair.read_json(repair.STATE / "guard.json")
@@ -853,15 +1081,35 @@ def corrective_fence(expected: dict) -> None:
     )
     if result.returncode:
         raise RuntimeError("canonical apply quiescence admission failed")
-    checkpoint = inspect_checkpoint(repair.read_json(repair.STATE / "controller-checkpoint.json"))
-    if (
-        checkpoint.pending_action is not None
-        or checkpoint.transfer_continuity is not None
-        or checkpoint.repair_attempt is not None
-    ):
+    controller = repair.read_json(repair.STATE / "controller-checkpoint.json")
+    checkpoint = inspect_checkpoint(controller)
+    if checkpoint.transfer_continuity is not None or checkpoint.repair_attempt is not None:
         raise RuntimeError("corrective controller continuity is unresolved")
+    if checkpoint.pending_action is not None:
+        import yaml
+
+        raw = repair.verified_file(remote.CONFIG, remote.sha(remote.CONFIG.read_bytes()))
+        ha = yaml.safe_load(raw)["vm_ha"]
+        if (
+            ha["cluster_id"] != expected["cluster_id"]
+            or ha["node"]["node_id"] != expected["node_id"]
+            or ha["generation"]["generation_id"]
+            != (installed_generation or expected["generation_id"])
+        ):
+            raise RuntimeError("corrective passive intent has a foreign installed identity")
+        require_recovery_controller(
+            controller,
+            boot_id=ops.BOOT.read_text().strip(),
+            node_id=expected["node_id"],
+            allocation_id=ha["runtime_binding"]["shared_allocation_id"],
+            generation_id=installed_generation or expected["generation_id"],
+            digests=ha["generation"]["digests"],
+        )
+        if repair.verified_file(remote.CONFIG, remote.sha(raw)) != raw:
+            raise RuntimeError("corrective installed identity changed")
 
 
+@functools.partial(package_exclusion, always=True)
 def reserve_corrective(request: dict) -> dict:
     """Persist startup exclusion and replace one old lock; never install packages."""
     from nebius_vpngw.apply_lock import encode
@@ -875,6 +1123,22 @@ def reserve_corrective(request: dict) -> dict:
     path = repair.STATE / "corrective" / (operation_id + ".json")
     key = {k: request[k] for k in ("operation", "previous_lock", "children")}
     key["manifest"] = ops.digest(manifest)
+    settlement = request.get("settlement")
+    if settlement is not None:
+        if not isinstance(settlement, dict) or set(settlement) != {
+            "operation",
+            "receipt",
+            "generation",
+        }:
+            raise ValueError("HA successor settlement binding is invalid")
+        if any(
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(c not in "0123456789abcdef" for c in value)
+            for value in settlement.values()
+        ):
+            raise ValueError("HA successor settlement digest is invalid")
+        key["settlement"] = settlement
     manager = ops.Manager(float("inf") if remote.DURABLE_PACKAGES else time.monotonic() + 540)
     descriptor = os.open(remote.LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     operation = None
@@ -882,11 +1146,24 @@ def reserve_corrective(request: dict) -> dict:
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         saved = repair.read_json(path) if path.exists() else None
         if saved is None:
+            if settlement is not None:
+                original = repair.read_json(
+                    repair.STATE / "replanning" / settlement["operation"] / "intent.json"
+                )
+                settled = replan_inspect({**original, "action": "replan-inspect"})
+                if (
+                    settled["settlement"] is None
+                    or settled["settlement"]["state"] != "complete"
+                    or ops.digest(settled) != settlement["receipt"]
+                    or original["previous_lock"] != request["previous_lock"]
+                    or original["children"] != request["children"]
+                ):
+                    raise RuntimeError("HA successor lost its exact settled predecessor")
             if corrective_children() != request["children"]:
                 raise RuntimeError("corrective completed predecessor changed")
             children = request["children"]
             if not (
-                children["runtime"]["phase"] == "complete"
+                children["runtime"]["phase"] in {"installed", "activating", "complete"}
                 and children["ordinary"]["state"] == "complete"
                 and children["runtime"]["operation"] == children["ordinary"]["id"]
                 and (
@@ -894,8 +1171,9 @@ def reserve_corrective(request: dict) -> dict:
                 )
             ):
                 raise RuntimeError("corrective package work is incomplete")
+            remote.migration.verify_packages(remote.migration.state()["plan"])
             repair.exact_lock(request["previous_lock"])
-            with repair.writer_locks(deadline=time.monotonic() + 30):
+            with repair.writer_locks(deadline=manager.deadline):
                 corrective_fence(request["previous_lock"])
             if repair.FORWARDING.read_text().strip() != "0":
                 raise RuntimeError("corrective member is forwarding")
@@ -921,16 +1199,34 @@ def reserve_corrective(request: dict) -> dict:
             raise RuntimeError("corrective reservation authority changed")
         previous = request["previous_lock"]
         new_lock = {**previous, "operation_id": operation_id}
-        actual = repair.exact_lock({**previous, "operation_id": None})
+        if settlement is not None:
+            new_lock["generation_id"] = settlement["generation"]
+            encode(new_lock)  # Validate before changing any canonical lock.
+        # Only these two complete locks are authorized. A missing generation is
+        # not a wildcard in the canonical verifier, including after settlement.
+        actual = repair.read_json(repair.STATE / "apply.lock")
         if actual not in (previous, new_lock):
             raise RuntimeError("corrective lock belongs to another operation")
+        repair.exact_lock(actual)
         if saved["phase"] == "quiescent":
             if actual != new_lock or remote.migration.state()["operation"] != saved["child"]:
                 raise RuntimeError("corrective reservation postcondition changed")
-            with repair.writer_locks(deadline=time.monotonic() + 30):
-                corrective_fence(new_lock)
+            with repair.writer_locks(deadline=manager.deadline):
+                corrective_fence(
+                    new_lock,
+                    **(
+                        {"installed_generation": previous["generation_id"]}
+                        if settlement is not None
+                        else {}
+                    ),
+                )
             return saved
-        remote.migration.begin(manifest["runtime_plan"], saved["child"], manifest)
+        remote.migration.begin(
+            manifest["runtime_plan"],
+            saved["child"],
+            manifest,
+            superseded_sha256=request["children"]["runtime"]["digest"],
+        )
         ops.install_startup_guard(ha_repair=True)
         old = ops.Journal().read()
         operation = ops.Operation.begin(
@@ -958,9 +1254,16 @@ def reserve_corrective(request: dict) -> dict:
                 operation.service("stop", unit)
             if not manager.stopped(unit):
                 raise RuntimeError("corrective writer is not stopped")
-        with repair.writer_locks(deadline=time.monotonic() + 30):
+        with repair.writer_locks(deadline=manager.deadline):
             repair.exact_lock(actual)
-            corrective_fence(actual)
+            corrective_fence(
+                actual,
+                **(
+                    {"installed_generation": previous["generation_id"]}
+                    if settlement is not None
+                    else {}
+                ),
+            )
             if repair.FORWARDING.read_text().strip() != "0":
                 raise RuntimeError("corrective forwarding fence changed")
             repair.cold_guard(state_dir=repair.STATE, boot_id=ops.BOOT.read_text().strip())
@@ -1023,6 +1326,15 @@ def main(*, durable: bool = False) -> None:
         return
     if request["action"] == "corrective-inspect":
         reply(corrective_inspect(request))
+        return
+    if request["action"] == "replan-inspect":
+        reply(replan_inspect(request))
+        return
+    if request["action"] == "replan-settle":
+        reply(settle_replan(request))
+        return
+    if request["action"] == "corrective-plan":
+        reply(corrective_plan(request))
         return
     if request["action"] == "corrective-reserve":
         reply(reserve_corrective(request))
@@ -1161,6 +1473,19 @@ def main(*, durable: bool = False) -> None:
                 operation.service("stop", name, timeout=45)
             if not manager.stopped(name):
                 raise RuntimeError("HA handoff writer did not stop")
+        if (
+            not repairing
+            and request.get("package") is not None
+            and binding.get("activation") is None
+        ):
+            # A Single guest has no HA lock storage yet. Establish only the
+            # canonical empty layout under the approved handoff exclusion;
+            # later verification must not have to initialize its own premise.
+            # A resumed exact publication already owns its checkpoint/layout;
+            # activation revalidates those instead of treating them as fresh.
+            if not all(manager.stopped(name) for name in ops.HA_WRITERS):
+                raise RuntimeError("HA handoff writer is not stopped before initialization")
+            initialize_unstarted_writer_layout()
         if repairing and request.get("repair") is not None:
             with repair.writer_locks(deadline=time.monotonic() + 30):
                 repair.exact_lock(request["repair"])

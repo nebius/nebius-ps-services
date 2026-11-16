@@ -50,7 +50,7 @@ def context(
 
 
 def first_start_authorized(state: Any, instance: Any, binding: Any, artifact: str) -> bool:
-    """Authorize seeding only the exact Compute created by this activation."""
+    """Seed exact created guests or independently reset retained repair guests."""
     from .vm_ha_lifecycle import (
         VMHALifecycleStatus,
         vm_ha_effective_resource_bindings,
@@ -83,6 +83,28 @@ def first_start_authorized(state: Any, instance: Any, binding: Any, artifact: st
         or vm_ha_effective_resource_bindings(resources).get(f"compute:{name}") != member.compute_id
     ):
         return False
+    if tx.approval_kind == "repair":
+        import hashlib
+        import json
+
+        from ..repair_guest import GUARD
+
+        try:
+            proof = json.loads(resources["repair-reset:" + name])
+        except (KeyError, ValueError, TypeError):
+            return False
+        return bool(
+            isinstance(proof, dict)
+            and set(proof) == {"operation", "compute", "disk", "artifact", "boot", "guard"}
+            and proof["operation"] == tx.operation_id
+            and proof["compute"] == member.compute_id
+            and proof["disk"] == resources.get("disk:" + name)
+            and proof["artifact"] == artifact
+            and isinstance(proof["boot"], str)
+            and proof["boot"]
+            and proof["guard"] == hashlib.sha256(GUARD).hexdigest()
+            and "repair-reset-" + node_id in tx.completed_effects
+        )
     cycles = vm_ha_passive_replacement_cycles(resources, name)
     if cycles:
         cycle = cycles[-1]

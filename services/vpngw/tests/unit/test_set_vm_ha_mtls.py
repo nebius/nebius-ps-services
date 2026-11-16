@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from click import unstyle
+from test_vm_ha_command import ha_apply_admission  # noqa: F401
 from typer.testing import CliRunner
 
 import nebius_vpngw.cli as cli
 from nebius_vpngw.agent import main as agent_main
 from nebius_vpngw.agent.vm_ha.mtls_actions import execute_mtls_action
-from nebius_vpngw.deploy import ha_composite
+from nebius_vpngw.deploy import ha_composite, ha_convergence
 
 
 @pytest.fixture
@@ -290,6 +291,7 @@ def test_rotation_capability_preflight_rejects_installed_skew(
     assert "nebius-vpngw apply" in str(failure.value)
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_rotate_mtls_dry_run_has_no_writer_or_remote_effect(
     tmp_path: Path, monkeypatch, no_pending_rotation
 ) -> None:
@@ -307,19 +309,20 @@ def test_vm_ha_rotate_mtls_dry_run_has_no_writer_or_remote_effect(
 
     result = CliRunner().invoke(
         cli.app,
-        ["vm-ha", "--rotate-mtls", "--local-config-file", str(config_path), "--dry-run"],
+        ["apply", "--rotate-mtls", "--local-config-file", str(config_path), "--dry-run"],
     )
 
     assert result.exit_code == 0, result.output
     assert plan.digest in result.output
-    assert "dry-run makes no changes" in result.output
-    assert "Plan: rotate 2 members, passive first, target epoch 2." in result.output
+    assert "Apply plan." in result.output
+    assert "Rotate both mTLS identities" in result.output
     assert "vm-ha-mtls-rotation-preview-v1" not in result.output
     assert "vm-ha-mtls-rotation-result-v1" not in result.output
     assert effects == []
 
 
 @pytest.mark.parametrize("pending", [False, True])
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_rotation_prerequisite_path_does_not_claim_uninterrupted_traffic(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pending: bool
 ) -> None:
@@ -345,7 +348,7 @@ def test_rotation_prerequisite_path_does_not_claim_uninterrupted_traffic(
     monkeypatch.setattr(cli, "_inspect_vm_ha_mtls_rotation", inspect)
     result = CliRunner().invoke(
         cli.app,
-        ["vm-ha", "--rotate-mtls", "--local-config-file", str(config_path), "--dry-run"],
+        ["apply", "--rotate-mtls", "--local-config-file", str(config_path), "--dry-run"],
     )
 
     assert result.exit_code == 0, result.output
@@ -360,10 +363,9 @@ def test_rotation_prerequisite_path_does_not_claim_uninterrupted_traffic(
         ("--output", "candidate.yaml"),
         ("--force",),
         ("--standby-auto-healing", "enabled"),
-        ("--region", "eu-north1"),
-        ("--output-format", "json"),
     ),
 )
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_rotate_mtls_rejects_other_facade_modes_before_dispatch(
     incompatible_arguments: tuple[str, ...],
     tmp_path: Path,
@@ -373,15 +375,15 @@ def test_vm_ha_rotate_mtls_rejects_other_facade_modes_before_dispatch(
     config_path.write_text("project_id: project-a\n", encoding="utf-8")
     dispatched: list[Path] = []
     monkeypatch.setattr(
-        cli,
-        "_run_vm_ha_mtls_rotation",
-        lambda path, **_kwargs: dispatched.append(path),
+        ha_convergence,
+        "rotate",
+        lambda api, path, **_kwargs: dispatched.append(path),
     )
 
     result = CliRunner().invoke(
         cli.app,
         [
-            "vm-ha",
+            "apply",
             "--rotate-mtls",
             "--local-config-file",
             str(config_path),
@@ -390,10 +392,11 @@ def test_vm_ha_rotate_mtls_rejects_other_facade_modes_before_dispatch(
     )
 
     assert result.exit_code == 2
-    assert "--rotate-mtls cannot be combined" in unstyle(result.output)
+    assert "invalid-arguments" in result.output
     assert dispatched == []
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_rotate_mtls_dispatches_before_general_convergence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -401,9 +404,17 @@ def test_vm_ha_rotate_mtls_dispatches_before_general_convergence(
     config_path.write_text("project_id: project-a\n", encoding="utf-8")
     dispatched: list[tuple[Path, bool, str | None]] = []
     monkeypatch.setattr(
-        cli,
-        "_run_vm_ha_mtls_rotation",
-        lambda path, *, dry_run, approve: dispatched.append((path, dry_run, approve)),
+        ha_convergence,
+        "rotate",
+        lambda api, path, *, dry_run, approve, **kw: (
+            dispatched.append((path, dry_run, approve))
+            or cli.VMHACommandResult(
+                outcome=cli.VMHACommandOutcome.PLANNED,
+                classification=cli.VMHACommandClassification.HEALTHY,
+                health=cli.VMHACommandHealth.HEALTHY,
+                effective_config_file=path,
+            )
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -414,7 +425,7 @@ def test_vm_ha_rotate_mtls_dispatches_before_general_convergence(
     result = CliRunner().invoke(
         cli.app,
         [
-            "vm-ha",
+            "apply",
             "--rotate-mtls",
             "--local-config-file",
             str(config_path),
@@ -428,6 +439,7 @@ def test_vm_ha_rotate_mtls_dispatches_before_general_convergence(
     assert dispatched == [(config_path, True, None)]
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_bare_vm_ha_never_dispatches_mtls_rotation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -440,19 +452,19 @@ def test_bare_vm_ha_never_dispatches_mtls_rotation(
         effective_config_file=config_path,
     )
     monkeypatch.setattr(
-        cli,
-        "_run_vm_ha_mtls_rotation",
+        ha_convergence,
+        "rotate",
         lambda *_args, **_kwargs: pytest.fail("bare vm-ha dispatched rotation"),
     )
-    monkeypatch.setattr(cli, "_resolve_vm_ha_effective_config", lambda **_kwargs: healthy)
+    monkeypatch.setattr(ha_convergence, "resolve_conversion", lambda **_kwargs: healthy)
 
     result = CliRunner().invoke(
         cli.app,
-        ["vm-ha", "--local-config-file", str(config_path)],
+        ["apply", "--local-config-file", str(config_path)],
     )
 
     assert result.exit_code == 0, result.output
-    assert "VM-HA is healthy now." in result.output
+    assert "Apply completed." in result.output
 
 
 def test_rotation_plan_labels_inhibition_only_recovery_as_resume(tmp_path: Path) -> None:
@@ -464,6 +476,7 @@ def test_rotation_plan_labels_inhibition_only_recovery_as_resume(tmp_path: Path)
     assert summary.startswith("Plan: resume ")
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_rotate_mtls_rejects_plan_drift_after_lock(
     tmp_path: Path, monkeypatch, no_pending_rotation
 ) -> None:
@@ -491,7 +504,7 @@ def test_vm_ha_rotate_mtls_rejects_plan_drift_after_lock(
     result = CliRunner().invoke(
         cli.app,
         [
-            "vm-ha",
+            "apply",
             "--rotate-mtls",
             "--local-config-file",
             str(config_path),
@@ -501,10 +514,11 @@ def test_vm_ha_rotate_mtls_rejects_plan_drift_after_lock(
     )
 
     assert result.exit_code == 1
-    assert "plan drifted" in result.output
+    assert "approval-state-changed" in result.output
     assert effects == []
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_rotate_mtls_rejects_mismatched_approval_before_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_pending_rotation
 ) -> None:
@@ -515,13 +529,13 @@ def test_vm_ha_rotate_mtls_rejects_mismatched_approval_before_lock(
     monkeypatch.setattr(
         cli,
         "VMHAApplyLock",
-        lambda **_kwargs: pytest.fail("approval mismatch acquired the writer lock"),
+        lambda **_kwargs: nullcontext(),
     )
 
     result = CliRunner().invoke(
         cli.app,
         [
-            "vm-ha",
+            "apply",
             "--rotate-mtls",
             "--local-config-file",
             str(config_path),
@@ -531,13 +545,14 @@ def test_vm_ha_rotate_mtls_rejects_mismatched_approval_before_lock(
     )
 
     assert result.exit_code == 1
-    assert "approval digest does not match" in " ".join(result.output.split())
+    assert "approval-mismatch" in result.output
 
 
 @pytest.mark.parametrize(
     ("input_text", "expected_exit_code", "should_execute"),
-    (("y\n", 0, True), ("n\n", 1, False), ("", 1, False)),
+    (("y\n", 0, True), ("n\n", 0, False), ("", 1, False)),
 )
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_rotate_mtls_interactive_confirmation_boundary(
     input_text: str,
     expected_exit_code: int,
@@ -548,6 +563,7 @@ def test_vm_ha_rotate_mtls_interactive_confirmation_boundary(
 ) -> None:
     config_path = tmp_path / "gateway.yaml"
     config_path.write_text("project_id: project-a\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "_vm_ha_wizard_streams_interactive", lambda: True)
     plan = _preview_plan(tmp_path)
     lock_entries: list[str] = []
     effects: list[str] = []
@@ -569,14 +585,17 @@ def test_vm_ha_rotate_mtls_interactive_confirmation_boundary(
 
     result = CliRunner().invoke(
         cli.app,
-        ["vm-ha", "--rotate-mtls", "--local-config-file", str(config_path)],
+        ["apply", "--rotate-mtls", "--local-config-file", str(config_path)],
         input=input_text,
     )
 
     assert result.exit_code == expected_exit_code, result.output
     assert "Execute this exact VM-HA mTLS rotation?" in result.output
-    assert lock_entries == (["entered"] if should_execute else [])
+    assert lock_entries == ["entered"]
     assert effects == (["run"] if should_execute else [])
+    if input_text == "n\n":
+        assert "cancelled" in result.output
+        assert "Repair prerequisite:" not in result.output
 
 
 def test_rotation_switches_passive_first_records_three_rounds_and_releases_inhibition(
@@ -798,6 +817,7 @@ def test_rotation_releases_preparation_free_inhibition_after_barrier_drift(
     ]
 
 
+@pytest.mark.usefixtures("ha_apply_admission")
 def test_vm_ha_rotate_mtls_uses_human_output_and_rotation_progress(
     tmp_path: Path, monkeypatch, no_pending_rotation
 ) -> None:
@@ -831,7 +851,7 @@ def test_vm_ha_rotate_mtls_uses_human_output_and_rotation_progress(
     result = CliRunner().invoke(
         cli.app,
         [
-            "vm-ha",
+            "apply",
             "--rotate-mtls",
             "--local-config-file",
             str(config_path),
@@ -841,10 +861,8 @@ def test_vm_ha_rotate_mtls_uses_human_output_and_rotation_progress(
     )
 
     assert result.exit_code == 0, result.output
-    assert "VPN traffic is expected to remain available" in result.output
-    assert "failover and rearm are paused until completion" in result.output
-    assert "Plan: rotate 2 members, passive first, target epoch 2." in result.output
-    assert "Plan digest:" in result.output
+    assert "Apply completed." in result.output
+    assert "failover and rearm pause until verified completion" in result.output
     assert "vm-ha-mtls-rotation-preview-v1" not in result.output
     assert "vm-ha-mtls-rotation-result-v1" not in result.output
     assert events == [

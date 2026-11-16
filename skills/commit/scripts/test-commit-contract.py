@@ -83,10 +83,15 @@ class CommitContractTest(unittest.TestCase):
             "`task-result --result <private-json> --termination <observation>`",
             "`task-finish --receipt`",
             "Never project summary, validation or review into a second completion path",
-            "Source drift retains the verified result",
         ):
             self.assertIn(required, task_skill)
         self.assertNotIn("invokes `$commit` exactly once", task_skill)
+        loop = " ".join(self.text("implement/references/implementation-loop.md").split())
+        self.assertIn("Dirty source content remains untouched.", loop)
+        self.assertIn(
+            "A source drift blocker retains the exact verified integration for later reconciliation.",
+            loop,
+        )
 
     def test_worktree_delegation_is_fresh_bounded_and_exact(self) -> None:
         commit_skill = self.text("commit/SKILL.md")

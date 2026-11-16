@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "projects": {
+    "vpngw": {
+      "directory": "services/vpngw",
+      "tag_prefix": "nebius-vpngw-v",
+      "workflow": "vpngw-release.yml",
+      "include": [
+        "services/vpngw/src/*",
+        "services/vpngw/pyproject.toml",
+        "services/vpngw/uv.lock",
+        "services/vpngw/MANIFEST.in",
+        "services/vpngw/packaging/*"
+      ],
+      "exclude": [
+        "**/tests/*",
+        "**/docs/*",
+        "**/*.md"
+      ],
+      "assets": [
+        "nebius_vpngw-*.whl"
+      ]
+    },
+    "nebius-cxcli": {
+      "directory": "services/nebius-cxcli",
+      "tag_prefix": "nebius-cxcli-v",
+      "workflow": "nebius-cxcli-release.yml",
+      "include": [
+        "services/nebius-cxcli/src/*",
+        "services/nebius-cxcli/pyproject.toml",
+        "services/nebius-cxcli/uv.lock",
+        "services/nebius-cxcli/MANIFEST.in",
+        "services/nebius-cxcli/components/*",
+        "services/nebius-cxcli/component_sources.yaml",
+        "services/nebius-cxcli/component_cli_settings.yaml",
+        "services/nebius-cxcli/compatibility-matrix.yaml",
+        "services/nebius-cxcli/scripts/build_tailscale_helper.py",
+        "services/nebius-cxcli/build_hooks.py",
+        "services/nebius-cxcli/setup.py",
+        "platform-infra/modules/*",
+        "helm-charts/nccl-test/*",
+        "services/nccl-test/*"
+      ],
+      "exclude": [
+        "**/tests/*",
+        "**/docs/*"
+      ],
+      "assets": [
+        "nebius_cxcli-*.whl",
+        "component_sources.yaml"
+      ]
+    }
+  }
+}

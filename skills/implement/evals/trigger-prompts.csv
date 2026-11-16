@@ -1,12 +1,20 @@
 id,should_trigger,prompt
-explicit-plan,true,"$implement"
-explicit-request,true,"$implement Add the requested bounded retry behavior."
-explicit-continue,true,"$implement continue ./services/example"
-ordinary-edit,false,"Fix this one typo."
-sdlc,false,"$sdlc-start Build the accepted feature."
-review,false,"Review the current changes without implementing them."
+explicit-plan,true,$implement
+explicit-request,true,$implement Add the requested bounded retry behavior.
+explicit-continue,true,$implement continue ./services/example
+ordinary-edit,false,Fix this one typo.
+sdlc,false,$sdlc-start Build the accepted feature.
+review,false,Review the current changes without implementing them.
 implement-steered-delivery,true,$implement continue example-project after the accepted steering revision.
-multiline-plan,true,"$implement Execute the accepted plan with the multiline API schema and acceptance checks included in each task assignment."
-review-workflow,false,"Use $align-skill and $code-review to review the $implement workflow and fix findings before I use it."
+multiline-plan,true,$implement Execute the accepted plan with the multiline API schema and acceptance checks included in each task assignment.
+review-workflow,false,Use $align-skill and $code-review to review the $implement workflow and fix findings before I use it.
 implement-issue-workflow-explanation,false,Explain how $implement participates in saved issue plans and closure after merge; do not execute the workflow.
 implement-positive-parallel-policy,true,Use $implement for the accepted objective with eight parallel workers and bounded waves on this host; independently verify tasks already satisfied without changes.
+automatic-status,true,$implement status ./project-a and show my registered projects without changing them.
+automatic-sibling,true,$implement Add the requested CLI feature in project-b while my project-a workflow continues.
+implement-statistics-status,true,"$implement status ./project-a with component task counts, observed running workers, reserved slots and measurement gaps."
+scoped-dirty-sibling,true,$implement Implement the accepted plan in this clean project while another project has uncommitted work.
+delivery-pending,true,$implement continue ./project-a — the original checkout is now clean; finish delivery.
+promotion-recovery,true,$implement continue ./project-a — promotion finished before the session stopped; verify and finish cleanup.
+implement-no-default-uat,true,Use $implement for this feature; I will perform UAT after the full application is ready.
+healthy-long-execution,true,$implement Build this large application and continue healthy work across days without a campaign timeout.

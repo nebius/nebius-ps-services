@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "authority": "actions",
+  "workflows": {
+    "controller": "github-ai-automation.yml",
+    "waiver": "github-ai-waiver.yml",
+    "release": "github-ai-release.yml"
+  },
+  "release_projects": ["vpngw", "nebius-cxcli"]
+}

@@ -1,6 +1,7 @@
 """The historical fixture must interrupt the product's actual install command."""
 
 import ast
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -16,19 +17,28 @@ from nebius_vpngw import runtime_migration as migration
 def hook(monkeypatch, tmp_path):
     driver = Path(__file__).parents[1] / "systemd/package_upgrade_driver.py"
     tree = ast.parse(driver.read_text())
-    source = next(
-        ast.literal_eval(node.value)
+    assignments = [
+        node
         for node in tree.body
         if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Name) and t.id == "INTERRUPTION_HOOK" for t in node.targets)
-    )
+        and any(
+            isinstance(target, ast.Name)
+            and target.id in {"INTERRUPTION_ASSETS", "INTERRUPTION_HOOK"}
+            for target in node.targets
+        )
+    ]
+    constants = {}
+    exec(compile(ast.Module(body=assignments, type_ignores=[]), str(driver), "exec"), constants)
+    source = constants["INTERRUPTION_HOOK"]
     calls = []
     remote = SimpleNamespace(command=lambda args, **kwargs: calls.append(args) or (0, ""))
+    asset = tmp_path / "unit.service"
+    asset.write_text("unchanged service asset")
     value = {
         "operation": "saved",
         "plan": {},
         "plan_digest": "plan",
-        "manifest": {"wheel_name": "product.whl"},
+        "manifest": {"wheel_name": "product.whl", "assets": {str(asset): {}}},
     }
     runtime = SimpleNamespace(
         state=lambda: value,
@@ -63,7 +73,11 @@ def test_actual_product_install_is_interrupted_after_effect(hook, monkeypatch, o
             command(migration.product_install_command(wheel))
     assert stopped.value.code == 86
     assert len(calls) == 1 and calls[0][-1] == str(wheel)
-    assert json.loads((directory / "interruption.json").read_text())["operation"] == "saved"
+    receipt = json.loads((directory / "interruption.json").read_text())
+    assert receipt["operation"] == "saved"
+    assert receipt["assets_before_product_install"][str(directory / "unit.service")]["sha256"] == (
+        hashlib.sha256(b"unchanged service asset").hexdigest()
+    )
     if owner == "ha":
         assert value["state"] == "installing"
 

@@ -34,6 +34,14 @@ never permission to bypass a guard or claim unobserved behavior.
 
 ## Purpose
 
+Read `../worktree/references/optional-uat.md` for the shared acceptance policy.
+No UAT by default; requested UAT runs at a meaningful ready objective/release
+scope (or explicitly selected coherent milestone). Missing optional prerequisites
+remain pending without blocking implementation or otherwise eligible PR/merge.
+Keep required development checks and correctness dependencies mandatory. Use
+container/Nebius testing skills only when explicitly requested; an existing
+environment uses its own project harness directly.
+
 Coordinate one accepted objective through requirements, context, design, locked
 plans, implementation, validation, delivery and optional authorized publication.
 `global-context-management` owns context and continuity. `maintain-project-specs`
@@ -50,6 +58,7 @@ adapters; workers report specification gaps to the coordinator.
 $sdlc-start
 $sdlc-start <objective>
 $sdlc-start continue [project-folder]
+$sdlc-start status [project-folder]
 $sdlc-start -h
 $sdlc-start --help
 ```
@@ -81,8 +90,14 @@ Do not archive raw conversation turns or capture prompts globally.
 
 ## Required Reads
 
-- `../worktree/references/document-delivery.md` for source coverage, phase/slice
-  identities, shared-skill caller contracts and protected completion policy.
+- `../worktree/references/automatic-projects.md` for automatic outer ownership,
+  shared admission, capacity, aggregation, recovery and original-folder status.
+
+- `../worktree/references/workflow-invariants.md` for shared ownership,
+  evidence, failure and conditional-read rules.
+- Read `../worktree/references/document-delivery.md` when accepting a source
+  manifest/program or handling SLICE/source coverage, phase barriers, delivery
+  admission, phase exit or protected completion.
 
 - `../worktree/references/workflow-contract.md` for objective, binding, basis,
   scheduler and reconciliation contracts.
@@ -100,11 +115,35 @@ phase state, feature queue within this objective, checkpoints, fingerprints and
 bounded evidence. Canonical specs publish only through maintain-project-specs at
 the registered checkout and expected revision. Workers never publish them.
 
+## Statistics
+
+Follow `../worktree/references/statistics.md`. After intake and before first
+initialization, record all known architecture from the accepted objective,
+accepted design and existing code, even without a task plan. Refresh through context/design owners. After
+each coherent checkpoint publication, run the private statistics checkpoint
+helper and show each new summary ID once. Public status only reads statistics.
+
 ## Process
+
+Before planning, preparation and new dispatch, require current coordinator-issued
+steering readiness. `STEERING_PENDING` returns `sdlc-auto-steering` as pending work;
+`CONTEXT_PENDING` returns `sdlc-gather-context`. Neither spends a repair dispatch.
+When recording a user pause, run private `workflow_transition.py corrections-pause`;
+on authorized continuation run `corrections-resume`, each with the exact `--run-dir`.
+Hooks only check readiness; they never issue it or run phases.
+
+Public `status [project-folder]` is read-only and uses shared intake `status`;
+return its project/outcome/owner/phase/worker/wait/next-action summary and stop.
+At acceptance use the returned execution project; keep the native launch folder
+in the original project so automatic cleanup can remove owned checkouts.
 
 1. Resolve the exact project and applicable instructions. Require existing named,
    committed Git history. Before canonical authoring, the shared intake helper verifies SDLC remote-default prerequisites and selects its feature branch. Preserve ordinary
    managed outer-worktree ownership; greenfield bootstrapping is outside this skill.
+   Before automatic allocation, inspect source dirt and supply complete committed
+   input dependencies to private intake under `automatic-projects.md`. A clean
+   project may exclude unrelated sibling dirt; selected-project, instruction,
+   spec or shared-input dirt blocks. Never copy uncommitted source content.
 2. Normalize direct intent in a private candidate. Call
    `../worktree/scripts/workflow_intake.py --owner agentic-sdlc accept` with the
    project and candidate. Bare bound continuation uses `observe`; explicit
@@ -215,12 +254,16 @@ the registered checkout and expected revision. Workers never publish them.
   exactly as a conditional diagnostic branch. Persist its diagnosis pointer
   and return every diagnosis to `sdlc-classify-failure`; troubleshooting never
   chooses or executes the repair phase directly.
-- Treat `repair-control-v2` as authoritative for blocker identity, route
+- Treat `repair-control-v3` as authoritative for blocker identity, route
   history, invalidations, active time, and repair dispatch budgets. Freeze new
   worker dispatch while classifying, diagnosing, or replanning. Stop on missing
   evidence, unresolved competing hypotheses, policy/human decisions, semantic
   routing cycles, or budget exhaustion.
-- A successful repair with invalidations enters the repair-control
+- When `complete` returns `resumed_dispatch_id`, reload its returned parent
+  control and refresh checkpoint repair pointers before routing onward. This
+  resumes an already counted interrupted repair; it does not resolve its
+  original failure, authorize another dispatch, or waive downstream gates.
+- A successful repair without a suspended parent and with invalidations enters the repair-control
   revalidation cursor. Route only to its exact next gate, bind each completion
   to digest-verified evidence and current fingerprints, use the live
   integration HEAD before commit, and bind final commit evidence to completed
@@ -232,8 +275,10 @@ the registered checkout and expected revision. Workers never publish them.
   immutable corrective plan vN+1 and private `replan-future`, preserving full
   completed task definitions/digests and resource-owning waves while appending
   correction tasks and waves.
-- Never reopen sealed, promoted, or completed execution. A post-promotion
-  failure begins a corrective run from the exact promoted commit.
+- Never reopen sealed, promoted, or completed execution. Before automatic outer release, a post-promotion
+  failure starts a fresh execution revision through `aggregate-correct`, preserving
+  the sealed executor. After terminal release, start a fresh corrective objective
+  from the exact delivered commit.
 - Admit failure-driven redesign only after the classifier validates positive
   system-contract proof and the required approval mode. Missing or
   inconclusive implementation evidence is not a design defect.
@@ -248,10 +293,17 @@ the registered checkout and expected revision. Workers never publish them.
 - After UAT, post-promotion documentation assessment is read-only. Route to
   `sdlc-update-documents` only for assessment and no-op evidence. Required edits
   return `DOCUMENTATION_DRIFT` through `sdlc-classify-failure` and start a
-  corrective run from the exact promoted commit. Preserve completed execution;
-  require fresh documentation, alignment, promotion and UAT before handoff.
-- In a managed outer worktree, invoke the private `release-outer-lease`
-  transition only after final alignment, UAT, and documentation evidence are
+  fresh corrective execution before automatic release, or a fresh objective after
+  terminal release. Preserve completed execution;
+  require fresh documentation, alignment, promotion and implementation admission
+  before handoff; rerun requested UAT only when its scope is ready.
+- For an automatic outer, complete inner final gates and use the shared
+  `aggregate-prepare`, `aggregate-validate`, `aggregate-record-gates`,
+  `aggregate-finish` lifecycle before
+  completion. The original aggregate is the delivery/publication target. Follow
+  `automatic-projects.md` for waits, corrective execution and cleanup replay.
+- In a manually managed outer worktree, invoke the private `release-outer-lease`
+  transition only after final alignment, honest UAT disposition, and documentation evidence are
   recorded, the exact promoted child HEAD is clean, and all Agentic SDLC
   integration and worker resources are absent. Record phase
   `outer-integration-pending`, return the recorded primary path/source branch
@@ -321,6 +373,13 @@ edit skill sources; report that it was skipped. Do not capture secrets, private
 URLs, customer data, raw logs, or one-off local state.
 
 ## Output Contract
+
+For automatic delivery, include the shared `user_message` in the final response.
+Pending delivery must name the original project/branch, retained work and blocker,
+and show the exact owning `next_action` from `automatic-projects.md`. Distinguish
+promotion pending, promoted with finalization pending, and verification/recovery
+pending. Require a clean original before resuming. After verified delivery and
+cleanup, report completion without a continuation command.
 
 Report readable objective and project, current feature/phase, immutable basis,
 actual observed concurrency, evidence and blockers, delivered checkout/commit,

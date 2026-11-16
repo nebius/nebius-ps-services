@@ -43,6 +43,35 @@ def git(*arguments: str, cwd: Path, check: bool = True) -> str:
 
 
 class WorktreeManagerTest(unittest.TestCase):
+    def test_managed_config_batch_matches_individual_observations(self):
+        branch = "feature/Mixed-name.x"
+        for field in wm.CONFIG_FIELDS:
+            git("config", "set", "--local", wm._config_key(branch, field), "first", cwd=self.repo)
+            git("config", "set", "--local", "--append", wm._config_key(branch, field), "last\nvalue\n", cwd=self.repo)
+        expected = {field: wm._read_config(self.repo, branch, field) for field in wm.CONFIG_FIELDS}
+        with mock.patch.object(wm, "_run_bytes", wraps=wm._run_bytes) as calls:
+            self.assertEqual(wm._read_managed_config(self.repo, branch), expected)
+        self.assertEqual(calls.call_count, 1)
+        git("config", "unset", "--local", "--all", wm._config_key(branch, "base"), cwd=self.repo)
+        self.assertIsNone(wm._read_managed_config(self.repo, branch)["base"])
+
+    def test_private_dispatch_rejects_invalid_action_and_fields(self):
+        for action in ([], None, 2, "add", "remove", "integrate"):
+            with self.subTest(action=action), self.assertRaises(wm.WorktreeError):
+                wm.dispatch_private(cwd=self.repo, request=wm.PrivateRequest(action, {}))
+        with self.assertRaises(wm.WorktreeError):
+            wm.dispatch_private(cwd=self.repo, request=wm.PrivateRequest("inspect", {"name": None, "require_clean": 1}))
+
+    def test_private_dispatch_cli_library_anchor_equivalence(self):
+        before = Path.cwd()
+        environment = dict(os.environ)
+        direct = wm.dispatch_private(cwd=self.repo, request=wm.PrivateRequest("anchor-inspect", {}))
+        native = subprocess.run([sys.executable, str(MODULE_PATH), "anchor-inspect"],
+                                cwd=self.repo, text=True, capture_output=True, check=True)
+        self.assertEqual(direct, json.loads(native.stdout))
+        self.assertEqual(Path.cwd(), before)
+        self.assertEqual(dict(os.environ), environment)
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name) / "workspace with spaces"
@@ -641,17 +670,11 @@ class WorktreeManagerTest(unittest.TestCase):
                     node.func, ast.Name
                 ):
                     continue
-                if node.func.id not in {"_call", "_managed_call"}:
+                if node.func.id != "PrivateRequest":
                     continue
-                for argument in node.args:
-                    if (
-                        isinstance(argument, ast.List)
-                        and argument.elts
-                        and isinstance(argument.elts[0], ast.Constant)
-                        and isinstance(argument.elts[0].value, str)
-                    ):
-                        actions.add(argument.elts[0].value)
-                        break
+                if (node.args and isinstance(node.args[0], ast.Constant)
+                        and isinstance(node.args[0].value, str)):
+                    actions.add(node.args[0].value)
             with self.subTest(caller=caller.name):
                 self.assertTrue(actions, "expected private worktree interop actions")
                 self.assertTrue(actions.isdisjoint(public_actions), actions)
@@ -667,7 +690,7 @@ class WorktreeManagerTest(unittest.TestCase):
         )
         self.assertIn("services/example/service.txt", inspected["branch_changed_paths"])
 
-    def test_publication_guard_blocks_managed_child_only(self) -> None:
+    def test_publication_guard_blocks_child_candidate_and_reserved_source(self) -> None:
         result = self.add()
         with self.assertRaisesRegex(wm.WorktreeError, "must not push"):
             wm.publication_guard(cwd=Path(str(result["worktree"])), action="push")
@@ -677,8 +700,8 @@ class WorktreeManagerTest(unittest.TestCase):
             wm.publication_guard(
                 cwd=Path(str(prepared["candidate_worktree"])), action="create-pr"
             )
-        allowed = wm.publication_guard(cwd=self.repo, action="create-pr")
-        self.assertEqual(allowed["mode"], "source")
+        with self.assertRaises(wm.WorktreeError):
+            wm.publication_guard(cwd=self.repo, action="create-pr")
         git(
             "worktree",
             "remove",

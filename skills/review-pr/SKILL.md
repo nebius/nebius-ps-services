@@ -130,9 +130,20 @@ Alongside code-review, select only the matching domain skills. A broad PR may
 need `align` plus the one or two specialists for its surfaces. All child analysis
 is report-only; review-pr owns repair decisions and final readiness.
 
+## Enrolled automation repositories
+
+Before GitHub effects, read the sibling merge-pr
+`merge-pr/references/automation-authority.md` contract. In an enrolled
+repository, a read-only request dispatches `review`; an explicitly authorized full
+lifecycle dispatches `process`. Never publish a local merge attestation or call
+the broker separately. In the isolated hosted agent, return findings and
+contribution/spec assessments through the supplied schema only. The controller
+owns patch publication, closure and delegation to merge-pr.
+
 ## Workflow
 
-Read [contribution assessment](references/contribution-assessment.md) before
+Read [the shared PR lifecycle](references/pr-lifecycle.md) and
+[contribution assessment](references/contribution-assessment.md) before
 ordinary review. Review accepted behavior, safety and existing-user compatibility
 first; repair proven defects, then reconcile canonical specs before final review.
 
@@ -157,7 +168,7 @@ first; repair proven defects, then reconcile canonical specs before final review
    Select the matching Python, Actions or container specialist. Bot identity,
    metadata and green CI never replace review. Safe repairs may include source
    changes and invalidate earlier head/base review. Review locally;
-   never install or run an AI agent on GitHub Actions.
+   use only the enrolled isolated hosted agent contract when Actions owns execution.
 4. Keep the caller checkout, index, files and local refs untouched throughout
    every review. Metadata/diff-only review allocates nothing. Before checkout-dependent
    inspection, validation or editing, use the canonical owner's private review
@@ -187,7 +198,9 @@ first; repair proven defects, then reconcile canonical specs before final review
    Standalone review also returns this evidence when writable and eligible;
    report-only/non-default reviews return findings without merge admission.
    Eligible fork reviews use the same bound attestation and protected broker.
-8. Return findings/fixes, validation, final identity and attestation or blocker.
+8. Publish/read back the selected PR disposition from the shared lifecycle,
+   preserving report-only/SDLC restrictions; then return findings/fixes, validation,
+   final identity and attestation or blocker.
    The review coordinator never issues merge effects. The calling
    create-pr/publication/merge-pr owner continues only
    within its existing completion authorization. Standalone review closes its
@@ -245,8 +258,9 @@ URLs, customer data, raw logs, or one-off local state.
 - Ordinary review/merge intent covers scoped, non-destructive repairs to the
   selected contributor branch when GitHub permits them. Preserve explicit
   report-only restrictions; permission denial is a blocker, not another PR.
-- Do not create a replacement PR from someone else's branch unless the user
-  explicitly asks for that follow-up path.
+- Replacement publication requires explicit full-lifecycle adoption intent or
+  enrolled adoption policy and the shared lifecycle coverage/lineage gates.
+  Plain review never grants that authority.
 - Do not rebase or force-push in the ordinary review repair path.
 - Do not issue approval or merge effects. The Actions broker approves only after
   local attestation; merge-pr owns all ordinary merge effects.

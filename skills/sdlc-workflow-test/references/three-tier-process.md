@@ -12,6 +12,9 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
    Native three-tier qualification currently supports Codex only. Claude's
    disposable-home catalog binding and native event adapter remain unqualified;
    report that capability as PARTIAL before preparing a Claude live trial.
+   Check `codex --version` against the native adapter's documented exact version
+   before preparation. An unsupported version is a capability gap; do not start
+   a trial or relax evidence checks to hide it.
 2. After aggregate cleanup and fresh deterministic preflight, select the native
    host's installed catalog through the existing host installation convention.
    Run its absolute `sdlc-workflow-test/scripts/three_tier_lifecycle.py` entrypoint
@@ -35,9 +38,10 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
    this invocation's immutable
    generation fence. Pass it as `--expected-verification-id` to every later
    mutating helper action; never refresh it from a newer status response. Run
-   the helper's `prepare-images` action to pull only the fixed
-   public base images through an owned empty Docker CLI config; do not reuse
-   that config for Compose. For resume mode, require the existing lifecycle to
+   the helper's `prepare-images` action to pull the fixed public base images
+   through an owned empty Docker CLI config and build one labelled, immutable
+   dependency image for task acceptance. Do not reuse that config for Compose.
+   Task trials use fresh containers and remove them immediately. For resume mode, require the existing lifecycle to
    be owned, KEPT, and previously FAIL or PARTIAL; revalidate its project
    boundary and recorded resources without creating replacements. Use the
    private root's isolated agent home for all accepted objective and phase state;
@@ -50,11 +54,25 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
    Keep current runtime/hook installation inside the selected disposable native
    home. Use the existing installer and normal native hook review during setup,
    before freezing the trial; never copy trust state or use bypass flags. Do not overwrite ordinary hooks or substitute manual Git overrides.
-3. Render the disposable request with `scripts/render_three_tier_objective.py`
+3. Establish the outer verifier as the physical-host memory owner before either
+   native session starts: obtain a fresh reliable observation, keep a bounded
+   monitor active, consume its results throughout both sessions and live runtime,
+   and cancel exact owned work at the existing critical/unknown boundary. Record
+   process ownership at launch and verify its workspace/lifecycle before stopping
+   it. If visibility or monitoring is unavailable, report the capability gap
+   before launch. The request's environment handoff is setup context, not proof
+   of monitoring; repeat it in worker assignments. A sandboxed child may rely on
+   this actual outer owner without duplicating an unavailable host probe.
+   Render the disposable request with `scripts/render_three_tier_objective.py`
    and invoke `$sdlc-start <rendered fixture objective>` from the owned project.
    Resume another native session with `$sdlc-start continue <project-folder>`.
    Follow the returned phase skill; the harness and hooks never perform private
    product transitions to satisfy workflow acceptance.
+   Preserve the objective's exact `not-a-secret` placeholder in offline
+   credential mocks, patched environments and expected-call assertions, and
+   repeat that constraint in affected worker assignments. Actual runtime
+   credentials use the protected environment file. Keep sensitive-content
+   screening active and retain rejected attempts under normal recovery rules.
    Complete the coordinator's first-start initialization after intake and before
    reading or recording its startup checkpoint. Accepted registration alone does
    not create phase state; follow `sdlc-start/references/state-schema.md`. The
@@ -86,17 +104,29 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
    native tool/hook events exist, run generation-fenced `record-native-activation`;
    final PASS additionally requires its independent native correlation receipt. A late repair
    starts a fresh trial and does not rehabilitate earlier evidence.
-   For classifier or TDD PASS, the private adapter obtains the integration HEAD
+   For classifier, TDD or preparation PASS, the private adapter obtains the HEAD
    with `execution_target(state, require_clean=False, phase_observation=phase)`
-   where phase is `sdlc-classify-failure` or `sdlc-tdd`. The lifecycle consumes the
-   same purpose for identity and receipt validation. TDD output may remain
+   where phase is `sdlc-classify-failure`, `sdlc-tdd` or `sdlc-prepare-execution`.
+   The lifecycle consumes the same purpose for identity and receipt validation.
+   Preparation remains clean and must prove the completed owner replan before
+   observing a corrective boundary. Subsequent TDD observation of that completed
+   replan reuses its exact authority and quiescence proofs while execution remains
+   `repair_required`; it requires the clean failed commit and existing sealed tests.
+   It does not permit test authoring. Initial or typed test-revision TDD output may remain
    unsealed at `tests_red` or `tests_ready`; never seal or change phase merely to
    satisfy observation. Await the receipt before dependent actions. Runtime and
    acceptance never use this purpose or substitute the clean primary checkout.
+   When classification observes a failed integrated wave whose counted parent is
+   suspended, use the repair owner's read-only lineage proof. The exact pending
+   parent must connect to the current counted child through immutable suspension
+   records with the same commit and preserved obligations and budgets. Observation
+   never resumes that parent or admits corrective execution or runtime access.
 4. Build all three logical layers: browser GUI, Django/Gunicorn web/API server,
    and PostgreSQL. Run exactly two labelled Compose containers, dynamically
    publish only the web port on loopback, and keep PostgreSQL private to the
-   Compose network. Run every Compose action through the helper's
+   Compose network. Use a project-owned normal bridge, without `internal: true`,
+   so Docker can publish the loopback web port. No database port is published.
+   Run every Compose action through the helper's
    generation-locked `run-compose` action with the immutable expected
    verification ID; never invoke a mutating `docker compose` command directly.
    This makes a replacement wait for an in-flight action and prevents a
@@ -128,14 +158,14 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
    GUI evidence. Generic logs or hand-written PASS/counts cannot qualify tests.
    Service frozen worker runtime requests promptly, batching their declared
    sequential operations without unrelated exploration between them. The shared
-   worker's one-hour deadline includes harness waiting time; it is not paused.
-   Return actual failures promptly to the coordinator before the worker expires.
+   worker has no healthy-work expiry while waiting. Return actual failures
+   promptly to the coordinator; keep unknown outcomes reserved until reconciled.
    Failed owned Compose commands include a bounded sanitized diagnostic tail and
    their command exit code. Known private runtime values are redacted before
    truncation; credential-like output is withheld. Preserve the nonzero outcome.
    Do not rerun a failed test merely to recover output already provided, and do
-   not treat diagnostics as canonical test receipts. Each individual Compose
-   action retains its separate 30-minute command timeout.
+   not treat diagnostics as canonical test receipts. Healthy Compose
+   actions continue through periodic observation checkpoints without expiry.
    Before worker lease release, request owned `stop web db` for teardown;
    resource deletion remains with final lifecycle cleanup. Do not substitute
    unsupported `down` or `logs` actions. See the live reference for the action
@@ -165,11 +195,11 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
    failed trial. Browser cleanup validates the exact owned process identity;
    ambiguity is `CLEANUP_FAILED`.
 8. Persist semantic results incrementally using
-   `agentic-sdlc/three-tier-results-v3`. Failed runs retain validated partial
+   `agentic-sdlc/three-tier-results-v4`. Failed runs retain validated partial
    layer/test status; the lifecycle helper derives PASS from
    required phases, tests, Git identity, GUI actions, API/database correlation,
    restart persistence, and distinct artifacts. Record canonical per-phase JSON
-   results and the four digest-bound headless browser stage receipts. Never accept
+   results and the complete digest-bound headless browser stage history. Never accept
    placeholder `{"result":"pass"}` evidence or screenshots as the only oracle.
 9. Write the complete sanitized report with layer inventory, resolved ports
    and endpoints, baseline/promoted SHAs, phase/test/UAT outcomes, exact owned
@@ -198,6 +228,11 @@ rejects Zsh startup files there, and sets `BASH_ENV` and `ENV` to `/dev/null`.
 Do not source ordinary shell startup files or copy shell snapshots. The launcher sets a private `077` umask before native execution so new logs and
 receipts are private at creation. Native
 workers inherit the sanitized environment and use their own host identity.
+
+Grant the exact primary checkout, its `.git` directory, the owned sibling
+`project-worktrees` parent, and this generation's private/evidence directories
+through the native scoped permission profile before launch. Do not use full
+access or change permissions from the product workflow.
 
 Before a Codex launch, put these settings in its private, owner-only
 `config.toml`, alongside the selected model and ordinary approval controls:
@@ -244,13 +279,22 @@ and [shell environment policy](https://learn.chatgpt.com/docs/config-file/config
 ## Headless browser contract
 
 Use headless Playwright Test with Chrome for required web acceptance. Run
-four fresh owned stages in order: `capability-discovery`, `evaluate`,
+four fresh owned stage roles in order: `capability-discovery`, `evaluate`,
 `uat-before-restart`, and `uat-after-restart`. Each stage starts a new process
 and isolated context, records assertions, screenshots, a trace, actual browser
 version and timestamps, and closes its processes even with `--keep`. Native
 desktop capture, an unlocked screen, display selection, and foreground windows
 are not prerequisites. Optional headless isolated Playwright MCP exploration
 is separate from the acceptance oracle and cannot satisfy a required stage.
+
+Before UAT, a new clean candidate may require another evaluation after a counted
+repair. The owner verifies the current evaluation cursor, exact candidate and
+fingerprints, preserves every prior PASS, and records its repair binding. At most
+four additional evaluations fit the unchanged four-dispatch ceiling. Reusing a
+cursor, repeating the same candidate, repeating capability/UAT, or any failed
+browser attempt requires a new trial; no prior failure becomes passing. Final
+qualification verifies each repeated evaluation's completed repair gate, including
+archived cursors, and uses only the final two UAT receipts for restart screenshots.
 
 The verifier freezes its independent test bundle before product implementation;
 never copy it into product TDD tests or alter it to fit an implementation.
@@ -293,6 +337,15 @@ resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
 Read-only phase observations use a named private purpose. Classification permits
 unsealed integration files during `sdlc-classify-failure`; TDD additionally permits
 its documented `tests_red` and `tests_ready` output checkpoints before sealing.
+Pending test-revision TDD uses the existing read-only revision owner to validate
+its typed authority, exact test-only scope and retained quiescent writers.
+Preparation uses `sdlc-prepare-execution` at its running phase or
+`execution_prepared` checkpoint to observe a clean `repair_required` boundary.
+It requires a completed owner replan, exact active failure and corrective-first
+tasks; a plan-command repair also requires its unchanged reviewed plan and specs.
+Observation never advances the correction, seals TDD or changes coordinator state.
+Historical receipt inspection retains existing authoring checkpoints; fresh
+preparation receipts always require a clean target.
 Exact worktree, objective, basis, branch, HEAD, ownership and ancestry checks remain.
 These purposes never reach Compose, inventory, build, browser or test execution;
 explicit clean requests still win. Worker selectors and dirty promoted checkouts
@@ -302,7 +355,10 @@ Pre-commit runtime testing may select a worker only through the private helper's
 `run-compose --worker-task TASK-NNN --assignment-digest DIGEST -- <action>`.
 Both identifiers are required. The resolver admits only an assignment holding
 the exclusive runtime lease in an active scheduler slot during
-`sdlc-implement-plan`, with a registered worktree,
+`sdlc-implement-plan`, or during `sdlc-validate-codes` for a current counted
+same-assignment `VALIDATION_DEFECT` recovery. The latter requires the recovery
+owner's read-only proof of the blocked receipt, active dispatch, exact fresh
+worker and prior termination. Both paths require a registered worktree,
 unchanged assignment base, and an `ACTIVE` result from the execution owner's
 live scope guard. Uncommitted changes must stay inside its write claims. This
 selection never changes phase evidence or UAT targeting; after integration, rerun
@@ -314,3 +370,67 @@ pre-restart UI states and one capture from the fresh post-restart stage. The
 post-restart pixels may match the completed state when persistence works.
 Require separate owned stage receipts and capture observations; never fabricate
 visual changes, copy an earlier screenshot, or weaken the four-state check.
+
+## Concurrent companion and final aggregate
+
+The owned primary Git repository contains project-a for the entire SDLC app and
+project-b for an independent Implement CLI. Start SDLC from the original
+project-a folder in the isolated native home. Record its initial startup before
+later phases. Once it is admitted, run the installed `companion_trial.py` with
+`--verification-root <root> --expected-verification-id <id>` and the same selected
+native home. The helper independently validates the sealed Git/native environment
+and installed catalog, registers its launcher and App Servers, and fences the generation. The companion uses a separate native session and the
+public Implement skill; do not manufacture its intake or completion records.
+The frozen companion request prefers available native agent tools for its one
+fresh assignment-only worker. Consume the admitted launch envelope's exact command
+cwd and support directories with unchanged sandbox and approval controls. Verify
+capabilities before arming: supported explicit command cwd and existing inherited
+grants can satisfy the envelope without spawn-level setters. One task
+does not require a nested CLI launch: use that fallback only when native agent
+tools are unavailable and the host supports it. A missing capability or failed
+launch remains a blocker with its original evidence; never switch paths as an
+unadmitted retry.
+The workspace records every exact launcher PID/start identity. Wait for both
+native invocations and their descendants before cleanup.
+
+Preserve all existing SDLC phases, five test classes, four browser stage roles,
+startup and hook observations. Record the inner promotion with `record-git`;
+its UAT remains tied to that child SHA. Let the product complete automatic
+aggregation and removal, and let the companion finish its original-folder
+continuation. Invoke private `record-aggregate` with the generation fence. It
+requires both delivery/cleanup proofs, shared-admission overlap and unchanged
+project-a content between inner UAT and the final aggregate. It never merges
+or completes a product step.
+
+Build the application again from aggregate/project-a, recreate the owned
+runtime, collect a fresh acceptance inventory and rerun the five test classes.
+Earlier build, UAT and test receipts stay historical. The final manifest binds
+both `promoted_sha` (inner) and `aggregate_sha` (final). No old image or passing
+child receipt qualifies the aggregate runtime. If app content changed after
+inner UAT, preserve the failed trial and route a fresh trial through its owner.
+
+## Task acceptance coverage
+
+The three-tier fixture seeds an independent domain harness before its Git
+baseline. `prepare-images` builds one owned nonroot dependency image and freezes
+`task-acceptance-profile.json` in the private root. The native SDLC coordinator
+uses it for checks on at least two admitted task assignments with distinct
+trial containers, records a deferred filtering criterion,
+and resolves all debt on promoted and aggregate trees. Final observation derives
+coverage from owner receipts; handwritten summaries cannot satisfy this lane.
+It also verifies the seeded harness bytes on both final Git candidates so a
+later task cannot weaken the deferred criterion's independent assertions.
+Historical original-TDD observation permits additive corrective plans only after
+checking each frozen acceptance sidecar and unchanged criteria for retained tasks.
+Existing promoted test classes, fresh browser stages, restart persistence,
+aggregate rebuild and Implement companion remain required.
+
+## Statistics observation
+
+Before initial phase publication, the native coordinator inventories accepted
+design and existing code through the private statistics owner. After every
+coherent checkpoint it records the statistics checkpoint and emits each new
+summary once. The independent phase observer captures before/during evidence;
+final verification captures after evidence from the completed objective.
+Missing reports cannot be supplied by handwritten summaries or patched into a
+frozen trial. Cleanup archives sanitized reporting evidence automatically.

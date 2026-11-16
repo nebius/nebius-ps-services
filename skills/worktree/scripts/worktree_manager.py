@@ -100,6 +100,70 @@ class WorktreeError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class PrivateRequest:
+    action: str
+    fields: dict[str, object]
+
+
+PRIVATE_FIELDS = {
+    "anchor-inspect": (),
+    "inspect": ("name", "require_clean"),
+    "task-lease-acquire": ("workspace", "run_id", "task_scope", "initial_head", "owner_kind"),
+    "task-lease-inspect": ("name", "lease_id", "owner_kind"),
+    "task-lease-resource": ("name", "lease_id", "kind", "path", "branch", "state", "owner_kind"),
+    "task-lease-promote": ("name", "lease_id", "promoted_head", "expected_head", "owner_kind"),
+    "task-lease-release": ("name", "lease_id", "promoted_head", "owner_kind"),
+}
+
+
+def dispatch_private(*, cwd: Path, request: PrivateRequest) -> dict[str, Any]:
+    """One typed boundary for private CLI and in-process coordinator requests.
+
+    No cached lease observations: inspections reconcile manifests and all owners
+    retain their original lock, fresh observation, rollback and CAS boundaries.
+    """
+    if (not isinstance(cwd, Path) or not cwd.is_absolute()
+            or not isinstance(request, PrivateRequest)
+            or type(request.action) is not str
+            or request.action not in PRIVATE_FIELDS
+            or not isinstance(request.fields, dict)
+            or set(request.fields) != set(PRIVATE_FIELDS[request.action])):
+        raise WorktreeError("invalid private worktree request")
+    fields = dict(request.fields)
+    for key, value in fields.items():
+        if key == "require_clean":
+            valid = type(value) is bool
+        elif key in {"workspace", "path"}:
+            valid = isinstance(value, Path)
+            if valid:
+                fields[key] = (cwd / value).absolute()
+        elif key == "name" and request.action == "inspect":
+            valid = value is None or isinstance(value, str) and bool(value)
+        else:
+            valid = isinstance(value, str) and bool(value) and "\0" not in value
+        if not valid:
+            raise WorktreeError("invalid private worktree field: " + key)
+    for key, choices in (("owner_kind", {"implement", "agentic-sdlc"}),
+                         ("kind", {"integration", "worker"}),
+                         ("state", {"planned", "present", "absent"})):
+        if key in fields and fields[key] not in choices:
+            raise WorktreeError("invalid private worktree field: " + key)
+    owners = {"anchor-inspect": inspect_managed_anchor, "inspect": inspect_worktree,
+              "task-lease-acquire": task_lease_acquire, "task-lease-inspect": task_lease_inspect,
+              "task-lease-resource": task_lease_resource, "task-lease-promote": task_lease_promote,
+              "task-lease-release": task_lease_release}
+    from worktree_operation import operation, OperationError
+    from workflow_process import ProcessCleanupError
+    try:
+        with operation(request.action):
+            return owners[request.action](cwd=cwd, **fields)
+    except ProcessCleanupError as error:
+        raise WorktreeError("private worktree operation cleanup is unproven") from error
+    except OperationError as error:
+        raise WorktreeError(str(error)) from error
+
+
+@dataclass(frozen=True)
 class WorktreeRecord:
     path: str
     head: str | None = None
@@ -134,6 +198,7 @@ class AddPreflight:
     scope: str
     task_slug: str
     parent: Path
+    input_digest: str | None = None
 
 
 
@@ -172,7 +237,8 @@ def _run(
     allowed: Iterable[int] = (0,),
 ) -> subprocess.CompletedProcess[str]:
     try:
-        result = subprocess.run(
+        from worktree_operation import run
+        result = run(
             list(arguments),
             cwd=cwd,
             env=_environment(cwd),
@@ -199,7 +265,8 @@ def _run_bytes(
     allowed: Iterable[int] = (0,),
 ) -> subprocess.CompletedProcess[bytes]:
     try:
-        result = subprocess.run(
+        from worktree_operation import run
+        result = run(
             list(arguments),
             cwd=cwd,
             env=_environment(cwd),
@@ -290,6 +357,27 @@ def _read_config(repository: Path, branch: str, field: str) -> str | None:
     return result.stdout.removesuffix("\n") if result.returncode == 0 else None
 
 
+def _read_managed_config(repository: Path, branch: str) -> dict[str, str | None]:
+    """One exact, operation-local observation; never reused across a boundary."""
+    # Subsection (branch) spelling is case-sensitive; variable names are not.
+    keys = {"branch." + branch + "." + CONFIG_FIELDS[field].lower(): field for field in CONFIG_FIELDS}
+    pattern = "^branch\\." + re.escape(branch) + "\\.(" + "|".join(
+        re.escape(value.lower()) for value in CONFIG_FIELDS.values()) + ")$"
+    result = _run_bytes(["git", "config", "get", "--local", "--all", "--show-names", "--regexp",
+                         "--null", pattern], cwd=repository, allowed=(0, 1))
+    values = dict.fromkeys(CONFIG_FIELDS)
+    for entry in result.stdout.split(b"\0"):
+        if not entry:
+            continue
+        key, separator, value = entry.partition(b"\n")
+        if not separator or key.decode() not in keys:
+            raise WorktreeError("managed metadata observation is malformed")
+        # git config get selects the last value for duplicate keys. Preserve
+        # embedded/trailing newlines: NUL framing removes only the delimiter.
+        values[keys[key.decode()]] = value.decode()
+    return values
+
+
 def _write_config(repository: Path, branch: str, field: str, value: str) -> None:
     _run(
         [
@@ -318,7 +406,8 @@ def _reject_obsolete_lanes(repository: Path, branch: str | None) -> None:
     present = False
     if branch:
         for marker in markers:
-            result = subprocess.run(["git", "-C", str(repository), "config", "--local", "--get", f"branch.{branch}.{marker}"], capture_output=True, check=False, env=_environment(repository))
+            from worktree_operation import run
+            result = run(["git", "-C", str(repository), "config", "--local", "--get", f"branch.{branch}.{marker}"], capture_output=True, check=False, env=_environment(repository))
             if result.returncode not in {0, 1}:
                 raise WorktreeError("cannot establish obsolete worktree ownership")
             present = present or result.returncode == 0
@@ -333,9 +422,7 @@ def _managed_from_record(repository: Path, record: WorktreeRecord) -> ManagedWor
     _reject_obsolete_lanes(repository, record.branch)
     if not record.branch or not record.branch.startswith(BRANCH_PREFIX):
         raise WorktreeError(f"{record.path} is not on a managed worktree branch")
-    values = {
-        field: _read_config(repository, record.branch, field) for field in CONFIG_FIELDS
-    }
+    values = _read_managed_config(repository, record.branch)
     missing = sorted(field for field, value in values.items() if value is None)
     if missing:
         raise WorktreeError(
@@ -532,8 +619,10 @@ def _paths_from_status(data: bytes) -> list[str]:
     return paths
 
 
-def status_paths(repository: Path, scope: str | None = None) -> list[str]:
-    arguments = ["status", "--porcelain=v1", "-z", "--untracked-files=all"]
+def status_paths(repository: Path, scope: str | None = None, *, include_submodule_dirt: bool = False) -> list[str]:
+    arguments = ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"]
+    if include_submodule_dirt:
+        arguments.append("--ignore-submodules=none")
     if scope is not None:
         arguments.extend(["--", scope])
     return _paths_from_status(_git_bytes(repository, *arguments))
@@ -651,7 +740,9 @@ def _new_name(
 
 
 def _preflight_add(
-    *, cwd: Path, project: str | None, task_slug: str | None
+    *, cwd: Path, project: str | None, task_slug: str | None,
+    automatic_run: Path | None = None, expected_base: str | None = None,
+    expected_inputs: str | None = None,
 ) -> AddPreflight:
     """Validate add without creating lifecycle state or managed directories."""
 
@@ -674,15 +765,22 @@ def _preflight_add(
             "worktree creation requires a non-default source branch; create or "
             "switch to a feature branch and rerun $worktree"
         )
-    dirty_primary = status_paths(primary)
-    if dirty_primary:
+    base = _git(primary, "rev-parse", "HEAD")
+    scope, project_path = resolve_scope(primary, cwd, project)
+    if expected_base is not None and base != expected_base:
+        raise WorktreeError("source commit changed during creation preflight; retry admission")
+    input_digest = None
+    if automatic_run is not None:
+        from workflow_inputs import admit
+        input_digest = admit(automatic_run, primary, scope, source_branch, base)
+        if expected_base is not None and input_digest != expected_inputs:
+            raise WorktreeError("input declaration changed during creation preflight; retry admission")
+    elif dirty_primary := status_paths(primary):
         raise WorktreeError(
             "the primary source worktree must be completely clean: "
             + ", ".join(dirty_primary)
         )
-    base = _git(primary, "rev-parse", "HEAD")
     source_ref = f"refs/heads/{source_branch}"
-    scope, project_path = resolve_scope(primary, cwd, project)
     resolved_task_slug = _resolve_task_slug(project_path, task_slug)
     try:
         parent = checked_worktree_parent(primary)
@@ -697,6 +795,7 @@ def _preflight_add(
         scope=scope,
         task_slug=resolved_task_slug,
         parent=parent,
+        input_digest=input_digest,
     )
 
 
@@ -706,8 +805,13 @@ def _add_worktree_unlocked(
     project: str | None,
     task_slug: str | None,
     reuse: str | None = None,
+    automatic_run: Path | None = None,
+    expected_base: str | None = None,
+    expected_inputs: str | None = None,
 ) -> dict[str, Any]:
-    preflight = _preflight_add(cwd=cwd, project=project, task_slug=task_slug)
+    preflight = _preflight_add(cwd=cwd, project=project, task_slug=task_slug,
+                               automatic_run=automatic_run, expected_base=expected_base,
+                               expected_inputs=expected_inputs)
     primary = preflight.primary
     current_root = preflight.current_root
     source_branch = preflight.source_branch
@@ -723,6 +827,8 @@ def _add_worktree_unlocked(
         except StateError as error:
             raise WorktreeError(str(error)) from error
         assert manifest is not None
+        if automatic_run is not None and manifest.base != preflight.base:
+            raise WorktreeError("automatic outer recovery base differs from the captured source; preserve the existing outer for recovery")
         if (
             manifest.status != "active"
             or manifest.scope != scope
@@ -897,8 +1003,9 @@ def add_worktree(
     project: str | None,
     task_slug: str | None,
     reuse: str | None = None,
+    automatic_run: Path | None = None,
 ) -> dict[str, Any]:
-    preflight = _preflight_add(cwd=cwd, project=project, task_slug=task_slug)
+    preflight = _preflight_add(cwd=cwd, project=project, task_slug=task_slug, automatic_run=automatic_run)
     try:
         with lifecycle_creation_lock(preflight.primary):
             return _add_worktree_unlocked(
@@ -906,6 +1013,9 @@ def add_worktree(
                 project=project,
                 task_slug=task_slug,
                 reuse=reuse,
+                automatic_run=automatic_run,
+                expected_base=preflight.base if automatic_run is not None else None,
+                expected_inputs=preflight.input_digest,
             )
     except InteropError as error:
         raise WorktreeError(str(error)) from error
@@ -1167,6 +1277,7 @@ def publication_guard(*, cwd: Path, action: str) -> dict[str, Any]:
                 )
         for reservation in active_reservations(primary):
             claims = (
+                (str(primary), str(reservation["source_branch"]), "integration source reservation"),
                 (
                     str(reservation["worktree"]),
                     str(reservation["branch"]),
@@ -1255,7 +1366,7 @@ def _record_manifest_lease(
 ) -> None:
     """Advance the durable ownership marker after the lease write succeeds."""
 
-    if state not in {"active", "released"}:
+    if state not in {"active", "aggregation-ready", "released"}:
         raise WorktreeError("ownership manifest lease state is invalid")
     try:
         with interop_lock(primary):
@@ -1315,6 +1426,7 @@ def _validate_outer_lease_receipt(
     manifest: Manifest | None,
     observed_head: str | None = None,
     for_removal: bool = False,
+    automatic_run: Path | None = None,
 ) -> dict[str, object] | None:
     """Bind a terminal receipt to exact outer identity and absent resources."""
 
@@ -1337,7 +1449,10 @@ def _validate_outer_lease_receipt(
             )
         if lease is None:
             return None
-        if lease["state"] != "released":
+        if automatic_run is not None and not for_removal:
+            from workflow_automatic import validate_capability
+            validate_capability(automatic_run, primary, name, lease)
+        elif lease["state"] != "released":
             raise InteropError(
                 f"{lease['owner_kind']} still owns the outer worktree; "
                 "the outer lifecycle is blocked"
@@ -1387,7 +1502,9 @@ def _validate_outer_lease_receipt(
                 "refs/heads/",
             ).splitlines()
         )
-        return validate_released_resources(
+        from worktree_interop import validate_absent_resources
+        validator = validate_absent_resources if automatic_run is not None else validate_released_resources
+        return validator(
             lease,
             registered_worktrees=registered,
             existing_branches=branches,
@@ -1643,6 +1760,16 @@ def task_lease_release(
     primary, managed = _leased_anchor(cwd, name)
     manifest = load_manifest(primary, name)
     assert manifest is not None
+    lease = lifecycle_lease(primary, name, allow_external_transition=True)
+    if lease is not None and (Path(str(lease["workspace"])) / "run.json").exists():
+        from workflow_objectives import validate_run
+        from workflow_projects import get
+        workspace = Path(str(lease["workspace"]))
+        run, _ = validate_run(workspace)
+        if run.get("automatic_outer"):
+            admitted = get(workspace)
+            if admitted is None or admitted["state"] != "delivered" or manifest.status != "integrated":
+                raise WorktreeError("automatic outer lease stays owned until aggregate delivery is recorded")
     if managed.head != promoted_head:
         raise WorktreeError("outer worktree is not at the promoted task head")
     if status_paths(managed.path):
@@ -1803,7 +1930,7 @@ def _orphan_candidate_blockers(primary: Path, name: str) -> list[str]:
 
 
 def integration_preflight(
-    *, cwd: Path, name: str, restart: bool = False
+    *, cwd: Path, name: str, restart: bool = False, automatic_run: Path | None = None
 ) -> dict[str, Any]:
     """Classify one integration without creating commits or lifecycle state."""
 
@@ -1836,7 +1963,7 @@ def integration_preflight(
         raise WorktreeError(str(error)) from error
     nested_participation = lease is not None or manifest.lease_state != "none"
     if lease is not None:
-        if lease["state"] == "active":
+        if lease["state"] != "released" and automatic_run is None:
             blockers.append(f"{lease['owner_kind']} still owns the child worktree")
         else:
             _validate_outer_lease_receipt(
@@ -1844,6 +1971,7 @@ def integration_preflight(
                 name=name,
                 manifest=manifest,
                 observed_head=managed.head,
+                automatic_run=automatic_run,
             )
 
     if child_operation:
@@ -1876,7 +2004,7 @@ def integration_preflight(
     if manifest.status == "integrated":
         mode = "reconcile"
         try:
-            _verify_recorded_integration(primary, manifest)
+            _verify_recorded_integration(primary, manifest, automatic_run=automatic_run)
         except WorktreeError as error:
             blockers.append(str(error))
         if source_dirty or child_dirty:
@@ -2492,11 +2620,11 @@ def _remove_integration_candidate(
         _remove_local_branch(primary, branch, expected_head=expected_head)
 
 
-def _verify_recorded_integration(primary: Path, manifest: Manifest) -> str:
+def _verify_recorded_integration(primary: Path, manifest: Manifest, *, automatic_run: Path | None = None) -> str:
     source = _source_snapshot(primary, manifest)
     record = _find_record(primary, primary, name=manifest.name, current_cwd=primary)
     managed = _managed_from_record(primary, record)
-    _validate_outer_lease_receipt(primary, name=manifest.name, manifest=manifest, observed_head=managed.head)
+    _validate_outer_lease_receipt(primary, name=manifest.name, manifest=manifest, observed_head=managed.head, automatic_run=automatic_run)
     if (managed.head != manifest.integration_child_head or status_paths(managed.path)
             or _operation_in_progress(managed.path)
             or manifest.integration_head is None
@@ -2524,6 +2652,7 @@ def _integrate_worktree_unlocked(
     expected_source_head: str | None,
     expected_child_head: str | None,
     preparation_token: str | None,
+    automatic_run: Path | None = None,
 ) -> dict[str, Any]:
     primary = _integration_primary(cwd)
     _validate_name(name)
@@ -2533,7 +2662,7 @@ def _integrate_worktree_unlocked(
         raise WorktreeError(str(error)) from error
     assert manifest is not None
     if manifest.status == "integrated":
-        current_source = _verify_recorded_integration(primary, manifest)
+        current_source = _verify_recorded_integration(primary, manifest, automatic_run=automatic_run)
         reservation = load_reservation(primary, name)
         if reservation is not None:
             _remove_integration_candidate(primary, reservation, abort_merge=False)
@@ -2571,8 +2700,9 @@ def _integrate_worktree_unlocked(
         name=name,
         manifest=manifest,
         observed_head=managed.head,
+        automatic_run=automatic_run,
     )
-    if reservation is None and preparation is None:
+    if reservation is None and preparation is None and automatic_run is None:
         try:
             with interop_lock(primary):
                 assert_idle(primary, name)
@@ -2622,6 +2752,7 @@ def _integrate_worktree_unlocked(
                 integration_branch=_integration_branch(name),
                 integration_worktree=_integration_path(primary, name),
                 preparation_token=preparation_token,
+                automatic_run=automatic_run,
             )
         except InteropError as error:
             raise WorktreeError(str(error)) from error
@@ -2651,6 +2782,7 @@ def _integrate_worktree_unlocked(
             expected_source_head=source_head,
             expected_child_head=child_head,
             preparation_token=None,
+            automatic_run=automatic_run,
         )
     if reservation is not None:
         source_already_promoted = reservation.get(
@@ -2689,6 +2821,7 @@ def _integrate_worktree_unlocked(
                 integration_branch=integration_branch,
                 integration_worktree=integration_path,
                 preparation_token=preparation_token,
+                automatic_run=automatic_run,
             )
         except InteropError as error:
             raise WorktreeError(str(error)) from error
@@ -2791,6 +2924,7 @@ def integrate_worktree(
     expected_source_head: str | None = None,
     expected_child_head: str | None = None,
     preparation_token: str | None = None,
+    automatic_run: Path | None = None,
 ) -> dict[str, Any]:
     primary = _integration_primary(cwd)
     _validate_name(name)
@@ -2807,6 +2941,7 @@ def integrate_worktree(
                 expected_source_head=expected_source_head,
                 expected_child_head=expected_child_head,
                 preparation_token=preparation_token,
+                automatic_run=automatic_run,
             )
     except InteropError as error:
         raise WorktreeError(str(error)) from error
@@ -3308,18 +3443,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     arguments = parser.parse_args(argv)
     try:
-        if arguments.action == "add":
+        if arguments.action in PRIVATE_FIELDS:
+            result = dispatch_private(cwd=Path.cwd(), request=PrivateRequest(
+                arguments.action, {key: getattr(arguments, key) for key in PRIVATE_FIELDS[arguments.action]}))
+        elif arguments.action == "add":
             result = add_worktree(
                 cwd=Path.cwd(),
                 project=arguments.project,
                 task_slug=arguments.task_slug,
                 reuse=arguments.reuse,
-            )
-        elif arguments.action == "inspect":
-            result = inspect_worktree(
-                cwd=Path.cwd(),
-                name=arguments.name,
-                require_clean=arguments.require_clean,
             )
         elif arguments.action == "integration-preflight":
             result = integration_preflight(
@@ -3364,55 +3496,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         elif arguments.action == "remove":
             result = remove_worktree(cwd=Path.cwd(), name=arguments.name)
-        elif arguments.action == "anchor-inspect":
-            result = inspect_managed_anchor(cwd=Path.cwd())
         elif arguments.action == "publication-guard":
             result = publication_guard(
                 cwd=Path.cwd(), action=arguments.publication_action
-            )
-        elif arguments.action == "task-lease-acquire":
-            result = task_lease_acquire(
-                cwd=Path.cwd(),
-                workspace=arguments.workspace,
-                run_id=arguments.run_id,
-                task_scope=arguments.task_scope,
-                initial_head=arguments.initial_head,
-                owner_kind=arguments.owner_kind,
-            )
-        elif arguments.action == "task-lease-resource":
-            result = task_lease_resource(
-                cwd=Path.cwd(),
-                name=arguments.name,
-                lease_id=arguments.lease_id,
-                kind=arguments.kind,
-                path=arguments.path,
-                branch=arguments.branch,
-                state=arguments.state,
-                owner_kind=arguments.owner_kind,
-            )
-        elif arguments.action == "task-lease-inspect":
-            result = task_lease_inspect(
-                cwd=Path.cwd(),
-                name=arguments.name,
-                lease_id=arguments.lease_id,
-                owner_kind=arguments.owner_kind,
-            )
-        elif arguments.action == "task-lease-promote":
-            result = task_lease_promote(
-                cwd=Path.cwd(),
-                name=arguments.name,
-                lease_id=arguments.lease_id,
-                promoted_head=arguments.promoted_head,
-                expected_head=arguments.expected_head,
-                owner_kind=arguments.owner_kind,
-            )
-        elif arguments.action == "task-lease-release":
-            result = task_lease_release(
-                cwd=Path.cwd(),
-                name=arguments.name,
-                lease_id=arguments.lease_id,
-                promoted_head=arguments.promoted_head,
-                owner_kind=arguments.owner_kind,
             )
         else:
             parser.error(f"unsupported action: {arguments.action}")

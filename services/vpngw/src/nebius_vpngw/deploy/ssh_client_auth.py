@@ -137,15 +137,17 @@ def operator_identity() -> SSHClientAuth | None:
 
 def require_bootstrap_public_key(public_key: str | None) -> None:
     """Admit fresh-VM authorization without changing the selected operator."""
+    from .recovery import BootstrapKeyFailure
+
     if not (public_key or "").strip():
-        raise ValueError(
+        raise BootstrapKeyFailure(
             "Creating a gateway member requires a bootstrap SSH public key. "
             "With --ssh-identity, supply gateway_group.vm_spec.ssh_public_key inline; "
             "the operator identity does not select new-VM authorization."
         )
     selected = operator_identity()
     if selected is not None and not selected.matches(*_configured_public_key(public_key)):
-        raise ValueError(
+        raise BootstrapKeyFailure(
             "The bootstrap SSH public key must match --ssh-identity when creating a gateway member"
         )
 

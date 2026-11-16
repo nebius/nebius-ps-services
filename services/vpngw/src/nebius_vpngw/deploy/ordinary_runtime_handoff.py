@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
 import shlex
+import textwrap
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass
@@ -44,26 +46,97 @@ def same_completed_routes(before: dict, after: dict) -> bool:
 
 
 # A read-only absent-state probe works before the first candidate installation.
-# An existing binding or authority always requires the installed protocol owner.
+# Existing state uses the selected command's owner and writer-lock protocol.
 _ENTRY = """import json, pathlib, sys
+class RouteSourceIntegrityError(RuntimeError):
+    pass
 request = json.loads(sys.stdin.readline(1048577))
 paths = [pathlib.Path('/etc/nebius-vpngw/ordinary-route-binding.json'), pathlib.Path('/var/lib/nebius-vpngw/ordinary/cloud-routes/authority.json')]
 if request == {'action': 'inspect'} and all(not path.exists() and not path.is_symlink() for path in paths):
     result = {'authority': None, 'journal': None}
 else:
-    from nebius_vpngw.agent.ordinary_route_authority import action
-    result = action(request)
+    import base64, hashlib, types
+    source = base64.b64decode(OWNER_SOURCE, validate=True)
+    if hashlib.sha256(source).hexdigest() != OWNER_DIGEST:
+        raise RouteSourceIntegrityError('route owner source integrity changed')
+    operations_source = base64.b64decode(OPERATIONS_SOURCE, validate=True)
+    if hashlib.sha256(operations_source).hexdigest() != OPERATIONS_DIGEST:
+        raise RouteSourceIntegrityError('route operations source integrity changed')
+    import nebius_vpngw
+    operations = types.ModuleType('nebius_vpngw.ordinary_operations')
+    operations.__package__ = 'nebius_vpngw'
+    operations._SOURCE = operations_source
+    sys.modules[operations.__name__] = operations
+    exec(compile(operations_source, '<route-operations>', 'exec'), operations.__dict__)
+    nebius_vpngw.ordinary_operations = operations
+    module = types.ModuleType('nebius_vpngw.agent._route_owner_command')
+    module.__package__ = 'nebius_vpngw.agent'
+    sys.modules[module.__name__] = module
+    exec(compile(source, '<route-owner>', 'exec'), module.__dict__)
+    result = module.action(request)
 print(json.dumps(result, sort_keys=True))
 """
+
+_FAILURE = """except Exception as error:
+    reason = 'route-handoff-unknown'
+    owner = sys.modules.get('nebius_vpngw.agent._route_owner_command')
+    operations = sys.modules.get('nebius_vpngw.ordinary_operations')
+    if isinstance(error, RouteSourceIntegrityError):
+        reason = 'route-owner-integrity-failed'
+    elif isinstance(error, ImportError):
+        reason = 'route-owner-import-failed'
+    elif isinstance(error, getattr(operations, 'RoutingLockDeadline', ())):
+        reason = 'route-lock-deadline'
+    elif isinstance(error, getattr(operations, 'OperationBlocked', ())):
+        reason = 'route-operation-pending'
+    elif isinstance(error, getattr(owner, 'RouteAuthorityConflict', ())):
+        reason = 'route-authority-conflict'
+    print(json.dumps({'error': {'schema': 'nebius-vpngw.route-handoff-error.v1', 'reason': reason}}, sort_keys=True))
+    raise SystemExit(1) from None
+"""
+
+
+def owner_entry() -> str:
+    """Use the selected command's exact owner protocol before guest upgrade.
+
+    The same canonical source handles every action; no installed-version
+    fallback or alternate legacy behavior is selected.
+    """
+    root = Path(__file__).parent.parent
+    source = (root / "agent" / "ordinary_route_authority.py").read_bytes()
+    operations = (root / "ordinary_operations.py").read_bytes()
+    return (
+        "OWNER_SOURCE=" + repr(base64.b64encode(source).decode()) + "\n"
+        "OWNER_DIGEST=" + repr(hashlib.sha256(source).hexdigest()) + "\n"
+        "OPERATIONS_SOURCE=" + repr(base64.b64encode(operations).decode()) + "\n"
+        "OPERATIONS_DIGEST=" + repr(hashlib.sha256(operations).hexdigest()) + "\n"
+        "try:\n" + textwrap.indent(_ENTRY, "    ") + _FAILURE
+    )
+
+
+_BOOTSTRAP = (
+    "import base64,sys; raw=sys.stdin.readline(1048577); "
+    "assert len(raw)<=1048576 and raw.endswith('\\n'); "
+    "exec(compile(base64.b64decode(raw.strip(),validate=True),'<route-bootstrap>','exec'))"
+)
 
 _RECOVER = """import hashlib, json, os, pathlib, stat, sys
 from nebius_vpngw import ordinary_route_binding as binding
 from nebius_vpngw.agent.ordinary_route_authority import RouteAuthority
 from nebius_vpngw.vm_ha_credentials import preflight_vm_ha_credentials, read_vm_ha_credential_source
 from nebius_vpngw.vm_ha_managed_credentials import vm_ha_service_account_name
-expected = binding.validate(json.loads(sys.stdin.readline(1048577)))
+request = json.loads(sys.stdin.readline(1048577))
+expected = binding.validate(request['binding'])
 assert binding.read() == expected
-config = pathlib.Path('/etc/nebius-vpngw/config-resolved.yaml').read_bytes()
+config_path = pathlib.Path('/etc/nebius-vpngw/config-resolved.yaml')
+if request['repair'] is not None:
+    from nebius_vpngw import repair_guest, repair_state
+    repair = repair_state.Journal(repair_guest.ROOT).load()
+    assert repair and repair['id'] == request['repair'] and not repair['intent']['ha']
+    assert repair['intent']['project'] == expected['project'] and repair['intent']['gateway'] == expected['gateway']
+    repair_guest.verify_guard(repair['id'])
+    config_path = repair_guest.ROOT / 'archives' / repair['id'] / 'config' / 'config-resolved.yaml'
+config = config_path.read_bytes()
 authority = RouteAuthority().read()
 assert hashlib.sha256(config).hexdigest() == expected['generation'] or (
     authority is not None and authority['writer'] == 'deployment' and authority['binding'] == expected)
@@ -80,7 +153,7 @@ assert (identity.credential_sha256, identity.service_account_id, identity.author
 payload = read_vm_ha_credential_source(source)
 assert hashlib.sha256(payload).hexdigest() == ref['sha256']
 assert binding.read() == expected
-assert pathlib.Path('/etc/nebius-vpngw/config-resolved.yaml').read_bytes() == config
+assert config_path.read_bytes() == config
 assert RouteAuthority().read() == authority
 sys.stdout.buffer.write(payload)
 """
@@ -92,23 +165,51 @@ class Handoff:
     target: str
     instance: Any
     local: dict
+    repair_operation: str | None = None
 
     def call(self, request: dict) -> dict:
+        from .apply_diagnostics import RouteHandoffFailure
+
+        source = base64.b64encode(owner_entry().encode()).decode() + "\n"
+        if len(source) > 1024 * 1024:
+            raise RuntimeError("Ordinary runtime source exceeds its bounded payload")
         payload = json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n"
         if len(payload.encode()) > 1024 * 1024:
             raise RuntimeError("Ordinary runtime handoff exceeds its bounded payload")
         with _connection(self.ssh, self.target, self.instance, self.local) as client:
             stdin, stdout, _stderr = client.exec_command(
-                "sudo /usr/bin/python3 -B -c " + shlex.quote(_ENTRY), timeout=15
+                "sudo /usr/bin/python3 -B -c " + shlex.quote(_BOOTSTRAP), timeout=15
             )
+            stdin.write(source)
             stdin.write(payload)
             stdin.flush()
             stdin.channel.shutdown_write()
             response = stdout.read(1024 * 1024 + 1)
-            if len(response) > 1024 * 1024 or stdout.channel.recv_exit_status() != 0:
-                raise RuntimeError("Ordinary runtime handoff is unavailable")
-            value = json.loads(response)
-        if not isinstance(value, dict) or set(value) != {"authority", "journal"}:
+            if len(response) > 1024 * 1024:
+                raise RouteHandoffFailure("route-handoff-unknown")
+            status = stdout.channel.recv_exit_status()
+            try:
+                value = json.loads(response)
+            except (ValueError, UnicodeError):
+                raise RouteHandoffFailure("route-handoff-unknown") from None
+            if status != 0:
+                failure = value.get("error") if isinstance(value, dict) else None
+                reason = "route-handoff-unknown"
+                if (
+                    isinstance(value, dict) and set(value) == {"error"}
+                    and isinstance(failure, dict) and set(failure) == {"schema", "reason"}
+                    and failure["schema"] == "nebius-vpngw.route-handoff-error.v1"
+                    and isinstance(failure["reason"], str)
+                    and failure["reason"] in RouteHandoffFailure.CODES
+                ):
+                    reason = failure["reason"]
+                raise RouteHandoffFailure(reason)
+        keys = (
+            {"authority", "binding", "metadata"}
+            if request["action"] == "repair-inspect"
+            else {"authority", "journal"}
+        )
+        if not isinstance(value, dict) or set(value) != keys:
             raise RuntimeError("Ordinary runtime handoff returned incomplete evidence")
         return value
 
@@ -122,7 +223,9 @@ class Handoff:
         value = binding.validate(value)
         if value["node"] != self.instance.hostname:
             raise RuntimeError("Credential recovery target changed")
-        request = json.dumps(value, sort_keys=True) + "\n"
+        request = (
+            json.dumps({"binding": value, "repair": self.repair_operation}, sort_keys=True) + "\n"
+        )
         if len(request.encode()) > 1024 * 1024:
             raise RuntimeError("Credential recovery binding exceeds its bound")
         with _connection(self.ssh, self.target, self.instance, self.local) as client:
@@ -194,6 +297,9 @@ class Handoff:
 
     def reserve(self, holder: str, observed: dict) -> dict:
         return self.call({"action": "reserve", "holder": holder, "expected": digest(observed)})
+
+    def supersede_reservation(self, previous: str, holder: str, observed: dict) -> dict:
+        return self.call({"action": "supersede-reservation", "previous": previous, "holder": holder, "expected": digest(observed)})
 
     def release(self, holder: str, value: dict, journal: dict | None) -> dict:
         return self.call(

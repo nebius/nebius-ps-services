@@ -15,8 +15,9 @@ ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = ROOT / ".github/workflows"
 
 
-def workflow(name):
-    return yaml.load((WORKFLOWS / name).read_text(), Loader=yaml.BaseLoader)
+def workflow(name, *, prepared=False):
+    path = (ROOT / "github-ai-automation/deployment/workflows" / (name + ".template")) if prepared else WORKFLOWS / name
+    return yaml.load(path.read_text(), Loader=yaml.BaseLoader)
 
 
 def step(value, name):
@@ -71,37 +72,30 @@ class WorkflowContracts(unittest.TestCase):
                 completion["jobs"][job]["if"],
             )
 
-    def test_release_evidence_precedes_effect_and_verification_follows(self):
-        for name in [
-            "vpngw-release.yml",
-            "nebius-cxcli-release.yml",
-        ]:
+    def test_release_builders_cannot_publish_or_access_controller_secrets(self):
+        for name in ["vpngw-release.yml", "nebius-cxcli-release.yml"]:
             with self.subTest(workflow=name):
-                value = workflow(name)
+                value = workflow(name, prepared=True)
+                self.assertEqual(set(value["on"]), {"workflow_call"})
+                self.assertEqual(value["permissions"], {"contents": "read"})
+                self.assertNotIn("secrets", json.dumps(value))
+                self.assertNotIn("gh release", json.dumps(value))
                 steps = value["jobs"]["release"]["steps"]
-                labels = [s.get("name") for s in steps]
-                self.assertLess(
-                    labels.index("Freeze asset hashes before publication"),
-                    labels.index("Preserve immutable pre-publication evidence"),
-                )
-                self.assertLess(
-                    labels.index("Preserve immutable pre-publication evidence"),
-                    labels.index("Create GitHub release"),
-                )
-                self.assertGreater(
-                    labels.index("Verify published release against original evidence"),
-                    labels.index("Create GitHub release"),
-                )
-                effect = step(steps, "Create GitHub release")["run"]
-                manifest = step(steps, "Freeze asset hashes before publication")["run"]
-                assets = re.findall(
-                    r"\$\{\{ steps\.(?:asset|package)\.outputs\.[a-z_]+ \}\}", effect
-                )
-                self.assertTrue(assets)
-                for asset in assets:
-                    self.assertIn('--asset "' + asset + '"', manifest)
-                self.assertEqual(value["concurrency"]["queue"], "max")
-                self.assertNotIn("gh release view", json.dumps(value))
+                uploads = [s for s in steps if s.get("uses", "").startswith("actions/upload-artifact@")]
+                self.assertEqual(len(uploads), 1)
+                self.assertIn("release-assets-", uploads[0]["with"]["name"])
+        value = workflow("github-ai-release.yml", prepared=True)
+        for lane in ["vpngw", "cxcli"]:
+            self.assertEqual(value["jobs"][lane]["permissions"], {"contents": "read"})
+            self.assertNotIn("secrets", value["jobs"][lane])
+        publish = value["jobs"]["publish"]
+        self.assertEqual(publish["environment"], "github-ai-automation")
+        self.assertIn("needs.prepare.result == 'success'", publish["if"])
+        effect = step(publish["steps"], "Publish and verify original assets")
+        self.assertIn("release-publish", effect["run"])
+        self.assertNotIn("TF_API_KEY", json.dumps(publish))
+        # Behavioral original-hash, lease-loss and reservation tests live with
+        # the sole publication owner in github-ai-automation/tests.
 
     def test_tag_and_manual_image_lanes_do_not_share_aliases(self):
         value = workflow("nccl-test-image-publish.yml")

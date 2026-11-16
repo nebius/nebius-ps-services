@@ -1,0 +1,38 @@
+{
+  "skill_name": "implement-test",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "For an authorized $implement-test --create trial, review the initial fixture request for offline mocked credential propagation. Explain the test-data and worker-assignment requirements without launching or changing the trial.",
+      "expected_output": "The review requires exact not-a-secret mock values in patched environments and expected-call assertions, copied into affected assignments before dispatch. Runtime credentials keep their declared handling.",
+      "files": [],
+      "assertions": [
+        "The mock input and expected assertion use the same explicit not-a-secret placeholder.",
+        "Affected assignments repeat the constraint before dispatch.",
+        "Mock values never replace actual runtime credentials or change application acceptance."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "An authorized $implement-test --create trial stopped when a mock credential literal matched sensitive-content screening. Explain how to preserve the failed evidence and validate corrected fixture guidance without altering the active trial or weakening the guard.",
+      "expected_output": "Retain the original failure, use separate disposable copies to compare placeholder behavior and test outcomes, preserve credential screening, and require a fresh trial for changed initial guidance.",
+      "files": [],
+      "assertions": [
+        "The unchanged guard accepts the explicit placeholder but still rejects realistic credential literals.",
+        "An isolated counterfactual preserves test assertions and does not mutate product-owned state.",
+        "The failed trial remains failed; runtime or delivery is not claimed from offline controls."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "During an authorized $implement-test --create trial, independent reporting replay has passed before lifecycle validate-results. Explain which owner records workflow-statistics PASS and how to handle an already conflicting immutable stage without changing the active trial. Do not launch or mutate a trial.",
+      "expected_output": "Retain the independent observation as evidence and leave workflow-statistics PASS to lifecycle validate-results after canonical semantic replay. Generic record-stage must reject that success before mutation. Preserve an existing conflict as failed trial evidence and qualify a fresh trial after the owner correction.",
+      "files": [],
+      "assertions": [
+        "Only validate-results publishes workflow-statistics PASS after semantic replay.",
+        "Generic success recording is rejected without changing lifecycle state; prose cannot pre-satisfy acceptance.",
+        "An existing immutable conflict is not rewritten or relabeled as a passing trial."
+      ]
+    }
+  ]
+}

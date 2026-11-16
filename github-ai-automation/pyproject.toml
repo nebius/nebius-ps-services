@@ -1,0 +1,104 @@
+[project]
+name = "github-ai-automation"
+dynamic = ["version"]
+description = "Trusted GitHub Actions orchestration for bounded AI PR automation"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+  "boto3>=1.40,<2",
+  "httpx>=0.28,<1",
+  "jsonschema>=4.23,<5",
+  "pydantic>=2.10,<3",
+  "pyyaml>=6.0,<7",
+  "rich>=13.7,<15",
+  "typer>=0.12,<1",
+]
+
+[project.optional-dependencies]
+# Add only consumer-selectable extras. Required application dependencies belong
+# in project.dependencies. Example:
+# api = [
+#   "fastapi>=0.116.0,<1.0.0",
+#   "uvicorn[standard]>=0.30.0,<1.0.0",
+# ]
+
+[dependency-groups]
+dev = [
+  "pytest>=9.1.1,<10",
+  "pytest-cov>=7.1,<8",
+  "pytest-socket>=0.8.1,<0.9",
+  # Add pytest-xdist>=3.8,<4 only after measuring a parallelism benefit.
+  "ruff>=0.6.0,<1.0.0",
+  "mypy>=1.11.0,<2.0.0",
+  "build>=1.2.0,<2.0.0",
+  "setuptools-scm>=8.0.0,<9.0.0",
+  "pip-audit>=2.7.0,<3.0.0",
+]
+
+[project.scripts]
+github-ai-automation = "github_ai_automation.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["github_ai_automation*"]
+
+[tool.setuptools.package-data]
+# For the systemd profile only:
+# github_ai_automation = ["systemd/*"]
+
+[tool.setuptools_scm]
+version_scheme = "python-simplified-semver"
+local_scheme = "no-local-version"
+version_file = "src/github_ai_automation/_version.py"
+tag_regex = "^github-ai-automation-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
+fallback_version = "0+unknown"
+search_parent_directories = true
+
+[tool.setuptools_scm.scm.git]
+describe_command = "git describe --dirty --tags --long --abbrev=40 --match github-ai-automation-v*"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+extend-exclude = ["dist", "build", ".venv", "src/github_ai_automation/_version.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["B008", "E501"]
+
+[tool.pytest.ini_options]
+addopts = [
+  "-ra", "--strict-config", "--strict-markers", "--import-mode=importlib",
+  "--disable-socket", "-m", "not slow and not e2e and not external",
+]
+strict_xfail = true
+required_plugins = ["pytest-socket>=0.8.1,<0.9"]
+markers = [
+  "unit: focused behavior with isolated external boundaries",
+  "integration: collaboration between real components or controlled dependencies",
+  "e2e: complete local workflow excluded from the fast feedback lane",
+  "slow: excluded from the fast feedback lane",
+  "external: requires explicit live-test opt-in and target preflight",
+  "local_network: permits loopback TCP for a controlled local dependency",
+  # Register contract and smoke when generating those tests.
+]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["github_ai_automation"]
+
+[tool.coverage.report]
+skip_empty = true
+
+[build-system]
+requires = ["setuptools>=69", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"

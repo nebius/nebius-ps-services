@@ -16,7 +16,7 @@ from agent_runtime import agent_name
 
 
 SCENARIO = "three-tier-task-board-v1"
-RESULTS_SCHEMA = "agentic-sdlc/three-tier-results-v3"
+RESULTS_SCHEMA = "agentic-sdlc/three-tier-results-v4"
 REQUIRED_SDLC_PHASES = (
     "sdlc-start",
     "sdlc-create-requirements",
@@ -144,12 +144,13 @@ def summarize_semantic_results(state: dict[str, Any]) -> dict[str, Any] | None:
             "gui_uat",
         }
         or not isinstance(value.get("git"), dict)
-        or set(value["git"]) != {"baseline_sha", "promoted_sha", "clean"}
+        or set(value["git"]) != {"baseline_sha", "promoted_sha", "aggregate_sha", "clean"}
         or value["git"].get("baseline_sha") != state["git"].get("baseline_sha")
         or value["git"].get("promoted_sha") != state["git"].get("promoted_sha")
+        or value["git"].get("aggregate_sha") != state["git"].get("aggregate_sha")
         or any(
             sha is not None and (not isinstance(sha, str) or len(sha) < 40)
-            for sha in (value["git"]["baseline_sha"], value["git"]["promoted_sha"])
+            for sha in (value["git"]["baseline_sha"], value["git"]["promoted_sha"], value["git"]["aggregate_sha"])
         )
         or not isinstance(value["git"]["clean"], bool)
         or not isinstance(layers, dict)
@@ -244,10 +245,18 @@ def validate_semantic_results(state: dict[str, Any], *, keep: bool) -> dict[str,
         raise SemanticEvidenceError(
             "Semantic three-tier results schema/profile is invalid."
         )
+    if not state["git"].get("aggregate_sha") or not state.get("multi_project"):
+        raise SemanticEvidenceError("Both automatic projects and final aggregate acceptance are required.")
+    import three_tier_lifecycle as lifecycle
+    try:
+        if lifecycle.observe_aggregate(state) != state["multi_project"]:
+            raise SemanticEvidenceError("Frozen aggregate or companion proof changed.")
+    except (lifecycle.LifecycleError, OSError, ValueError, RuntimeError) as error:
+        raise SemanticEvidenceError("Aggregate delivery and companion acceptance are invalid.") from error
     try:
         three_tier_runtime.validate_acceptance_inventory(
             state,
-            {"path": state["project_root"], "head": state["git"].get("promoted_sha")},
+            {"path": state["selected_project_root"], "head": state["git"].get("aggregate_sha")},
         )
         observations = three_tier_runtime.validate_observations(state)
         failed = [
@@ -280,6 +289,7 @@ def validate_semantic_results(state: dict[str, Any], *, keep: bool) -> dict[str,
     if value.get("git") != {
         "baseline_sha": state["git"].get("baseline_sha"),
         "promoted_sha": state["git"].get("promoted_sha"),
+        "aggregate_sha": state["git"].get("aggregate_sha"),
         "clean": True,
     }:
         raise SemanticEvidenceError(
@@ -385,7 +395,7 @@ def validate_gui_results(state: dict[str, Any], gui: object) -> dict[str, Any]:
         receipts = three_tier_browser.validate_receipts(state)
     except three_tier_browser.BrowserOwnershipError as error:
         raise SemanticEvidenceError(str(error)) from error
-    owned_screenshots = {name for receipt in receipts[2:] for name in receipt["artifacts"] if name.endswith(".png")}
+    owned_screenshots = {name for receipt in receipts[-2:] for name in receipt["artifacts"] if name.endswith(".png")}
     if set(gui.get("screenshots", [])) != owned_screenshots:
         raise SemanticEvidenceError("GUI screenshots must be the exact owned UAT stage artifacts.")
     if (
@@ -433,8 +443,8 @@ def validate_gui_results(state: dict[str, Any], gui: object) -> dict[str, Any]:
                 f"GUI screenshot is not a recognized PNG or JPEG image: {relative}"
             )
         screenshot_digests[relative] = hashlib.sha256(content).hexdigest()
-    before_images = [name for name in receipts[2]["artifacts"] if name.endswith(".png")]
-    after_images = [name for name in receipts[3]["artifacts"] if name.endswith(".png")]
+    before_images = [name for name in receipts[-2]["artifacts"] if name.endswith(".png")]
+    after_images = [name for name in receipts[-1]["artifacts"] if name.endswith(".png")]
     if len(before_images) != 4 or len(after_images) != 1 or len({screenshot_digests[name] for name in before_images}) != 4:
         raise SemanticEvidenceError("GUI UAT requires four distinct pre-restart states and one fresh post-restart capture.")
     # Persistence may produce exactly the same pixels after restart. Separate

@@ -42,7 +42,7 @@ only clean reachable worker resources. An unresolved failure admits only its
 diagnosis-bound corrective wave. Passing corrected combined checks creates a
 separate digest-bound resolution; stale or missing proof blocks promotion.
 
-The shared lease is schema v4 with `active` and terminal `released` states.
+The shared lease is schema v5 with `active` and terminal `released` states.
 Promotion persists Git, lease, local interop, then coordinator state in that
 order; resume reconciles exact durable identity across every boundary. Release
 requires a clean exact outer head and absent internal resources and leaves a

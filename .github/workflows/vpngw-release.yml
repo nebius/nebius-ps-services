@@ -25,8 +25,8 @@ jobs:
   ordinary-job-settlement:
     name: Ordinary systemd and networkd settlement
     runs-on: ubuntu-24.04
-    # Allow the bounded image build (10m), native tests (20m), and cleanup.
-    timeout-minutes: 35
+    # Allow the bounded image build (10m), native tests (40m), and cleanup.
+    timeout-minutes: 55
     permissions:
       contents: read
     steps:

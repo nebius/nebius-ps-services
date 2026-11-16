@@ -6,10 +6,50 @@ import os
 import py_compile
 import struct
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from nebius_vpngw import python_package_recovery as packages
+
+
+@pytest.mark.parametrize("state", ["prepared", "installing"])
+@pytest.mark.parametrize("dependent_requirement", ["shared<2", "shared>=1"])
+def test_payload_rechecks_new_shared_consumers_before_checkpoint_mutation(
+    monkeypatch, tmp_path, state, dependent_requirement
+):
+    installed = []
+
+    def distribution(name, version, requirements):
+        return SimpleNamespace(
+            metadata={"Name": name}, version=version, requires=requirements,
+            locate_file=lambda _: tmp_path,
+        )
+
+    distributions = [distribution("shared", "1", [])]
+    monkeypatch.setattr(packages.metadata, "distributions", lambda: distributions)
+    manifest = {
+        "ordinary_assets": {}, "dependency_wheels": {},
+        "wheel_name": "shared-2-py3-none-any.whl", "wheel_sha256": "a" * 64,
+        "expected_dependencies": {"shared": "2"},
+    }
+    # Staging admits the plan. Another installed consumer appears before the
+    # mutation boundary; it must be checked for both new and resumed installs.
+    packages.require_shared_dependencies(manifest)
+    distributions.append(distribution("new-consumer", "1", [dependent_requirement]))
+    directory = packages.checkpoint_root(manifest, tmp_path) / ("a" * 64)
+    packages.storage.directory(directory)
+    packages.storage.publish(directory / "checkpoint.json", {"state": state})
+    before = (directory / "checkpoint.json").read_bytes()
+    monkeypatch.setattr(packages, "install", lambda *args: installed.append(args))
+    if dependent_requirement == "shared<2":
+        with pytest.raises(RuntimeError, match="conflicts with installed"):
+            packages.install_payload(manifest, tmp_path, lambda: None, lambda: None)
+        assert not installed
+    else:
+        packages.install_payload(manifest, tmp_path, lambda: None, lambda: None)
+        assert len(installed) == 1
+    assert (directory / "checkpoint.json").read_bytes() == before
 
 
 @pytest.mark.parametrize(
@@ -31,6 +71,7 @@ def test_payload_checkpoint_retains_admission_at_both_entrypoints(
         "dependency_wheels": {"dependency.whl": "d" * 64},
         "wheel_name": "product.whl",
         "wheel_sha256": "a" * 64,
+        "expected_dependencies": {},
     }
     prepared, installed = [], []
     monkeypatch.setattr(packages, "prepare", lambda directory, *_: prepared.append(directory))

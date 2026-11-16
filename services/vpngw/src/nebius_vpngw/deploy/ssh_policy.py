@@ -2053,7 +2053,9 @@ def require_vm_ha_ssh_policy(
                     raise ValueError(
                         f"VM-HA SSH private host key for fresh member {hostname} is unavailable"
                     )
-                raise ValueError(
+                from .recovery import SSHIdentityUnavailable
+
+                raise SSHIdentityUnavailable(
                     "VM-HA original SSH private host key for retained member "
                     f"{hostname} is unavailable; no authoritative local, default-known-hosts, "
                     "or product "
@@ -2093,7 +2095,9 @@ def require_vm_ha_ssh_policy(
                     f"{hostname} is unavailable; exact replacement approval is required",
                     rotation_intent=rotation_intent,
                 )
-            raise ValueError(
+            from .recovery import SSHIdentityUnavailable
+
+            raise SSHIdentityUnavailable(
                 f"VM-HA original SSH private host key for retained member {hostname} is unavailable"
             )
         if hostname in derived:

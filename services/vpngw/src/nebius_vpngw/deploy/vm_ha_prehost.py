@@ -31,6 +31,17 @@ RECOVERY_CHECKPOINT = "prehost-recovery-approved"
 AUDIT_PREFIX = "prehost-superseded-"
 
 
+def operation_id(state: VMHALifecycleState, approval: str) -> str:
+    validate_prehost_checkpoint(state)
+    return _digest(
+        {
+            "domain": "nebius-vpngw/vm-ha-prehost-recovery-v1",
+            "approval_digest": approval,
+            "predecessor_sha256": state.record_sha256,
+        }
+    )
+
+
 def _digest(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode()

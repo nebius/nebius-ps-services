@@ -15,7 +15,7 @@ if str(SPEC_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SPEC_SCRIPTS))
 from project_specs_lib.source_bundle import validate_bundle  # noqa: E402
 
-SCHEMA = "workflow/program-v1"
+SCHEMA = "workflow/program-v2"
 SLICE = re.compile(r"SLICE-[0-9]{3,}\Z")
 PHASE = re.compile(r"[A-Za-z][A-Za-z0-9._-]{0,79}\Z")
 FEATURE = re.compile(r"FEAT-[0-9]{3,}\Z")
@@ -55,11 +55,14 @@ def _acyclic(rows):
 
 
 def validate_definition(value, coverage):
-    if (not isinstance(value, dict) or set(value) != {"schema", "phases", "slices"}
+    if (not isinstance(value, dict) or set(value) != {"schema", "phases", "slices", "uat_criteria"}
             or value["schema"] != SCHEMA or not isinstance(value["phases"], list)
             or not value["phases"] or not isinstance(value["slices"], list) or not value["slices"]):
         reject("program must contain explicit phases and delivery slices")
     obligations = {r["source_id"]: r for r in coverage if r["disposition"] == "required"}
+    if (not isinstance(value["uat_criteria"], list) or any(c not in obligations for c in value["uat_criteria"])
+            or len(value["uat_criteria"]) != len(set(value["uat_criteria"]))):
+        reject("UAT catalog must reference unique accepted source criteria")
     phase_ids, slice_ids = set(), set()
     for row in value["phases"]:
         if not isinstance(row, dict) or set(row) != {"id", "depends_on", "exit_criteria"}:
@@ -74,7 +77,7 @@ def validate_definition(value, coverage):
                 or len(set(row["exit_criteria"])) != len(row["exit_criteria"])):
             reject("phase exit criteria must reference required source obligations")
     for row in value["slices"]:
-        if not isinstance(row, dict) or set(row) != {"id", "phase", "depends_on", "feature_ids", "requirement_ids", "criteria", "regression_criteria", "change_kind"}:
+        if not isinstance(row, dict) or set(row) != {"id", "phase", "depends_on", "feature_ids", "requirement_ids", "criteria", "regression_criteria", "change_kind", "implementation_coverage"}:
             reject("slice definition is invalid")
         _ids([row["id"]], SLICE)
         _ids(row["depends_on"], SLICE, empty=True)
@@ -95,6 +98,13 @@ def validate_definition(value, coverage):
                 or any(not isinstance(c, str) or c not in obligations for c in row["regression_criteria"])
                 or len(set(row["regression_criteria"])) != len(row["regression_criteria"])):
             reject("slice regression criteria must reference source obligations")
+        coverage_map = row["implementation_coverage"]
+        required = set(row["criteria"] + row["regression_criteria"]) - set(value["uat_criteria"])
+        if (not isinstance(coverage_map, dict) or set(coverage_map) != required
+                or any(not isinstance(ids, list) or not ids or any(not isinstance(item, str)
+                       or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", item) is None for item in ids)
+                       or len(ids) != len(set(ids)) for ids in coverage_map.values())):
+            reject("implementation coverage must map every required source criterion to frozen check IDs")
         for criterion in row["criteria"]:
             if not set(obligations[criterion]["features"]) <= features or not set(obligations[criterion]["requirements"]) <= requirements:
                 reject("slice mappings do not cover its declared criteria")
@@ -190,10 +200,10 @@ def admit(run_dir: Path, candidate: dict):
 def _preserve_delivered_slices(run_dir, candidate):
     """Historical merges cannot be relabeled as delivery of a changed contract."""
     from workflow_delivery import verify_completion
-    from workflow_qualification import verify_receipt
+    from workflow_delivery_admission import verify_receipt
     for path in (run_dir / "delivery").glob("*/completion.json"):
         completed = verify_completion(run_dir, read(path))
-        receipt = verify_receipt(run_dir, completed["review"]["qualification"], current=False)
+        receipt = verify_receipt(run_dir, completed["review"]["admission"], current=False)
         prior_digest = receipt["inputs"]["program_sha256"]
         prior = read(run_dir / "program" / (prior_digest + ".json"))
         if digest(prior) != prior_digest:
@@ -206,7 +216,11 @@ def _preserve_delivered_slices(run_dir, candidate):
 
 def verify_inputs(run_dir: Path, project: Path, *, specs=True):
     _run, _latest, snapshot = accepted(run_dir)
-    inputs = snapshot["inputs"]
+    return _verify_inputs(run_dir, project, snapshot["inputs"], specs=specs)
+
+
+def _verify_inputs(run_dir: Path, project: Path, inputs, *, specs=True):
+    """Consume inputs freshly validated by this operation, before any effects."""
     if inputs is None:
         return None
     bundle = validate_bundle(project, inputs["manifest"], inputs["manifest_sha256"], specs=specs)
@@ -229,6 +243,11 @@ def _delivery(run_dir, slice_id):
 
 def slice_basis(run_dir: Path, project: Path, execution_id: str, tasks=None):
     inputs = verify_inputs(run_dir, project)
+    return _slice_basis(run_dir, execution_id, inputs, tasks)
+
+
+def _slice_basis(run_dir: Path, execution_id: str, inputs, tasks=None):
+    """Project independently verified program inputs; never accept public context."""
     if inputs is None:
         if SLICE.fullmatch(execution_id):
             reject("slice execution requires an accepted program")
@@ -279,13 +298,14 @@ def require_complete(run_dir):
         verify_phase_exit(run_dir, record, phase)
     # Phase exits can intentionally be a subset. Full project completion also
     # needs fresh evidence for every scheduled acceptance/regression obligation.
-    from workflow_qualification import verify_receipt
+    from workflow_delivery_admission import verify_receipt
     current_basis = program["bundle"]["obligation_basis"]
     covered = set()
     for selected in program["definition"]["slices"]:
         completion = read(run_dir / "delivery" / selected["id"] / "completion.json")
-        receipt = verify_receipt(run_dir, completion["review"]["qualification"], current=False)
+        receipt = verify_receipt(run_dir, completion["review"]["admission"], current=False)
         covered.update(c for c in receipt["criteria"] if receipt["obligation_basis"].get(c) == current_basis.get(c))
     required = {c for s in program["definition"]["slices"] for c in s["criteria"] + s["regression_criteria"]}
+    required -= set(program["definition"]["uat_criteria"])
     if not required <= covered:
         reject("current source obligations still require qualification in a corrective slice")

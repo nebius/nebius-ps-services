@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 STANDBY_REPLACEMENT_INHIBITION_CAPABILITY = "vm-ha-standby-replacement-inhibition-v2"
-LIVE_PEER_REPLACEMENT_CAPABILITY = "vm-ha-live-peer-replacement-v4"
+LIVE_PEER_REPLACEMENT_CAPABILITY = "vm-ha-live-peer-replacement-v5"
 STANDBY_REPLACEMENT_INHIBITION_FILENAME = "standby-replacement.inhibition.json"
 STANDBY_REPLACEMENT_INHIBITION_SCHEMA = "nebius-vpngw/vm-ha-standby-replacement-inhibition-v1"
 STANDBY_REPLACEMENT_RELEASE_FILENAME = "standby-replacement.release.json"

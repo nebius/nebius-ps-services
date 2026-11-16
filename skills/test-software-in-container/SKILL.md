@@ -1,6 +1,7 @@
 ---
 name: test-software-in-container
 description: "Test the current project source live in disposable containers, or explicitly test installed images, installations, upgrades, patches and migrations. Not VM, hardware or production qualification."
+disable-model-invocation: true
 ---
 
 # Test Software In Container
@@ -21,8 +22,9 @@ authorization.
 
 ## Invocation Policy
 
-Ordinary implicit and explicit invocation are allowed. Selection supplies
-guidance, not additional authority. Requests to run these tests cover inspected
+Explicit invocation is required; `allow_implicit_invocation: false` is authoritative.
+An implementation request or a supplied environment does not invoke this skill.
+Selection supplies guidance, not additional authority. Requests to run these tests cover inspected
 test glue and disposable local containers. Planning stays read-only. Reuse
 existing authorization without requiring repeated execution phrases.
 
@@ -31,6 +33,11 @@ Code, or /skills:test-software-in-container in the Claude plugin. Unsupported
 capabilities remain visible limitations.
 
 ## Purpose
+
+For optional UAT during Implement or SDLC, follow
+`../worktree/references/optional-uat.md`: wait for the requested meaningful scope,
+record unavailable prerequisites as pending, and leave eligible implementation
+and publication unblocked. This skill still owns its actual trial and cleanup.
 
 Test the current project source and exercise actual software in disposable containers, including
 historical upgrades, patches and state migrations, with reusable verified

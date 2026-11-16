@@ -30,9 +30,13 @@ class SchemaTests(unittest.TestCase):
             service_account="client",
             iam_service_account_id="sa-a",
         )
-        self.assertEqual(request.spec.federated_subject_id, "system:serviceaccount:apps:client")
+        self.assertEqual(
+            request.spec.federated_subject_id, "system:serviceaccount:apps:client"
+        )
         self.assertEqual(request.spec.subject_id, "sa-a")
-        self.assertEqual(request.spec.oidc_provider.issuer_url, "https://oidc.example/cluster-a")
+        self.assertEqual(
+            request.spec.oidc_provider.issuer_url, "https://oidc.example/cluster-a"
+        )
         self.assertIsInstance(request.SerializeToString(), bytes)
 
     def test_explicit_workload_identity_disables_profile_fallback(self):
@@ -514,6 +518,57 @@ class InspectorTests(unittest.TestCase):
         )
         self.assertIsNone(result[0]["effective_available"])
         self.assertEqual(result[0]["source_scope"], "unresolved")
+
+    def test_unconfigured_project_quota_has_no_resource_id_or_limit(self):
+        import inspect_quotas as helper
+        from nebius.api.nebius.common.v1 import ResourceMetadata
+        from nebius.api.nebius.quotas.v1 import (
+            QuotaAllowance,
+            QuotaAllowanceSpec,
+            QuotaAllowanceStatus,
+        )
+
+        module = importlib.import_module("nebius.api.nebius.quotas.v1")
+        item = QuotaAllowance(
+            metadata=ResourceMetadata(parent_id="project-a", name="cpu"),
+            spec=QuotaAllowanceSpec(region="region-a"),
+            status=QuotaAllowanceStatus(
+                usage_state=QuotaAllowanceStatus.UsageState.USAGE_STATE_NOT_USED
+            ),
+        )
+        client = Mock()
+        client.list.return_value = response(NS(items=[item], next_page_token=""))
+        with patch.object(module, "QuotaAllowanceServiceClient", return_value=client):
+            rows = helper._list_quotas(Mock(), parent_id="project-a", scope="project")
+        self.assertTrue(rows[("cpu", "region-a")].inherited)
+        tenant = helper.QuotaRow(
+            "tenant",
+            "cpu",
+            "region-a",
+            16,
+            4,
+            12,
+            "compute",
+            "",
+            "count",
+            "STATE_ACTIVE",
+            "USAGE_STATE_USED",
+            "0.25",
+        )
+        self.assertEqual(
+            helper._effective_rows({("cpu", "region-a"): tenant}, rows)[0][
+                "effective_available"
+            ],
+            12,
+        )
+        item.status.usage_state = QuotaAllowanceStatus.UsageState.USAGE_STATE_UNKNOWN
+        with patch.object(module, "QuotaAllowanceServiceClient", return_value=client):
+            rows = helper._list_quotas(Mock(), parent_id="project-a", scope="project")
+        self.assertIsNone(
+            helper._effective_rows({("cpu", "region-a"): tenant}, rows)[0][
+                "effective_available"
+            ]
+        )
 
     def test_quota_pages_and_parent_validation(self):
         import inspect_quotas as helper

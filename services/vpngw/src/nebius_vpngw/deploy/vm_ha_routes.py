@@ -911,6 +911,33 @@ def _has_route_safety_blocker(plan: RouteReconciliationPlan) -> bool:
     return any(reason.startswith("foreign-route-conflict:") for reason in plan.blocked_reasons)
 
 
+class RoutePlanningProgress(RuntimeError):
+    """Initial BGP acquisition advanced; no route effect or receipt was submitted."""
+
+
+def _initial_bgp_progress(
+    plan: RouteReconciliationPlan,
+    current: RouteReconciliationPlan,
+    context: RouteReconciliationContext,
+) -> bool:
+    acquisition_reasons = {
+        "configured-bgp-sessions-not-established",
+        "required-bgp-prefixes-not-learned",
+        "required-bgp-prefixes-lack-usable-xfrm-next-hop",
+    }
+    return bool(
+        not plan.desired_prefixes
+        and not plan.mutations
+        and plan.blocked_reasons
+        and set(plan.blocked_reasons) <= acquisition_reasons
+        and current.desired_prefixes
+        and current.authorized
+        and current.ownership is not None
+        and context.matches(current.ownership)
+        and current.route_targets == plan.route_targets
+    )
+
+
 def execute_route_plan(
     plan: RouteReconciliationPlan,
     apply_mutation: Callable[[RouteMutation], None],
@@ -946,6 +973,10 @@ def execute_route_plan(
                 raise RuntimeError("Current route observation does not satisfy the durable receipt")
             return RouteApplyResult((), None, (), plan.next_state, receipt)
     if current != plan:
+        if _initial_bgp_progress(plan, current, context) and context.matches(reobserve_ownership()):
+            raise RoutePlanningProgress(
+                "Initial BGP readiness advanced; replan from fresh authority"
+            )
         raise RuntimeError("Route plan changed before mutation")
     applied: list[RouteMutation] = []
     for index, mutation in enumerate(plan.mutations):
@@ -977,6 +1008,8 @@ def execute_route_plan(
             receipt=None,
         )
     current = reobserve_plan()
+    if _initial_bgp_progress(plan, current, context) and context.matches(reobserve_ownership()):
+        raise RoutePlanningProgress("Initial BGP readiness advanced; replan from fresh authority")
     if (
         not current.authorized
         or current.ownership is None

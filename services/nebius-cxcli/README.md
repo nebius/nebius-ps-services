@@ -87,6 +87,12 @@ profile or authentication environment. Project-aware commands can create or
 reconcile the canonical project service account and renewable credentials on
 first use. See [authentication](docs/project-workflows.md#authentication).
 
+Restricted hosted CPU VM trials can explicitly use
+[preconfigured static authentication](docs/preconfigured-static-auth.md), which
+consumes existing scoped credentials without managed IAM bootstrap or renewal.
+It rejects component bindings and non-regular credential sources, including FIFOs.
+This path still requires live qualification before automated deployment use.
+
 | Tool or access | When needed |
 | --- | --- |
 | Nebius API access | Live discovery, quota checks, validation, rendering, deployment, and lifecycle operations |
@@ -895,7 +901,7 @@ server certificates and hostnames.
 
 Contributors should use the locked Make/uv workflow in the
 [development guide](docs/development.md), which also covers focused tests,
-quality gates, wheel verification, and releases. Product contracts live in
+quality gates and wheel verification. Product contracts live in
 [requirements](docs/requirements.md) and [design](docs/design.md); release history
 is in [CHANGELOG.md](CHANGELOG.md).
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,70 @@ _SPEC = importlib.util.spec_from_file_location("package_repeat", _PATH)
 assert _SPEC is not None and _SPEC.loader is not None
 repeat = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(repeat)
+
+
+@pytest.fixture
+def current_checkpoint_files(tmp_path):
+    from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_to_dict
+    from nebius_vpngw.agent.vm_ha_controller import ControllerCheckpoint
+
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "apply.lock").write_text("exact-lock")
+    current = state / "controller-checkpoint.json"
+    current.write_text(json.dumps(controller_checkpoint_to_dict(ControllerCheckpoint(sequence=7))))
+    predecessor = tmp_path / "predecessor-checkpoint.json"
+    predecessor.write_bytes(current.read_bytes())
+    return state, predecessor
+
+
+def test_current_format_unchanged_checkpoint_needs_no_conversion_receipt(current_checkpoint_files):
+    state, predecessor = current_checkpoint_files
+    result = repeat.ha_checkpoint_files(state, predecessor)
+    assert result["checkpoint-conversion.json"] == {
+        "kind": "absent-current-format-unchanged",
+        "predecessor_sha256": repeat.file_identity(predecessor)["sha256"],
+    }
+    assert not (state / "checkpoint-conversion.json").exists()
+
+
+@pytest.mark.parametrize("change", ["bytes", "legacy-schema", "malformed", "symlink", "missing"])
+def test_missing_conversion_receipt_requires_exact_valid_current_checkpoint(current_checkpoint_files, change):
+    state, predecessor = current_checkpoint_files
+    checkpoint = state / "controller-checkpoint.json"
+    if change == "bytes":
+        checkpoint.write_bytes(checkpoint.read_bytes() + b"\n")
+    elif change == "legacy-schema":
+        payload = json.loads(checkpoint.read_text())
+        payload["schema"] = "nebius-vpngw/vm-ha-controller-checkpoint-v6"
+        checkpoint.write_text(json.dumps(payload))
+        predecessor.write_bytes(checkpoint.read_bytes())
+    elif change == "malformed":
+        checkpoint.write_text("{}")
+        predecessor.write_bytes(checkpoint.read_bytes())
+    else:
+        checkpoint.unlink()
+        if change == "symlink":
+            checkpoint.symlink_to(predecessor)
+    with pytest.raises((AssertionError, ValueError, FileNotFoundError)):
+        repeat.ha_checkpoint_files(state, predecessor)
+
+
+@pytest.mark.parametrize("change", ["modified", "removed", "appeared"])
+def test_conversion_receipt_changes_remain_strict(current_checkpoint_files, observation, change):
+    state, predecessor = current_checkpoint_files
+    receipt = state / "checkpoint-conversion.json"
+    if change != "appeared":
+        receipt.write_text("conversion-evidence")
+    observation["ha_files"] = repeat.ha_checkpoint_files(state, predecessor)
+    if change == "removed":
+        receipt.unlink()
+    else:
+        receipt.write_text("different-conversion-evidence")
+    after = copy.deepcopy(observation)
+    after["ha_files"] = repeat.ha_checkpoint_files(state, predecessor)
+    with pytest.raises(AssertionError, match="Package repeat changed ha_files"):
+        repeat.verify_repeat(observation, after)
 
 
 @pytest.fixture

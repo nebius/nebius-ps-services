@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 import sys
 from copy import deepcopy
@@ -1972,13 +1973,38 @@ def test_runtime_binding_selects_exact_approved_primary_and_shared_routes(tmp_pa
     ]
 
 
-def test_vm_ha_activation_resume_rebuilds_binding_without_provisioning(tmp_path) -> None:
+@pytest.mark.parametrize("route_source", [False, True])
+def test_vm_ha_activation_resume_rebuilds_binding_without_provisioning(
+    tmp_path, route_source
+) -> None:
     vm_mgr = VMManager(project_id="project-1", region="eu-north1")
     _journal, observation, binding = _install_vm_ha_activating_journal(
         vm_mgr,
         tmp_path,
         pending_effect="activate-node-b",
     )
+    if route_source:
+        transaction = _journal.state.transaction
+        assert transaction is not None
+        _journal.state = replace(
+            _journal.state,
+            transaction=replace(
+                transaction,
+                resource_bindings=tuple(
+                    sorted(
+                        {
+                            **dict(transaction.resource_bindings),
+                            "ordinary-route-source": json.dumps(
+                                {
+                                    "schema": "nebius-vpngw.ordinary-route-migration.v1",
+                                    "sources": {"gateway-0": None},
+                                }
+                            ),
+                        }.items()
+                    )
+                ),
+            ),
+        )
 
     with (
         patch.object(
@@ -2379,8 +2405,10 @@ def test_vm_ha_transaction_preflight_rejects_unapproved_current_state_drift(
         vm_mgr._verify_vm_ha_transaction_preconditions(_ha_spec(), ["10.0.0.0/8"])
 
 
+@pytest.mark.parametrize("route_source", [False, True])
 def test_vm_ha_transaction_preflight_uses_v4_trusted_observation_for_recovery(
     tmp_path,
+    route_source,
 ) -> None:
     vm_mgr = VMManager(project_id="project-1", region="eu-north1")
     journal = _install_vm_ha_journal(vm_mgr, tmp_path)
@@ -2400,6 +2428,25 @@ def test_vm_ha_transaction_preflight_uses_v4_trusted_observation_for_recovery(
             observation=normalize_vm_ha_observation(observation),
         ),
     )
+    if route_source:
+        transaction = journal.state.transaction
+        journal.state = replace(
+            journal.state,
+            transaction=replace(
+                transaction,
+                resource_bindings=(
+                    (
+                        "ordinary-route-source",
+                        json.dumps(
+                            {
+                                "schema": "nebius-vpngw.ordinary-route-migration.v1",
+                                "sources": {"gateway-0": None},
+                            }
+                        ),
+                    ),
+                ),
+            ),
+        )
 
     with patch.object(
         vm_mgr,

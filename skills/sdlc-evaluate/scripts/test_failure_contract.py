@@ -100,7 +100,7 @@ class FailureContractTests(unittest.TestCase):
             )
             self.assertEqual(
                 second["repair_control"]["schema"],
-                "agentic-sdlc/repair-control-v2",
+                "agentic-sdlc/repair-control-v3",
             )
 
 

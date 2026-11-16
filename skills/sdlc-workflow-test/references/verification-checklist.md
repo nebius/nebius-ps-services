@@ -72,7 +72,7 @@ Verify `docs/agentic-sdlc-design.md` includes:
   `task-heartbeat`, read-only `task-watch`, confirmed-stopped `task-requeue`,
   `task-recover`, task-finish crash adoption, `replan-future`, process-group
   monitored sequential `codex exec` fallback, and `worktree-interop-v2`
-  coordinator state over v4 Worktree leases
+  coordinator state over v5 Worktree leases
 - `allow_implicit_invocation: false`
 - `<agent-home>/sdlc-verification/report.md`
 - `sdlc-auto-steering`
@@ -267,7 +267,7 @@ For a nested monorepo project, verify all claims, worker `scope_cwd`, staged
 paths, and committed paths remain inside the initialized folder. Exercise a
 confirmed interrupted-worker transfer, a resource-free future-wave replan, a
 rejected staged-secret attempt, and the fake-process sequential fallback. In a
-managed outer worktree, verify the `agentic-sdlc` v4 lease blocks outer
+managed outer worktree, verify the `agentic-sdlc` v5 lease blocks outer
 integration, tracks all internal resources and promoted heads, survives every
 external-first promotion persistence boundary, rejects stale local
 promoted/released state, releases to an exact terminal receipt only after final
@@ -324,13 +324,22 @@ generic evidence reused across test classes, missing phases, screenshots as the
 only GUI oracle, and stale worker/integration SHAs.
 
 Use headless Playwright Test with Chrome for required web acceptance. Run
-four fresh owned stages in order: `capability-discovery`, `evaluate`,
+four fresh owned stage roles in order: `capability-discovery`, `evaluate`,
 `uat-before-restart`, and `uat-after-restart`. Each stage starts a new process
 and isolated context, records assertions, screenshots, a trace, actual browser
 version and timestamps, and closes its processes even with `--keep`. Native
 desktop capture, an unlocked screen, display selection, and foreground windows
 are not prerequisites. Optional headless isolated Playwright MCP exploration
 is separate from the acceptance oracle and cannot satisfy a required stage.
+
+Before UAT, a new clean candidate may require another evaluation after a counted
+repair. The owner verifies the current evaluation cursor, exact candidate and
+fingerprints, preserves every prior PASS, and records its repair binding. At most
+four additional evaluations fit the unchanged four-dispatch ceiling. Reusing a
+cursor, repeating the same candidate, repeating capability/UAT, or any failed
+browser attempt requires a new trial; no prior failure becomes passing. Final
+qualification verifies each repeated evaluation's completed repair gate, including
+archived cursors, and uses only the final two UAT receipts for restart screenshots.
 
 The verifier freezes its independent test bundle before product implementation;
 never copy it into product TDD tests or alter it to fit an implementation.
@@ -437,14 +446,11 @@ the disposable Git root must carry the exact fixture marker. Symlinked fixture
 components,
 installed skill roots, configured hook payloads, or report paths fail closed
 before mutation. Invalid UTF-8 becomes a reported failure rather than a crash.
-A deterministic subprocess timeout becomes a named FAIL check; it must not
-prevent report generation. A custom report path must remain under the private
-verification root.
-
-Capability regression subprocesses use a 120-second default timeout. The
-measured slow worktree, execution, three-tier and task-wave matrices use bounded
-900-second timeouts, so their full crash/recovery coverage is not
-misreported as a workflow failure.
+Healthy deterministic suites have no duration-only expiry. Freeze exact test IDs
+before execution, retain all outcomes and attributed timings, and allow at most
+two explicitly audited independent groups. Required failure cancels owned peers
+and stops queued work. Incomplete streams or cleanup cannot certify success.
+A custom report path must remain under the private verification root.
 
 ## Idempotency And Change Request
 
@@ -569,12 +575,16 @@ visual changes, copy an earlier screenshot, or weaken the four-state check.
 
 - Current worker-result fields propagate through fan-in; wrong coordinator
   identity and altered handoffs remain rejected by their production owners.
-- Suite catalog commands/dependencies agree; timeouts retain completed identifiers,
+- Suite catalog commands/dependencies agree; interruptions retain completed identifiers,
   progress is bounded, and interruptions cannot qualify incomplete capabilities.
   Cleanup drain timeouts still attempt process-group absence verification, retain
   earlier results and stop later suites with sanitized `EXECUTION_UNPROVEN`.
 - Destroy covers both fixture types and the exact context-bound manifest, retains
   reports, rejects missing ownership, and resumes checkpoint/journal interruptions.
+- Changed source preserves an existing owned context and cleanup authority.
+  Static or fixture failures skip regression launches. Context restoration requires
+  the original recorded hash, unchanged remaining scope/identity, inactive native
+  and live work, retained replacement evidence and interruption-safe replay.
 - Replay rejects expanded targets, replaced parents and changed file bytes; custom
   report paths cannot overwrite ownership or raw state. Concurrent writers block.
 - Source startup v3 is separate from native activation. Native correlation requires
@@ -590,3 +600,57 @@ visual changes, copy an earlier screenshot, or weaken the four-state check.
   validates product ownership and quiescence without creating acceptance proof.
 - Fresh Codex three-tier acceptance and verified cleanup are separate from the
   aggregate seven-lane qualification; unexecuted lanes remain PARTIAL.
+
+## Task acceptance coverage
+
+The three-tier fixture seeds an independent domain harness before its Git
+baseline. `prepare-images` builds one owned nonroot dependency image and freezes
+`task-acceptance-profile.json` in the private root. The native SDLC coordinator
+uses it for early task container checks, records a deferred filtering criterion,
+and resolves all debt on promoted and aggregate trees. Final observation derives
+coverage from owner receipts; handwritten summaries cannot satisfy this lane.
+Existing promoted test classes, fresh browser stages, restart persistence,
+aggregate rebuild and Implement companion remain required.
+
+## Recovery and readiness regression obligations
+
+- Prove structural feedback is distinct from missing acceptance, semantics,
+  permissions and executed failures; exhaust two submissions/300 active seconds
+  without renewing on hash/process/worker replacement. Preserve fourth-dispatch
+  completion and fifth refusal across nested recovery.
+- Check steering order, current context/plan/evidence, timestamp/checkpoint
+  convergence, resolved historical entries and stale/fabricated receipt denial.
+  Execute the returned readiness command from its supplied selected-project
+  working directory through the sealed Git profile before and after planning.
+- Reproduce diagnostic exhaustion replay, strict time types, overlap union,
+  atomic shared reservations, interrupted accounting and terminal contradictions.
+  Unsupported effective tool restrictions must take the serial fallback.
+- Retain within-wave overlap/refill and serial integration/validation/cleanup
+  barriers. Inclusive timing and idle reasons are observations, never speedup proof.
+- Install before freezing fresh live trials. Keep full delivery, intentional
+  repair, nested recovery and budget-stop scenarios separately declared. Preserve
+  all prior failures and archives; no source edits during a frozen live trial.
+
+## Factual statistics
+
+- Initial architecture is observed before task execution, including known names
+  and source references with no plan prerequisite.
+- The statistics inventory/checkpoint CLI works in a fresh process from an
+  unrelated directory without inherited Python import paths or loaded helpers.
+- During-phase reports separate submission, acceptance and integration; task
+  counts agree with the execution owner and observed intervals retain attempts.
+- An unchanged locked plan retains task definition fingerprints through real
+  execution preparation, with no false scope change or baseline rewrite.
+- Terminated blocked results are not running workers, even while their scheduler
+  slot remains reserved. Counted repair dispatches survive a rejected recovery.
+- Peak observed worker count agrees with coherent running states even when
+  process-only clocks prevent duration measurement. A lone zero-duration recovery
+  sample cannot turn incomplete duration totals into zero; fully measured
+  zero-length attempts retain zero duration.
+- Cancellation summaries retain retired accepted results and count replacement
+  identities once; dispatch fences expose no available launch slots.
+- Terminal reports share the initial baseline and bind completed delivery.
+- Read-only canonical admission revalidates statistics; missing observations or
+  forged reports fail even when application evidence is otherwise valid.
+- Cleanup retains sanitized Markdown/JSON statistics and observer receipts.
+- Deterministic projection tests do not qualify native execution or overlap.

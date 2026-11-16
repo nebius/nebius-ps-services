@@ -46,7 +46,7 @@ from workflow_spec_checkout import SpecCheckoutError, resolve_spec_checkout  # n
 CLAIM_SCHEMA = "workflow/objective-impact-claim-v1"
 RECEIPT_SCHEMA = "workflow/objective-impact-receipt-v1"
 LEDGER_SCHEMA = "workflow/objective-impact-ledger-v1"
-EXECUTION_BASIS_SCHEMA = "workflow/objective-impact-execution-basis-v2"
+EXECUTION_BASIS_SCHEMA = "workflow/objective-impact-execution-basis-v3"
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 REVISION_RE = re.compile(r"r[0-9]{4}\Z")
 FEATURE_RE = re.compile(r"(?:FEAT|SLICE)-[0-9]{3,}\Z")
@@ -493,22 +493,28 @@ def _basis_path(run_dir: Path, execution_id: str) -> Path:
     return _root(run_dir) / "execution" / f"{execution_id}.json"
 
 
-def _identity_files(project_root: Path) -> dict[str, str]:
+def _identity_files(project_root: Path, *, owner: str, task_policy=None) -> dict[str, str]:
     """Freeze effective repository instructions and the execution helper closure."""
     sources = {path for path in Path(__file__).parent.glob("*.py") if not path.name.startswith("test")}
     catalog = Path(__file__).resolve().parents[2]
-    for dependency in ("maintain-project-specs", "global-context-management", "merge-pr", "sdlc-classify-failure"):
+    dependencies = ["maintain-project-specs", "global-context-management", "merge-pr", "sdlc-classify-failure"]
+    needs_container = bool(task_policy and any(c.get("purpose") == "implementation"
+        and c.get("check", {}).get("kind") == "container" for row in task_policy["tasks"].values()
+        for c in row["criteria"] if c.get("check") is not None))
+    if needs_container:
+        dependencies.append("test-software-in-container")
+    for dependency in dependencies:
         sources.update(path for path in (catalog / dependency / "scripts").rglob("*.py") if not path.name.startswith("test"))
     for directory, children, filenames in os.walk(project_root):
         children[:] = [name for name in children if name not in {".git", "node_modules", ".venv", "venv", "__pycache__"}]
         chosen = "AGENTS.override.md" if "AGENTS.override.md" in filenames else "AGENTS.md"
         if chosen in filenames:
             sources.add(Path(directory) / chosen)
-    for owner in (
+    for skill_owner in (
         "implement", "sdlc-start", "sdlc-prepare-execution", "sdlc-implement-plan",
         "global-context-management", "maintain-project-specs", "code-review", "align",
     ):
-        sources.add(catalog / owner / "SKILL.md")
+        sources.add(catalog / skill_owner / "SKILL.md")
     # These mandatory execution inputs live outside the Python helper trees.
     # Enumerate them so deletion is invalid, rather than silently disappearing
     # from a glob, and avoid binding unrelated catalog documentation.
@@ -520,7 +526,15 @@ def _identity_files(project_root: Path) -> dict[str, str]:
         "code-review/references/quality-rubric.md",
         "align/references/quality-gate.md",
         "worktree/references/workflow-contract.md",
+        "worktree/references/workflow-invariants.md",
+        "worktree/references/automatic-projects.md",
         "worktree/references/worker-waves.md",
+        "worktree/references/statistics.md",
+        "worktree/scripts/workflow_statistics_delivery.py",
+        "worktree/references/task-acceptance.md",
+        "worktree/references/optional-uat.md",
+        "worktree/scripts/workflow_task_acceptance.py",
+        "worktree/scripts/workflow_task_container.py",
         "worktree/references/issue-resolution.md",
         "worktree/references/document-delivery.md",
         "worktree/assets/worker-result.schema.json",
@@ -528,6 +542,10 @@ def _identity_files(project_root: Path) -> dict[str, str]:
         "sdlc-prepare-execution/references/execution-plane.md",
     ):
         sources.add(catalog / relative)
+    if needs_container:
+        for relative in ("SKILL.md", "references/suite-evidence.md", "scripts/tsc_support/suite_contracts.py",
+                         "scripts/tsc_support/contracts.py"):
+            sources.add(catalog / "test-software-in-container" / relative)
     for parent in (project_root, *project_root.parents):
         override = parent / "AGENTS.override.md"
         normal = parent / "AGENTS.md"
@@ -542,7 +560,11 @@ def _identity_files(project_root: Path) -> dict[str, str]:
     return identities
 
 
-def _execution_basis(run_dir, execution_id, plan_digest, project_root, receipt, receipt_sha256):
+_CURRENT_INPUTS = object()
+
+
+def _execution_basis(run_dir, execution_id, plan_digest, project_root, receipt, receipt_sha256,
+                     input_digest=_CURRENT_INPUTS):
     from workflow_objectives import validate_run
     run, objective = validate_run(run_dir)
     plans = [path for path in (run_dir / "plans").rglob("*.md")
@@ -555,11 +577,27 @@ def _execution_basis(run_dir, execution_id, plan_digest, project_root, receipt, 
     prepared = read(run_dir / "prepared-bases" / (execution_id + ".json"))
     if prepared.get("schema") != "workflow/prepared-base-v1" or prepared.get("git_common_dir") != run["git_common_dir"]:
         raise ObjectiveImpactError("BASIS_INVALID", "prepared Git base identity is invalid")
-    inputs = run_dir / "input-dependencies.json"
-    from workflow_program import slice_basis
-    program_basis = slice_basis(run_dir, project_root, execution_id)
+    from workflow_inputs import current_digest, frozen
+    settling_inputs = input_digest is _CURRENT_INPUTS
+    if input_digest is _CURRENT_INPUTS:
+        input_digest = current_digest(run_dir)
+    if input_digest is not None:
+        frozen(run_dir, input_digest)
+    from workflow_program import slice_basis, _slice_basis, _verify_inputs
+    if settling_inputs:
+        # current_digest may archive inputs. Revalidate after that mutation.
+        program_basis = slice_basis(run_dir, project_root, execution_id)
+    else:
+        # No effects or external checks since validate_run above. Consume only
+        # these inputs now; do not carry reusable context across program checks.
+        inputs = read(run_dir / latest["snapshot"])["inputs"]
+        program_basis = _slice_basis(run_dir, execution_id, _verify_inputs(run_dir, project_root, inputs))
     from workflow_capacity import policy
     from workflow_validation import plan_path
+    from workflow_task_acceptance import load_policy
+    from workflow_execution import parse_locked_plan
+    task_policy = load_policy(run_dir, plans[0], [t.task_id for t in parse_locked_plan(plans[0].read_text())])
+    uat = read(run_dir / latest["snapshot"])["uat"]
     return {
         "schema": EXECUTION_BASIS_SCHEMA, "owner": run["owner"],
         "execution_id": execution_id, "objective_id": objective["objective_id"],
@@ -569,14 +607,18 @@ def _execution_basis(run_dir, execution_id, plan_digest, project_root, receipt, 
         "spec_receipt_sha256": receipt["spec_receipt_sha256"],
         "spec_transition_sha256": receipt.get("spec_transition_sha256"),
         "plan_action": receipt["plan_action"], "base_commit": prepared["base_head"],
-        "input_dependencies_sha256": canonical_digest(read(inputs)) if inputs.exists() else None,
+        "input_dependencies_sha256": input_digest,
         "program_basis": program_basis,
+        "uat_policy": uat,
+        "uat_policy_sha256": canonical_digest(uat),
         "ownership": {key: run[key] for key in ("owner", "run_id", "project_root", "git_common_dir")},
-        "identities": _identity_files(project_root),
+        "identities": _identity_files(project_root, owner=run["owner"], task_policy=task_policy),
         # Task ownership and validation requirements are part of these exact
         # locked plan bytes, and each immutable assignment binds this basis.
         "assignment_plan_sha256": plan_digest,
         "validation_plan_sha256": canonical_digest(read(plan_path(plans[0]))),
+        "task_acceptance_policy": task_policy,
+        "task_acceptance_policy_sha256": canonical_digest(task_policy) if task_policy is not None else None,
         "policy_sha256": canonical_digest(policy(run_dir)),
     }
 
@@ -599,6 +641,11 @@ def settle_execution(run_dir: Path, execution_id: str, plan_digest: str, project
     run, objective = validate_run(run_dir)
     if existing is not None:
         prior = read(run_dir / existing["path"])
+        if prior["plan_digest"] == plan_digest and prior.get("uat_policy") != value["uat_policy"]:
+            raise ObjectiveImpactError("REPLAN_REQUIRED", "the same plan cannot change its frozen UAT policy")
+        if (run["owner"] == "agentic-sdlc" and prior["plan_digest"] == plan_digest
+                and prior.get("task_acceptance_policy") != value["task_acceptance_policy"]):
+            raise ObjectiveImpactError("REPLAN_REQUIRED", "the same plan cannot change its frozen acceptance policy")
         if (prior["plan_digest"] == plan_digest and receipt["plan_action"] == "replan_required"
                 and prior["latest_settled_revision"] != receipt["revision"]):
             raise ObjectiveImpactError("REPLAN_REQUIRED", "material steering requires a distinct immutable plan")
@@ -628,7 +675,8 @@ def verify_execution(run_dir: Path, execution_id: str, plan_digest: str, project
             or pointer.get("path") != f"bases/{execution_id}/{fingerprint}.json"):
         raise ObjectiveImpactError("BASIS_INVALID", "execution basis pointer is invalid")
     value = read(run_dir / pointer["path"])
-    current = _execution_basis(run_dir, execution_id, plan_digest, project_root, receipt, receipt_sha256)
+    current = _execution_basis(run_dir, execution_id, plan_digest, project_root, receipt, receipt_sha256,
+                               input_digest=value["input_dependencies_sha256"])
     if canonical_digest(value) != fingerprint or value != current:
         raise ObjectiveImpactError("REPLAN_REQUIRED", "immutable execution basis is stale")
     return value

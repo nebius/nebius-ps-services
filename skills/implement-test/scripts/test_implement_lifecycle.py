@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from test_implement_catalog import successful_verification
+
 import copy
 import fcntl
 import json
@@ -15,6 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import implement_lifecycle as lifecycle
+import implement_browser
 
 from implement_lifecycle import (
     GENERATION_LABEL,
@@ -40,6 +43,22 @@ from implement_reporting import build_report, default_live_stages
 
 
 class LifecycleTests(unittest.TestCase):
+    def test_catalog_drift_blocks_stage_and_compose_without_writes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            result = prepare(base / "private", self.make_fixture(base))
+            run = Path(result["agent_home"]).parent
+            before = (run / "lifecycle.json").read_bytes()
+            with patch.object(lifecycle.catalog, "validate", side_effect=LifecycleError("frozen drift")):
+                for operation in (
+                    lambda: record_stage(base / "private", result["generation_id"], "browser-uat", "PARTIAL", "unavailable"),
+                    lambda: lifecycle.validate_compose(base / "private", result["generation_id"]),
+                ):
+                    with self.assertRaisesRegex(LifecycleError, "frozen drift"):
+                        operation()
+                    self.assertEqual((run / "lifecycle.json").read_bytes(), before)
+                    self.assertFalse((run / "compose.snapshot.json").exists())
+
     def test_claude_generation_uses_native_home_and_rejects_cross_host_resume(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"SKILLS_AGENT": "claude"}):
             os.environ.pop("CODEX_THREAD_ID", None)
@@ -56,6 +75,19 @@ class LifecycleTests(unittest.TestCase):
         preflight_patcher = patch.object(lifecycle, "_validate_runtime_preflight")
         self.runtime_preflight = preflight_patcher.start()
         self.addCleanup(preflight_patcher.stop)
+        # These lifecycle fixtures isolate owner transitions from the complete
+        # deterministic preflight and browser oracle, which have dedicated tests.
+        catalog_patcher = patch.object(lifecycle.catalog, "preflight", side_effect=lambda _root: {
+            "schema": "implement-test/preflight-v2", "status": "PASS",
+            "catalog": lifecycle.catalog.snapshot(), "stages_sha256": "a" * 64, "verification": successful_verification(), "verification_sha256": lifecycle.catalog.digest(successful_verification())})
+        catalog_patcher.start()
+        self.addCleanup(catalog_patcher.stop)
+        browser_patcher = patch.object(implement_browser, "validate")
+        browser_patcher.start()
+        self.addCleanup(browser_patcher.stop)
+        hooks_patcher = patch.object(lifecycle.catalog, "validate_runtime_hooks")
+        hooks_patcher.start()
+        self.addCleanup(hooks_patcher.stop)
 
     def make_fixture(self, root: Path) -> Path:
         fixture = root / "fixture"
@@ -76,11 +108,79 @@ class LifecycleTests(unittest.TestCase):
         state["application_evidence_sha256"] = "a" * 64
         state["semantic_status"] = "PASS"
         state["semantic_project_head"] = head
+        manifest = state_path.parent / "evidence/live-results.json"
+        manifest.write_text("{}")
+        state["semantic_results_sha256"] = lifecycle._sha256(manifest)
         for stage in state["stages"]:
             if stage["id"] != "cleanup":
                 stage["status"] = "PASS"
                 stage["detail"] = "Stage passed."
         state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    def test_root_identity_is_stable_and_active_generation_schema_is_independent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            private = base / "private"
+            lifecycle._ensure_root(private)
+            marker = (private / "owner.json").read_bytes()
+            archived = private / "archive" / "historical"
+            archived.mkdir(parents=True)
+            (archived / "report.md").write_bytes(b"preserved terminal evidence\n")
+            before = (archived / "report.md").read_bytes()
+            result = prepare(private, self.make_fixture(base))
+            state_path = private / "runs" / result["generation_id"] / "lifecycle.json"
+            state = json.loads(state_path.read_text())
+            self.assertEqual(json.loads(marker), {"owner": "implement-test", "version": 1})
+            self.assertEqual(state["version"], 2)
+            self.assertEqual((private / "owner.json").read_bytes(), marker)
+            self.assertEqual((archived / "report.md").read_bytes(), before)
+            state["version"] = 1
+            state_path.write_text(json.dumps(state))
+            saved = state_path.read_bytes()
+            with self.assertRaises(LifecycleError):
+                status(private)
+            self.assertEqual(state_path.read_bytes(), saved)
+
+    def test_noncanonical_root_markers_and_orphans_are_rejected_without_replacement(self):
+        for version in (True, 2, 0, "1"):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp).resolve()
+                marker = root / "owner.json"
+                marker.write_text(json.dumps({"owner": "implement-test", "version": version}))
+                before = marker.read_bytes()
+                with self.assertRaises(OwnershipBlockedError):
+                    status(root)
+                self.assertEqual(marker.read_bytes(), before)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            lifecycle._atomic_json(root / "owner.json", {"owner": "implement-test", "version": 1})
+            (root / "runs/orphan").mkdir(parents=True)
+            with self.assertRaisesRegex(OwnershipBlockedError, "unreferenced"):
+                status(root)
+            self.assertTrue((root / "runs/orphan").is_dir())
+
+    def test_browser_success_cannot_be_recorded_as_prose(self):
+        with self.assertRaisesRegex(LifecycleError, "collect-browser"):
+            record_stage(Path("/not-used"), "not-used", "browser-uat", "PASS", "claimed")
+
+    def test_statistics_success_requires_semantic_owner_without_stage_mutation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            private = base / "private"
+            result = prepare(private, self.make_fixture(base))
+            state_path = Path(result["agent_home"]).parent / "lifecycle.json"
+            before = state_path.read_bytes()
+            with self.assertRaisesRegex(LifecycleError, "validate-results"):
+                record_stage(
+                    private, result["generation_id"], "workflow-statistics",
+                    "PASS", "Reports were independently inspected.",
+                )
+            self.assertEqual(state_path.read_bytes(), before)
+            recorded = record_stage(
+                private, result["generation_id"], "workflow-statistics",
+                "PARTIAL", "Required reporting evidence is unavailable.",
+            )
+            self.assertEqual(recorded["stage_status"], "PARTIAL")
 
     def make_report(self, private: Path, result: dict, outcome: str = "PASS") -> Path:
         stages = default_live_stages()
@@ -545,7 +645,7 @@ class LifecycleTests(unittest.TestCase):
             )
             lifecycle._rewrite_report_lifecycle(report, "CLEANED")
             cleaned = report.read_text(encoding="utf-8")
-            self.assertIn("2 PASS, 1 FAIL, 0 PARTIAL, 14 NOT_RUN", cleaned)
+            self.assertIn(f"2 PASS, 1 FAIL, 0 PARTIAL, {len(default_live_stages()) - 3} NOT_RUN", cleaned)
             not_run_section = cleaned.split("## Not Run", 1)[1].split(
                 "## Next Action", 1
             )[0]
@@ -578,7 +678,7 @@ class LifecycleTests(unittest.TestCase):
                 report, "CLEANUP_FAILED", overall="FAIL"
             )
             failed = report.read_text(encoding="utf-8")
-            self.assertIn("1 PASS, 2 FAIL, 0 PARTIAL, 14 NOT_RUN", failed)
+            self.assertIn(f"1 PASS, 2 FAIL, 0 PARTIAL, {len(default_live_stages()) - 3} NOT_RUN", failed)
             self.assertIn("| Owned-resource cleanup | **FAIL** |", failed)
             self.assertIn("run $implement-test --destroy", failed)
             lifecycle._rewrite_report_lifecycle(report, "DESTROYED")
@@ -586,7 +686,7 @@ class LifecycleTests(unittest.TestCase):
             self.assertNotIn("run $implement-test --destroy", recovered)
             self.assertIn("Review remaining failed or unverified stages", recovered)
             self.assertNotIn("| Owned-resource cleanup | **FAIL** |", recovered)
-            self.assertIn("2 PASS, 1 FAIL, 0 PARTIAL, 14 NOT_RUN", recovered)
+            self.assertIn(f"2 PASS, 1 FAIL, 0 PARTIAL, {len(default_live_stages()) - 3} NOT_RUN", recovered)
 
     def test_complete_report_must_match_recorded_stage_statuses(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

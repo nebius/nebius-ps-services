@@ -1,5 +1,11 @@
 # Classify Failure
 
+The repair owner's private `capture-worker-failure` operation derives a blocked
+worker event from the exact current receipt, integration commit and complete
+checkpoint identity/fingerprints. New records and dispatches reject stale context
+before effects. Recapture cannot bind the same receipt to a changed context;
+historical event and charged-dispatch replay remain idempotent.
+
 `sdlc-classify-failure` is an Agentic SDLC skill. It is authored in this repository and is
 installed into a Codex runtime only when `install-skills.sh` is run.
 
@@ -56,11 +62,20 @@ referenced classifications validate diagnosis version, digest and execution
 identity before dispatch or completion writes. Advancing the current event does
 not make a retired diagnosis valid authority again.
 
+A proven `plan_defect` diagnosis covers frozen validation-command mistakes.
+Integrated recovery retains the exact failed producer receipt and uses counted
+plan revision with an immutable equivalence review. It preserves original
+acceptance, task history and all earlier failed attempts.
+
 ## Deterministic Helper
 
 Input records use whole-second UTC `created_at` values in
 `YYYY-MM-DDTHH:MM:SSZ` form, without fractional seconds or numeric offsets.
 The helper's error and input help describe this existing accepted format.
+For blocked-worker recovery, copy every current `fingerprint_ids` entry into
+the event mapping, including context when present. Compare the full mapping
+before recording the immutable event or charging dispatch; an incomplete subset
+cannot authorize recovery, even when the other digests match.
 
 Use `scripts/repair_control.py` for `record-failure`, `record-diagnosis`,
 `record-approval`, `classify`, `dispatch`, `complete`, and
@@ -101,7 +116,35 @@ its own failure type, route and budget. Environment-only recovery still rejects
 unrelated pending invalidations. The last allowed dispatch may finish its
 revalidation; another dispatch and over-limit state remain blocked.
 
-A successful repair with invalidations enters `revalidation_required`.
+When a new independent failure interrupts a counted pending repair,
+`repair-control-v3` retains its full context in immutable suspended evidence.
+After the intervening worker has performed and verified the actual repair,
+record its successful completion before the original corrective wave completes.
+The owner returns `resumed_dispatch_id` and restores the pending parent only
+when its ordered gates cover every remaining invalidation. Refresh checkpoint
+repair pointers from the returned control. Both budgets, the child completion
+and deferred cursor, and all failure evidence remain. No historical receipt
+becomes active by itself; no new dispatch is charged. Failed, changed, exhausted
+or broader obligations stop restoration. The original wave still needs fresh
+combined validation. Reaching the child's time limit persists its consumed time
+and exhausted status before rejecting completion; even a zero-time retry cannot
+restore the parent or reset the budget. The original repair's later completion
+reruns all invalidated gates. Completion replay cannot rewind a later owner.
+Completion journal entries retain their canonical shape; continuation links live
+in immutable resumption records. Read-only recovery verification consumes those
+owner-validated records without restoring authority or advancing revalidation.
+Classifier observation of a failed integrated wave uses a separate read-only
+repair-owner query. The exact pending parent may remain suspended if a bounded
+immutable chain connects it to the current counted child at the same integration
+commit. Validate carried obligations, increasing feature counts and active attempt
+limits; reject missing, reordered, tampered, exhausted or terminal lineage.
+This query does not resume repairs or grant the parent's mutation authority.
+The verifier separately requires clean integration and writer/lease quiescence.
+Obsolete v2 control state
+is rejected without conversion; install the source repair before a fresh run.
+
+Without a suspended parent, a successful repair with invalidations enters
+`revalidation_required`.
 `record-revalidation` advances one ordered gate at a time using immutable
 `revalidation-evidence-v2` whose source must be a structured phase-owned
 `passed` result. The helper verifies its file digest, current workflow
@@ -117,10 +160,21 @@ in-scope remedy and new evidence/hypothesis, then consume a counted localized
 repair dispatch before authorizing the shared fresh-worker recovery. Preserve
 the blocked receipt and observe termination and runtime release. Rerun the
 original failed operation through an authorized mechanism, complete the
-assignment's validation and normal task/wave completion, then record the actual
-remediation result. Success requires the existing downstream revalidation
+assignment's validation and normal task completion, then record the actual
+remediation result before completing an interrupted parent's corrective wave. Success requires the existing downstream revalidation
 cursor; it does not erase failure history or grant permission. Other active
 phases, policy/human blockers and later lifecycle boundaries gain no authority.
+
+Every blocked SDLC worker now needs active counted repair authority bound to
+its exact receipt and current target before same-assignment recovery. Set
+`evidence_digests.worker_result` to `sha256:` plus the canonical `receipt_sha256`
+from `task-result`. Authorization and ownership transfer independently recheck
+the current classification, dispatch, integration commit and fingerprints.
+Implementation/environment `existing_task_attempt` and validation repair through
+`sdlc-validate-codes` are permitted; other classifications retain their revision
+routes. Keep the dispatch active until the worker performs and verifies the
+repair. A changed blocked attempt cannot reuse earlier authority. See the
+[shared recovery contract](../worktree/references/workflow-contract.md).
 
 For an externally recovered environment block after completed waves, the
 private `record-environment-recovery` transition requires the original gate to
@@ -145,3 +199,7 @@ authority and unchanged invalidated surfaces, archives the old cursor and
 progress, and resets all gates to pending under the current policy. Immutable
 evidence and repair budgets remain unchanged. A retry preserves any new gate
 progress; this is not a general reset or an alias for retired skill names.
+
+Canonical owner-issued pre-effect formatting feedback has a separate two-submission,
+300-active-second allowance. See [input correction](references/input-correction.md).
+Missing criteria, semantic changes and effectful failures retain normal repair budgets.

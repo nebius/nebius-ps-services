@@ -26,8 +26,11 @@ def source_frame() -> bytes:
     ).decode()
     recovery_sources = "import types\n"
     for name, relative in (
+        ("_vpngw_dependency_scope", "dependency_scope.py"),
         ("_vpngw_package_worker", "package_worker.py"),
         ("_vpngw_python_package_recovery", "python_package_recovery.py"),
+        ("_vpngw_repair_state", "repair_state.py"),
+        ("_vpngw_repair_guest", "repair_guest.py"),
     ):
         encoded = base64.b64encode((Path(__file__).parent / relative).read_bytes()).decode()
         recovery_sources += (

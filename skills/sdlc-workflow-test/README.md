@@ -1,7 +1,18 @@
 # SDLC Workflow Test
 
+Browser runner stdout and stderr are drained incrementally into bounded
+`runner-output.json` byte-count and digest metadata, without retaining raw logs.
+Complete EOF and owner cleanup remain required; assertion and trace artifacts
+retain their independent acceptance role. Output volume never stops healthy work.
+
 Execution supports Codex and Claude through the selected native host context.
 See `SKILL.md` for invocation, required setup and evidence boundaries.
+
+Full lightweight verification follows
+[the ordered runtime scenarios](references/lightweight-runtime-verification.md).
+Three-tier operations require [live ownership rules](references/live-runtime-ownership.md)
+before startup, phase collection or targeting. These extracted references remain
+part of the frozen verifier catalog; missing or changed detail fails validation.
 
 `sdlc-workflow-test` verifies the Agentic SDLC workflow from outside the
 workflow. It checks the design contract, source-installed skill parity,
@@ -10,6 +21,40 @@ interoperability, the managed outer-worktree lease lifecycle, hook
 behavior, and optional private live-run evidence. Its opt-in live profile builds
 and tests one real local three-tier application without changing the lightweight
 default.
+
+Deterministic target fixtures append a matching coordinator checkpoint when
+selecting a feature after startup. They retain the original startup checkpoint
+and observation; mismatched current state remains rejected by the production
+correction guard. Synthetic fixture state does not qualify native execution.
+
+The live monorepo runs the complete SDLC app in `project-a` alongside a separate
+public Implement CLI objective in `project-b`, sharing one isolated native home.
+Both use automatic outers and the shared admission registry. The companion
+validates its sealed Git environment against its selected project directory,
+independently of the verifier's launch folder. Inner UAT and fresh final aggregate
+acceptance remain separate; cleanup covers both native sessions and objectives.
+Its frozen request selects available native agent tools even for its single
+worker, consuming the admitted launch envelope and support directories. Sequential
+CLI dispatch remains a capability-dependent fallback; task count does not select
+it. An unsupported launch remains a preserved blocker, never a permission bypass.
+Check capabilities before arming. Native execution tools may establish each
+command cwd explicitly, while inherited permissions already cover support paths;
+missing spawn setters alone do not require a CLI fallback. The shared Worktree
+owner still checks actual startup/heartbeat cwd, assignment scope and identity.
+Shared-capacity acceptance requires typed observations within all three home
+limits: four admitted objectives, four active workers, and sixteen retained task
+worktrees, including trees held by waiting objectives. Missing or malformed
+capacity evidence fails acceptance.
+Before native launch, the outer verifier establishes reliable physical-host
+memory visibility and owns active monitoring through both sessions and runtime.
+Coordinators repeat this setup ownership in assignments. The request handoff
+alone is not monitoring proof, and unavailable outer visibility blocks launch.
+An immediately completed tool call has no session handle to retain or poll.
+
+Offline credential mocks use the exact `not-a-secret` placeholder in patched
+environments and expected-call assertions. Repeat this constraint in affected
+assignments. Actual runtime credentials use the protected environment file;
+ordinary sensitive-content screening and failure history remain required.
 
 Hook-routing checks inspect command tokens after removing only the exact owned
 agent-home prefix. A verification directory named with `sdlc` does not imply
@@ -26,7 +71,19 @@ from inspection. Immutable named diagnostics survive automatic cleanup; worker
 observations remain separate from clean build-bound acceptance. See
 [runtime inventory](references/runtime-inventory.md) for the private path-only
 interface, failure categories and classifier-linked development recovery.
-Lifecycle v7 rejects incompatible active state; historical reports are preserved.
+Static and fixture prerequisites must pass before regression suites launch.
+An existing workspace generation retains its original context when the source or
+design changes; run aggregate owned cleanup before fresh preflight. Setup validates
+the ownership receipt before touching fixture files. An already replaced context
+can be restored only from original bytes matching its recorded hash, while all
+other ownership, scope and quiescence checks hold. This private recovery retains
+the prior receipt and replacement evidence, supports interruption replay, and
+creates no passing result. See [owned context restoration](references/three-tier-live.md#owned-context-restoration).
+The fixture uses one project-owned normal bridge, without `internal: true`,
+so the web service can publish its loopback port. PostgreSQL has no published
+port. Inspection still requires an actual numeric binding; configured intent
+alone does not pass runtime acceptance.
+Lifecycle v9 rejects incompatible active state; historical reports are preserved.
 Git and native-hook consumers admit this retained state through the lifecycle
 owner's existing 1 MiB limit. Small profile files remain bounded at 64 KiB;
 oversized or unsafe files fail without discarding earlier diagnostics.
@@ -82,6 +139,12 @@ $sdlc-workflow-test --destroy
   evidence, while preserving sanitized reports and lifecycle history. It closes only the exact
   recorded verifier-owned Chrome process group; existing Chrome instances are
   never targets. Repeating it returns `ALREADY_DESTROYED` only when both fixture types are absent.
+
+After both fixture classes are removed and native process absence is proven,
+aggregate cleanup archives the terminal process ledger before retiring its active
+file. The next trial receives the same 64-invocation bound without inheriting
+earlier trials' entries. Interrupted retirement reuses the exact immutable archive;
+active processes, uncertain absence, changed files and unsafe archives fail closed.
 
 Owned Git validation disables optional locks so a cleanliness observation cannot
 refresh the index sealed in a cleanup checkpoint. Interrupted cleanup still
@@ -156,9 +219,9 @@ acceptance failure requires a fresh trial, even if it was recorded by mistake.
 - Uses `references/verification-checklist.md` as the test plan.
 - Runs `scripts/verify_agentic_sdlc.py` for static discovery, SDLC contract,
   capability regressions, a nested disposable project, and hook fixture checks.
-  The worktree, execution, three-tier and task-wave aggregates use explicit
-  900-second budgets; verifier, hook and dispatch suites use 600 seconds, and other
-  capability suites keep the 120-second default.
+  Exact test inventories are frozen before execution. At most two audited
+  independent groups run together; other groups remain exclusive. Healthy suites
+  have no duration-only expiry; periodic observations retain attributed timings.
   Rejected fixtures are preserved, dependent hook checks are skipped with
   explicit prerequisite failures, and the verifier still writes its report.
   Failed suites report their exit code and bounded failing-test identifiers
@@ -230,10 +293,12 @@ acceptance failure requires a fresh trial, even if it was recorded by mistake.
   real remote merge. Deterministic program and merge regressions are reported
   separately and must not be presented as those live outcomes.
 - Writes the verification report to `<agent-home>/sdlc-verification/report.md`.
+  Recovery advice follows the named failure owner; a continuation check is not
+  a GUI/UAT failure merely because its name contains the letters `uat`.
 - Keeps real repositories, installed skills, hooks, and agent configuration
   unchanged.
 - For explicit create modes, requires a semantic
-  `agentic-sdlc/three-tier-results-v3` manifest, loopback-only dynamic web port,
+  `agentic-sdlc/three-tier-results-v4` manifest, loopback-only dynamic web port,
   an internal-only database endpoint, exact labelled Docker ownership, five
   independently captured PNG/JPEG GUI checkpoints, unit/API/database/migration/
   vertical/GUI evidence, API/database correlation, and restart persistence.
@@ -301,10 +366,10 @@ acceptance failure requires a fresh trial, even if it was recorded by mistake.
 
 ## Workflow
 
-Shared SDLC/Implement workers have a one-hour per-attempt wall-clock deadline
-with a five-minute warning, independent of heartbeat/stall guards. Harness waits
-count, so service frozen runtime requests promptly and batch declared sequential
-operations. Failed owned Compose commands retain a nonzero outcome with bounded
+Shared SDLC/Implement workers use
+[execution health](../worktree/references/execution-health.md) observations
+without healthy-work expiry. Service frozen runtime requests promptly and batch
+declared sequential operations. Failed owned Compose commands retain a nonzero outcome with bounded
 safe diagnostics; runtime credential values are redacted and sensitive output
 is withheld. These diagnostics are not acceptance receipts.
 
@@ -356,7 +421,8 @@ arbitrary overrides, allowlist filters or bypass a failed profile validation.
   Fixture setup failures produce sanitized FAIL results in the report.
 - `scripts/collect_live_evidence.py`: private bounded artifact collector.
 - `scripts/test_verify_agentic_sdlc.py`: verifier status and evidence tests.
-- `scripts/test_git_environment.py`: profile isolation and tampering regressions.
+- `scripts/test_git_environment.py`: profile isolation, tampering and returned
+  readiness-command scope regressions.
 - `scripts/run_with_git_environment.py`: sealed-profile native command launcher.
 - `assets/live-results.schema.json`: private live-results manifest contract.
 - `assets/three-tier-objective.md.template`: public-safe application
@@ -387,6 +453,11 @@ exclusive runtime lease. The worker acquires and holds it through the full live
 sequence and teardown; the outer verifier consumes it without impersonating or
 releasing worker ownership. A per-resource use lock guards synchronous actions
 against lease release, while short state locks leave heartbeat/status available.
+During `sdlc-validate-codes`, worker runtime access additionally requires the
+recovery owner's read-only proof of a current counted `VALIDATION_DEFECT`
+recovery for that assignment, its exact fresh worker and prior termination.
+Ordinary validation and stale or completed repairs remain denied; observation
+does not change phase, repair state or lease ownership.
 Before promotion, Compose and
 execution-phase Git evidence use the exact registered integration worktree, with
 matching project, run, feature, Git directory, branch and recorded HEAD. The target must be clean except while the root checkpoint explicitly records
@@ -399,6 +470,29 @@ resource cleanup. Caller-selected paths and unrecorded descendants are rejected.
 Read-only phase observations use a named private purpose. Classification permits
 unsealed integration files during `sdlc-classify-failure`; TDD additionally permits
 its documented `tests_red` and `tests_ready` output checkpoints before sealing.
+Pending test-revision TDD uses the existing read-only revision owner to validate
+its typed authority, exact test-only scope and retained quiescent writers.
+After native `wave-fail`, classification may observe `repair_required` before
+corrective replanning. It requires the exact unresolved failed wave,
+classified and counted authority, unchanged validation binding, clean integration
+and quiescent workers, validators and runtime leases. It neither advances the
+repair nor admits runtime access.
+When a counted child suspends that parent, the repair owner's read-only query
+verifies the exact pending parent and bounded immutable chain to the active child,
+including integration commit, obligations and budgets. Missing, reordered,
+tampered, exhausted or terminal lineage is rejected. The parent remains suspended;
+corrective preparation and execution still require their ordinary active authority.
+Preparation uses `sdlc-prepare-execution` at its running phase or
+`execution_prepared` checkpoint to observe a clean `repair_required` boundary.
+It requires a completed owner replan, exact active failure and corrective-first
+tasks; a plan-command repair also requires its unchanged reviewed plan and specs.
+The following TDD observation uses those same proofs while execution remains
+`repair_required`, at `sdlc-tdd`, `tests_red` or `tests_ready`. This re-observation
+requires the clean failed commit and existing sealed tests; it grants no test
+authoring authority. Test changes require the separate typed revision owner.
+Observation never advances the correction, seals TDD or changes coordinator state.
+Historical receipt inspection retains existing authoring checkpoints; fresh
+preparation receipts always require a clean target.
 Exact worktree, objective, basis, branch, HEAD, ownership and ancestry checks remain.
 These purposes never reach Compose, inventory, build, browser or test execution;
 explicit clean requests still win. Worker selectors and dirty promoted checkouts
@@ -416,8 +510,10 @@ not serve concurrent worker tests.
 
 ## Verification And Cleanup Owners
 
+The execution suite's actual unittest collection is checked against every
+declared execution capability, including integrated plan-command recovery.
 The private suite catalog/runner records command outcomes, elapsed time and
-bounded progress, with a measured 600-second dispatch budget. Reports group
+bounded progress without expiring a healthy dispatch suite. Reports group
 failed suites/prerequisites separately from affected capabilities. Required
 failures still block native qualification; interruption preserves completed
 results and remains incomplete. Prior report bytes are archived before reruns.
@@ -446,12 +542,12 @@ observations use the immutable receipt and reject unused selectors. Startup also
 requires a clean unchanged baseline. A separate native activation
 receipt correlates naturally emitted Codex turn/execution-item IDs with installed hook
 events and the exact startup session. The bounded adapter currently supports
-Codex CLI 0.166.0; other event formats remain unqualified. Raw prompts and tool
+Codex CLI 0.167.0; other event formats remain unqualified. Raw prompts and tool
 arguments are never copied into receipts. Source discovery alone cannot qualify
 three-tier PASS. Complete normal hook review in the disposable native home before
 the frozen trial, then use the generation-fenced `record-native-activation`
 helper before final acceptance. Installation maintenance precedes verification.
-The v8 lifecycle pins the physical installed catalog and its runtime closure.
+The v9 lifecycle pins the physical installed catalog and its runtime closure.
 Run lifecycle, launcher and workspace actions from that catalog in fresh Python
 processes; the native launcher rejects source-catalog execution. Equal file bytes
 do not make source and installed execution-basis paths interchangeable. Aggregate
@@ -465,3 +561,26 @@ event qualification remain PARTIAL, and its native launch is rejected explicitly
 The CLI adapter uses completed `CommandExecution` events, independently bound to
 their thread and turn; enclosing model tool calls cannot substitute for them.
 See the official [command execution event contract](https://learn.chatgpt.com/docs/app-server#command-execution-approvals).
+
+## Statistics evidence
+
+The three-tier observer records generation-bound before/during/after statistics
+without advancing product state. Full live PASS requires the same immutable
+initial baseline and owner history throughout. Read-only canonical admission
+rechecks those observations, rejecting missing or altered reports without
+repairing evidence. Cleanup retains sanitized reports under the trial report
+directory; missing measurements remain partial.
+The deterministic owner regression also follows a locked plan through execution
+preparation and requires unchanged task fingerprints and scope.
+Recovery regressions also preserve peak observed worker counts across process-only
+clocks and zero-duration samples. Independent live observations compare this count
+with coherent running states, separately from measurable overlap duration.
+
+Deterministic unittest suites buffer output from passing tests so automatic
+summaries do not obscure named outcomes. Failed-test diagnostics remain in the
+captured output; the outcome parser and acceptance rules are unchanged.
+
+Verifier unit fixtures control memory observations so result assertions are
+independent of runner host visibility. Separate regressions require unknown or
+critical memory to admit no fixture suites. Operational verification retains
+the real host probe.

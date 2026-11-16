@@ -37,13 +37,23 @@ Use these examples when reviewing or tuning implicit invocation behavior.
 - Priority/safety independence: a gated P1 and safe P2 must remain classified
   independently; fix only the safe P2.
 
+## Untracked-File Validation Cases
+
+Run the two output-quality cases in `evals.json` against the captured prior
+skill and the candidate in fresh disposable checkouts. Verify the real index
+and worktree remain unchanged, a clean new file does not cause a false
+whitespace failure, and a real whitespace defect is reported with its evidence.
+Do not turn an unexpected command failure into a pass or bypass a caller's
+recovery rules. Deterministic Git controls verify command semantics separately
+from whether a native reviewer chooses the correct check.
+
 ## Manual Runtime Check
 
 When routing precision matters, test these canonical cases in a fresh Codex thread
 where the source skill is installed or discoverable:
 
 - Run canonical rows `code-review-positive-01` through
-  `code-review-positive-10`. Direct `$code-review` prompts should follow the
+  `code-review-positive-11`. Direct `$code-review` prompts should follow the
   findings-first safe-remediation and focused-validation loop unless they
   contain no-write intent. Natural positive rows should produce a
   findings-first report without edits or persistent validation artifacts.

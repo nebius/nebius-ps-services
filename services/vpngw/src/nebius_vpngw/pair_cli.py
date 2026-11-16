@@ -116,6 +116,11 @@ def apply(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Preview both regional child plans without mutation"
     ),
+    repair: bool = typer.Option(
+        False,
+        "--repair",
+        help="Confirm full reconstruction on both retained regional gateway deployments",
+    ),
     prepare_network: bool = typer.Option(
         False,
         "--prepare-network",
@@ -137,6 +142,10 @@ def apply(
     A failed invocation retains each child's original journal and exact approval.
     """
     manifest = manifest.expanduser().absolute()
+    if repair and (dry_run or prepare_network or approve_a is not None or approve_b is not None):
+        raise typer.BadParameter(
+            "--repair is a separate confirmed operation; do not combine it with dry-run, network preparation or disruption approval"
+        )
     if prepare_network and (dry_run or approve_a is not None or approve_b is not None):
         raise typer.BadParameter("Network preparation is a separate resumable phase")
     if prepare_network:
@@ -176,7 +185,12 @@ def apply(
     if dry_run:
         _observe_both(value, manifest, list(pair_config.SIDES), "apply", "--dry-run")
         return
-    result = pair_apply.apply(manifest, approvals={"a": approve_a, "b": approve_b}, timeout=timeout)
+    result = pair_apply.apply(
+        manifest, approvals={"a": approve_a, "b": approve_b}, timeout=timeout, repair=repair
+    )
+    if result["phase"] == "cancelled":
+        typer.echo("Repair cancelled; no gateway state was changed.")
+        return
     typer.echo(
         json.dumps(
             {

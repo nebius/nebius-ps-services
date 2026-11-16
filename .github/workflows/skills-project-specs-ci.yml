@@ -1,6 +1,6 @@
 name: Skills project specs CI
 
-run-name: ${{ inputs.correlation_id != '' && format('post-merge-{0}', inputs.correlation_id) || format('{0} {1}', github.workflow, github.event_name) }}
+run-name: ${{ inputs.candidate_head != '' && format('ai-candidate-{0}-{1}-{2}-{3}', inputs.candidate_pr, inputs.candidate_head, inputs.candidate_base, inputs.candidate_request_id) || inputs.correlation_id != '' && format('post-merge-{0}', inputs.correlation_id) || format('{0} {1}', github.workflow, github.event_name) }}
 
 on:
   pull_request:
@@ -18,6 +18,26 @@ on:
       - ".claude-plugin/marketplace.json"
   workflow_dispatch:
     inputs:
+      candidate_pr:
+        description: Trusted candidate identity (all five fields required together)
+        required: false
+        type: string
+      candidate_head:
+        description: Trusted candidate identity (all five fields required together)
+        required: false
+        type: string
+      candidate_base:
+        description: Trusted candidate identity (all five fields required together)
+        required: false
+        type: string
+      candidate_request_id:
+        description: Active automation request ID
+        required: false
+        type: string
+      candidate_source:
+        description: Trusted admission run ID and attempt separated by a colon
+        required: false
+        type: string
       result_sha:
         description: Post-merge identity (all fields required together)
         required: false
@@ -43,8 +63,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: skills-project-specs-${{ github.workflow }}-${{ inputs.result_sha || github.ref }}
-  cancel-in-progress: ${{ inputs.result_sha == '' }}
+  group: skills-project-specs-${{ github.workflow }}-${{ inputs.candidate_head || inputs.result_sha || github.ref }}
+  cancel-in-progress: ${{ inputs.result_sha == '' && inputs.candidate_head == '' }}
 
 jobs:
   merge-inputs:
@@ -58,10 +78,11 @@ jobs:
       run:
         working-directory: .
     outputs:
+      candidate: ${{ steps.identity.outputs.candidate }}
       post_merge: ${{ steps.identity.outputs.post_merge }}
       checkout_sha: ${{ steps.identity.outputs.checkout_sha }}
     steps:
-      - if: inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != ''
+      - if: (inputs.candidate_pr != '' || inputs.candidate_head != '' || inputs.candidate_base != '' || inputs.candidate_request_id != '' || inputs.candidate_source != '') || inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
@@ -70,9 +91,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+          CANDIDATE_INPUTS: ${{ (inputs.candidate_pr != '' || inputs.candidate_head != '' || inputs.candidate_base != '' || inputs.candidate_request_id != '' || inputs.candidate_source != '') }}
           POST_MERGE_INPUTS: ${{ inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != '' }}
         run: |
-          if [ "$POST_MERGE_INPUTS" = true ]; then
+          if [ "$CANDIDATE_INPUTS" = true ]; then
+            python3 skills/merge-pr/scripts/candidate_ci.py inputs --workflow skills-project-specs-ci.yml
+          elif [ "$POST_MERGE_INPUTS" = true ]; then
             python3 skills/merge-pr/scripts/merge_completion.py ci-inputs --workflow skills-project-specs-ci.yml
           else
             printf 'post_merge=false\ncheckout_sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
@@ -113,6 +137,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Check out the admitted PR candidate
+        if: needs.merge-inputs.outputs.candidate == 'true'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py checkout --workflow skills-project-specs-ci.yml
       - name: Check out the authoritative merged result
         if: needs.merge-inputs.outputs.post_merge == 'true'
         shell: bash
@@ -174,6 +204,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Check out the admitted PR candidate
+        if: needs.merge-inputs.outputs.candidate == 'true'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py checkout --workflow skills-project-specs-ci.yml
       - name: Check out the authoritative merged result
         if: needs.merge-inputs.outputs.post_merge == 'true'
         shell: bash
@@ -219,6 +255,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Check out the admitted PR candidate
+        if: needs.merge-inputs.outputs.candidate == 'true'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py checkout --workflow skills-project-specs-ci.yml
       - name: Check out the authoritative merged result
         if: needs.merge-inputs.outputs.post_merge == 'true'
         shell: bash
@@ -298,7 +340,8 @@ jobs:
           python -m venv "${RUNNER_TEMP}/nebius-sdk-validation"
           "${RUNNER_TEMP}/nebius-sdk-validation/bin/python" -m pip install -r nebius/requirements-validation.txt
           "${RUNNER_TEMP}/nebius-sdk-validation/bin/python" -B -m unittest discover -s nebius/tests -v
-          "${RUNNER_TEMP}/nebius-sdk-validation/bin/ruff" check --no-cache nebius/assets nebius/scripts nebius/tests
+          "${RUNNER_TEMP}/nebius-sdk-validation/bin/python" -B -m unittest discover -s test-live-on-nebius/tests -v
+          "${RUNNER_TEMP}/nebius-sdk-validation/bin/ruff" check --no-cache nebius/assets nebius/scripts nebius/tests test-live-on-nebius
 
       - name: Validate cross-agent distribution and evaluation adapters
         env:
@@ -350,6 +393,7 @@ jobs:
           python -B commit/scripts/test-commit-transaction.py
           python -B commit/scripts/test_pr_publication.py
           python -B commit/scripts/test_transaction_retirement.py
+          python -B commit/scripts/test_commit_push_current.py
           python -B -m unittest discover -s publish-release/scripts -p 'test_release_*.py'
           python -B implement/scripts/test_implement_contract.py
           python -B sdlc-start/scripts/test_validate_project_specs.py
@@ -379,6 +423,8 @@ jobs:
           python -B sdlc-workflow-test/scripts/test_collect_live_evidence.py
           python -B sdlc-workflow-test/scripts/test_three_tier_lifecycle.py
           python -B sdlc-workflow-test/scripts/test_three_tier_objective.py
+          python -B sdlc-workflow-test/scripts/test_three_tier_statistics.py
+          python -B sdlc-workflow-test/scripts/test_three_tier_task_acceptance.py
           python -B sdlc-workflow-test/scripts/test_verify_agentic_sdlc.py
 
   npx-installation:
@@ -399,6 +445,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Check out the admitted PR candidate
+        if: needs.merge-inputs.outputs.candidate == 'true'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py checkout --workflow skills-project-specs-ci.yml
       - name: Check out the authoritative merged result
         if: needs.merge-inputs.outputs.post_merge == 'true'
         shell: bash
@@ -459,3 +511,32 @@ jobs:
           path: ${{ runner.temp }}/result.json
           retention-days: 30
           if-no-files-found: error
+
+  candidate-evidence:
+    name: Exact candidate CI evidence
+    needs: [merge-inputs, python-testing-contracts, runtime-security, verify, npx-installation]
+    if: always() && needs.merge-inputs.outputs.candidate == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Independently collect job outcomes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py evidence --workflow skills-project-specs-ci.yml --output "$RUNNER_TEMP/candidate.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: candidate-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate.json
+          if-no-files-found: error
+          retention-days: 30

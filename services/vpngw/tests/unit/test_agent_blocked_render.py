@@ -912,9 +912,11 @@ def test_failed_frr_activation_does_not_advance_last_applied_state(
     assert agent.state.is_changed({"version": 1, "gateway": {}, "connections": []})
 
 
+@pytest.mark.parametrize("failure", ["hygiene", "runtime-race"])
 def test_passive_materialization_hygiene_failure_does_not_write_receipt(
     tmp_path: Path,
     monkeypatch,
+    failure: str,
 ) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -926,6 +928,8 @@ def test_passive_materialization_hygiene_failure_does_not_write_receipt(
 
     class Renderer:
         def render_and_apply(self, cfg, **kwargs):
+            if failure == "runtime-race":
+                raise RuntimeError("IPsec daemon or configuration changed during policy load")
             return []
 
     monkeypatch.setattr(agent_main, "STATE_PATH", tmp_path / "state.json")
@@ -958,21 +962,26 @@ def test_passive_materialization_hygiene_failure_does_not_write_receipt(
     agent = agent_main.Agent()
     agent.ss = Renderer()
     agent.frr = Renderer()
+    saved = []
+    monkeypatch.setattr(agent.state, "save_last_applied", saved.append)
 
-    with pytest.raises(RuntimeError, match="hygiene failed"):
+    message = "hygiene failed" if failure == "hygiene" else "changed during policy load"
+    with pytest.raises(RuntimeError, match=message):
         agent.reload()
 
     assert not materialization_path.exists()
+    assert not saved
 
 
+@pytest.mark.parametrize("mixed", [False, True])
 def test_ordinary_unit_lane_runs_production_composed_bootstrap_oracle(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, mixed: bool
 ) -> None:
     from tests.integration.test_vm_ha_runtime_composed import (
         test_clean_owner_bootstrap_materializes_passive_before_promotion,
     )
 
-    test_clean_owner_bootstrap_materializes_passive_before_promotion(tmp_path, monkeypatch)
+    test_clean_owner_bootstrap_materializes_passive_before_promotion(tmp_path, monkeypatch, mixed)
 
 
 def test_blocked_frr_render_does_not_install_kernel_routes(

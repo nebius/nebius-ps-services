@@ -157,6 +157,28 @@ class ProjectSpecTransactionTestCase(unittest.TestCase):
         self.previous_home = os.environ.get("CODEX_HOME")
         os.environ["CODEX_HOME"] = str(self.root / "codex")
 
+    def test_candidate_correction_cannot_exempt_stale_authority(self):
+        invalid = self.candidate_design.replace(b'#### Design Details', b'## Design Details')
+        with mock.patch.object(transaction, '_workflow_candidate', return_value={'status': 'correction_pending'}) as feedback:
+            with self.assertRaisesRegex(transaction.ProjectSpecError, 'Git HEAD changed'):
+                transaction._publish_spec_pair(
+                    self.project, requirements_candidate=self.candidate_requirements,
+                    design_candidate=invalid, expected_git_head='a' * 40,
+                    expected_requirements_sha256=digest(self.old_requirements),
+                    expected_design_sha256=digest(self.old_design), operation_id='stale-input')
+            feedback.assert_not_called()
+
+    def test_valid_correction_does_not_mutate_before_predecessor_check(self):
+        with mock.patch.object(transaction, '_workflow_candidate') as feedback:
+            with self.assertRaises(transaction.ProjectSpecError):
+                transaction.publish_spec_pair(
+                    self.project, requirements_candidate=self.candidate_requirements,
+                    design_candidate=self.candidate_design,
+                    expected_git_head=git(self.project, 'rev-parse', 'HEAD'),
+                    expected_requirements_sha256='a' * 64,
+                    expected_design_sha256=digest(self.old_design), operation_id='stale-valid')
+            feedback.assert_not_called()
+
     def tearDown(self) -> None:
         if self.previous_home is None:
             os.environ.pop("CODEX_HOME", None)
@@ -164,7 +186,7 @@ class ProjectSpecTransactionTestCase(unittest.TestCase):
             os.environ["CODEX_HOME"] = self.previous_home
         self.temporary.cleanup()
 
-    def publish(self, operation_id: str = "op-1"):
+    def publish(self, operation_id: str = "op-1", **identity):
         return transaction.publish_spec_pair(
             self.project,
             requirements_candidate=self.candidate_requirements,
@@ -173,7 +195,27 @@ class ProjectSpecTransactionTestCase(unittest.TestCase):
             expected_requirements_sha256=digest(self.old_requirements),
             expected_design_sha256=digest(self.old_design),
             operation_id=operation_id,
+            **identity,
         )
+
+    def test_unregistered_publication_omits_identity_with_shared_registry(self):
+        before = self.publish("before-registry")
+        self.assertNotIn("workflow_identity", before)
+        (self.docs / "requirements.md").write_bytes(self.old_requirements)
+        (self.docs / "design.md").write_bytes(self.old_design)
+        # A common registry directory alone does not register this project.
+        (self.project / ".git/workflow-spec-publication").mkdir()
+        after = self.publish("after-registry")
+        self.assertNotIn("workflow_identity", after)
+        for field in ("git_head", "project_scope", "before", "after", "contract_status"):
+            self.assertEqual(after[field], before[field])
+
+    def test_explicit_publication_identity_survives_noop_project_guard(self):
+        (self.project / ".git/workflow-spec-publication").mkdir()
+        receipt = self.publish(expected_objective_sha256="a" * 64)
+        self.assertEqual(receipt["workflow_identity"], {
+            "objective_sha256": "a" * 64, "basis_sha256": None,
+        })
 
     def test_publish_compares_and_swaps_both_documents(self) -> None:
         receipt = self.publish()

@@ -12,11 +12,11 @@ from . import pair_config
 from .agent.vm_ha.store import atomic_write_json
 from .apply_approval import digest
 from .deploy import pair_phases
-from .deploy.operator_keys import read_private_file
+from .deploy.operator_keys import PrivateFileChanged, read_private_file
 from .deploy.replacement import metadata_only
 
 ENV = "VPNGW_PAIR_CHILD_REQUEST"
-SCHEMA = "nebius-vpngw.pair-child.v1"
+SCHEMA = "nebius-vpngw.pair-child.v2"
 
 
 class Child:
@@ -39,9 +39,18 @@ class Child:
                 "profile",
                 "timeout",
                 "artifact",
+                "repair",
+                "repair_scope",
+                "inspect_repair",
             }
             or request["schema"] != SCHEMA
             or request["side"] not in pair_config.SIDES
+            or type(request["repair"]) is not bool
+            or type(request["inspect_repair"]) is not bool
+            or request["inspect_repair"]
+            and not request["repair"]
+            or request["repair"]
+            and request["approval"] is not None
         ):
             raise ValueError("Invalid regional pair request")
         manifest, configs = pair_config.load(Path(request["manifest"]), resolved=True)
@@ -103,7 +112,12 @@ class Child:
                 raise RuntimeError(
                     "Pair coordinator stopped; regional owner retains recovery authority"
                 )
-            raw = read_private_file(release, required=False)
+            try:
+                raw = read_private_file(release, required=False)
+            except PrivateFileChanged:
+                # Publication can still be settling its private file metadata.
+                # Discard this read; only fresh exact evidence releases a child.
+                raw = None
             if raw is not None:
                 value = json.loads(raw)
                 if value.get("run") != self.request["run"] or value.get("receipts", {}).get(
@@ -131,15 +145,19 @@ def main(path: Path) -> None:
     try:
         child.save()
         arguments = ["apply", "--local-config-file", str(child.config)]
+        if child.request["repair"]:
+            arguments.append("--repair")
         if child.request["approval"]:
             arguments += ["--approve-disruption", child.request["approval"]]
         try:
-            get_command(app).main(arguments, standalone_mode=False)
-            code = 0
+            returned = get_command(app).main(arguments, standalone_mode=False)
+            code = returned if isinstance(returned, int) else 0
         except typer.Exit as error:
             code = error.exit_code
         result = child.record["result"] or {}
-        if code == 0 and result.get("outcome") in {"applied", "resumed", "unchanged"}:
+        if child.request["inspect_repair"] and code == 0 and child.record.get("repair_scope"):
+            child.record["phase"] = "complete"
+        elif code == 0 and result.get("outcome") in {"applied", "resumed", "unchanged"}:
             from .pair_readiness import ReadinessFailure, observe
 
             child.record["phase"] = "verifying"
@@ -160,22 +178,42 @@ def main(path: Path) -> None:
                     }
                     child.save()
                     if time.monotonic() >= deadline or os.getppid() != child.request["parent"]:
-                        raise RuntimeError(
-                            "Paired connection readiness was not independently verified: "
-                            + child.record["first_readiness_failure"]["phase"]
-                            + "/"
-                            + child.record["first_readiness_failure"]["predicate"]
-                        ) from None
+                        raise
                     time.sleep(2)
             child.record["phase"] = "complete"
         else:
             child.record["phase"] = "failed"
-            code = 1
-    except BaseException:
+            code = code or 1
+    except BaseException as error:
+        from .deploy.recovery import Invocation, advice
+
         child.record["phase"] = "failed"
-        raise
+        code = 130 if isinstance(error, KeyboardInterrupt) else 1
+        if isinstance(error, (SystemExit, typer.Exit)):
+            raw_code = error.code if isinstance(error, SystemExit) else error.exit_code
+            code = raw_code if isinstance(raw_code, int) and raw_code != 0 else 1
+        verification_failed = "first_readiness_failure" in child.record
+        recovery = advice(
+            Invocation("apply", child.config, repair=child.request["repair"]), error,
+            codes=("verification-failed",) if verification_failed else (),
+        )
+        result = child.record.get("result") or {}
+        # A completed command remains evidence for effects, not for readiness
+        # after the independent verifier fails. Retain completed effect receipts.
+        if verification_failed:
+            result.update(
+                outcome="failed", configuration="unknown", local_runtime="unknown",
+                authority="unknown", connectivity="unknown", inhibition_retained=None,
+                failure=child.record["first_readiness_failure"],
+                latest_failure=child.record["readiness"]["latest_failure"],
+                next_command=recovery.resume_command,
+            )
+        result["recovery"] = recovery.mapping()
+        child.record["result"] = result
     finally:
-        child.save()
-        pair_phases.CURRENT.reset(token)
-        os.close(child.request["lock_fd"])
+        try:
+            child.save()
+        finally:
+            pair_phases.CURRENT.reset(token)
+            os.close(child.request["lock_fd"])
     raise SystemExit(code)
