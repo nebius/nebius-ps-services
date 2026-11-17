@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 from pathlib import Path
@@ -9,6 +10,179 @@ from urllib.parse import quote
 
 from release_checkpoint import SHA, ReleaseError
 
+
+def reconcile_successor(value, github, *, expected_merge, pr, branch, head, review_id, review_task):
+    """Select an explicitly reviewed follow-up before any publication effects."""
+    if (
+        not isinstance(expected_merge, str)
+        or not SHA.fullmatch(expected_merge)
+        or not isinstance(head, str)
+        or not SHA.fullmatch(head)
+        or type(pr) is not int
+        or pr <= 0
+        or type(review_id) is not int
+        or review_id <= 0
+        or not isinstance(branch, str)
+        or not branch
+        or value["scope"]["host"] != "github.com"
+        or any(value.get(k) for k in ("tag_object", "tag_payload", "run", "complete"))
+    ):
+        raise ReleaseError("Successor requires exact unpublished selection and review identities")
+    history = value.get("successor_reconciliations", [])
+    if (
+        not isinstance(history, list)
+        or len(history) > 100
+        or any(
+            not isinstance(row, dict)
+            or any(not isinstance(row.get(key), dict) for key in ("previous", "next", "evidence"))
+            for row in history
+        )
+    ):
+        raise ReleaseError("Successor history requires owner inspection")
+    selected = {"pr": pr, "branch": branch, "head": head, "review_id": review_id}
+    previous = history[-1] if history and history[-1].get("next") == selected else None
+    retry = previous is not None and value.get("merge") is None
+    old = previous["previous"] if retry else value
+    if (
+        old.get("merge") != expected_merge
+        or old.get("pr") == pr
+        or not old.get("pr")
+        or not old.get("head")
+        or not old.get("branch")
+        or (retry and any(value.get(k) != selected[k] for k in ("pr", "branch", "head")))
+        or (not retry and len(history) >= 100)
+    ):
+        raise ReleaseError("Successor does not match the original merged checkpoint")
+    for checkpoint in (old, value):
+        qualification = checkpoint.get("qualification")
+        if qualification is not None and (
+            not isinstance(qualification, dict)
+            or set(qualification) - {"profile_digest", "operations"}
+            or not isinstance(qualification.get("operations"), dict)
+            or qualification["operations"]
+        ):
+            raise ReleaseError("Settle qualification effects before selecting a successor")
+    candidate = {**value, "pr": pr, "branch": branch, "head": head}
+    proof = execution_proof(candidate, review_task=review_task, head=head, ancestor=expected_merge)
+    owner = review_owner()
+
+    def absence():
+        if github.tag(value["tag"]) != (None, None) or github.release_exists(value["tag"]):
+            raise ReleaseError("A remote tag or release prevents successor selection")
+
+    def observe():
+        repo = github.api("")
+        repo_id = repo["id"]
+        if (
+            type(repo_id) is not int
+            or repo_id <= 0
+            or repo["full_name"] != value["scope"]["repo"]
+            or repo["default_branch"] != value["base"]
+        ):
+            raise ReleaseError("Successor repository or default identity changed")
+        original = github.api(f"pulls/{old['pr']}")
+        successor = github.api(f"pulls/{pr}")
+        if (
+            original["number"] != old["pr"]
+            or original["state"] != "closed"
+            or original["merged"] is not True
+            or not isinstance(original.get("merged_at"), str)
+            or not original["merged_at"]
+            or original["head"]["sha"] != old["head"]
+            or original["head"]["ref"] != old["branch"]
+            or original["base"]["ref"] != value["base"]
+            or successor["number"] != pr
+            or successor["head"]["ref"] != branch
+            or any(type(item["id"]) is not int or item["id"] <= 0 for item in (original, successor))
+            or any(
+                type(item[side]["repo"]["id"]) is not int
+                or item[side]["repo"]["id"] != repo_id
+                or item[side]["repo"]["full_name"] != repo["full_name"]
+                for item in (original, successor)
+                for side in ("head", "base")
+            )
+        ):
+            raise ReleaseError("Original or successor PR identity changed")
+        owner.identity(successor, value["scope"]["repo"], head, value["base"])
+        merged = owner.GitHub(value["scope"]["repo"]).merged_commit(
+            old["pr"], old["head"], value["base"]
+        )
+        if merged != expected_merge:
+            raise ReleaseError("Original authoritative merge result changed")
+        base = successor["base"]["sha"]
+        tip = github.api(f"git/ref/heads/{quote(value['base'], safe='')}")["object"]["sha"]
+        if not isinstance(base, str) or not SHA.fullmatch(base) or tip != base:
+            raise ReleaseError(
+                "Synchronize and review the current default before selecting a successor"
+            )
+        for ancestor, descendant in ((expected_merge, base), (base, head)):
+            comparison = github.api(f"compare/{ancestor}...{descendant}")
+            if (
+                comparison["status"] not in {"ahead", "identical"}
+                or comparison["merge_base_commit"]["sha"] != ancestor
+            ):
+                raise ReleaseError("Successor must include the original merge and current default")
+        allowed = json.loads(github.api("actions/variables/MERGE_OPERATOR_IDS")["value"])
+        if (
+            not isinstance(allowed, list)
+            or not allowed
+            or any(type(item) is not int or item <= 0 for item in allowed)
+        ):
+            raise ReleaseError("Invalid configured merge operator IDs")
+        review = github.api(f"pulls/{pr}/reviews/{review_id}")
+        if type(review.get("id")) is not int or review["id"] != review_id:
+            raise ReleaseError("Successor review ID mismatch")
+        owner.review_record(review, successor, allowed)
+        return {
+            "repository_id": repo_id,
+            "previous_pr_id": original["id"],
+            "pr_id": successor["id"],
+            "base_sha": base,
+            "merged_at": original["merged_at"],
+            "execution_task_sha256": proof["task_sha256"],
+        }
+
+    try:
+        absence()
+        record = observe()
+        if observe() != record:
+            raise ReleaseError("Successor identity changed during reconciliation")
+        if (
+            execution_proof(candidate, review_task=review_task, head=head, ancestor=expected_merge)
+            != proof
+        ):
+            raise ReleaseError("Successor execution changed during reconciliation")
+        absence()
+    except (owner.Blocked, owner.ApiFailure, KeyError, TypeError, ValueError) as error:
+        raise ReleaseError("Authoritative successor review evidence is unavailable") from error
+    if retry:
+        if previous["evidence"] != record:
+            raise ReleaseError("Conflicting successor retry")
+        return copy.deepcopy(value)
+    replaced = (
+        "pr",
+        "branch",
+        "head",
+        "merge",
+        "qualification",
+        "head_reconciliations",
+        "merged_reconciliation",
+        "observed_queue_entry",
+    )
+    prior_selection = {key: copy.deepcopy(value[key]) for key in replaced if key in value}
+    result = copy.deepcopy(value)
+    for key in replaced:
+        result.pop(key, None)
+    result.update(pr=pr, branch=branch, head=head, merge=None)
+    result["successor_reconciliations"] = [
+        *history,
+        {
+            "previous": prior_selection,
+            "next": selected,
+            "evidence": record,
+        },
+    ]
+    return result
 
 def review_owner():
     """Load the installed sibling owner, never code from the release checkout."""

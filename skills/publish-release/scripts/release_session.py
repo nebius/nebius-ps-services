@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from release_checkpoint import SCHEMA, SHA, ReleaseError, Store, state_home
-from release_reconcile import execution_proof, reconcile_merged, reconcile_pr
+from release_reconcile import execution_proof, reconcile_merged, reconcile_pr, reconcile_successor
 
 PHASE_SECONDS = 28800
 POLL_SECONDS = 15
@@ -619,6 +619,7 @@ def parser() -> argparse.ArgumentParser:
             "bind-pr",
             "reconcile-pr",
             "reconcile-merged",
+            "reconcile-successor",
             "verification-budget",
             "qualify",
             "observe",
@@ -641,6 +642,7 @@ def parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--pr", type=int)
     p.add_argument("--expected-head", help="Frozen PR head before an authorized repair")
+    p.add_argument("--expected-merge", help="Frozen merged result before a follow-up repair")
     p.add_argument("--head", help="Exact newly reviewed PR head")
     p.add_argument("--review-task", type=Path, help="Canonical private review execution manifest")
     p.add_argument(
@@ -828,6 +830,14 @@ def main() -> int:
                         head=args.head, review_task=args.review_task,
                     )
                     verification_budget(value, time.time())
+                    store.save(value)
+                    result = value
+                elif args.action == "reconcile-successor":
+                    value = reconcile_successor(
+                        value, github, expected_merge=args.expected_merge,
+                        pr=args.pr, branch=args.branch, head=args.head,
+                        review_id=args.review_id, review_task=args.review_task,
+                    )
                     store.save(value)
                     result = value
                 elif args.action == "complete":

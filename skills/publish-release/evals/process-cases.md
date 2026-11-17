@@ -49,6 +49,11 @@ native invocation, commit-owner delegation or real GitHub publication.
 
 ## Exact publication and recovery
 
+- An explicitly authorized follow-up fix PR before tagging uses its own canonical
+  task and fresh review. Guarded successor selection archives the original merged
+  selection, preserves deadlines, rejects tag/release or qualification effects,
+  and requires protected merge and exact-result qualification again. Ordinary
+  resume does not retarget; exact retry is idempotent and conflicting retry blocks.
 - Squash/rebase results differ from the feature head; use the verified resulting
   commit. Default advancement afterward does not change the release commit.
 - Tag in a clean isolated clone after default-history and exact-result CI proof.

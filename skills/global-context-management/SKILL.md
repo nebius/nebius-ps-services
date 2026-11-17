@@ -139,6 +139,21 @@ Hooks own only non-SDLC global-context events:
 Hooks must not call subagent tools directly, route `sdlc-start`, select SDLC
 phase skills, modify SDLC run state, or inject large documents.
 
+## Repair Skill Defects And Continue
+
+When a repository-owned skill implementation bug blocks an already authorized
+task, repair the canonical skill source before its installed copy. Reproduce the
+failure, make the narrow correction, review and validate it, install through the
+repository's existing script, verify installed parity, and continue the original
+task. Reuse existing authorization; do not stop solely to request another approval
+for an in-scope skill repair and its necessary installation.
+
+Keep grants, checkpoints, deadlines and uncertain effects intact. Reconcile an
+ambiguous effect before retrying it. A genuine external policy, missing authority
+or unsupported security boundary remains a blocker; do not weaken controls, invent
+authority, patch only installed files or use another path to bypass the failure.
+Report source, installation and actual resumed-operation evidence separately.
+
 ## Host Memory Headroom
 
 Before workloads and throughout owned work, follow

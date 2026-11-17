@@ -175,6 +175,7 @@ class GitHub:
         )
 
     def args(self, path):
+        endpoint = f"repos/{self.repo}" + (f"/{path}" if path else "")
         return [
             "gh",
             "api",
@@ -182,7 +183,7 @@ class GitHub:
             "github.com",
             "-H",
             "X-GitHub-Api-Version: 2026-03-10",
-            f"repos/{self.repo}/{path}",
+            endpoint,
         ]
 
     def api(self, path):

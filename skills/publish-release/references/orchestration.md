@@ -166,6 +166,37 @@ budget only when missing. This transition supplies progress evidence, never
 approval or CI success. Complete the frozen release qualification profile before isolated tagging;
 unrelated CI and Pages are observed separately. Ordinary bind and pre-merge reconciliation remain strict.
 
+## Reviewed follow-up before tagging
+
+A defect discovered after the original PR merged may require an explicitly
+authorized follow-up fix PR. Prepare it through a new canonical create-pr task;
+retain the original release checkpoint and merge evidence. After local review,
+passing CI and a fresh configured-operator COMMENT attestation, but before the
+follow-up broker dispatch, use:
+
+```text
+python3 <skill>/scripts/release_session.py reconcile-successor --project-dir <project> \
+  --tag <tag> --expected-merge <original-merged-sha> --pr <follow-up-pr> \
+  --branch <follow-up-branch> --head <reviewed-head> --review-id <review-id> \
+  --review-task <follow-up-execution-manifest>
+```
+
+The original PR/head/result must remain authoritatively merged in the same
+repository's default history. The new open nondraft PR must include that result
+and the current default, carry fresh exact-head/base review, and have its own
+active canonical private execution and published PR binding. The old grant never
+authorizes new work. Existing recorded or remote tags, draft/published releases,
+and any qualification operations or proof block this transition; do not erase
+them to continue.
+
+The owner rechecks identities, ancestry, execution and complete remote absence
+under its existing effect lock. It archives the old selection and qualification,
+selects the follow-up PR, and clears only the active merge/qualification. Scope,
+tag, workflow, expected artifacts and every deadline remain unchanged. Exact
+retries are idempotent; conflicting retries fail. Resume and ordinary binding
+retain their existing strict behavior. Then dispatch the normal protected broker,
+observe its authoritative merge result and qualify that exact result before tagging.
+
 ## Isolated tag publication
 
 Create a task-owned private temporary clone with full history from the frozen

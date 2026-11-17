@@ -78,6 +78,10 @@ creates a release or pushes a tag; project workflows retain those effects and
 service-specific qualification. Standalone templates install the helper at
 `.github/scripts/publication.py` and keep their original workflow filenames.
 
+Repository metadata reads use GitHub's canonical `/repos/{owner}/{repo}`
+endpoint without a trailing slash. Qualification regressions exercise the real
+API argument builder so an invalid metadata URL cannot be hidden by API mocks.
+
 Release manifests are uploaded before publication. Existing releases must match
 those original hashes, while images must match original digests across every
 immutable alias. Image outputs use the registry digest after that comparison.

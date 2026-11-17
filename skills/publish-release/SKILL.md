@@ -194,6 +194,10 @@ observation limits, independent of GitHub job execution limits.
   A push error keeps identity evidence until the remote outcome is established.
 - Missing assets, draft releases and mismatched tag/workflow commits never count
   as success. Repair failing publication through its owner, not duplicate uploads.
+- Before any tag or release exists, an explicitly authorized follow-up fix PR may
+  use the guarded successor transition in the orchestration reference. Preserve
+  the original merge evidence and deadlines; require the new PR's canonical
+  ownership, fresh review, protected merge and exact-result qualification.
 
 ## Must Not
 

@@ -59,6 +59,13 @@ result before updating progress, without recreating a review or merge. The
 registered execution must remain available; selected release-profile qualification
 precedes tags, while unrelated CI and Pages remain background observations.
 
+If a defect is found after merge but before tagging, an explicitly authorized
+follow-up fix PR can become the release's successor. The checkpoint owner verifies
+the original merge, the new PR's ownership, ancestry and fresh review, and absence
+of tag/release or qualification effects. It archives the earlier selection and
+keeps all deadlines. Protected merge and qualification then run for the successor.
+Ordinary resume never changes the release selection implicitly.
+
 PR readiness, merge settlement, post-merge verification and release execution each
 have a separate 28,800-second (eight-hour) limit. The checkpoint retains verification
 deadlines across repeated checks and CI reruns. Only explicit resume renews any
