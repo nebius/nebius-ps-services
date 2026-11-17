@@ -6,6 +6,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Align offline contract and workflow assertions with release qualification,
+  shared publisher dependencies and required PR-read permission.
+
 - Require complete, unique current member coverage for Tailscale gateway readiness
   and retain earlier client evidence across progress reports and later failures.
 - Handle Tailscale client and OS-route command failures without exposing subprocess

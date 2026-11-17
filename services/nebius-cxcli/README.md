@@ -925,6 +925,8 @@ Merge-identity and result-evidence jobs also verify authenticated post-merge run
 Workflow tests require exactly one setup-uv action pinned to a full commit SHA,
 while preserving uv version, cache inputs, conditions and setup ordering.
 Valid immutable action updates do not require a duplicated test hash change.
+Contract and workflow tests cover the release-qualification specification,
+shared publisher dependency paths and required PR-read permission.
 File-preservation tests check content and write metadata while allowing reads to
 update access times.
 Source-contract tests use `tests/source_inspection.py` to locate current function

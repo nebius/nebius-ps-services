@@ -177,6 +177,10 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
     assert isinstance(push_paths, list)
 
     expected_paths = {
+        ".github/merge-policy.json",
+        "skills/publish-release/scripts/**",
+        "skills/github-workflows/scripts/release_qualification.py",
+        "skills/github-workflows/scripts/publication.py",
         ".github/helm-chart-publish.json",
         "services/nebius-cxcli/**",
         "services/nccl-test/**",
@@ -199,6 +203,7 @@ def test_nebius_cxcli_ci_workflow_tracks_platform_modules_and_parses() -> None:
         "wheel-compatibility",
         "result-evidence",
         "candidate-evidence",
+        "release-qualification-nebius-cxcli",
     }
     expected_checkout = {
         "ref": "${{ github.sha }}",
@@ -316,7 +321,11 @@ def test_nebius_cxcli_release_workflow_parses() -> None:
     workflow = _workflow("nebius-cxcli-release.yml")
 
     assert workflow["name"] == "nebius-cxcli-release-publish"
-    assert workflow["permissions"] == {"contents": "write", "actions": "read"}
+    assert workflow["permissions"] == {
+        "contents": "write",
+        "actions": "read",
+        "pull-requests": "read",
+    }
     jobs = workflow["jobs"]
     assert isinstance(jobs, dict)
     assert set(jobs) == {"release"}
