@@ -382,13 +382,28 @@ def completed_asset_predecessor() -> dict | None:
     return value
 
 
-def asset_retirement(manifest: dict, previous: dict | None) -> dict:
-    """Freeze completed ownership before the next runtime journal replaces it."""
+def asset_retirement(
+    manifest: dict, previous: dict | None, *, superseded_sha256: str | None = None
+) -> dict:
+    """Freeze completed or exactly superseded ownership before replacing its journal."""
     if "asset_retirement" in manifest:
         return manifest["asset_retirement"]
-    if previous is None or previous["phase"] != "complete":
+    if superseded_sha256 is not None and not (
+        previous is not None
+        and previous["phase"] in {"installed", "activating", "complete"}
+        and digest(previous) == superseded_sha256
+    ):
+        raise RuntimeError("corrective runtime predecessor differs")
+    if previous is None or (previous["phase"] != "complete" and superseded_sha256 is None):
         return {"predecessor": None, "removals": {}}
     owned = previous["manifest"]["assets"]
+    if previous["phase"] != "complete":
+        # An installed predecessor may still owe its own retirement. Preserve
+        # that ownership too; its newly published assets take precedence.
+        owned = {
+            **previous["manifest"].get("asset_retirement", {}).get("removals", {}),
+            **owned,
+        }
     removals = json.loads(
         json.dumps({path: item for path, item in owned.items() if path not in manifest["assets"]})
     )
@@ -926,11 +941,6 @@ def begin(
 ) -> None:
     existing = state()
     retirement = manifest.get("asset_retirement", {"predecessor": None, "removals": {}})
-    if retirement["removals"] and (existing is None or existing["operation"] != operation):
-        unbound = {key: value for key, value in manifest.items() if key != "asset_retirement"}
-        if retirement != asset_retirement(unbound, completed_asset_predecessor()):
-            raise RuntimeError("asset_retirement_unproven")
-        verify_asset_retirement(retirement)
     superseded = None
     if superseded_sha256 is not None and (existing is None or existing["operation"] != operation):
         # Only the guarded handoff owner supplies this after archiving the exact
@@ -947,6 +957,17 @@ def begin(
         verify_packages(existing["plan"])
         superseded = existing
         existing = None
+    if (superseded is not None or retirement["removals"]) and (
+        existing is None or existing["operation"] != operation
+    ):
+        unbound = {key: value for key, value in manifest.items() if key != "asset_retirement"}
+        if retirement != asset_retirement(
+            unbound,
+            superseded if superseded is not None else completed_asset_predecessor(),
+            superseded_sha256=superseded_sha256 if superseded is not None else None,
+        ):
+            raise RuntimeError("asset_retirement_unproven")
+        verify_asset_retirement(retirement)
     if existing is not None and (
         existing["phase"] != "complete" or existing["operation"] == operation
     ):

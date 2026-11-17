@@ -207,3 +207,25 @@ def test_collector_counts_text_only_limits_and_retains_partial_exit(tmp_path, mo
     assert coverage["limited_probes"] == 1
     assert coverage["collection_gaps"] == 1
     assert events[-1]["limited_probes"] >= 1
+
+
+def test_unreachable_member_has_no_successful_guest_evidence(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "project_id": "project-example",
+        "gateway_group": {"name": "example", "instance_count": 1,
+                          "external_ips": [["192.0.2.1"]]},
+    }))
+    events = []
+    path, code = collector.collect(
+        config, output=tmp_path / "bundle.zip",
+        runner=lambda *_: ([], "unavailable"), progress=events.append,
+    )
+    assert code == 1
+    with zipfile.ZipFile(path) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        peer = json.loads(archive.read("nodes/0/network/peer-channel.json"))
+    assert peer["assessment"] == "unknown"
+    assert manifest["node_coverage"][0]["successful_probes"] == 0
+    assert events[-1]["guest_nodes"] == 0

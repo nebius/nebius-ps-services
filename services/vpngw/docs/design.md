@@ -12745,7 +12745,12 @@ pins and receipts. Expanded effects retain review, and explicit repair remains a
 separate reconstruction owner with the same release-order prerequisite.
 
 Read the completed runtime/package predecessor manifest before preparation replaces
-it. Full repair publishes its verified asset ownership through the same runtime
+it. A corrective successor may also use the exact digest-bound installed or activating
+predecessor after package settlement; carry forward its pending removals as well as
+its published assets. Reject omitted or changed removal evidence before replacing
+that journal. Guarded package preparation performs retirement inside the existing
+writer locks before its ordinary child records completion; failure preserves the
+incomplete operation. Full repair publishes its verified asset ownership through the same runtime
 asset owner; later upgrades read that receipt when no runtime operation exists. Bind exact removed destinations, hashes, modes and predecessor identity into
 the successor manifest/journal. Revalidate under existing writer locks, establish
 replacement boot fencing first, stop/disable obsolete timers before their services,
@@ -12771,7 +12776,9 @@ or invalid collection times and already stale snapshots remain unknown.
 Extend owner-defined diagnostic projections and closed error allowlists together.
 Retain safe operation/checkpoint identifiers, selected/pinned hashes, settlement and
 omissions; never copy raw journals or arbitrary binding maps. Evidence coverage
-remains separate from gateway health. Follow FEAT-041's terminal policy: routine
+remains separate from gateway health. Derived peer-channel diagnostics never count
+as successful guest acquisition; an unreachable member retains zero successful
+probes even when an unknown peer diagnosis is included. Follow FEAT-041's terminal policy: routine
 history limits stay in the archive; other collection gaps remain visible. State
 automatic targeted redaction and its non-exhaustive limit, retaining private-support
 guidance.

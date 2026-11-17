@@ -769,6 +769,7 @@ def prepare_guarded(request: dict) -> dict:
                         raise RuntimeError("HA asset identity changed")
                     repair.publish(Path(path), raw, item["mode"])
             operation.reload_manager()
+            remote.migration.retire_assets(manifest)
             # Runtime inhibition remains durable until exact guarded activation.
             operation.complete()
             return receipt
@@ -1027,6 +1028,10 @@ def corrective_plan(request: dict) -> dict:
     remote.migration.corrective_policy(runtime, manifest["runtime_plan"])
     if manifest.get("ha_parent") != request["operation"]:
         raise RuntimeError("corrective package proposal parent differs")
+    manifest.pop("asset_retirement", None)
+    manifest["asset_retirement"] = remote.migration.asset_retirement(
+        manifest, runtime, superseded_sha256=children["runtime"]["digest"]
+    )
     inspection = remote.inspect_for_plan(manifest, runtime_admission=False)
     if corrective_inspect(request) != current:
         raise RuntimeError("corrective package proposal changed during observation")

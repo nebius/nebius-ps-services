@@ -840,6 +840,7 @@ def collect(
                     "successful_probes": sum(
                         row["file"].endswith(".json")
                         and row["outcome"] == "ok"
+                        and not row["file"].endswith("/network/peer-channel.json")
                         and any(
                             part in row["file"]
                             for part in ("/host/", "/services/", "/ha-", "/logs/", "/network")

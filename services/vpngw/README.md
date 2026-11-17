@@ -810,6 +810,10 @@ repair gets a distinct execution identity; a historical receipt or cloud request
 key cannot satisfy later drift. An admitted corrective release archives the exact
 pending command before publishing its separately approved successor. Uncertain
 attachment requests must settle before that successor can proceed.
+For an installed predecessor whose HA activation did not finish, the exact
+successor retains both its published asset ownership and any pending removals.
+Guarded package preparation retires those obsolete assets under the writer locks
+before recording completion; a retirement failure keeps the operation incomplete.
 Ordinary and retained HA commands retain approved package manifests before guest
 work starts. A retry after an early interruption restores the exact dependency
 wheels by filename and hash, using the original native package plan. Missing approved artifacts stop
@@ -5031,6 +5035,8 @@ Progress identifies discovery, trust, identity selection, connection, sudo, gues
 startup, collection, status and archive stages. Failures include a stable reason,
 whether SSH was attempted and a next action. The final gateway count makes a bundle
 without guest evidence explicitly partial. Detailed outcomes remain in the ZIP.
+Derived peer-channel observations remain diagnostic context and do not count as
+successful guest probes when the member cannot be reached.
 
 `support-bundle` replaces `collect-logs`; the old command is not an alias.
 The v3 bundle is collected live and intended for offline investigation, including review by

@@ -11,6 +11,13 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.6.7] - 2026-11-17
+
+- Complete guarded HA asset retirement under the writer locks and retain pending
+  removals across exact corrective release successors. Reject changed ownership
+  evidence before replacing the predecessor journal.
+- Exclude derived peer-channel observations from successful guest-probe counts
+  when a support-bundle member is unreachable.
 - Show animated repair progress immediately after confirmation, with the current
   stage, member, elapsed time and bounded worker/access wait updates. Preserve
   plain redirected output, one JSON result and interrupted-repair continuation.
