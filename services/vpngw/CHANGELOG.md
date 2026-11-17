@@ -11,7 +11,97 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Keep installed wheel and frozen-binary help checks independent of terminal
+  styling, with forced-color regression coverage.
+
+## [nebius-vpngw-v0.6.6] - 2026-11-16
+
+### Changed
+
+- Make ordinary and HA apply resolve the installed CLI's exact deployment artifact
+  automatically, with frozen editable builds, bundled standalone wheels and a
+  verified release manifest. Retain immutable artifacts by digest.
+- Admit bounded package upgrades through new operation identities after settling
+  interrupted predecessors; retain original artifact pins and require review for
+  expanded effects. Release changes do not require full repair.
+
+- Rename `collect-logs` to `support-bundle` without a compatibility alias.
+- Emit support-bundle schema v3 with durable coverage counts, typed journal
+  error context, boot/invocation chronology, cloud-init stages, five resource
+  intervals, pressure/OOM facts, managed listeners and disk/inode observations.
+- Generate an offline summary, evidence index, bounded timeline and analysis
+  guide from final retained evidence. Collection completeness does not imply
+  gateway health or diagnostic sufficiency. Retain redacted ordinary journal and
+  command text with explicit privacy limits.
+
 ### Fixed
+
+- Redact quoted multiline command-line credentials across journal entries and
+  stream reads, including multiple credential fields on the same line.
+- Stop redacted text streams after an oversized line so discarded credential
+  openers cannot expose later multiline content; report journal text limits.
+- Preserve buffered startup stderr when sudo or Python exits during SSH upload,
+  distinguish missing Python from sudo denial, and retain upload timeout causes.
+- Use the latest classified peer-channel failure for the early activation gate.
+- Show persistent peer failures and connectivity guidance during interrupted
+  apply without replacing the exact operation's recovery action.
+- Allow aggregate public status up to 90 seconds of the remaining support-bundle
+  budget; preserve the five-minute total, guest-probe limits and archive reserve.
+- Preserve multiline journal redaction across equal timestamps and clock rollback.
+- Bound artifact provenance lookup to an isolated 30-second worker so stalled
+  builds or downloads do not consume the live collector's overall deadline.
+- Retain redacted SSH startup diagnostics on timeout and malformed output.
+- Preserve IPsec child-SA counters when VICI returns an existing child name,
+  instead of failing the collector with a duplicate-name exception.
+- Drain SSH diagnostic output through EOF before accepting exit status, retaining
+  completed records and avoiding premature stream-completion failures.
+- Reuse normalized SSH key paths and existing operator identity for support
+  collection, with stage-specific failure reporting and explicit guest coverage.
+- Capture public status output, service status, host commands and bounded fixed
+  log tails; retain completed evidence on timeout and rebuild text/report references
+  after archive trimming.
+- Preserve SSH across repair-owned reboots by archiving exact obsolete
+  product-owned SSH ingress dependencies before replacing the ingress service.
+  Preserve customer SSH configuration and reject modified product dependencies.
+- Clarify the recovery order: normal apply, accessible-VM software repair, then
+  an explicitly confirmed last-resort VM rebuild using destroy and fresh apply.
+- Let fresh apply enroll managed SSH identities after verified destruction when
+  retired private host keys are unavailable, with fresh absence checks and
+  interruption-safe publication. Preserve explicit operator trust overrides.
+- Convert exact legacy SSH receipts during apply with current VM/lifecycle proof
+  and strict host verification; retain separate authenticated changed-key recovery.
+- Preserve specific SSH failures and omit YAML-derived project/region selectors
+  from recovery commands while retaining explicit overrides.
+
+- Preserve validated package-worker digests and exact service names in support
+  bundles, including prepared workers with no requests yet.
+- Preserve journal omission accounting through projection and archive limits;
+  retain failure landmarks ahead of routine historical events.
+- Retain separately labelled first/latest apply failures, paired interface
+  traffic/error/drop counters and exact package-request states in support bundles.
+- Preserve exact activation predicates, cloud route next hops, source timestamps
+  and omission counts in support bundles. Mark structural and journal limits,
+  prioritize every gateway's current facts, and retain newest journal evidence
+  during bounded collection and archive trimming.
+- Prioritize unfinished package workers over terminal history and report bounded
+  worker-history coverage instead of silently omitting older active operations.
+- Include route-fix timer state and operating-system versions in support evidence.
+- Allow fenced VM-HA activation verification five minutes per member before
+  reporting operation-timeout, so slow post-repair convergence on small VM
+  presets no longer aborts the apply mid-transaction; expired verification still
+  leaves only exact-operation locked state that the same command resumes.
+- Report an interrupted apply-owned managed-mTLS transaction in `status` as
+  `managed-mtls-apply-interrupted` with a resume-the-apply action instead of the
+  misleading `managed-mtls-transaction-conflict`, which now marks only foreign
+  transactions.
+- Run the required build during explicit release qualification and keep optional
+  manual campaigns outside that mode; verify release lint through its required
+  exact-commit qualification evidence.
+- Identify the failed per-member HA activation predicate and retain the first
+  failure through later timeouts. Expected apply fencing is no longer presented
+  as the initiating activation failure; readiness and recovery checks remain.
+- Explain selected deployment wheel versus installed CLI identity in
+  `artifact-changed` recovery guidance and recommend evidence collection.
 
 - Let proven zero-SPI kernel acquisition placeholders expire after scoped trap
   and policy teardown. These placeholders no longer block tunnel restoration,
@@ -19,6 +109,30 @@ All notable changes to this project are tracked here. This changelog follows
 - Batch static tunnel route activation under bounded ownership admission so
   repeated full authority observations per prefix cannot exhaust restoration.
   Retain native IKE recovery when replay proves policy and routes already restored.
+
+### Added
+
+- Add bounded `support-bundle` collection into a private ZIP with safe projections,
+  redacted logs, artifact provenance and per-source completeness evidence.
+  Existing gateways need no upgrade. Credentials and raw configuration are excluded;
+  operational identifiers and unrecognized log text remain private evidence.
+- Include this diagnostic capability in the explicitly approved v0.6.6 patch
+  release exception to the usual minor-version policy for new capabilities.
+
+- Verify exact-commit CI qualification before release publication, retaining
+  final tagged package and artifact checks while excluding unrelated CI/Pages.
+
+- Classify failed VM-HA peer heartbeat sends (timeout, refused, unreachable,
+  tls, protocol) and publish peer send health additively in the agent status
+  heartbeat section; `status` reports a persistently blocked peer endpoint as
+  `peer-heartbeat-endpoint-unreachable` with the owning security-group fix
+  (VM-to-VM TCP 9443) and failed peer TLS trust as `peer-heartbeat-tls-failure`
+  with managed-mTLS guidance. Support bundles retain the new typed fields.
+- Prove the peer heartbeat channel in a bounded `verify-peer-channel-node-N`
+  gate before fenced activation verification, so a provably blocked endpoint
+  fails the apply in seconds with its classified cause; a merely slow channel
+  still falls through to the full fenced verification window. Document VM-to-VM
+  TCP 9443 as a customer-owned security-group prerequisite.
 
 ## [nebius-vpngw-v0.6.5] - 2026-11-15
 

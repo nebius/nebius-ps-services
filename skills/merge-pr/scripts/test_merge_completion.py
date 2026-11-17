@@ -937,5 +937,27 @@ python3() {
         self.assertEqual(written, initial)
 
 
+class NotificationTests(unittest.TestCase):
+    def test_targeted_callback_never_enumerates_global_recovery(self):
+        api = Mock(repo=REPO)
+        api.repo_info.return_value = {"default_branch": "main"}
+        source = {"id": 200, "run_attempt": 2, "status": "completed"}
+        api.api.return_value = source
+        target = {"pr": 1, "head": HEAD}
+        with patch.dict(os.environ, ENV), patch.object(completion, "route_target", return_value=target) as route:
+            self.assertEqual(completion.targets(api, POLICY, {"inputs": {"source_run_id": "200", "source_run_attempt": "2"}}), [target])
+            route.assert_called_once_with(api, POLICY, source)
+        api.pages.assert_not_called()
+
+    def test_partial_identity_and_attempt_drift_block(self):
+        api = Mock()
+        api.api.return_value = {"id": 200, "run_attempt": 3, "status": "completed"}
+        for inputs in [{"source_run_id": "200"}, {"source_run_attempt": "2"},
+                       {"source_run_id": "200", "source_run_attempt": "2"},
+                       {"source_run_id": "-1", "source_run_attempt": "2"}]:
+            with self.subTest(inputs=inputs), self.assertRaises(gate.Blocked):
+                completion.notification_source(api, inputs)
+
+
 if __name__ == "__main__":
     unittest.main()

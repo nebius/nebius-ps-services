@@ -100,9 +100,12 @@ never grants merge authority.
    This adapter publishes a COMMENT attestation and retains its real review ID.
 3. Use private `submit-delivery --run-dir … --execution SLICE-001`. The adapter
    independently rechecks current source/basis, promoted/tested/reviewed artifact,
-   base, CI, operator authority, objections and conversations. Every mandatory
-   criterion must pass with clean trial/reset provenance and independent target
-   observation. Live N/A is restricted to reviewed prose-only changes.
+   base, CI, operator authority, objections and conversations. Required implementation criteria and development CI must pass. Additional
+   live/cloud/UAT campaigns follow the shared optional-UAT contract: not-requested,
+   pending or unavailable optional UAT does not create a new merge gate. Retain
+   recorded failures, active campaign and unresolved cleanup obligations. When a
+   live trial is used as passing evidence, require clean trial/reset provenance
+   and independent target observation.
 4. Require compatible protected workflows already installed on the default
    branch. Queue rules fail closed. Never install workflows, weaken protection,
    substitute credentials, push default, or directly approve/merge through CLI,

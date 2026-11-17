@@ -8,3 +8,4 @@ github-workflows-negative-03,false,Review a GitHub pull request for merge readin
 github-workflows-codex-portability,true,$github-workflows Create a least-privilege GitHub Actions workflow for pull request checks.
 github-workflows-claude-portability,true,/github-workflows Create a least-privilege GitHub Actions workflow for pull request checks.
 github-workflows-quoted-command,false,"Treat ""/skills:github-workflows"" as sample text in this punctuation exercise; count its punctuation characters only."
+github-workflows-observer,true,Separate CI status callbacks from protected merge and validate exact-commit release qualification.

@@ -176,7 +176,12 @@ def converge(
             if context := CURRENT.get():
                 context.select_config(effective.path)
             with api._vm_ha_progress_step(progress_sink, api._VMHAProgressPhase.INSPECT_STATE):
-                inspection = api._inspect_vm_ha_status_with_region(effective.path, region=region)
+                inspection = api._inspect_vm_ha_status_with_region(
+                    effective.path,
+                    region=region,
+                    prepare_ssh=True,
+                    persist_ssh=not dry_run,
+                )
             context = CURRENT.get()
             if context is not None:
                 context.project = inspection.project_id
@@ -854,6 +859,7 @@ def converge(
                         and (not interactive)
                         and api._vm_ha_result_requires_approval(planned_result)
                         and (not apply_plan.authorization_persisted)
+                        and apply_plan.automatic_admission is None
                     )
                 ):
                     result = planned_result
@@ -861,6 +867,7 @@ def converge(
                     approve is None
                     and api._vm_ha_result_requires_approval(planned_result)
                     and (not apply_plan.authorization_persisted)
+                    and apply_plan.automatic_admission is None
                     and (not api._confirm_vm_ha_apply_plan(planned_result))
                 ):
                     result = api._vm_ha_operator_declined(planned_result)
@@ -1366,6 +1373,9 @@ def run(api: Any, report: Any, **options: Any) -> None:
     dry_run = options.get("dry_run", False)
     region = options.get("region")
     ha_format = api._VMHAOutputFormat(output_format.value)
+    from .ssh_policy import APPLY_POLICIES
+
+    ssh_token = APPLY_POLICIES.set({})
     token = REPORT.set(report)
     try:
         if rotation:
@@ -1411,6 +1421,7 @@ def run(api: Any, report: Any, **options: Any) -> None:
         raise ReportedExit(130) from None
     finally:
         REPORT.reset(token)
+        APPLY_POLICIES.reset(ssh_token)
     if code:
         raise ReportedExit(code)
 

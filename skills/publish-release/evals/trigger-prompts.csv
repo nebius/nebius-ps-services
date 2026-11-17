@@ -14,3 +14,5 @@ publish-release-approval-wait,true,$publish-release Publish end to end and conti
 publish-release-design-only,false,Design improvements to publish-release without publishing anything.
 publish-release-approval-alone,false,Approve this unrelated pull request on GitHub.
 checkout-behavior-explanation,false,"Explain how publish-release handles the final local checkout; do not run it or change anything."
+publish-release-manual-merge-resume,true,"I merged the repaired PR manually; resume publishing the same prepared release."
+publish-release-no-unrelated-wait,true,Publish this project release using its exact-commit qualification profile without waiting for unrelated Pages.

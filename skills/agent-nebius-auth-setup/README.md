@@ -135,6 +135,8 @@ This correction needs no setup, credential change or IAM operation.
 Hook installation regressions cover the complete source bundle, including hook
 test modules, and verify that a repeated installation reports no changed files
 or registrations.
+Setup tests exercise GNU and BSD file metadata reads, discard output from failed
+probes, and retain rejection of foreign-owned credentials and unsafe modes.
 
 ```bash
 python3 -B scripts/test_agent_nebius_auth_setup.py

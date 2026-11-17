@@ -908,6 +908,60 @@ class AgentNebiusAuthSetupTest(unittest.TestCase):
             (self.home / ".nebius" / "codex-agent-default-project-id").exists()
         )
 
+    def test_stat_dialects_discard_failed_probe_output_and_retain_guards(self) -> None:
+        fake_stat = self.bin_dir / "stat"
+        fake_stat.write_text(
+            textwrap.dedent("""\
+                #!/usr/bin/env python3
+                import os
+                import stat
+                import sys
+
+                flavor = os.environ["FAKE_STAT_FLAVOR"]
+                expected = "-c" if flavor == "gnu" else "-f"
+                if sys.argv[1] != expected or os.environ.get("FAKE_STAT_FAIL"):
+                    print("failed probe output that must not become metadata")
+                    raise SystemExit(1)
+                metadata = os.lstat(sys.argv[3])
+                if sys.argv[2] == "%u":
+                    print(metadata.st_uid + int(os.environ.get("FAKE_STAT_FOREIGN", "0")))
+                elif sys.argv[2] in ("%a", "%Lp"):
+                    print(format(stat.S_IMODE(metadata.st_mode), "o"))
+                else:
+                    raise SystemExit(1)
+                """),
+            encoding="utf-8",
+        )
+        fake_stat.chmod(0o700)
+        for flavor in ("gnu", "bsd"):
+            with self.subTest(flavor=flavor):
+                self.env["FAKE_STAT_FLAVOR"] = flavor
+                self.write_state()
+                self.write_credential()
+                self.assert_setup_succeeds()
+                self.assertEqual(self.run_verify().returncode, 0)
+
+                self.env["FAKE_STAT_FOREIGN"] = "1"
+                result = self.run_verify()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("not owned by the current user", result.stderr)
+                self.env.pop("FAKE_STAT_FOREIGN")
+
+                credential = (
+                    self.home / ".nebius" / f"codex-agent-authkey.{PROJECT}.json"
+                )
+                credential.chmod(0o644)
+                result = self.run_verify()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("must have mode 0600", result.stderr)
+                credential.chmod(0o600)
+
+                self.env["FAKE_STAT_FAIL"] = "1"
+                result = self.run_verify()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("not owned by the current user", result.stderr)
+                self.env.pop("FAKE_STAT_FAIL")
+
     def test_verify_uses_only_agent_runtime_and_makes_no_changes(self) -> None:
         self.write_state(
             active=AGENT_PROFILE,

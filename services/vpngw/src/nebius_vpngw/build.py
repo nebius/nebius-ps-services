@@ -93,12 +93,26 @@ def build_binary() -> None:
         "agent/vm_ha/evidence.py",
         "agent/vm_ha/heartbeat.py",
         "agent/vm_ha/mtls.py",
+        "support_bundle/redaction.py",
+        "support_bundle/projection.py",
+        "support_bundle/probe.py",
     ):
         source = Path(__file__).parent / relative
         if not source.is_file():
             raise RuntimeError("HA handoff helper source is missing")
         destination = "nebius_vpngw" + ("/" + str(Path(relative).parent) if "/" in relative else "")
         add_data_args.extend(["--add-data", f"{source}{os.pathsep}{destination}"])
+
+    from .deploy.ssh_push import SSHPush
+
+    artifact = SSHPush().resolve_vm_ha_agent_artifact()
+    artifact.verify_current()
+    add_data_args.extend(
+        [
+            "--add-data",
+            f"{artifact.path}{os.pathsep}nebius_vpngw/agent-wheel",
+        ]
+    )
 
     import vici
 

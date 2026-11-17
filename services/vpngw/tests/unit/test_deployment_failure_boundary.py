@@ -315,7 +315,7 @@ def test_interrupted_apply_publishes_recovery_before_pair_report(monkeypatch, tm
         assert result.stdout.count("Reason:") == 1
 
 
-def test_repair_preserves_effective_region_over_top_level_hint(monkeypatch, tmp_path):
+def test_repair_uses_config_without_redundant_resolved_selectors(monkeypatch, tmp_path):
     path = tmp_path / "config.yaml"
     path.touch()
     monkeypatch.setattr(cli, "load_local_config", lambda _: {"region_id": "wrong"})
@@ -329,7 +329,7 @@ def test_repair_preserves_effective_region_over_top_level_hint(monkeypatch, tmp_
     )
     result = CliRunner().invoke(cli.app, ["apply", "-c", str(path), "--output-format", "json"])
     recovery = json.loads(result.stdout)["recovery"]
-    assert "--region correct" in recovery["repair_command"]
+    assert "--region" not in recovery["repair_command"]
     assert "wrong" not in recovery["repair_command"]
 
 
@@ -426,8 +426,6 @@ def test_conversion_prerequisite_keeps_source_repair_and_conversion_resume(
             "apply",
             "--local-config-file",
             str(source),
-            "--project-id",
-            "project-a",
             "--region",
             "region-one",
             "--repair",
@@ -484,19 +482,12 @@ def test_conflicting_conversion_candidate_public_failure_never_recommends_foreig
         assert recovery["reason_code"] == "candidate-conflicts-with-source"
         assert shlex.split(recovery["repair_command"])[3:] == [
             str(source),
-            "--project-id",
-            "project-test",
-            "--region",
-            "eu-west1",
             "--repair",
         ]
     else:
         assert "candidate-conflicts-with-source" in result.stdout
         assert (
-            "  nebius-vpngw apply --local-config-file "
-            + str(source)
-            + " --project-id project-test --region eu-west1 --repair"
-            in result.stdout
+            "  nebius-vpngw apply --local-config-file " + str(source) + " --repair" in result.stdout
         )
     assert (source.read_bytes(), target.read_bytes()) == before
 
@@ -687,6 +678,12 @@ def test_repair_replacement_advice_requires_owned_existing_targets(owned, tmp_pa
         ]
         assert "--repair" not in shlex.split(recovery.fresh_apply_command)
         assert "deletes gateway VMs" in recovery.text()
+        assert (
+            "Step 2 — software repair, after authenticated SSH access is available"
+            in recovery.text()
+        )
+        assert "Step 3 — last-resort VM rebuild" in recovery.text()
+        assert recovery.text().index("Step 2") < recovery.text().index("Step 3")
     missing = advice(context, RepairBlocked("repair-vm-missing", ownership_established=True))
     assert missing.destroy_command is None
 

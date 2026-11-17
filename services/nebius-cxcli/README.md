@@ -260,6 +260,13 @@ route or Tailnet Lock approval. Have the administrator complete it, then rerun
 targets to check actual traffic; infrastructure readiness alone is insufficient.
 Failover testing is separate and only runs when explicitly requested.
 
+`gateway_ready: true` requires fresh readiness evidence for every configured member
+across all enabled gateway components. Client verification is reported separately:
+a local client or route-command timeout leaves optional verification `PENDING`;
+`verification.required: true` makes a failed client check fail deployment while
+retaining the router evidence. Reconnect the client, check accepted routes and run
+`tailscale verify` again.
+
 See the [Tailscale guide](docs/tailscale.md) for configuration, administrator
 prerequisites, credential modes, SecretStash import, recovery and retirement.
 Provisioning uses ordinary `deploy`; there is no `tailscale install` or
@@ -918,8 +925,17 @@ Merge-identity and result-evidence jobs also verify authenticated post-merge run
 Workflow tests require exactly one setup-uv action pinned to a full commit SHA,
 while preserving uv version, cache inputs, conditions and setup ordering.
 Valid immutable action updates do not require a duplicated test hash change.
+Contract and workflow tests cover the release-qualification specification,
+shared publisher dependency paths and required PR-read permission.
 File-preservation tests check content and write metadata while allowing reads to
 update access times.
 Source-contract tests use `tests/source_inspection.py` to locate current function
 definitions when edits shift imported line numbers. Rerun tests after edits to
 validate the final checkout.
+
+## Release qualification
+
+Releases use the project profile in `.github/merge-policy.json` and the shared
+[qualification contract](../../skills/publish-release/references/release-qualification.md).
+Required native/offline checks remain enforced. Optional cloud UAT is separate;
+final tagged package and remote asset verification remain part of publication.

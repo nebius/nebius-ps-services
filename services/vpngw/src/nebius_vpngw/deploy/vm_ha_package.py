@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -151,6 +151,19 @@ class VMHAPackagePlan:
     temporary: Any = field(repr=False)
     uploaded_payload_identity: str | None = field(default=None, repr=False)
     reservation: dict | None = field(default=None, repr=False)
+    _reinspect: Callable[[], dict] | None = field(default=None, repr=False)
+    _inventory: dict | None = field(default=None, repr=False)
+
+    def assert_predecessor(self) -> None:
+        """Refresh through the exact package owner used for this plan."""
+        if self._reinspect is None:
+            raise VMHAAgentPackageError("Package predecessor has no fresh admission observation")
+        current = self._reinspect()
+        if (
+            package_predecessor(current["observation"]) != self.observation
+            or current["dependency_inventory"] != self._inventory
+        ):
+            raise VMHAAgentPackageError("HA package predecessor changed after upgrade planning")
 
     @property
     def digest(self) -> str:
@@ -296,6 +309,7 @@ def inspect_plan(
             != corrective_predecessor["children"]
         ):
             raise VMHAAgentPackageError("Corrective package reservation changed")
+
     def inspect_packages() -> dict:
         if unreserved_corrective:
             assert corrective_predecessor is not None
@@ -381,6 +395,8 @@ def inspect_plan(
             effects,
             target_identity,
             temporary,
+            _reinspect=inspect_packages,
+            _inventory=inventory,
         )
     except Exception:
         temporary.cleanup()

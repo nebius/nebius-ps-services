@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -1071,7 +1072,10 @@ class MergeTests(unittest.TestCase):
                 self.assertIn("GH_TOKEN: ${{ github.token }}", broker)
                 self.assertIn("persist-credentials: false", broker)
                 self.assertNotIn("create-github-app-token", broker)
-                self.assertIn("types: [in_progress, completed]", broker)
+                observer = path.with_name(path.name.replace("skills-merge-pr", "ci-status-observer")).read_text()
+                self.assertIn("types: [in_progress, completed]", observer)
+                self.assertNotIn("  workflow_run:", broker)
+                self.assertNotIn("  pull_request_target:", broker)
 
     def test_each_result_ci_preserves_sha_and_push_equivalent_execution(self):
         root = Path(__file__).resolve().parents[3]
@@ -1086,6 +1090,8 @@ class MergeTests(unittest.TestCase):
                 self.assertIn("inputs.result_sha", group)
                 candidate_inputs = "      candidate_head:" in value
                 cancellation = "inputs.result_sha == ''"
+                if "      qualification_sha:" in value:
+                    cancellation = "inputs.qualification_sha == '' && " + cancellation
                 if candidate_inputs:
                     cancellation += " && inputs.candidate_head == ''"
                 self.assertIn("cancel-in-progress: ${{ " + cancellation + " }}", value)
@@ -1100,7 +1106,7 @@ class MergeTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     value.count("      actions: read"),
-                    checkout_steps + 2 + int(candidate_inputs),  # identity/result, optional candidate evidence
+                    checkout_steps + 2 + int(candidate_inputs) + value.count("  release-qualification-"),  # evidence producers
                 )
                 self.assertIn("CI_EXPECTED_JOBS:", value)
                 self.assertIn("ci-evidence --workflow " + workflow["file"], value)
@@ -1122,18 +1128,32 @@ class MergeTests(unittest.TestCase):
             (root / ".github/workflows", ".yml", ""),
             (root / "github-ai-automation/deployment/workflows", ".yml.template", "-automation"),
         ):
-            for name in ("skills-merge-pr", "merge-completion"):
+            for name in ("skills-merge-pr", "merge-completion", "ci-status-observer"):
                 with self.subTest(workflow=name, profile=profile_suffix or "ordinary"):
                     value = (directory / (name + suffix)).read_text()
                     value = value.replace("skills/merge-pr/scripts/", ".github/scripts/")
                     triggers = (
-                        '["Protected merge", "CI"]' if name == "merge-completion" else '["CI"]'
+                        '["Protected merge"]' if name == "merge-completion" else '["CI"]'
                     )
                     value = re.sub(
                         r"^    workflows:.*$", f"    workflows: {triggers}", value, flags=re.M
                     )
                     profile = name + profile_suffix
                     self.assertEqual(value, (templates / f"{profile}.yml.template").read_text())
+
+
+class TransportDiagnosticTests(unittest.TestCase):
+    def test_transport_categories_never_leak_original_error(self):
+        for error, category in [
+            (ValueError("SENSITIVE_RESPONSE"), "invalid_response"),
+            (OSError("SENSITIVE_PATH"), "command_unavailable"),
+            (subprocess.TimeoutExpired("SENSITIVE_COMMAND", 45), "transport_timeout"),
+        ]:
+            with self.subTest(category=category), patch.object(gate, "_gh", side_effect=error):
+                with self.assertRaises(gate.ApiFailure) as raised:
+                    gate.gh(["api", "fixture"])
+                self.assertIn(category, str(raised.exception))
+                self.assertNotIn("SENSITIVE", str(raised.exception))
 
 
 class MergedResultTests(unittest.TestCase):

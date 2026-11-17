@@ -10,6 +10,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
+from click import unstyle
 
 pytestmark = pytest.mark.integration
 
@@ -100,9 +101,10 @@ def test_wheel_staging_excludes_operator_configuration(monkeypatch, tmp_path) ->
     assert all((staged / name).is_file() for name in ("pyproject.toml", "README.md", "LICENSE"))
 
 
-def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
+def test_wheel_build_uses_package_local_version_file(tmp_path, monkeypatch) -> None:
     from nebius_vpngw.deploy.ssh_push import VMHAAgentArtifact
 
+    monkeypatch.setenv("FORCE_COLOR", "1")
     wheel_path = _build_wheel(tmp_path)
     artifact = VMHAAgentArtifact.from_wheel(wheel_path, source="release-build-test")
     assert artifact.path == wheel_path.resolve()
@@ -116,6 +118,9 @@ def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
     assert "nebius_vpngw/ordinary_routes.py" in names
     assert "nebius_vpngw/replay_window.py" in names
     assert "nebius_vpngw/packet_health.py" in names
+    assert "nebius_vpngw/support_bundle/redaction.py" in names
+    assert "nebius_vpngw/support_bundle/projection.py" in names
+    assert "nebius_vpngw/support_bundle/probe.py" in names
     assert "nebius_vpngw/systemd/nebius-vpngw-esp4-preflight.sh" in names
     assert "nebius_vpngw/systemd/nebius-vpngw-fix-routes.service" in names
     assert "nebius_vpngw/systemd/nebius-vpngw-fix-routes.timer" in names
@@ -151,6 +156,51 @@ def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
 
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(install_root)
+    support_help = subprocess.run(
+        [sys.executable, "-m", "nebius_vpngw", "support-bundle", "--help"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert support_help.returncode == 0, support_help.stderr
+    help_text = unstyle(support_help.stdout)
+    assert "--since" in help_text and "--output" in help_text
+    support_smoke = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import json, pathlib, zipfile
+from functools import partial
+from typer.testing import CliRunner
+from nebius_vpngw import cli
+from nebius_vpngw.support_bundle import collector
+p=pathlib.Path('support-fixture.json')
+p.write_text(json.dumps({'project_id':'project-fixture','gateway_group':{'name':'fixture','instance_count':1},'psk':'SYNTHETIC_PRIVATE_VALUE'}))
+def unavailable(request, timeout): return [], 'unavailable'
+collector.collect = partial(collector.collect, runner=unavailable)
+out=pathlib.Path('support-fixture.zip')
+result=CliRunner().invoke(cli.app, ['support-bundle', '-c', str(p), '--output', str(out)])
+assert result.exit_code == 1, result.output
+assert CliRunner().invoke(cli.app, ['collect-logs', '--help']).exit_code == 2
+with zipfile.ZipFile(out) as archive:
+    assert 'manifest.json' in archive.namelist()
+    assert json.loads(archive.read('manifest.json'))['schema'] == 'nebius-vpngw/support-bundle-v3'
+    assert {'summary.md','analysis-guide.md','timeline.json','evidence-index.json'} <= set(archive.namelist())
+    assert all(b'SYNTHETIC_PRIVATE_VALUE' not in archive.read(name) for name in archive.namelist())
+""",
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert support_smoke.returncode == 0, support_smoke.stderr
     capability = subprocess.run(
         [
             sys.executable,
@@ -224,7 +274,8 @@ def test_wheel_metadata_retains_runtime_dependency_bounds(tmp_path) -> None:
     )
 
 
-def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
+def test_frozen_binary_starts_and_contains_routing_assets(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("FORCE_COLOR", "1")
     binary_path = _build_frozen_binary(tmp_path)
 
     version = subprocess.run(
@@ -236,6 +287,27 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
     )
     assert version.returncode == 0, version.stderr
     assert version.stdout.startswith("nebius-vpngw ")
+
+    support_help = subprocess.run(
+        [str(binary_path), "support-bundle", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert support_help.returncode == 0, support_help.stderr
+    assert "--since" in unstyle(support_help.stdout)
+    worker = subprocess.run(
+        [str(binary_path), "--support-bundle-worker"],
+        input='{"kind":"invalid"}',
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert worker.returncode == 0, worker.stderr
+    assert json.loads(worker.stdout.splitlines()[-1])["outcome"] == "unavailable"
+    assert "Traceback" not in worker.stderr
 
     archive = subprocess.run(
         [
@@ -272,6 +344,9 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
     from nebius_vpngw import ingress_policy, packet_health, replay_window
 
     for source in (
+        "support_bundle/redaction.py",
+        "support_bundle/projection.py",
+        "support_bundle/probe.py",
         *replay_window.REPLAY_WINDOW_SOURCES,
         *ingress_policy.INGRESS_SOURCES,
         "packet_health.py",

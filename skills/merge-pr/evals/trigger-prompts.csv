@@ -14,3 +14,7 @@ major-dependabot-merge,true,$merge-pr Review and merge this major Dependabot upd
 checkout-behavior-explanation,false,"Explain how merge-pr handles the final local checkout; do not run it or change anything."
 merge-pr-issue-workflow-explanation,false,Explain how $merge-pr participates in saved issue plans and closure after merge; do not execute the workflow.
 merge-pr-pending-uat,true,Use $merge-pr for the reviewed SDLC pull request with core admission and a nonblocking pending UAT disposition.
+merge-pr-wait-result,true,Use merge-pr --wait-for-result for PR42 and verify its downstream CI and Pages.
+merge-pr-default-settlement,true,Merge PR42 and return after confirmed merge while downstream CI continues.
+review-close-owner,false,"Use review-pr to review and close only PR42 without merging, including independently resolved linked issues."
+closed-pr-issue-continuation,false,Resume the authorized review-pr closure: PR42 is already closed and its independently resolved linked issue still needs completion.

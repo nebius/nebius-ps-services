@@ -1,10 +1,12 @@
 name: nebius-cxcli-nsight
 
-run-name: ${{ inputs.candidate_head != '' && format('ai-candidate-{0}-{1}-{2}-{3}', inputs.candidate_pr, inputs.candidate_head, inputs.candidate_base, inputs.candidate_request_id) || inputs.correlation_id != '' && format('post-merge-{0}', inputs.correlation_id) || format('{0} {1}', github.workflow, github.event_name) }}
+run-name: ${{ inputs.qualification_sha != '' && format('release-qualification-{0}-{1}-{2}', inputs.qualification_profile, inputs.qualification_sha, inputs.qualification_id) || inputs.candidate_head != '' && format('ai-candidate-{0}-{1}-{2}-{3}', inputs.candidate_pr, inputs.candidate_head, inputs.candidate_base, inputs.candidate_request_id) || inputs.correlation_id != '' && format('post-merge-{0}', inputs.correlation_id) || format('{0} {1}', github.workflow, github.event_name) }}
 
 on:
   pull_request:
     paths:
+      - "services/nebius-cxcli/uv.lock"
+      - "services/nebius-cxcli/pyproject.toml"
       - "services/nebius-cxcli/src/nebius_cxcli/nsight*.py"
       - "services/nebius-cxcli/src/nebius_cxcli/flux_render.py"
       - "services/nebius-cxcli/scripts/verify_nsight*.py"
@@ -13,6 +15,8 @@ on:
   push:
     branches: [main]
     paths:
+      - "services/nebius-cxcli/uv.lock"
+      - "services/nebius-cxcli/pyproject.toml"
       - "services/nebius-cxcli/src/nebius_cxcli/nsight*.py"
       - "services/nebius-cxcli/src/nebius_cxcli/flux_render.py"
       - "services/nebius-cxcli/scripts/verify_nsight*.py"
@@ -20,6 +24,18 @@ on:
       - ".github/workflows/nebius-cxcli-nsight.yml"
   workflow_dispatch:
     inputs:
+      qualification_sha:
+        description: Explicit release qualification identity (all three required together)
+        required: false
+        type: string
+      qualification_profile:
+        description: Explicit release qualification identity (all three required together)
+        required: false
+        type: string
+      qualification_id:
+        description: Explicit release qualification identity (all three required together)
+        required: false
+        type: string
       candidate_pr:
         description: Trusted candidate identity (all five fields required together)
         required: false
@@ -65,8 +81,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: nebius-cxcli-nsight-${{ inputs.candidate_head || inputs.result_sha || github.ref }}
-  cancel-in-progress: ${{ inputs.result_sha == '' && inputs.candidate_head == '' }}
+  group: nebius-cxcli-nsight-${{ inputs.qualification_sha || inputs.candidate_head || inputs.result_sha || github.ref }}
+  cancel-in-progress: ${{ inputs.qualification_sha == '' && inputs.result_sha == '' && inputs.candidate_head == '' }}
 
 defaults:
   run:
@@ -85,11 +101,12 @@ jobs:
       run:
         working-directory: .
     outputs:
+      qualification: ${{ steps.identity.outputs.qualification }}
       candidate: ${{ steps.identity.outputs.candidate }}
       post_merge: ${{ steps.identity.outputs.post_merge }}
       checkout_sha: ${{ steps.identity.outputs.checkout_sha }}
     steps:
-      - if: (inputs.candidate_pr != '' || inputs.candidate_head != '' || inputs.candidate_base != '' || inputs.candidate_request_id != '' || inputs.candidate_source != '') || inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != ''
+      - if: (inputs.candidate_pr != '' || inputs.candidate_head != '' || inputs.candidate_base != '' || inputs.candidate_request_id != '' || inputs.candidate_source != '') || inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != '' || inputs.qualification_sha != '' || inputs.qualification_profile != '' || inputs.qualification_id != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
@@ -99,9 +116,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
           CANDIDATE_INPUTS: ${{ (inputs.candidate_pr != '' || inputs.candidate_head != '' || inputs.candidate_base != '' || inputs.candidate_request_id != '' || inputs.candidate_source != '') }}
+          QUALIFICATION_INPUTS: ${{ inputs.qualification_sha != '' || inputs.qualification_profile != '' || inputs.qualification_id != '' }}
           POST_MERGE_INPUTS: ${{ inputs.result_sha != '' || inputs.merge_pr != '' || inputs.broker_run_id != '' || inputs.broker_run_attempt != '' || inputs.correlation_id != '' }}
         run: |
-          if [ "$CANDIDATE_INPUTS" = true ]; then
+          if [ "$QUALIFICATION_INPUTS" = true ]; then
+            python3 skills/github-workflows/scripts/release_qualification.py inputs --workflow nebius-cxcli-nsight.yml
+          elif [ "$CANDIDATE_INPUTS" = true ]; then
             python3 skills/merge-pr/scripts/candidate_ci.py inputs --workflow nebius-cxcli-nsight.yml
           elif [ "$POST_MERGE_INPUTS" = true ]; then
             python3 skills/merge-pr/scripts/merge_completion.py ci-inputs --workflow nebius-cxcli-nsight.yml
@@ -140,7 +160,7 @@ jobs:
       pull-requests: read
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -158,13 +178,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
         run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow nebius-cxcli-nsight.yml
+      - name: Check out the release qualification commit
+        if: needs.merge-inputs.outputs.qualification == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/github-workflows/scripts/release_qualification.py checkout --workflow nebius-cxcli-nsight.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
         env:
           EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -179,7 +206,7 @@ jobs:
           uv sync --locked
           uv run --locked --no-sync python scripts/verify_nsight_native.py \
             --ubuntu "$NSIGHT_UBUNTU" --arch "$NSIGHT_ARCH" --output nsight-native.json
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: nsight-native-${{ matrix.ubuntu }}-${{ matrix.host.arch }}
           path: services/nebius-cxcli/nsight-native.json
@@ -194,7 +221,7 @@ jobs:
       pull-requests: read
       actions: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -212,19 +239,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
         run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow nebius-cxcli-nsight.yml
+      - name: Check out the release qualification commit
+        if: needs.merge-inputs.outputs.qualification == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/github-workflows/scripts/release_qualification.py checkout --workflow nebius-cxcli-nsight.yml
       - name: Verify exact checkout identity
         shell: bash
         working-directory: .
         env:
           EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.5"
-      - uses: azure/setup-helm@v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
       - name: Verify pinned official chart and production postrenderers
         run: |
           set -euo pipefail
@@ -291,3 +325,41 @@ jobs:
           path: ${{ runner.temp }}/candidate.json
           if-no-files-found: error
           retention-days: 30
+
+  release-qualification-nebius-cxcli:
+    name: Release qualification for nebius-cxcli
+    needs: [merge-inputs, native-packages, official-chart]
+    if: >-
+      always() && needs.merge-inputs.result == 'success' &&
+      ((github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
+      needs.merge-inputs.outputs.post_merge == 'true' ||
+      (needs.merge-inputs.outputs.qualification == 'true' && inputs.qualification_profile == 'services/nebius-cxcli'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Record complete qualification evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+          CI_NEEDS: ${{ toJSON(needs) }}
+          TESTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
+        run: >-
+          python3 skills/github-workflows/scripts/release_qualification.py emit
+          --workflow nebius-cxcli-nsight.yml --project services/nebius-cxcli --commit "$TESTED_SHA"
+          --output "$RUNNER_TEMP/qualification.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-qualification-services-nebius-cxcli-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/qualification.json
+          retention-days: 14
+          if-no-files-found: error

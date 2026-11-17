@@ -20,6 +20,166 @@ spec.loader.exec_module(fixture)
 tx, git = fixture.transaction, fixture.git
 
 
+class AccessAssessmentTests(unittest.TestCase):
+    def setUp(self):
+        self.pr = {
+            'number': 7, 'state': 'open', 'merged': False, 'maintainer_can_modify': True,
+            'base': {'ref': 'main', 'sha': 'a' * 40,
+                     'repo': {'id': 1, 'full_name': 'org/base'}},
+            'head': {'ref': 'topic', 'sha': 'b' * 40,
+                     'repo': {'id': 2, 'full_name': 'person/fork'}},
+        }
+        self.base = {'id': 1, 'full_name': 'org/base', 'permissions': {'push': True}}
+        self.head = {'id': 2, 'full_name': 'person/fork', 'permissions': {'push': False}}
+        self.actor = {'id': 9, 'login': 'reviewer', 'type': 'User'}
+
+    def assess(self, **kwargs):
+        return tx._pr.assess_branch_access(self.pr, self.base, self.head, actor=self.actor, **kwargs)
+
+    def test_maintainer_permission_is_independent_of_direct_fork_push(self):
+        result = self.assess()
+        self.assertEqual((result['status'], result['basis']), ('eligible', 'maintainer_edit'))
+        self.assertFalse(result['push_verified'])
+
+    def test_direct_write_does_not_require_maintainer_edits(self):
+        self.head['permissions']['push'] = True
+        self.pr['maintainer_can_modify'] = False
+        self.base.pop('permissions')
+        self.assertEqual(self.assess()['basis'], 'direct')
+
+    def test_denial_requires_conclusive_negative_routes(self):
+        for upstream, edits in [(False, True), (True, False), (False, False)]:
+            with self.subTest(upstream=upstream, edits=edits):
+                self.base['permissions']['push'] = upstream
+                self.pr['maintainer_can_modify'] = edits
+                self.assertEqual(self.assess()['status'], 'denied')
+
+    def test_missing_or_malformed_evidence_is_unknown(self):
+        for value in [None, 'false', 0, [], {}]:
+            with self.subTest(value=value):
+                self.head['permissions']['push'] = value
+                self.pr['maintainer_can_modify'] = False
+                self.assertEqual(self.assess()['status'], 'unknown')
+        self.head.pop('permissions')
+        self.assertEqual(self.assess()['status'], 'unknown')
+
+    def test_irrelevant_unknown_does_not_override_positive_route(self):
+        self.head.pop('permissions')
+        self.assertEqual(self.assess()['basis'], 'maintainer_edit')
+        self.head['permissions'] = {'push': False}
+        self.pr.pop('maintainer_can_modify')
+        self.assertEqual(self.assess()['status'], 'unknown')
+
+    def test_repository_token_cannot_inherit_fork_access(self):
+        self.head['permissions']['push'] = True
+        result = self.assess(credential_repository='org/base')
+        self.assertEqual(result['status'], 'denied')
+        self.assertEqual(result['reason'], 'credential_repository_scope')
+        self.assertEqual(self.assess(credential_repository='person/fork')['basis'], 'direct')
+
+    def test_token_variable_name_never_restricts_a_verified_maintainer(self):
+        # Synthetic fixture values only; never load or persist real credentials.
+        values = {'GITHUB_ACTIONS': 'true', 'GITHUB_REPOSITORY': 'org/base',
+                  'GITHUB_TOKEN': 'fixture-maintainer-pat', 'GH_TOKEN': ''}
+        with patch.dict(fixture.os.environ, values), patch.object(tx._pr, 'api', side_effect=self.api):
+            code, result = self.inspect()
+        self.assertEqual((code, result['status'], result['basis']), (0, 'eligible', 'maintainer_edit'))
+
+    def test_unknown_actor_never_inherits_human_maintainer_access(self):
+        for actor in [None, {'type': 'User'}, {**self.actor, 'type': []}]:
+            with self.subTest(actor=actor):
+                self.actor = actor
+                self.assertEqual(self.assess()['status'], 'unknown')
+        self.actor = {'id': 10, 'login': 'fixture[bot]', 'type': 'Bot'}
+        self.assertEqual(self.assess()['status'], 'denied')
+
+    def test_same_repository_requires_its_own_direct_permission(self):
+        self.head = copy.deepcopy(self.base)
+        self.pr['maintainer_can_modify'] = False
+        self.assertEqual(self.assess()['basis'], 'direct')
+        self.head['permissions']['push'] = False
+        self.assertEqual(self.assess(credential_repository='org/base')['status'], 'denied')
+
+    def api(self, path):
+        return copy.deepcopy({
+            'user': self.actor,
+            'repos/org/base/pulls/7': self.pr,
+            'repos/org/base': self.base,
+            'repos/person/fork': self.head,
+        }[path])
+
+    def inspect(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code = tx.main(['inspect-pr-access', '--repository', 'org/base', '--pr', '7'])
+        return code, json.loads(output.getvalue())
+
+    def test_preflight_is_read_only_and_binds_observed_identity(self):
+        with patch.object(tx._pr, 'api', side_effect=self.api), \
+                patch.object(tx, '_run_git', side_effect=AssertionError('Git must not run')), \
+                patch.object(tx, '_atomic_json', side_effect=AssertionError('No state writes')):
+            code, result = self.inspect()
+        self.assertEqual(code, 0)
+        self.assertEqual(result['status'], 'eligible')
+        self.assertEqual(result['actor'], self.actor)
+        self.assertEqual(result['pr']['head_sha'], 'b' * 40)
+        self.assertEqual(result['pr']['base_sha'], 'a' * 40)
+        self.assertFalse(result['push_verified'])
+
+    def test_preflight_failure_does_not_claim_denial(self):
+        with patch.object(tx._pr, 'api', side_effect=tx._pr.PublicationError('unavailable')):
+            code, result = self.inspect()
+        self.assertEqual(code, 2)
+        self.assertEqual(result['status'], 'unknown')
+        self.assertNotIn('unavailable', json.dumps(result.get('actor')))
+
+    def test_preflight_reports_denial_as_data_not_a_failed_api_call(self):
+        self.pr['maintainer_can_modify'] = False
+        with patch.object(tx._pr, 'api', side_effect=self.api):
+            code, result = self.inspect()
+        self.assertEqual((code, result['status'], result['reason']), (0, 'denied', 'no_write_route'))
+
+    def test_unavailable_or_wrong_identity_never_becomes_eligible(self):
+        for change in ['repository', 'base_sha', 'state', 'actor']:
+            def malformed_api(path):
+                value = self.api(path)
+                if path == 'repos/person/fork' and change == 'repository':
+                    value['id'] = 999
+                if path.endswith('/pulls/7'):
+                    if change == 'base_sha':
+                        value['base']['sha'] = 'invalid'
+                    if change == 'state':
+                        value['state'] = 'closed'
+                if path == 'user' and change == 'actor':
+                    value['id'] = None
+                return value
+
+            with self.subTest(change=change), patch.object(tx._pr, 'api', side_effect=malformed_api):
+                code, result = self.inspect()
+                self.assertEqual((code, result['status']), (2, 'unknown'))
+
+    def test_preflight_detects_actor_head_and_permission_drift(self):
+        for change in ['actor', 'head', 'permission']:
+            calls = {}
+
+            def changing_api(path):
+                calls[path] = calls.get(path, 0) + 1
+                value = self.api(path)
+                if calls[path] == 2:
+                    if path == 'user' and change == 'actor':
+                        value['id'] = 10
+                    if path.endswith('/pulls/7'):
+                        if change == 'head':
+                            value['head']['sha'] = 'c' * 40
+                        if change == 'permission':
+                            value['maintainer_can_modify'] = False
+                return value
+
+            with self.subTest(change=change), patch.object(tx._pr, 'api', side_effect=changing_api):
+                code, result = self.inspect()
+                self.assertEqual((code, result['status']), (2, 'unknown'))
+
+
 class PublicationTests(fixture.TransactionFixture):
     def finish(self):
         self.publish()
@@ -49,6 +209,7 @@ class PublicationTests(fixture.TransactionFixture):
         environment = patch.dict(fixture.os.environ, {
             "HOME": str(test_home), "XDG_CONFIG_HOME": str(test_home / "config"),
             "PATH": str(test_bin) + fixture.os.pathsep + fixture.os.environ["PATH"],
+            "GITHUB_ACTIONS": "false",
         })
         environment.start()
         self.addCleanup(environment.stop)
@@ -93,6 +254,8 @@ class PublicationTests(fixture.TransactionFixture):
         self.run_helper(*self.task_args('checkout-target'), '--branch', self.alias)
 
     def api(self, path):
+        if path == 'user':
+            return {'id': 9, 'login': 'reviewer', 'type': 'User'}
         if path == 'repos/org/base/pulls/7':
             value = copy.deepcopy(self.pr)
             value['head']['sha'] = git(self.fork, 'rev-parse', 'refs/heads/topic')
@@ -136,6 +299,20 @@ class PublicationTests(fixture.TransactionFixture):
                 self.allow = change != 'permission'
                 if change == 'identity':
                     self.pr['head']['repo']['id'] = 99
+                result = self.publish(expected=2)
+                self.assertEqual(result['code'], 'publication_blocked')
+                push.assert_not_called()
+        self.assertEqual(git(self.fork, 'rev-parse', 'refs/heads/topic'), self.initial_head)
+
+    def test_unverified_actor_stops_publication_before_push(self):
+        self.repair()
+        for actor in [{'type': 'User'}, {'id': 9, 'login': 'reviewer', 'type': []},
+                      {'id': 10, 'login': 'fixture[bot]', 'type': 'Bot'}]:
+            def unverified_api(path):
+                return actor if path == 'user' else self.api(path)
+
+            with self.subTest(actor=actor), patch.object(tx._pr, 'api', side_effect=unverified_api), \
+                    patch.object(tx._pr, 'push') as push:
                 result = self.publish(expected=2)
                 self.assertEqual(result['code'], 'publication_blocked')
                 push.assert_not_called()

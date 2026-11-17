@@ -26,6 +26,12 @@ request acceptance are not evidence of completion. Observe the controller and
 protected completion records, retaining their exact PR/head/result/run identity.
 Never submit a second merge request using a local review attestation.
 
+A request only to review and close a PR is not complete-lifecycle processing
+authority. It may complete independently resolved linked issues through an
+existing authorized narrow controller capability under the shared lifecycle.
+If no such capability is exposed, report the requested effects pending; never
+dispatch broader `process`, invent API fields or bypass the controller locally.
+
 For a requested lifetime waiver, create/reuse the PR as **draft**. Dispatch the
 waiver with the creator's human identity and wait for `WAIVER_REGISTERED`; only
 then make it ready and request processing. A failed/pending waiver leaves it

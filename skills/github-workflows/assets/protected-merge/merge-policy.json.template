@@ -10,5 +10,7 @@
   ],
   "merge_workflow": "skills-merge-pr.yml",
   "completion_workflow": "merge-completion.yml",
-  "pages_enabled": false
+  "pages_enabled": false,
+  "status_workflow": "ci-status-observer.yml",
+  "release_profiles": {}
 }

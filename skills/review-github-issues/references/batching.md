@@ -3,6 +3,11 @@
 Read after target collection and before ordering review work. These are rules
 for the existing host agent, not a separate executable scheduler.
 
+`--issue-batch` caps selection only in label mode; a remediation batch groups
+compatible selected issues. These are different concepts. In label mode freeze
+the bounded set across repositories before grouping or effects, then retain
+repository order. Project priorities cannot pull unselected issues into it.
+
 ## Project ownership and counts
 
 Keep repositories distinct and finish them in `--repo` order. Within one repo,

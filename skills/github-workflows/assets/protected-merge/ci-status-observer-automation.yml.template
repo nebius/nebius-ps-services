@@ -1,0 +1,100 @@
+name: CI status observer
+run-name: "CI status: ${{ github.event_name }} / ${{ github.event.workflow_run.name || github.event.pull_request.number }}"
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_run:
+    workflows: ["CI"]
+    types: [in_progress, completed]
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+  checks: read
+  statuses: read
+jobs:
+  candidates:
+    name: ci-status-targets
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ci_targets: ${{ steps.plan.outputs.ci_targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: |
+          set -euo pipefail
+          ci_targets=$(python3 .github/scripts/merge_gate.py ci-targets)
+          printf 'ci_targets=%s\n' "$ci_targets" >> "$GITHUB_OUTPUT"
+  ci-status:
+    name: required-ci-status
+    needs: candidates
+    if: needs.candidates.outputs.ci_targets != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.candidates.outputs.ci_targets) }}
+    environment: github-ai-automation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      actions: read
+      checks: read
+      statuses: write
+    concurrency:
+      group: required-ci-${{ github.repository }}-${{ matrix.target.pr }}
+      cancel-in-progress: false
+    env:
+      AI_AUTOMATION_PR_REVIEW: ${{ vars.AI_AUTOMATION_PR_REVIEW || 'disabled' }}
+      AI_AUTOMATION_MERGE_FORK_CONTRIBUTION: ${{ vars.AI_AUTOMATION_MERGE_FORK_CONTRIBUTION || 'false' }}
+      AI_AUTOMATION_STATE_BUCKET: ${{ secrets.AI_AUTOMATION_STATE_BUCKET }}
+      AI_AUTOMATION_STATE_ENDPOINT: ${{ secrets.AI_AUTOMATION_STATE_ENDPOINT }}
+      AI_AUTOMATION_STATE_ACCESS_KEY_ID: ${{ secrets.AI_AUTOMATION_STATE_ACCESS_KEY_ID }}
+      AI_AUTOMATION_STATE_SECRET_ACCESS_KEY: ${{ secrets.AI_AUTOMATION_STATE_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: '0.13.7'
+          enable-cache: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ matrix.target.pr }}
+          PR_HEAD: ${{ matrix.target.head }}
+        run: uv run --locked --project github-ai-automation python .github/scripts/merge_gate.py publish-ci --pr "$PR_NUMBER" --head "$PR_HEAD"
+
+  notify-result:
+    if: >-
+      github.event_name == 'workflow_run' && github.event.workflow_run.status == 'completed' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      startsWith(github.event.workflow_run.display_title, 'post-merge-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 .github/scripts/merge_completion.py notify-result

@@ -78,7 +78,10 @@ def authority(state: VMHALifecycleState | None) -> dict | None:
         from .ha_replan import validate_record
 
         proof = validate_record(value["replan"])
-        if proof["desired"] != state.transaction.desired_state_digest or proof["artifact"] != value["artifact"]:
+        if (
+            proof["desired"] != state.transaction.desired_state_digest
+            or proof["artifact"] != value["artifact"]
+        ):
             raise ValueError("HA replanned desired state differs from settlement")
     for key in (
         "prior_record",
@@ -132,7 +135,32 @@ def activation_started(state: VMHALifecycleState) -> bool:
     return any("activate-" + member.node_id in effects for member in state.members)
 
 
-def validate_checkpoint(state: VMHALifecycleState) -> None:
+def prepared_recovery(state: VMHALifecycleState) -> bool:
+    """A fully installed recovery may become a new immutable successor."""
+    from .vm_ha_upgrade_recovery import READY, recovery_authority
+
+    record = recovery_authority(state)
+    transaction = state.transaction
+    if record is None or transaction is None:
+        return False
+    resources = dict(transaction.resource_bindings)
+    return (
+        resources.get(READY) == record["artifact"] == resources.get(ARTIFACT)
+        and transaction.pending_effect is None
+    )
+
+
+def validate_checkpoint(state: VMHALifecycleState, *, settlement: dict | None = None) -> None:
+    from .vm_ha_upgrade_recovery import unfinished_recovery
+
+    unfinished = unfinished_recovery(state)
+    if unfinished is not None:
+        from .ha_replan import validate_record
+
+        if settlement is None or "recovery_frontier" not in validate_record(
+            settlement, previous=state
+        ):
+            raise ValueError("Unfinished recovery requires its completed owner settlement")
     tx = state.transaction
     if not (
         state.record_version == 4
@@ -144,9 +172,10 @@ def validate_checkpoint(state: VMHALifecycleState) -> None:
         and tx.observation_guard is None
         and tx.replacement_host_recovery is None
         and (
-            (release_started(state) or activation_started(state))
+            (release_started(state) or activation_started(state) or prepared_recovery(state))
             and vm_ha_activation_effect_is_host_only(tx.pending_effect)
             or unused_prelude(state)
+            or unfinished is not None
         )
     ):
         raise ValueError("corrective release requires a host-only failed release checkpoint")
@@ -187,7 +216,7 @@ def completed_children(value: dict, *, parent: str, artifact: str) -> None:
 def successor(
     previous: VMHALifecycleState, record: dict, *, bindings: dict[str, str]
 ) -> VMHALifecycleState:
-    validate_checkpoint(previous)
+    validate_checkpoint(previous, settlement=record.get("replan"))
     tx = previous.transaction
     assert tx is not None
     resources = dict(tx.resource_bindings)
@@ -220,7 +249,9 @@ def successor(
             operation_id=record["operation"],
             approval_digest=record["approval"],
             current_state_digest=record["cloud"],
-            desired_state_digest=record["replan"]["proof"]["desired"] if "replan" in record else tx.desired_state_digest,
+            desired_state_digest=record["replan"]["proof"]["desired"]
+            if "replan" in record
+            else tx.desired_state_digest,
             checkpoint="corrective-release-approved",
             pending_effect=None,
             completed_effects=(),
@@ -240,15 +271,19 @@ def validate_successor(previous: VMHALifecycleState, current: VMHALifecycleState
         return False
     if AUTHORITY_KEY not in dict(new.resource_bindings):
         return False
-    validate_checkpoint(previous)
     record = authority(current)
     assert record is not None
+    validate_checkpoint(previous, settlement=record.get("replan"))
     replan = record.get("replan")
     if replan is not None:
         from .ha_replan import successor_operation, validate_record
 
         proof = validate_record(replan, previous=previous)
-        if proof["cloud"] != record["cloud"] or proof["hosts"] != record["hosts"] or proof["ssh_trust"] != record["ssh_trust"]:
+        if (
+            proof["cloud"] != record["cloud"]
+            or proof["hosts"] != record["hosts"]
+            or proof["ssh_trust"] != record["ssh_trust"]
+        ):
             raise ValueError("HA successor settlement observation differs")
         expected_operation = successor_operation(previous, replan)
         expected_desired = proof["desired"]
@@ -271,7 +306,11 @@ def validate_successor(previous: VMHALifecycleState, current: VMHALifecycleState
         and record["prior_record"] == previous.record_sha256
         and record["prior_parent"] == tx.operation_id
         and record["prior_artifact"] == dict(tx.resource_bindings)[ARTIFACT]
-        and (record["artifact"] != record["prior_artifact"] or replan is not None and expected_desired != tx.desired_state_digest)
+        and (
+            record["artifact"] != record["prior_artifact"]
+            or replan is not None
+            and expected_desired != tx.desired_state_digest
+        )
         and record["operation"] == expected_operation
         and dict(new.resource_bindings)[CYCLE_KEY] == new.operation_id
         and vm_ha_effective_resource_bindings(dict(tx.resource_bindings))
@@ -292,10 +331,26 @@ def validate_successor(previous: VMHALifecycleState, current: VMHALifecycleState
         ):
             raise ValueError("HA replanned child or lock differs from settlement")
         baseline = None if retained is None else retained["children"][node]["runtime"]
+        expected_artifact = record["prior_artifact"] if baseline is None else baseline["artifact"]
+        if replan is not None and "recovery_frontier" in proof:
+            from ..apply_approval import manifest_identity
+            from .ha_replan import recovery_member_manifest
+
+            member = next(member for member in previous.members if member.node_id == node)
+            manifest = recovery_member_manifest(
+                previous,
+                member.instance_name,
+                item,
+                replan["requests"][node]["package_reservation"],
+                json.loads(dict(tx.resource_bindings)["runtime-package-manifests"]),
+            )
+            if manifest_identity(manifest) != proof["recovery_frontier"]["manifests"][node]:
+                raise ValueError("HA successor predecessor package manifest differs")
+            expected_artifact = manifest["wheel_sha256"]
         completed_children(
             item,
             parent=tx.operation_id if baseline is None else baseline["parent"],
-            artifact=record["prior_artifact"] if baseline is None else baseline["artifact"],
+            artifact=expected_artifact,
         )
     bindings = dict(tx.resource_bindings)
     owner = next(m for m in previous.members if m.node_id == record["owner"])

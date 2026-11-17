@@ -469,8 +469,6 @@ def test_peer_not_ready_reserves_passive_ip_without_writing_candidate(
                 "apply",
                 "--local-config-file",
                 str(source),
-                "--project-id",
-                "project-test",
                 "--region",
                 "eu-north1",
                 "--repair",
@@ -563,10 +561,6 @@ def test_permission_blocked_candidate_repair_uses_only_verified_ha_config(
             "apply",
             "--local-config-file",
             str(expected),
-            "--project-id",
-            "project-test",
-            "--region",
-            "eu-west1",
             "--repair",
         ]
         if not changed:
@@ -577,10 +571,6 @@ def test_permission_blocked_candidate_repair_uses_only_verified_ha_config(
                 "apply",
                 "--local-config-file",
                 str(source),
-                "--project-id",
-                "project-test",
-                "--region",
-                "eu-west1",
                 "--convert-to-ha",
                 "--output",
                 str(target),
@@ -594,10 +584,6 @@ def test_permission_blocked_candidate_repair_uses_only_verified_ha_config(
                     "apply",
                     "--local-config-file",
                     str(expected),
-                    "--project-id",
-                    "project-test",
-                    "--region",
-                    "eu-west1",
                     "--repair",
                 ]
             )

@@ -21,3 +21,4 @@ checkout-behavior-explanation,false,"Explain how create-pr handles the final loc
 create-pr-issue-workflow-explanation,false,Explain how $create-pr participates in saved issue plans and closure after merge; do not execute the workflow.
 create-pr-pending-uat,true,Use $create-pr for this completed change; optional UAT awaits an environment and core checks pass.
 create-pr-no-uat-request,true,Use $create-pr for the exact promoted SDLC candidate after core admission; UAT was not requested.
+create-pr-optional-uat,true,Create the reviewed PR; no optional cloud UAT campaign was requested.

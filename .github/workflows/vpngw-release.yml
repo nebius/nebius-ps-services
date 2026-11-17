@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   actions: read
+  pull-requests: read
 
 concurrency:
   group: nebius-vpngw-release-${{ github.ref }}
@@ -22,21 +23,7 @@ env:
   ASSET_GLOB: "dist/*.whl"
 
 jobs:
-  ordinary-job-settlement:
-    name: Ordinary systemd and networkd settlement
-    runs-on: ubuntu-24.04
-    # Allow the bounded image build (10m), native tests (40m), and cleanup.
-    timeout-minutes: 55
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-      - name: Verify delegated work in isolated systemd
-        working-directory: services/vpngw
-        run: python3 tests/systemd/run.py
-
   release:
-    needs: ordinary-job-settlement
     name: nebius-vpngw-release
     runs-on: ubuntu-latest
     defaults:
@@ -45,7 +32,7 @@ jobs:
         working-directory: ${{ env.APP_DIR }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -66,6 +53,15 @@ jobs:
           RELEASE_COMMIT: ${{ steps.revision.outputs.commit }}
         run: python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/publication.py" ancestry --commit "$RELEASE_COMMIT" --branch "$MAIN_BRANCH"
 
+      - name: Verify exact-commit release qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+          RELEASE_COMMIT: ${{ steps.revision.outputs.commit }}
+        run: >-
+          python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/release_qualification.py" verify
+          --project services/vpngw --commit "$RELEASE_COMMIT" --publisher vpngw-release.yml
+
       - name: Verify existing release or establish absence
         id: state
         env:
@@ -75,7 +71,7 @@ jobs:
 
       - name: Set up Python
         if: steps.state.outputs.release_exists == 'false'
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.12"
 
@@ -114,27 +110,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Helper shell checks
-        if: steps.state.outputs.release_exists == 'false'
-        run: |
-          set -euo pipefail
-          bash -n misc/gcp-vpngw.sh
-          bash -n misc/gcp-vpngw-vm-ha.sh
-          bash -n misc/gcp-vpngw-classic-vm-ha.sh
-          bash -n misc/fix-vpngw-esp4.sh
-          ./misc/gcp-vpngw.sh --help >/dev/null
-          ./misc/gcp-vpngw.sh --vm-ha-peer --help >/dev/null
-          ./misc/gcp-vpngw.sh --classic-vm-ha-peer --help >/dev/null
-          ./misc/fix-vpngw-esp4.sh --help >/dev/null
-
-      - name: Lint
-        if: steps.state.outputs.release_exists == 'false'
-        run: python -m ruff check src tests misc
-
-      - name: Test
-        if: steps.state.outputs.release_exists == 'false'
-        run: python -m pytest -q
-
       - name: Build artifact
         if: steps.state.outputs.release_exists == 'false'
         run: |
@@ -142,6 +117,16 @@ jobs:
           rm -rf build dist
           PYTHONWARNINGS="ignore:No GlobalOverrides context is active:UserWarning" \
             python -m build --wheel --no-isolation
+
+      - name: Verify the final wheel installation and CLI
+        if: steps.state.outputs.release_exists == 'false'
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/release-wheel"
+          "$RUNNER_TEMP/release-wheel/bin/python" -m pip install dist/*.whl
+          "$RUNNER_TEMP/release-wheel/bin/nebius-vpngw" --help > /dev/null
+          EXPECTED_VERSION="${{ steps.version.outputs.version }}" \
+            "$RUNNER_TEMP/release-wheel/bin/python" -c 'import os, nebius_vpngw; assert nebius_vpngw.__version__ == os.environ["EXPECTED_VERSION"]'
 
       - name: Resolve and verify artifact
         if: steps.state.outputs.release_exists == 'false'
@@ -188,6 +173,21 @@ jobs:
           python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/publication.py" notes --tag "$RELEASE_TAG" --prefix "$TAG_PREFIX" --output release-notes.md
           echo 'path=release-notes.md' >> "$GITHUB_OUTPUT"
 
+      - name: Write public agent artifact manifest
+        if: steps.state.outputs.release_exists == 'false'
+        env:
+          RELEASE_WHEEL: ${{ steps.asset.outputs.path }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python - <<'PYMANIFEST'
+          import json
+          import os
+          from pathlib import Path
+          from nebius_vpngw.deploy.agent_artifact import release_manifest
+          payload = release_manifest(Path(os.environ["RELEASE_WHEEL"]), os.environ["RELEASE_VERSION"])
+          Path("dist/agent-artifact.json").write_text(json.dumps(payload, sort_keys=True) + "\n")
+          PYMANIFEST
+
       - name: Freeze asset hashes before publication
         if: steps.state.outputs.release_exists == 'false'
         env:
@@ -196,11 +196,12 @@ jobs:
         run: >-
           python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/publication.py" release-manifest --workflow vpngw-release.yml --tag "$RELEASE_TAG"
           --asset "${{ steps.asset.outputs.path }}"
+          --asset dist/agent-artifact.json
           --output publication.json
 
       - name: Preserve immutable pre-publication evidence
         if: steps.state.outputs.release_exists == 'false'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: publication-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.APP_DIR }}/publication.json
@@ -213,7 +214,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release create "${{ steps.version.outputs.tag }}" "${{ steps.asset.outputs.path }}" \
+          gh release create "${{ steps.version.outputs.tag }}" "${{ steps.asset.outputs.path }}" dist/agent-artifact.json \
             --title "${{ steps.version.outputs.tag }}" \
             --notes-file "${{ steps.notes.outputs.path }}"
 
@@ -255,7 +256,7 @@ jobs:
 
       - name: Upload release manifest artifact
         if: steps.state.outputs.release_exists == 'false'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: nebius-vpngw-release-manifest-${{ github.run_id }}
           path: ${{ env.APP_DIR }}/release-manifest.json

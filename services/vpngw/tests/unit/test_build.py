@@ -73,7 +73,12 @@ def test_build_binary_invokes_pyinstaller_with_systemd_assets(tmp_path, monkeypa
     dist_binary.parent.mkdir(parents=True, exist_ok=True)
     dist_binary.write_text("", encoding="utf-8")
 
+    artifact = Mock(path=tmp_path / "nebius_vpngw-0.6.6-py3-none-any.whl")
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.ssh_push.SSHPush.resolve_vm_ha_agent_artifact", lambda _self: artifact
+    )
     build.build_binary()
+    artifact.verify_current.assert_called_once_with()
 
     cmd = run_mock.call_args[0][0]
     assert cmd[:3] == [build.sys.executable, "-m", "PyInstaller"]
@@ -91,6 +96,7 @@ def test_build_binary_invokes_pyinstaller_with_systemd_assets(tmp_path, monkeypa
     from nebius_vpngw.repair_bootstrap import SOURCES as REPAIR_SOURCES
 
     data = {cmd[index + 1] for index, arg in enumerate(cmd) if arg == "--add-data"}
+    assert f"{artifact.path}{build.os.pathsep}nebius_vpngw/agent-wheel" in data
     for _module, relative in (*SOURCES, *REPAIR_SOURCES):
         source = Path(build.__file__).parent / relative
         destination = str(Path("nebius_vpngw") / Path(relative).parent)
@@ -155,8 +161,12 @@ def test_ci_runs_project_mypy_and_one_build_per_execution_lane() -> None:
     assert build_job["if"] == (
         "(github.event_name != 'workflow_dispatch') || needs.merge-inputs.outputs.post_merge == 'true'"
         " || needs.merge-inputs.outputs.candidate == 'true'"
+        " || needs.merge-inputs.outputs.qualification == 'true'"
     )
-    manual_only = "github.event_name == 'workflow_dispatch' && needs.merge-inputs.outputs.post_merge != 'true'"
+    manual_only = (
+        "github.event_name == 'workflow_dispatch' && needs.merge-inputs.outputs.post_merge != 'true'"
+        " && needs.merge-inputs.outputs.qualification != 'true'"
+    )
     for name in ("packaging", "integration-tests", "coverage"):
         assert workflow["jobs"][name]["if"] == manual_only
     for job in (build_job, packaging_job):
@@ -166,6 +176,33 @@ def test_ci_runs_project_mypy_and_one_build_per_execution_lane() -> None:
             if "run" in step and "python -m build --wheel --no-isolation" in step["run"]
         ]
         assert len(build_runs) == 1
+
+
+def _qualified_lint_commands(repo_root: Path) -> list[str]:
+    import json
+
+    workflows = repo_root / ".github/workflows"
+    ci = yaml.safe_load((workflows / "vpngw-ci.yml").read_text())
+    policy = json.loads((repo_root / ".github/merge-policy.json").read_text())
+    profile = policy["release_profiles"]["services/vpngw"]
+    assert profile["publisher"] == "vpngw-release.yml"
+    assert profile["workflows"]["vpngw-ci.yml"]["jobs"]["lint"] == ["lint"]
+    qualification = ci["jobs"]["release-qualification-vpngw"]
+    assert "lint" in qualification["needs"]
+    emitter = next(step for step in qualification["steps"] if "run" in step)
+    assert emitter["env"]["CI_NEEDS"] == "${{ toJSON(needs) }}"
+    assert "release_qualification.py emit" in emitter["run"]
+    release = yaml.safe_load((workflows / "vpngw-release.yml").read_text())
+    steps = release["jobs"]["release"]["steps"]
+    names = [step.get("name") for step in steps]
+    gate = names.index("Verify exact-commit release qualification")
+    assert gate < names.index("Build artifact") < names.index("Create GitHub release")
+    assert steps[gate]["env"]["RELEASE_COMMIT"] == "${{ steps.revision.outputs.commit }}"
+    assert steps[gate]["run"] == (
+        'python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/release_qualification.py" verify '
+        '--project services/vpngw --commit "$RELEASE_COMMIT" --publisher vpngw-release.yml'
+    )
+    return [step["run"] for step in ci["jobs"]["lint"]["steps"] if "run" in step]
 
 
 def test_ruff_roots_match_across_makefile_ci_and_release() -> None:
@@ -179,39 +216,21 @@ def test_ruff_roots_match_across_makefile_ci_and_release() -> None:
         "make-check": _ruff_roots(make_check, "check"),
     }
 
-    for workflow_name in ("vpngw-ci.yml", "vpngw-release.yml"):
-        workflow = yaml.safe_load(
-            (repo_root / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
-        )
-        runs = [
-            step["run"]
-            for job in workflow["jobs"].values()
-            for step in job.get("steps", ())
-            if "run" in step
-        ]
-        ruff = next(command for command in runs if "python -m ruff check" in command)
-        observed[workflow_name] = _ruff_roots(ruff, "check")
+    runs = _qualified_lint_commands(repo_root)
+    ruff = next(command for command in runs if "python -m ruff check" in command)
+    observed["qualified-ci"] = _ruff_roots(ruff, "check")
 
     assert set(observed.values()) == {RUFF_ROOTS}
 
 
 def test_ci_and_release_cover_both_gcp_vm_ha_shell_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[4]
-    for workflow_name in ("vpngw-ci.yml", "vpngw-release.yml"):
-        workflow = yaml.safe_load(
-            (repo_root / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
-        )
-        runs = [
-            step["run"]
-            for job in workflow["jobs"].values()
-            for step in job.get("steps", ())
-            if "run" in step
-        ]
-        shell = next(command for command in runs if "bash -n misc/gcp-vpngw.sh" in command)
-        for helper in GCP_SHELL_HELPERS:
-            assert shell.count(f"bash -n {helper}") == 1
-        assert shell.count("./misc/gcp-vpngw.sh --vm-ha-peer --help") == 1
-        assert shell.count("./misc/gcp-vpngw.sh --classic-vm-ha-peer --help") == 1
+    runs = _qualified_lint_commands(repo_root)
+    shell = next(command for command in runs if "bash -n misc/gcp-vpngw.sh" in command)
+    for helper in GCP_SHELL_HELPERS:
+        assert shell.count(f"bash -n {helper}") == 1
+    assert shell.count("./misc/gcp-vpngw.sh --vm-ha-peer --help") == 1
+    assert shell.count("./misc/gcp-vpngw.sh --classic-vm-ha-peer --help") == 1
 
 
 def test_required_systemd_lane_runs_real_ufw_packet_regressions() -> None:

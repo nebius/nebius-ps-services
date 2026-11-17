@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: helm-chart-publish-${{ github.ref }}
@@ -29,12 +30,12 @@ jobs:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Set up Helm
-        uses: azure/setup-helm@v5
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: v3.15.4
 
@@ -141,7 +142,19 @@ jobs:
             echo "registry_path=${registry_path}"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Restore original packaged chart
+        id: restore
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          CHART_REF: ${{ steps.registry.outputs.chart_ref }}
+        run: >-
+          python3 skills/github-workflows/scripts/publication.py chart-restore
+          --workflow helm-chart-publish.yml --tag "$RELEASE_TAG" --directory "$RUNNER_TEMP/original-chart"
+          --chart-ref "$CHART_REF"
+
       - name: Package chart
+        if: steps.restore.outputs.restored != 'true'
         id: package
         env:
           CHART_DIR: ${{ steps.release.outputs.chart_dir }}
@@ -243,8 +256,9 @@ jobs:
       - name: Check existing public chart version
         id: existing
         env:
+          RESTORED_ORIGINAL: ${{ steps.restore.outputs.restored }}
           CHART_NAME: ${{ steps.release.outputs.chart_name }}
-          PACKAGE_SHA256: ${{ steps.package.outputs.package_sha256 }}
+          PACKAGE_SHA256: ${{ steps.restore.outputs.package_sha256 || steps.package.outputs.package_sha256 }}
           PUBLISH_VERSION: ${{ steps.release.outputs.publish_version }}
         run: |
           set -euo pipefail
@@ -258,6 +272,10 @@ jobs:
 
           pull_dir="$(mktemp -d)"
           if pull_output="$(helm pull "${{ steps.registry.outputs.chart_ref }}" --version "${PUBLISH_VERSION}" -d "${pull_dir}" 2>&1)"; then
+            if [[ "$RESTORED_ORIGINAL" != true ]]; then
+              echo "::error::Existing chart has no trusted original package; maintainer reconciliation required"
+              exit 1
+            fi
             printf '%s\n' "${pull_output}"
             remote_package="${pull_dir}/${CHART_NAME}-${PUBLISH_VERSION}.tgz"
             remote_sha256="$(sha256sum "${remote_package}" | awk '{print $1}')"
@@ -276,6 +294,37 @@ jobs:
               exit 1
             fi
           fi
+
+      - name: Preserve original chart package before push
+        id: chart_package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: publication-chart-package-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.restore.outputs.package_path || steps.package.outputs.package_path }}
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Record original chart publication intent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          CHART_REF: ${{ steps.registry.outputs.chart_ref }}
+          PACKAGE_ARTIFACT_ID: ${{ steps.chart_package.outputs.artifact-id }}
+          PACKAGE_ARTIFACT_DIGEST: sha256:${{ steps.chart_package.outputs.artifact-digest }}
+          PACKAGE_PATH: ${{ steps.restore.outputs.package_path || steps.package.outputs.package_path }}
+        run: >-
+          python3 skills/github-workflows/scripts/publication.py chart-manifest
+          --workflow helm-chart-publish.yml --tag "$RELEASE_TAG" --asset "$PACKAGE_PATH"
+          --output "$RUNNER_TEMP/publication.json"
+          --chart-ref "$CHART_REF"
+
+      - name: Preserve chart publication intent before push
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: publication-chart-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publication.json
+          retention-days: 90
+          if-no-files-found: error
 
       - name: Install Nebius CLI
         if: steps.existing.outputs.publish_needed == 'true'
@@ -345,7 +394,7 @@ jobs:
         id: push
         run: |
           set -euo pipefail
-          if push_output="$(helm push "${{ steps.package.outputs.package_path }}" "${{ steps.registry.outputs.push_ref }}" 2>&1)"; then
+          if push_output="$(helm push "${{ steps.restore.outputs.package_path || steps.package.outputs.package_path }}" "${{ steps.registry.outputs.push_ref }}" 2>&1)"; then
             printf '%s\n' "${push_output}"
           else
             printf '%s\n' "${push_output}" >&2
@@ -362,7 +411,7 @@ jobs:
         id: verify_public
         env:
           CHART_NAME: ${{ steps.release.outputs.chart_name }}
-          PACKAGE_SHA256: ${{ steps.package.outputs.package_sha256 }}
+          PACKAGE_SHA256: ${{ steps.restore.outputs.package_sha256 || steps.package.outputs.package_sha256 }}
           PUBLISH_VERSION: ${{ steps.release.outputs.publish_version }}
         run: |
           set -euo pipefail
@@ -414,8 +463,8 @@ jobs:
             --arg commit "${{ steps.release.outputs.commit }}" \
             --arg event "${GITHUB_EVENT_NAME}" \
             --arg oci_ref "${{ steps.registry.outputs.chart_ref }}" \
-            --arg package_path "${{ steps.package.outputs.package_path }}" \
-            --arg package_sha256 "${{ steps.package.outputs.package_sha256 }}" \
+            --arg package_path "${{ steps.restore.outputs.package_path || steps.package.outputs.package_path }}" \
+            --arg package_sha256 "${{ steps.restore.outputs.package_sha256 || steps.package.outputs.package_sha256 }}" \
             --arg project_id "${{ vars.NB_PROJECT_ID }}" \
             --arg public_pull_sha256 "${{ steps.verify_public.outputs.public_sha256 }}" \
             --arg publish_needed "${{ steps.existing.outputs.publish_needed }}" \
@@ -462,7 +511,7 @@ jobs:
             }' > publish-manifest.json
 
       - name: Upload publish manifest artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ steps.release.outputs.chart_name }}-chart-publish-manifest-${{ github.run_id }}
           path: publish-manifest.json
@@ -478,7 +527,7 @@ jobs:
             echo "- Registry name: \`${{ steps.registry.outputs.registry_name }}\`"
             echo "- Registry: \`${{ steps.registry.outputs.registry_id }}\`"
             echo "- OCI reference: \`${{ steps.registry.outputs.chart_ref }}:${{ steps.release.outputs.publish_version }}\`"
-            echo "- Package sha256: \`${{ steps.package.outputs.package_sha256 }}\`"
+            echo "- Package sha256: \`${{ steps.restore.outputs.package_sha256 || steps.package.outputs.package_sha256 }}\`"
             echo "- OCI digest: \`${{ steps.verify_public.outputs.digest }}\`"
             echo "- Anonymous pull sha256: \`${{ steps.verify_public.outputs.public_sha256 }}\`"
             echo "- Pushed in this run: \`${{ steps.existing.outputs.publish_needed }}\`"

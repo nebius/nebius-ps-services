@@ -23,8 +23,10 @@ the same publication owner.
   with tag object/commit, workflow run/attempt and each asset basename, size and
   SHA-256. Existing releases must match downloaded bytes against that original
   evidence; missing, expired, partial or conflicting evidence blocks recovery.
-- A complete authenticated release listing establishes absence. API failures do
-  not. Rebuilt assets must match any retained pre-publication manifest before
+- A complete authenticated release listing establishes destination absence.
+  Run/attempt history must also account for prior publication receipts, including
+  deleted artifact rows; only a proven pre-effect failure can lack a receipt.
+  API failures do not prove absence. Rebuilt assets must match any retained pre-publication manifest before
   a retry can create a release. Never overwrite assets or backfill expected
   hashes from remote bytes.
 - Upload a release manifest artifact and publish a short run summary.
@@ -45,7 +47,7 @@ handoffs. Keep newly generated helpers aligned with that contract:
 - Missing/empty release notes and conflicting tags fail before publication.
 - Resume rechecks exact PR/tag/workflow identities and verifies downloaded assets.
   Existing release existence alone is not evidence that its assets are complete.
-- Approval gates remain on GitHub, with visible 10800-second phase budgets and resumable
+- Approval gates remain on GitHub, with visible 28800-second phase budgets and resumable
   timeouts. No admin bypass or implicit rerun/re-upload.
 
 The local primitives remain internal to the non-enrolled skill profile. They
@@ -69,3 +71,5 @@ because local release observers use them to identify the exact tag run.
 Retain original evidence for the configured artifact lifetime (90 days here).
 Older releases without sufficient evidence require maintainer reconciliation;
 a green existence-only run is not a successful verification.
+
+See [release qualification](../../publish-release/references/release-qualification.md) for the exact-commit profile and evidence contract.

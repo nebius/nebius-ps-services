@@ -6,6 +6,13 @@ project folder.
 
 ## [Unreleased]
 
+- Separate CI status observation from protected merge and targeted completion;
+  retain strict review, required CI, recovery and disabled AI automation.
+- Reuse exact-commit release qualification, use eight-hour release phases, and
+  make ordinary post-merge result waiting and optional live UAT explicit.
+- Preserve original image digests and Helm package bytes before publication
+  effects so interrupted releases resume without replacing immutable content.
+
 - Isolate Implement and SDLC verifier unit fixtures from ambient host-memory
   measurements while retaining regression coverage for unknown and critical memory admission.
   Align repeated hook-installation assertions with the added policy test module.

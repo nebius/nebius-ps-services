@@ -78,8 +78,8 @@ class Store:
         secure_dir(self.directory)
 
     @contextlib.contextmanager
-    def locked(self):
-        fd = secure_fd(self.directory / "lock", os.O_CREAT | os.O_RDWR)
+    def locked(self, *, effect=False):
+        fd = secure_fd(self.directory / ("effects.lock" if effect else "lock"), os.O_CREAT | os.O_RDWR)
         try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

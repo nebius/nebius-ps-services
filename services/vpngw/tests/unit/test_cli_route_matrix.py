@@ -780,6 +780,13 @@ def test_public_command_parameter_and_alias_manifest_is_exact() -> None:
             ("--standby-auto-healing",),
             ("--approve",),
         ),
+        ("support-bundle",): (
+            ("--local-config-file", "-c"),
+            ("--project-id",),
+            ("--region",),
+            ("--output",),
+            ("--since",),
+        ),
         ("status",): (
             ("--local-config-file", "-c"),
             ("--project-id",),

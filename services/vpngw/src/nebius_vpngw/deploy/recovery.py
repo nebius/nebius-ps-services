@@ -85,11 +85,17 @@ class PredecessorSettlementRequired(DiagnosticFailure):
     first = Failure("predecessor", "predecessor-settlement-required")
 
     def __init__(
-        self, message="Predecessor settlement requires approval", *, approval=None, effects=()
+        self,
+        message="Predecessor settlement requires approval",
+        *,
+        approval=None,
+        effects=(),
+        automatic=False,
     ):
         super().__init__(message)
         self.approval = approval
         self.effects = tuple(effects)
+        self.automatic = automatic
 
 
 class ReplanRejected(ValueError, DiagnosticFailure):
@@ -140,6 +146,33 @@ class GuestFailure(DiagnosticFailure):
             raise ValueError("Unknown guest failure predicate")
         self.first = Failure("guest-" + stage, "guest-" + code.replace("_", "-"))
         super().__init__(detail)
+
+
+class SSHAccessFailure(DiagnosticFailure):
+    """A sanitized SSH prerequisite; never include stderr or key material."""
+
+    def __init__(self, code: str):
+        if code not in SSH_CAUSES:
+            raise ValueError("Unknown SSH prerequisite")
+        self.code = code
+        self.first = Failure("ssh-access", code)
+        super().__init__(SSH_CAUSES[code][0])
+
+
+def ssh_failure_code(error: object) -> str:
+    message = str(error).lower()
+    if (
+        "remote host identification has changed" in message
+        or "host identity verification failed" in message
+    ):
+        return "ssh-host-key-changed"
+    if "host key verification failed" in message:
+        return "ssh-host-key-unverified"
+    if "wrong schema" in message:
+        return "ssh-trust-schema-unsupported"
+    if "permission denied" in message or "client identity" in message:
+        return "ssh-client-authentication-failed"
+    return "ssh-trust-unavailable"
 
 
 class SSHIdentityUnavailable(ValueError, DiagnosticFailure):
@@ -194,6 +227,9 @@ class Invocation:
     emitted: bool = False
     resume_options: tuple[str, ...] = ()
     repair_config: Path | None = None
+    selectors_resolved: bool = False
+    command_project: str | None = None
+    command_region: str | None = None
     preparation: PreparationCache = field(default_factory=PreparationCache, repr=False)
 
     def command_line(
@@ -214,10 +250,12 @@ class Invocation:
             if paired
             else [command, "--local-config-file", str(config)]
         )
-        if self.project and not paired and command in {"apply", "destroy"}:
-            args += ["--project-id", self.project]
-        if self.region and not paired:
-            args += ["--region", self.region]
+        project = self.command_project if self.selectors_resolved else self.project
+        region = self.command_region if self.selectors_resolved else self.region
+        if project and not paired and command in {"apply", "destroy"}:
+            args += ["--project-id", project]
+        if region and not paired:
+            args += ["--region", region]
         if self.sa and command == "apply" and not paired and not repair:
             args += ["--sa", self.sa]
         if repair:
@@ -296,7 +334,8 @@ class Recovery:
             f"Next action: {self.next_action}",
             f"Resume command: {self.resume_command}",
             f"Repair prerequisite: {self.repair_prerequisite}",
-            "To rebuild VPN software on the existing VMs:",
+            "Recovery order: normal apply, software repair, then last-resort VM rebuild.",
+            "Step 2 — software repair, after authenticated SSH access is available:",
             "  " + self.repair_command,
             "Repair retains the Ubuntu VMs and disks and can interrupt VPN traffic "
             "for longer than two minutes. You will be asked to confirm.",
@@ -304,7 +343,7 @@ class Recovery:
         if self.destroy_command and self.fresh_apply_command:
             lines.extend(
                 (
-                    "If the retained VMs cannot be recovered, explicitly replace the verified gateway:",
+                    "Step 3 — last-resort VM rebuild, only if the retained VMs cannot be recovered:",
                     "  " + self.destroy_command,
                     "  " + self.fresh_apply_command,
                     "Destroy deletes gateway VMs and boot-disk contents and prolongs the outage. "
@@ -468,7 +507,47 @@ VM_HA_CONVERSION_PREREQUISITES = {
     ),
 }
 
+SSH_CAUSES = {
+    "ssh-trust-schema-unsupported": (
+        "The saved SSH trust receipt uses an unsupported format.",
+        "Run apply to validate and convert supported legacy trust; preserve the original receipt.",
+        "Establish exact current SSH identity before repair.",
+    ),
+    "ssh-host-key-changed": (
+        "A gateway SSH host key differs from its saved trusted identity.",
+        "Reconcile the exact VM identity using authenticated provisioning or independently verified pins, then rerun apply.",
+        "Verify the changed host identity before repair; repair does not establish SSH trust.",
+    ),
+    "ssh-host-key-unverified": (
+        "The gateway SSH host key could not be verified.",
+        "Restore an exact independently verified host pin and rerun apply.",
+        "Establish working verified SSH access before repair.",
+    ),
+    "ssh-client-authentication-failed": (
+        "The configured SSH client identity could not authenticate.",
+        "Restore access for the configured SSH public identity, then rerun apply.",
+        "Establish working SSH client authentication before repair.",
+    ),
+    "ssh-trust-unavailable": (
+        "Exact gateway SSH trust is unavailable or invalid.",
+        "Run apply with authenticated retained host-key evidence or an exact trusted-hosts override.",
+        "Establish verified SSH access before repair.",
+    ),
+    "ssh-trust-or-address-unavailable": (
+        "A gateway management address or exact SSH trust is unavailable.",
+        "Restore the current management address and verified SSH access, then rerun apply.",
+        "Establish exact VM ownership and verified SSH access before repair.",
+    ),
+    "member-address-unavailable": (
+        "A gateway management address is unavailable.",
+        "Restore management reachability for the exact retained VM, then rerun apply.",
+        "Establish management reachability before repair.",
+    ),
+}
+
+
 CAUSES = {
+    **SSH_CAUSES,
     "candidate-path-unsafe": (
         "The HA output path aliases the source or is not a safe regular file.",
         "Choose a distinct unlinked output file and rerun apply --convert-to-ha.",
@@ -785,8 +864,8 @@ CAUSES = {
         "Previous writers and submitted operations must be settled before reconstruction.",
     ),
     "artifact-changed": (
-        "The selected package differs from the interrupted deployment's package.",
-        "Resume with the original artifact or review a successor after settlement.",
+        "The selected deployment wheel's SHA-256 differs from the interrupted operation's pinned artifact; CLI version alone does not establish a match.",
+        "Collect a support bundle with support-bundle before recovery; resume with the verified original artifact or review a successor after settlement.",
         "Settle the original package worker and select a valid repair artifact.",
     ),
     "checkpoint-binding-changed": (

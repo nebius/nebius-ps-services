@@ -26,3 +26,4 @@ spec-steering-shared-intake,true,This steering changes the accepted API behavior
 spec-metadata-bootstrap,true,"Create the missing canonical spec pair using the owner templates, preserving machine-readable markers and normal prose lint checks."
 spec-prose-formatting,false,Wrap the long prose lines in README.md without changing project requirements or design.
 spec-sibling-publication,true,Publish the initial canonical specification pair for project-a while project-b has an active workflow in the same repository.
+maintain-project-specs-delivery-proof,true,Reconcile the accepted release qualification design with tested implementation and separate deployment evidence.

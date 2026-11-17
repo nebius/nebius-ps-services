@@ -500,6 +500,15 @@ Prevent unauthorized VM-HA origination and all export of peer-learned routes, ma
   appropriate; distinguish unavailable reciprocal-policy evidence from malformed
   configuration. Established IPsec/BGP alone is not forwarding or route readiness.
   Historical customer causality remains unproven without a causal reproduction.
+- Fenced activation verification tolerates slow post-activation convergence for
+  five minutes per member before reporting operation-timeout. Expiry performs no
+  rollback and leaves only exact-operation locked state that the unchanged apply
+  command resumes idempotently.
+- `status` distinguishes an interrupted apply-owned managed-mTLS transaction —
+  one bound to the member's exact retained apply operation while that member
+  stays apply-locked — as `managed-mtls-apply-interrupted` with a resume-the-apply
+  action, from a foreign `managed-mtls-transaction-conflict`, which stays blocked
+  for inspection. Rotation transactions keep their existing projection.
 
 #### Negative Criteria
 
@@ -685,7 +694,7 @@ When `VPNGW_SSH_KNOWN_HOSTS_FILE` is unset, resolve exact ordinary and VM-HA SSH
 
 #### Acceptance Criteria
 
-- The managed store is `~/.ssh/nebius-vpngw/<scope-sha256>/`, where the scope digest is derived deterministically from canonical tenant, project, region, gateway-group, and topology identity: the VM-HA cluster identity or the fixed ordinary topology discriminator. Its canonical v2 public-key-only receipt binds each stable member hostname and exact key to a closed authority kind, optional exact Compute-binding digest, and optional ordinary-predecessor receipt digest. A derived OpenSSH `known_hosts` projection carries that same key under the stable hostname plus the exact current configured or discovered management-address aliases needed by supported older releases; neither file contains private key bytes, credentials, peer certificates, or secret configuration. VM-HA is pre-adoption, so no v1 receipt reader or mixed receipt mode exists.
+- The managed store is `~/.ssh/nebius-vpngw/<scope-sha256>/`, where the scope digest is derived deterministically from canonical tenant, project, region, gateway-group, and topology identity: the VM-HA cluster identity or the fixed ordinary topology discriminator. Its canonical v2 public-key-only receipt binds each stable member hostname and exact key to a closed authority kind, optional exact Compute-binding digest, and optional ordinary-predecessor receipt digest. A derived OpenSSH `known_hosts` projection carries that same key under the stable hostname plus the exact current configured or discovered management-address aliases needed by supported older releases; neither file contains private key bytes, credentials, peer certificates, or secret configuration. REQ-043 permits one validated apply-only conversion of legacy v1 receipts to canonical v2; non-mutating consumers never migrate trust and no mixed runtime receipt mode exists.
 - Managed trust authority is keyed by each stable gateway hostname and carried to the discovered management address through `HostKeyAlias`; address changes do not silently create a new identity. An explicit source may name the exact hostname or current configured/discovered address, but all matching aliases must resolve to one unambiguous key before normalization. The non-authoritative projection may change when `apply` observes a new address, while the receipt identity remains unchanged.
 - `VPNGW_SSH_KNOWN_HOSTS_FILE` remains the highest-precedence source. A missing, unreadable, malformed, symlinked, empty, incomplete, revoked, ambiguous, or mismatched explicit source fails without reading the managed store. A successful actual `apply` verifies retained members through those pins before importing only the exact member keys; it never rewrites the explicit file.
 - When the explicit source is unset and a retained member lacks a managed pin, actual `apply` may read literal `~/.ssh/known_hosts` only as a one-time migration candidate. The source is opened without following symlinks, must be a current-user-owned single-link regular file with no group or other write access, and is held as an immutable content-and-file-identity snapshot. Only an exact stable hostname or exact current configured/discovered management-address record, including the equivalent OpenSSH hashed form, is eligible. An exact revoked record blocks; unrelated malformed records, wildcards, certificates, and other aliases grant no authority. One unambiguous raw Ed25519 candidate must be bound to the exact current ordinary Compute identity, or to the exact VM-HA Compute plus lifecycle or product-provisioning identity, verified through strict SSH, and re-read unchanged before only that normalized stable-hostname pin is imported. The general file is never created, repaired, rewritten, or used by non-apply commands.
@@ -2301,10 +2310,11 @@ After any planned failover, planned failback, or automatic owner-loss promotion 
   artifact recorded by the existing installation, bind the selected local wheel
   by SHA-256, verify the uploaded bytes before installation, and require a fresh
   installed-agent capability document containing the restoration feature.
-- Every `apply` approval that installs an agent artifact must select one
-  existing non-fallback local wheel before approval, publish its exact SHA-256,
-  and bind that digest into the approval domain. Planning must not build,
-  delete, or replace a wheel. Revalidation under the canonical apply lock must
+- Before approval or bounded automatic admission, resolve one exact CLI-compatible
+  wheel from explicit selection, verified installation provenance, the standalone
+  bundle, or a frozen editable-source build. Cache immutable bytes by digest and
+  bind the exact SHA-256 into the operation authority. Planning may populate that
+  cache but must not delete or replace a referenced artifact. Revalidation under the canonical apply lock must
   rehash the same regular file before the first effect, and every member upload
   must verify those exact bytes. A missing, changed, ambiguous, symlinked, or
   capability-incomplete artifact fails before gateway mutation and requires a
@@ -3661,8 +3671,9 @@ runtime checks are limitations, never passing qualification.
 
 Resolve CR-002 through CR-006 while retaining the repaired coordinator lock,
 public commands, configuration schema, credential schema and strict HA fencing.
-The approved one-time checkpoint conversion is the sole exception to the
-pre-adoption no-legacy-reader policy; runtime accepts only the current schema.
+The approved one-time checkpoint conversion and REQ-043 apply-only SSH receipt
+conversion are the bounded exceptions to the pre-adoption no-legacy-reader
+policy; runtime accepts only the current schema.
 
 #### Acceptance Criteria
 
@@ -3843,8 +3854,8 @@ REQ-033 where they conflict; their remaining safety obligations remain active.
 
 Run source checks, authentic historical package upgrades in isolated Ubuntu 24.04
 containers, native Linux and final-artifact live qualification as distinct lanes.
-At qualification start, freeze the four latest published stable VPNGW releases
-and their wheel hashes. Exercise supported ordinary/HA
+For release 0.6.6 qualification, freeze the five authentic VPNGW releases
+0.6.1 through 0.6.5 and their wheel hashes. Exercise supported ordinary/HA
 package and saved-state paths in Static/BGP from those artifacts to one frozen
 candidate. Verify exact installation, dependency consistency and partial-package
 recovery. Repeat the real package preparation with the identical selected request;
@@ -3919,7 +3930,8 @@ resource identities except effects explicitly included in an approved plan.
 - AC-003: Bind approval to the complete effect scope and persist metadata-only
   command intent before effects. Resume only the original approved effects. A
   pending attachment approval cannot authorize newly discovered guest work. A new
-  artifact or expanded repair scope requires a reviewed, archived successor;
+  artifact requires an archived successor, automatically admitted only by the
+  exact package-update policy in REQ-043; expanded effects require fresh review;
   supported original-artifact resume remains available after interruption.
 - AC-004: Distinguish unsubmitted, uncertain, accepted, successful and conclusively
   rejected operations. Settle uncertain effects before retry or replan. A timeout
@@ -4226,6 +4238,15 @@ on existing Ubuntu gateways without manually deleting checkpoints or replacing
 VMs. Support ordinary and VM-HA deployments in Static and BGP modes, including
 regional pairs. This explicit operation accepts a full VPN outage.
 
+Use an explicit recovery ladder: normal apply for convergence and upgrades;
+software repair on accessible retained VMs; then a separately confirmed last-resort
+VM rebuild when the retained guests cannot be recovered. The last resort uses
+canonical destroy followed by fresh apply from the same YAML through the SDK.
+It is never an implicit VM-deletion mode of apply or apply --repair.
+After verified destruction, fresh apply must not depend on the deleted guests'
+private SSH host keys. Recheck absence before managed identity publication and
+preserve explicit operator trust sources and exact publication recovery.
+
 #### Acceptance Criteria
 
 - Inspect exact targets, show the outage and reset scope, and ask a default-No
@@ -4242,6 +4263,9 @@ regional pairs. This explicit operation accepts a full VPN outage.
   managed node mTLS, HA generations and operational state.
   Preserve canonical writer-lock inodes and reconstruct owner-private managed
   certificate storage, including ordinary repair before subsequent HA conversion.
+  Before archiving ingress services, retire and archive only the exact obsolete
+  product-owned SSH service/socket dependency. Preserve customer SSH configuration;
+  modified or unsafe product dependency files require review before service changes.
 - Independently exclude old writers and reconcile accepted cloud/package effects.
   Confirmed reconstruction may retire an exact idle handoff owner after all
   submitted phases have known outcomes. Preserve its evidence and exclude new
@@ -4383,6 +4407,262 @@ Separate implemented, locally verified, focused-live verified and fully qualifie
 claims. An unresolved runtime reproducer prevents a tested release-candidate claim.
 
 <!-- /REQUIREMENT: REQ-039 -->
+
+<!-- REQUIREMENT: REQ-040 status=active priority=P1 type=reliability -->
+### REQ-040: Reuse exact-commit release qualification
+
+#### User Story
+
+Maintainers need shorter delivery with complete, identity-bound validation and
+recoverable publication rather than repeated or unrelated work.
+
+#### Acceptance Criteria
+
+- AC-001: Require the VPNGW CI and shared publisher contract producers for the frozen
+  merged commit before tagging. Bind native, historical-upgrade, lint, unit/safety
+  and build results to trusted run/attempt and artifact identities. Move offline
+  dependency-install coverage into CI before removing duplicate release suites.
+  Publication retains tagged runtime version, final wheel build, installation and
+  CLI smoke checks plus independent remote byte verification. Optional cloud UAT
+  is not a new release prerequisite. Existing HA and non-HA contracts are unchanged.
+- AC-002: Preserve user checkout state, original release identities and required
+  protection, review, failure and cleanup gates.
+
+#### Negative Criteria
+
+- NC-001: Never treat missing evidence, skipped required jobs, uncertain effects,
+  expired artifacts or unrelated successful runs as qualification.
+- NC-002: Do not activate the disabled AI controller or overwrite published data.
+
+#### Validation Method
+
+Focused source regressions and workflow contract tests, followed by independent
+installation and deployed workflow evidence at their respective boundaries.
+
+#### Test Method
+
+Cover exact identity, failure and skip rejection, stale attempts, concurrent
+observation, interruption, duplicate notifications and retained evidence expiry.
+
+#### Evaluation Method
+
+Compare selected test inventories and repeated work; report observed timings and
+separate local checks from deployed qualification without claiming unrun tests.
+
+<!-- /REQUIREMENT: REQ-040 -->
+
+<!-- REQUIREMENT: REQ-041 status=active priority=P1 type=feature -->
+### REQ-041: Collect bounded private support evidence without deployment effects
+
+#### User Story
+
+Operators need one automated diagnostic ZIP for a private support ticket, including
+an interrupted HA deployment, without upgrading gateways or disturbing recovery.
+
+#### Acceptance Criteria
+
+- Provide support-bundle as the only public diagnostic command; replace collect-logs
+  without an alias. Require local config; accept optional project, region, output
+  ZIP and RFC3339 since selectors. Support ordinary and HA groups, existing 0.6.5
+  nodes and damaged agent installations through a standalone read-only probe.
+- Collect workstation artifact provenance and lifecycle checkpoints; per-member
+  HA, heartbeat, mTLS, fence, service, host, network, IPsec and BGP evidence;
+  scoped cloud ownership, allocation, routes, security groups and operation state;
+  and redacted diagnostic journal messages and command output. Distinguish unavailable, partial,
+  changed and not-applicable evidence from healthy observations.
+- Retain operational identifiers for private support. Export typed fields plus broader redacted
+  log messages and command stdout/stderr by default; exclude credentials, keys,
+  raw config, user data, environment and unrestricted process arguments,
+  packet captures and XFRM cryptographic material. Report omissions and scan the
+  final safe export. Never write raw source material into staging files.
+- Bound collection to five minutes, two member workers, thirty seconds per guest
+  probe, two MiB per probe, sixty-four MiB uncompressed and twenty-five MiB compressed.
+  Aggregate public status may use at most ninety seconds of the remaining total
+  budget while reserving twenty seconds for archive finalization.
+  Default journals to twenty-four hours; explicit since is at most seven days.
+  Preserve current state before oldest-log trimming. Capture paired observations.
+- Publish a private non-overwriting atomic ZIP, summary and versioned manifest.
+  Exit zero means complete, one a valid partial bundle and two no valid bundle.
+  Never upload automatically or mutate deployment state, trust or cloud resources.
+- HA activation reports the exact failed readiness predicate and member, preserving
+  first versus latest failure and distinguishing expected apply fencing. Preserve
+  the existing predicate, ownership, timeout, lock and deployment persisted-format contracts.
+- Explain artifact-changed through selected versus pending wheel digests; installed
+  CLI version alone is not the selected deployment artifact. No automatic recovery.
+
+- Export schema v3 with coverage outside event arrays, exact/lower-bound counts,
+  acquisition intervals, stable evidence references and explicit unknown retention.
+  Collection completeness never promises diagnostic sufficiency or gateway health.
+- Include recognized error context, boot/invocation and monotonic chronology,
+  cloud-init stages, five one-second resource intervals, PSI and scoped OOM facts,
+  normalized clocks, component versions and managed-service listeners.
+- Produce an offline evidence index, timeline, summary and analysis guide from the
+  final retained records. Historical failures are not explained by non-overlapping
+  current samples. All generated text follows the same privacy policy.
+- Keep the existing fixed stack and gateway-independent probe. No model calls,
+  automatic analysis services, active connectivity tests or gateway upgrades.
+
+- Reuse established deployment SSH credentials and exact host trust, including
+  public-key-file configuration and operator overrides. No separate collector
+  setup is required when that existing access is usable.
+- Display live per-member progress and stage-specific failures with connection
+  attempt state and actionable guidance. Distinguish cloud-only from guest evidence.
+- Capture actual public status output, native HA status, service status, journals,
+  fixed product/bootstrap log tails and host resource commands. Preserve unknown
+  ordinary messages after targeted credential redaction; report omissions and
+  residual disclosure risk rather than claiming an absolute secret-free archive.
+
+#### Negative Criteria
+
+- No unredacted logs or raw config/API dumps, automatic trust enrollment, remote installation,
+  secrets discovery, credential changes, writer locks, restarts or cloud mutations.
+- No claim that diagnostic delivery proves an unresolved customer HA cause fixed.
+
+#### Validation Method
+
+Run synthetic privacy and read-only invariants, bounded failure and installed-wheel
+smokes, existing HA regression tests and the required exact-commit release lanes.
+
+#### Test Method
+
+Exercise unreachable members, authentication failure, corrupt and changing state,
+old or broken agents, injected secrets, limits, output races, all activation
+predicates and owner-replacement behavior without live customer access.
+
+#### Evaluation Method
+
+Separate local, installed, CI and published artifact proof. Operational identifiers
+remain private support information. Declare partial evidence and unrun live recovery.
+
+<!-- /REQUIREMENT: REQ-041 -->
+
+<!-- REQUIREMENT: REQ-042 status=active priority=P1 type=reliability -->
+### REQ-042: Diagnose the VM-HA peer heartbeat channel instead of failing opaquely
+
+#### User Story
+
+Operators whose network path blocks the VM-to-VM heartbeat endpoint need status
+and apply to name the blocked channel and its owning fix, instead of a generic
+activation verification timeout that leaves locks behind without a cause.
+
+#### Acceptance Criteria
+
+- The node agent classifies every failed peer heartbeat send over the managed
+  mTLS channel (TCP 9443 between member addresses) as exactly one of timeout,
+  refused, unreachable, tls, or protocol, and publishes peer send health
+  additively in the status document heartbeat section while schema version
+  stays 6: last-success age, last-error age, error kind and consecutive
+  failures. The wire heartbeat format is unchanged.
+- `status` renders a degraded member reason `peer-heartbeat-endpoint-unreachable`
+  with an Action naming TCP 9443 and the customer-owned security-group rules
+  when sends persistently fail as timeout, unreachable or refused while the
+  peer heartbeat is not fresh; a persistent tls kind renders
+  `peer-heartbeat-tls-failure` with managed-mTLS recovery guidance. Both codes
+  pass the CLI and support-bundle safe-reason allowlists.
+- `apply` proves the peer channel inside the fenced verification step through a
+  bounded per-node `verify-peer-channel-node-N` gate before the long per-node
+  fenced waits. A provably down channel fails fast with the classified reason
+  through the existing first/latest activation diagnostics, and a resume whose
+  transition already started skips the gate exactly like the fenced step.
+- VM-to-VM TCP 9443 is documented as a customer-owned security-group
+  prerequisite beside the existing `security_group_ids` documentation.
+- Support bundles retain the new typed heartbeat send fields and the existing
+  peer freshness fields under the established allowlist policy.
+- Heartbeat and failover timing is unchanged: the 1 s send cadence with 5 s
+  suspicion and 10 s staleness remains as validated conservative against
+  RFC 9568 VRRP defaults, corosync token defaults and etcd tuning guidance.
+
+#### Negative Criteria
+
+- No separate prober daemon, no additional periodic traffic, and no probing of
+  anything beyond the configured peer endpoint. No cloud security-group
+  mutation. Raw socket or TLS error text never reaches status documents or
+  bundles; the existing redacted transport messages are preserved.
+- No heartbeat schema version bump and no wire format change. Readers access
+  the new fields optionally, so older agent status documents keep rendering
+  with existing behavior.
+
+#### Validation Method
+
+Run the full unit suite with type and lint gates, plus the focused transport,
+publisher, runtime-status, status-view and projection tests for this feature.
+
+#### Test Method
+
+Inject each classified failure kind through the fake transport; prove publisher
+recording with the fake clock; assert the written agent status fields; render
+the new status reasons and Action including healthy and foreign negative cases;
+prove the pre-fence gate fails fast with mocked waits; prove projection retains
+the new fields.
+
+#### Evaluation Method
+
+On the live test pair: normal apply safely upgrades an interrupted 0.6.5
+operation to the selected candidate and status confirms healthy operation.
+Unchanged apply converges without unnecessary installation or restart. Explicit
+apply --repair is a separate reconstruction test, followed by healthy status.
+Peer-channel fault injection remains separately scoped qualification.
+
+<!-- /REQUIREMENT: REQ-042 -->
+
+<!-- REQUIREMENT: REQ-043 status=active priority=P1 type=reliability -->
+### REQ-043: Converge supported releases with ordinary apply
+
+#### User Story
+
+Installing a new CLI release and invoking apply upgrades existing gateways in
+place. Same-artifact apply reconciles configuration and supported drift or succeeds
+without unnecessary installation/restart when already converged. Release changes
+alone never require explicit full repair. Preserve existing resources, credentials,
+maintenance policy, strict host identity and independently verified ownership.
+
+#### Acceptance Criteria
+
+- Resolve the exact CLI-compatible deployable wheel automatically for release,
+  editable and standalone installs. Verify content and provenance, retain referenced
+  artifacts by digest and never select arbitrary newest local wheels.
+- Resume original-artifact work with its original identity. A new artifact uses a
+  separately recorded successor after owner-specific settlement. Automatically
+  admit only a proven same-scope package update; expanded resource, credential,
+  trust or interruption effects require fresh approval. Revalidate under owning
+  locks and preserve each predecessor, artifact pin and settlement receipt.
+- Cover preparation, completed preparation, continuation, partial activation,
+  interrupted settlement and successive interrupted upgrades. Unknown writers
+  and uncertain cloud effects remain classified pending/blocking conditions.
+- Actual apply may convert an exact legacy v1 SSH receipt to canonical v2 only
+  after strict SSH and current Compute/lifecycle identity verification. Changed
+  keys require a separate independently authenticated reconciliation, never TOFU,
+  blind pin replacement or disabled verification. Publish atomically with CAS.
+- Report specific SSH, artifact, ownership and remote-status causes in human and
+  structured output. Recovery commands retain explicit overrides but omit selectors
+  already supplied by YAML. Status remains read-only and truthfully reports health.
+- Qualify authentic 0.6.1 through 0.6.5 upgrades for ordinary/HA static/BGP paths.
+  The authorized live pair must pass normal apply, healthy status, unchanged apply,
+  healthy status, explicit repair and healthy status with retained VM/disk identity.
+
+#### Negative Criteria
+
+- No implicit full repair, automatic downgrade, trust bypass, silent adoption,
+credential rotation, stale approval reuse, or cosmetic health success.
+
+#### Validation Method
+
+Focused state-machine, trust, provenance, CLI and status tests, required project
+checks, installed and historical-release lanes, then frozen-candidate live trials.
+
+#### Test Method
+
+Exercise all supported interruption frontiers, a second interrupted successor,
+negative expanded effects and races, invalid provenance and trust conflicts;
+prove no-op behavior and independent health after normal apply and repair.
+
+#### Evaluation Method
+
+Keep implemented, locally verified, historical-release and focused-live evidence
+separate. Preserve failed and intervened trials. Missing identity evidence is a
+specific prerequisite, not proof of successful automatic recovery.
+
+<!-- /REQUIREMENT: REQ-043 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->

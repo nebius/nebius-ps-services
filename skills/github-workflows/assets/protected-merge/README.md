@@ -38,7 +38,7 @@ status without publishing targets. If the helper produces no diagnostic, the
 workflow still reports the failed exit status. Keep this handling aligned with
 the deployed workflow; raw transport errors remain suppressed by the helper.
 
-Customize both workflow-run trigger lists and the complete CI/path policy
+Customize the observer CI listener list and broker-only completion listener and the complete CI/path policy
 inventory together. Retain at least one unfiltered PR CI workflow. The native
 `Required CI` aggregate runs independently of merge dispatch and review
 attestations. Expected workflow evidence, checks/statuses and fork association
@@ -71,7 +71,8 @@ Local release skills retain tag ownership. Agentic SDLC is excluded.
 
 ## Targeted events and hourly recovery
 
-Protected merge has no schedule. PR events and trusted PR CI `in_progress` and
+Protected merge is dispatch-only. CI status observer owns PR events and trusted
+PR CI `in_progress` and
 `completed` events update only affected current heads. Starts must remain wired
 so a same-SHA rerun cannot leave stale green Required CI. Push and result-CI
 runs do not enter that aggregate path.
@@ -89,8 +90,9 @@ normal CI start/completion handlers should update the affected head directly.
 Merge completion has the sole hourly recovery schedule (`17 * * * *`) and manual
 recovery. A separate default-branch-only status-write job repairs Required CI
 for all open default-base PRs. Completion event discovery reads the producer
-run's artifacts; ordinary CI and CI-only broker runs are filtered before runner
-allocation. GitHub may still display skipped workflow-run rows.
+run's artifacts. Completion listens only to the broker; the observer sends a
+paired source run/attempt callback for verified result CI. Targeted callbacks
+skip global recovery enumeration. GitHub can still show skipped observer rows.
 
 Validated result inputs produce an immutable `merge-result-route/v1` receipt
 before tests. It binds repository, workflow/run/attempt, broker/PR/result and
@@ -100,3 +102,24 @@ bounded journal scans for uncertain effects. Target-specific malformed receipts
 produce blocked matrix entries and failing run status while valid independent
 targets proceed. Global API, authentication and incomplete-listing errors stop
 all candidate effects and preserve sanitized diagnostics.
+
+## Release qualification producers
+
+For a repository with releases, use `release-ci.yml.template` in place of
+`ci.yml.template` and copy `github-workflows/scripts/release_qualification.py`
+and `publication.py` beside the matching merge helpers in `.github/scripts`.
+Replace `__APP_DIR__` with the project path and `__APP_DIR_SLUG__` with that path
+with slashes replaced by hyphens. Keep every required job and matrix name in the
+profile. The generic policy leaves `release_profiles` empty until configured.
+For example, a single CI contracts job and release publisher use:
+
+```json
+{"release_profiles":{"services/example":{"publisher":"example-release.yml","workflows":{"ci.yml":{"jobs":{"contracts":["contracts"]}}}}}}
+```
+
+Release CI must emit qualification for ordinary default pushes, broker results
+and authorized qualification dispatches. Keep all three qualification inputs
+paired and exclusive of the five broker inputs. The current provider allows up
+to 25 workflow-dispatch inputs, as documented in [GitHub events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch).
+Copy the optional producer only when its profile is configured. Tagged publishers
+are read-only consumers of qualification and never dispatch missing tests.

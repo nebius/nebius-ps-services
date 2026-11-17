@@ -86,6 +86,14 @@ destination lock. Missing evidence, partial state and ambiguous errors block
 reconciliation without overwrite. See the [release](references/publish-release.md)
 and [image](references/container-image-publish.md) contracts for details.
 
+Every attempt that can publish retains its own receipt, including retries that
+reuse an original image digest or chart archive. Deleted receipts are detected
+from run/attempt history; only the currently executing attempt or a proven attempt that
+skipped both intent preservation and effects may proceed without one.
+Qualification discovery retains authenticated source association across reruns,
+but only the current attempt can prove success. An unresolved trusted result
+producer blocks fallback to an older green run.
+
 `test_publication.py` exercises failure and retry boundaries;
 `test_workflow_contracts.py` checks the repository policy, listeners, CI filters,
 publication ordering and reviewer/image behavior. The latter requires PyYAML
@@ -106,3 +114,5 @@ Keep these controls at repository scope without environment shadows.
 Fork merge eligibility defaults off through
 `AI_AUTOMATION_MERGE_FORK_CONTRIBUTION`; enabling it grants no fork branch writes.
 See [the authority contract](../merge-pr/references/automation-authority.md).
+
+See [release qualification](../publish-release/references/release-qualification.md) for the exact-commit profile, eight-hour phases and evidence contract.

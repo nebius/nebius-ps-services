@@ -24,7 +24,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Add reviewers from trusted base policy
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const {owner, repo} = context.repo;

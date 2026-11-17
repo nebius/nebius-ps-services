@@ -137,6 +137,104 @@ def identity(pr):
     return result
 
 
+def actor_identity(value):
+    require(isinstance(value, dict) and type(value.get("id")) is int and value["id"] > 0
+            and isinstance(value.get("login"), str)
+            and re.fullmatch(r"[A-Za-z0-9_\[\]-]{1,100}", value["login"])
+            and value.get("type") in ("User", "Bot"), "GitHub actor identity unavailable")
+    return {"id": value["id"], "login": value["login"], "type": value["type"]}
+
+
+def assess_branch_access(pr, base, head, *, actor=None, credential_repository=None):
+    """One three-valued permission rule for observation and publication."""
+    def boolean(value):
+        return value if type(value) is bool else None
+
+    def push(repo):
+        permissions = repo.get("permissions")
+        return boolean(permissions.get("push")) if isinstance(permissions, dict) else None
+
+    direct, upstream, edits = push(head), push(base), boolean(pr.get("maintainer_can_modify"))
+    facts = {"head_push": direct, "upstream_push": upstream, "maintainer_can_modify": edits}
+    result = {"status": "unknown", "basis": None, "reason": "permission_evidence_unavailable",
+              "facts": facts, "push_verified": False}
+    # A workflow's built-in token cannot acquire a human maintainer's access
+    # to another repository, even if the PR permits maintainer edits.
+    if credential_repository is not None:
+        name = head.get("full_name")
+        if not credential_repository or not isinstance(name, str):
+            return result
+        if name.lower() != credential_repository.lower():
+            return {**result, "status": "denied", "reason": "credential_repository_scope"}
+        # An installation token needs its own direct repository permission.
+        maintainer = False
+    else:
+        maintainer = (False if upstream is False or edits is False else
+                      True if upstream is True and edits is True else None)
+        if maintainer is True:
+            # Maintainer edits belong to the authenticated human. Environment
+            # variable names do not establish token type or repository scope.
+            try:
+                actor_type = actor_identity(actor)["type"]
+            except PublicationError:
+                actor_type = None
+            maintainer = True if actor_type == "User" else False if actor_type == "Bot" else None
+    if direct is True or maintainer is True:
+        return {**result, "status": "eligible", "reason": "write_route_observed",
+                "basis": "direct" if direct is True else "maintainer_edit"}
+    if direct is False and maintainer is False:
+        return {**result, "status": "denied", "reason": "no_write_route"}
+    return result
+
+
+def inspect_pr_access(repository, number, *, credential_repository=None):
+    """Read-only preflight: no Git, private state, checkout or probe effect."""
+    result = {"schema": "skills/pr-access-v1", "status": "unknown", "basis": None,
+              "reason": "identity_or_permission_unavailable", "actor": None, "pr": None,
+              "facts": None, "push_verified": False}
+
+    def actor():
+        return actor_identity(api("user"))
+
+    def observed(value):
+        binding = identity(value)
+        require(binding["repository"].lower() == repository.lower()
+                and binding["number"] == number, "Selected PR identity changed")
+        for field in ("head", "base"):
+            sha = value[field].get("sha")
+            require(isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", sha),
+                    "PR commit identity unavailable")
+            binding[field + "_sha"] = sha
+        return binding
+
+    try:
+        repository_url(repository)
+        require(type(number) is int and number > 0, "Invalid PR number")
+        result["actor"] = actor()
+        path = f"repos/{repository}/pulls/{number}"
+        pr = api(path)
+        result["pr"] = observed(pr)
+        if pr.get("state") != "open" or pr.get("merged") is not False:
+            return {**result, "reason": "pr_not_open"}
+        base = api(f"repos/{result['pr']['repository']}")
+        head = api(f"repos/{result['pr']['head_repository']}")
+        require(type(base.get("id")) is int and type(head.get("id")) is int
+                and base["id"] == result["pr"]["base_repository_id"]
+                and head["id"] == result["pr"]["head_repository_id"],
+                "PR repository identity changed")
+        assessment = assess_branch_access(pr, base, head, actor=result["actor"],
+                                          credential_repository=credential_repository)
+        after = api(path)
+        if (observed(after) != result["pr"] or after.get("state") != "open"
+                or after.get("merged") is not False
+                or after.get("maintainer_can_modify") != pr.get("maintainer_can_modify")
+                or actor() != result["actor"]):
+            return {**result, "reason": "identity_or_permission_changed"}
+        return {**result, **assessment}
+    except (PublicationError, KeyError, TypeError, ValueError):
+        return result
+
+
 def validate_binding(binding, root, git):
     keys = {"repository", "base_repository_id", "number", "base_ref", "head_repository",
             "head_repository_id", "head_ref", "fetch", "push"}
@@ -166,9 +264,11 @@ def snapshot(binding, root, git, *, writable=False):
         require(pr.get("state") == "open" and pr.get("merged") is not True, "PR is not open")
         head = api(f"repos/{binding['head_repository']}")
         require(head.get("id") == binding["head_repository_id"], "PR head repository changed")
-        direct = head.get("permissions", {}).get("push") is True
-        maintainer = pr.get("maintainer_can_modify") is True and base.get("permissions", {}).get("push") is True
-        require(direct or maintainer, "Contributor branch updates are not permitted")
+        access = assess_branch_access(pr, base, head)
+        if access["status"] == "unknown":
+            access = assess_branch_access(pr, base, head, actor=api("user"))
+        require(access["status"] != "unknown", "Contributor branch write permission is unknown")
+        require(access["status"] == "eligible", "Contributor branch updates are not permitted")
     head_sha = pr["head"].get("sha")
     require(isinstance(head_sha, str) and re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", head_sha), "Invalid PR head")
     return head_sha

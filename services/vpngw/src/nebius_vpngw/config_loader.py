@@ -538,19 +538,10 @@ def load_local_config(
     try:
         gg = expanded.get("gateway_group", {}) or {}
         vm_spec = gg.get("vm_spec", {}) or {}
-        ssh_key_path = vm_spec.get("ssh_public_key_path")
-        ssh_key_inline = vm_spec.get("ssh_public_key")
-        from .deploy.ssh_client_auth import operator_identity
+        from .deploy.ssh_client_auth import normalize_ssh_access
 
-        if ssh_key_path and not ssh_key_inline and operator_identity() is None:
-            p = Path(str(ssh_key_path)).expanduser()
-            if not p.exists():
-                raise ValueError(f"SSH public key file not found: {p}")
-            key_text = p.read_text(encoding="utf-8").strip()
-            # Insert content into ssh_public_key (keep the path for reference)
-            vm_spec["ssh_public_key"] = key_text
-            gg["vm_spec"] = vm_spec
-            expanded["gateway_group"] = gg
+        gg["vm_spec"] = normalize_ssh_access(vm_spec)
+        expanded["gateway_group"] = gg
     except Exception as e:
         # Re-raise as ValueError to provide a clear message to CLI
         raise ValueError(str(e)) from e

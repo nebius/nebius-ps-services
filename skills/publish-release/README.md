@@ -35,7 +35,7 @@ fresh validation and review. merge-pr dispatches the protected broker, which
 supplies routine Actions approval. Unsafe findings and human objections stop.
 
 Additional required human or release-environment approvals use the remaining
-three-hour phase budget, with links and 15-second polling. There is no separate
+eight-hour phase budget, with links and 15-second polling. There is no separate
 ten-minute cutoff. Partial approvals and changing gates do not restart the clock;
 repository protection remains authoritative.
 
@@ -53,9 +53,14 @@ intact; no local background publisher is left running.
 If the default branch advances after the PR was bound, canonical synchronization
 and a fresh review can reconcile the checkpoint to that exact repaired head before
 merge. This preserves prior-head evidence and deadlines; unrelated drift still blocks.
+If a maintainer already merged that canonical repair, explicit resume uses a
+separate guarded recovery path. It verifies the original execution and merged
+result before updating progress, without recreating a review or merge. The
+registered execution must remain available; selected release-profile qualification
+precedes tags, while unrelated CI and Pages remain background observations.
 
 PR readiness, merge settlement, post-merge verification and release execution each
-have a separate 10,800-second (three-hour) limit. The checkpoint retains verification
+have a separate 28,800-second (eight-hour) limit. The checkpoint retains verification
 deadlines across repeated checks and CI reruns. Only explicit resume renews any
 phase budget; upgrading installed skills does not change stored deadlines.
 Failures, conflicting identities and missing assets produce precise blockers.
@@ -153,3 +158,11 @@ private Git calls that could bypass the review owner's inert-LFS policy.
 ## Enrolled repository automation
 
 Shared Actions authority: enrolled repositories route laptop and hosted requests through one merge/release controller; PR lifetime waivers are durable policy, not labels. See the skill contract and sibling merge-pr automation-authority reference.
+
+## Delivery waiting and optional UAT
+
+Ordinary merge returns after confirmed merge and destination containment.
+Use `merge-pr --wait-for-result` to wait for full result CI and Pages. Release
+publication instead verifies its exact-commit service/shared publisher profile.
+Additional live/cloud/UAT campaigns are opt-in; required CI, review, recorded
+failures and cleanup remain binding. SDLC retains its accepted delivery boundary.

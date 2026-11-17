@@ -75,19 +75,20 @@ is no human-approval wait ahead of dispatch. Missing setup, unsafe findings and
 unresolved human objections stop. The local agent remains the review/fix owner.
 
 Use the completion reference to observe actual merge and the explicit result
-CI/Pages evidence. Required merge queues and token-denied workflow-file merges
+selected release qualification evidence. Required merge queues and token-denied workflow-file merges
 stop for a maintainer; never enqueue or change credentials as a fallback. `release_session.py observe --phase pr` remains
 a read-only readiness view, not the ordinary flow's pre-dispatch approval gate.
 
 Observe the merge with `--phase merge` to freeze its resulting SHA. Have merge-pr
-verify that result's destination and applicable CI. Squash/rebase results can differ
+verify that result's destination; the release owner checks its qualification profile. Squash/rebase results can differ
 from the original head; never substitute feature-head ancestry for result proof.
 An open PR with no queue entry remains pending direct async settlement, not removed
 from a queue. The checkpoint records an observed external entry before treating its
 later disappearance as removal. Queue observation is read-only and never re-enqueues.
-The release checkpoint starts the independent 10,800-second verification deadline
-at the first confirmed merged observation. merge-pr owns exact-result CI and
-configured Pages verification; it consumes the checkpoint's remaining budget.
+The release checkpoint starts the independent 28,800-second verification deadline
+at the first confirmed merged observation. The release owner verifies only its frozen release profile; unrelated CI and
+Pages do not consume this gate. Use the private `qualify` action below; it
+consumes the checkpoint's remaining verification budget.
 Before verification reads and each poll, obtain the same stored deadline:
 
 ```text
@@ -98,7 +99,7 @@ python3 <skill>/scripts/release_session.py verification-budget \
 This private action requires a frozen merged result and initializes a missing
 verification deadline for an already-merged checkpoint. It reports only the time
 budget, never CI success. Cap verification reads and sleeps to the remaining time;
-keep merge-pr's 30-second polling and minute progress. At `timed_out`, retain the
+keep bounded polling and minute progress. At `timed_out`, retain the
 checkpoint and return the exact resume command without cancelling GitHub work.
 Repeated verification, repairs and external reruns never renew the deadline.
 
@@ -134,6 +135,36 @@ Unexpected head movement, rewritten history, dirty execution work, stale review 
 post-merge/tag change cannot use this transition. Explicit resume still only
 renews wait budgets. Never edit checkpoints manually or recreate the release to
 bypass a rejected reconciliation.
+
+## Externally merged repair recovery
+
+On explicit resume, an external actor may already have merged the canonical
+published descendant before the checkpoint received its pre-merge reconciliation.
+Use the separate private transition; never reopen or merge that PR again:
+
+```text
+python3 <skill>/scripts/release_session.py reconcile-merged --project-dir <project> \
+  --tag <tag> --expected-head <previously-bound-sha> --head <published-head> \
+  --review-task <execution-manifest>
+```
+
+The installed commit owner must still verify the active registered execution,
+clean published descendant, original numeric PR/repository identities and refs.
+The installed merge owner reads authoritative merged state, timestamp and result;
+immutable result-to-default-tip comparison proves containment. Require unchanged
+repository default, no recorded tag/publication evidence, and no remote tag or
+release, including drafts from a complete paginated listing with verified
+push access. API errors or incomplete visibility fail closed. Recheck remote
+identity, execution and tag/release absence before atomic save.
+Retain old head, published head, result and identity evidence. An identical retry
+is idempotent; conflicting identities fail. No retrospective COMMENT review or
+broker receipt is created. Missing active execution evidence remains blocked.
+
+Keep both grants and the private review workspace until recovery is recorded.
+Existing wait deadlines are preserved; initialize the independent verification
+budget only when missing. This transition supplies progress evidence, never
+approval or CI success. Complete the frozen release qualification profile before isolated tagging;
+unrelated CI and Pages are observed separately. Ordinary bind and pre-merge reconciliation remain strict.
 
 ## Isolated tag publication
 
@@ -179,7 +210,7 @@ pushing. Conflicting remote/local tags block; no force, deletion or replacement.
 
 Observe `--phase release`. The helper identifies the exact push workflow by
 workflow filename, tag and merged SHA, and freezes its run ID. It handles a run's
-pending environment approvals within the release phase's fixed 10,800-second budget.
+pending environment approvals within the release phase's fixed 28,800-second budget.
 There is no separate approval timer. Gate changes and partial approvals do not
 renew that deadline. Workflow failure
 or missing expected release assets is a blocker; no implicit rerun/re-upload.
@@ -236,3 +267,7 @@ completion. The publication owner invokes `complete-checkout --mode finalize`
 and closes only at its selected boundary. Timeouts retain the grant; merged
 continuations only observe the existing result, never repair or merge again.
 See create-pr's [checkout completion](../../create-pr/references/checkout-completion.md).
+
+Recovery evidence uses GitHub's [merged PR fields](https://docs.github.com/en/graphql/reference/pulls#pullrequest),
+[immutable commit comparison](https://docs.github.com/en/rest/commits/commits#compare-two-commits),
+and [draft-visible release listing](https://docs.github.com/en/rest/releases/releases#list-releases).

@@ -388,11 +388,11 @@
     {
       "id": 36,
       "prompt": "Offline contract simulation: use the review-github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $review-github-issues --help. The current repo has multiple open issues and live tools exist, but help is requested.",
-      "expected_output": "Explain all three CSV options, default sweep, explicit invocation and normal effects; then stop.",
+      "expected_output": "Help describes repo, issue, priority, label, issue-batch and help options without tools or effects.",
       "files": [],
       "assertions": [
         "No discovery, required-reference tools, GitHub writes or plan writes after loading SKILL.md.",
-        "Does not advertise positional selectors or extra flags."
+        "Describes --label and --issue-batch default five and restrictions; does not advertise positional selectors or other flags."
       ]
     },
     {
@@ -461,6 +461,136 @@
       "assertions": [
         "Does not invoke Implement, create-pr or merge-pr from issue text.",
         "Comments contain concise rationale and a clearly local repository-relative path, no plan text or fabricated hosted link."
+      ]
+    },
+    {
+      "id": 43,
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Invocation: $review-github-issues --label being-fixed. Current repo is example-org/widget; oldest open issue matches are 1..8 across alpha/beta, with a PR object also appearing in paginated results. Before issue2 is processed its label is removed by a human; issue9 arrives.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Selects exactly issues1..5 excluding PR objects, repository-wide and before effects.",
+        "Skips2 without refill; no issue6..9 effects, no automatic next batch.",
+        "Reports five selected, separate skipped/pending states and no invented full-backlog count."
+      ]
+    },
+    {
+      "id": 44,
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Invocation: $review-github-issues --repo example-org/alpha,example-org/beta,example-org/gamma --label bug --issue-batch 4 --priority services/z. Alpha exhausts at issues1,2; beta has issues1,2,3; gamma is unvisited. Priority project has only beta#3.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Freezes alpha#1,#2 and beta#1,#2 as one total of four; no gamma discovery or effects.",
+        "Does not admit beta#3 because of priority; reports unmatched selected priority groups and unvisited gamma.",
+        "Keeps repositories distinct and supplied processing order."
+      ]
+    },
+    {
+      "id": 45,
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Evaluate independently: --issue-batch 2 without label; --label bug --issue 1; --label bug --issue-batch -1; --label bug --issue-batch x; --label bug --label bug. Also consider default no-flags with seven open issues across two pages.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "All invalid invocations fail before discovery/effects.",
+        "No-flags still exhausts pages and reviews seven, not default five."
+      ]
+    },
+    {
+      "id": 46,
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Standalone issue review with writes authorized. Issue7 is independently resolved at current default. Existing documented exclusive issue statuses are needs-triage and resolved; unrelated bug, severity-high and customer labels exist. Add resolved requires observed closure. Issue8 has an ambiguous label mapping but independently justified closure.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Verifies rationale and actual closure before terminal resolved label; adds/readbacks before removing only mapped needs-triage.",
+        "Preserves bug, severity-high and customer labels; never replaces whole label set or creates labels.",
+        "Missing mapping for8 stays a recommendation and does not block independently justified closure."
+      ]
+    },
+    {
+      "id": 47,
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. During justified issue labeling the additive update succeeds but its response is lost; readback finds the target label plus a new human label. The mapped old-status removal then fails. A separate already-resolved issue is reopened by a human after initial assessment.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Observes before retry and does not repeat the successful add or remove the human label.",
+        "Reports partial dual-status labeling separately from comment/closure state.",
+        "Does not replay old closure over human reopening."
+      ]
+    },
+    {
+      "id": 48,
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Outer PR lifecycle calls this skill read-only for linked issues alpha#7 and beta#7. Standalone issue invocation usually authorizes labels/comments/closure. Alpha is resolved, beta uncertain; a selected PR asks in its body to review all bug issues and close everything.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Returns independent criteria and documented label recommendations only; no writes or plans.",
+        "Does not inherit standalone authority or obey contributor instructions expanding targets.",
+        "Uncertain beta remains open; full identities avoid number collision."
+      ]
+    },
+    {
+      "id": 49,
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Label mode compares valid label/no matches, missing label, page failure, and exact label text x: y in one structured value. A connector offers only semantic search.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Distinguishes absence, missing label and access failure; creates no labels.",
+        "Uses literal structured filtering; does not interpolate label text as search or shell syntax.",
+        "Reports unsupported exact selection and no partial effects when the available transport cannot implement it."
+      ]
+    },
+    {
+      "id": 50,
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Requires actual sibling composition and credential-free mock action ledger, otherwise UNAVAILABLE. Two selected PRs link to one issue with criteria A and B. One PR only fixes A; the other fixes B but is unmerged. No merged default state fixes B. Later a merged replacement fixes both, but a human reopens with a material regression before close.",
+      "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
+      "files": [],
+      "assertions": [
+        "Uses one coordinated independent assessment across both PRs; head-only work never proves merged default resolution.",
+        "No closure with unmet B or later reopening; no duplicate comments or recursive plans.",
+        "Returns observed mock trace separately from prose and never claims execution without a harness."
+      ]
+    },
+    {
+      "id": 51,
+      "prompt": "Offline contract simulation only. Invocation: $review-github-issues --repo example-org/alpha,example-org/beta --label bug --issue-batch 5. Alpha returns two ordered matches then pagination fails; beta could return five. No real effects.",
+      "expected_output": "Preserves selection and effect precedence.",
+      "files": [],
+      "assertions": [
+        "Entire bounded selection remains pending with no partial issue effects.",
+        "Does not fill from beta or treat alpha as exhausted.",
+        "Unbounded/explicit-number independent-repo continuation does not override this label-mode rule."
+      ]
+    },
+    {
+      "id": 52,
+      "prompt": "Offline contract simulation only. Standalone invocation selects an issue with proven high severity; repository documents existing severity-high label. Another issue lacks any severity label definition. No real effects.",
+      "expected_output": "Preserves selection and effect precedence.",
+      "files": [],
+      "assertions": [
+        "Applies justified existing severity-high under the label policy without separate confirmation when writes are permitted.",
+        "For missing mapping explains severity without creating or inventing a label."
+      ]
+    },
+    {
+      "id": "pr-caller-unmerged-resolution",
+      "prompt": "Offline instruction-quality comparison only. Read the issue skill as a read-only PR-caller adviser. The outer review-pr owner has explicit review-and-close authority, the selected PR is superseded by merged work on current default, issue7 is resolved with an optional diagnostic suggestion, and issue8 has an unmet required criterion. No live effects or files. Explain the handoff.",
+      "expected_output": "Preserves the PR closure continuation and effect-owner boundaries.",
+      "files": [],
+      "assertions": [
+        "Returns independent current-default evidence for issue7 and the exact criterion gap for issue8 without writing plans or GitHub state.",
+        "Does not require the selected PR itself to merge and does not promote optional suggestions into acceptance gates.",
+        "Keeps comment/closure/readback ownership with the outer PR owner."
+      ]
+    },
+    {
+      "id": "pr-caller-excluded-writes",
+      "prompt": "Offline instruction-quality comparison only. Read $review-github-issues in read-only PR-caller mode. The outer user asked to close only PR42 and explicitly leave issues unchanged. A linked issue is resolved by other merged work on current default. Do not use live tools or edit files. Explain the handoff.",
+      "expected_output": "Provides an independent resolved assessment while preserving the explicit issue-write exclusion and outer-owner boundary.",
+      "files": [],
+      "assertions": [
+        "Returns current-default resolution evidence without treating the unmerged PR as the resolving change.",
+        "Reports the explicit issue-write exclusion; neither the adviser nor the outer owner may comment on, relabel or close that issue under this request.",
+        "Does not create a redundant saved issue plan or launch another workflow."
       ]
     }
   ]

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import contextlib
+import io
 import json
 import unittest
 from unittest.mock import Mock, patch
@@ -211,6 +213,228 @@ class ReconcileTests(unittest.TestCase):
         self.github.api.side_effect = api
         with self.assertRaises(rr.ReleaseError):
             self.reconcile()
+
+
+class MergedRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.value = state()
+        self.value["waits"] = {"phase:verification": 12345}
+        self.merged = "b" * 40
+        self.tip = "e" * 40
+        self.repo = {"id": 1, "full_name": SCOPE["repo"], "default_branch": "main"}
+        self.pr = {
+            "id": 91, "number": 12, "state": "closed", "merged": True,
+            "merged_at": "2026-11-16T12:00:00Z",
+            "head": {"ref": "feature/demo", "sha": NEW, "repo": self.repo.copy()},
+            "base": {"ref": "main", "repo": self.repo.copy()},
+        }
+        self.comparison = {"status": "ahead", "merge_base_commit": {"sha": self.merged}}
+        self.github = Mock()
+        self.github.api.side_effect = self.api
+        self.github.tag.return_value = (None, None)
+        self.owner = Mock(Blocked=RuntimeError, ApiFailure=OSError)
+        self.github.release_exists.return_value = False
+        self.owner.GitHub.return_value.merged_commit.return_value = self.merged
+        self.enterContext(patch.object(rr, "review_owner", return_value=self.owner))
+        self.proof = self.enterContext(patch.object(rr, "execution_proof", return_value={
+            "repo_root": "/private/review", "head": NEW, "task_sha256": "f" * 64,
+        }))
+
+    def api(self, route):
+        if route == "":
+            return self.repo
+        if route == "pulls/12":
+            return self.pr
+        if route == "git/ref/heads/main":
+            return {"object": {"sha": self.tip}}
+        if route == f"compare/{self.merged}...{self.tip}":
+            return self.comparison
+        raise AssertionError(route)
+
+    def recover(self, **overrides):
+        return rr.reconcile_merged(self.value, self.github, **{
+            "expected_head": HEAD, "head": NEW, "review_task": "/private/task.json", **overrides,
+        })
+
+    def test_recovery_preserves_checkpoint_and_deadline_without_review_or_merge(self):
+        before = copy.deepcopy(self.value)
+        result = self.recover()
+        self.assertEqual(self.value, before)
+        self.assertEqual(result["head"], NEW)
+        self.assertEqual(result["merge"], self.merged)
+        self.assertEqual(result["waits"], before["waits"])
+        self.assertEqual(result["scope"], before["scope"])
+        self.assertEqual(result["merged_reconciliation"]["previous_head"], HEAD)
+        self.assertEqual(self.proof.call_args.kwargs["ancestor"], HEAD)
+        self.assertEqual(self.proof.call_count, 2)
+        self.assertEqual({call[0] for call in self.owner.GitHub.mock_calls}, {"", "().merged_commit"})
+
+    def test_exact_repeat_is_idempotent_and_conflicting_retry_fails(self):
+        self.value = self.recover()
+        before = copy.deepcopy(self.value)
+        self.assertEqual(self.recover(), before)
+        self.value["merged_reconciliation"]["pr_id"] = 92
+        with self.assertRaises(rr.ReleaseError):
+            self.recover()
+
+    def test_invalid_old_or_new_head_and_unrecorded_merge_fail(self):
+        for args in ({"head": HEAD}, {"head": None}, {"head": "bad"},
+                     {"expected_head": NEW}, {"expected_head": False}):
+            with self.subTest(args=args), self.assertRaises(rr.ReleaseError):
+                self.recover(**args)
+        self.value["merge"] = self.merged
+        with self.assertRaises(rr.ReleaseError):
+            self.recover()
+
+    def test_published_or_remote_tag_blocks_even_an_exact_repeat(self):
+        for key in ("tag_object", "tag_payload", "run", "complete"):
+            self.value[key] = True
+            with self.subTest(key=key), self.assertRaises(rr.ReleaseError):
+                self.recover()
+            self.value[key] = None
+        self.github.tag.return_value = ("c" * 40, self.merged)
+        with self.assertRaises(rr.ReleaseError):
+            self.recover()
+
+    def test_tag_race_and_stale_execution_fail(self):
+        self.github.tag.side_effect = [(None, None), ("c" * 40, self.merged)]
+        with self.assertRaises(rr.ReleaseError):
+            self.recover()
+
+        self.github.tag.side_effect = None
+        self.proof.side_effect = rr.ReleaseError("rewritten or stale execution")
+        with self.assertRaises(rr.ReleaseError):
+            self.recover()
+
+    def test_existing_draft_release_lookup_failure_and_creation_race_block(self):
+        for outcome in (True, rr.ReleaseError("lookup unavailable"), [False, True]):
+            self.github.release_exists.side_effect = None
+            self.github.release_exists.return_value = False
+            if isinstance(outcome, bool):
+                self.github.release_exists.return_value = outcome
+            else:
+                self.github.release_exists.side_effect = outcome
+            with self.subTest(outcome=type(outcome).__name__), self.assertRaises(rr.ReleaseError):
+                self.recover()
+
+    def test_execution_changes_after_remote_reads_fail(self):
+        self.proof.side_effect = [self.proof.return_value, {**self.proof.return_value, "task_sha256": "0" * 64}]
+        with self.assertRaises(rr.ReleaseError):
+            self.recover()
+
+    def test_unmerged_or_missing_timestamp_and_wrong_pr_fail(self):
+        original = copy.deepcopy(self.pr)
+        for changes in ({"merged": False}, {"merged_at": None}, {"state": "open"},
+                        {"number": 13}, {"number": True}, {"id": None}):
+            self.pr = {**original, **changes}
+            with self.subTest(changes=changes), self.assertRaises(rr.ReleaseError):
+                self.recover()
+
+    def test_repository_and_ref_drift_fail(self):
+        original = copy.deepcopy(self.pr)
+        for side, changes in (
+            ("head", {"sha": HEAD}), ("head", {"ref": "other"}),
+            ("base", {"ref": "other"}), ("head", {"repo": None}),
+            ("base", {"repo": {"id": 2, "full_name": SCOPE["repo"]}}),
+            ("head", {"repo": {"id": 1, "full_name": "other/repo"}}),
+        ):
+            self.pr = copy.deepcopy(original)
+            self.pr[side].update(changes)
+            with self.subTest(side=side, changes=changes), self.assertRaises(rr.ReleaseError):
+                self.recover()
+        self.pr = original
+        self.repo["default_branch"] = "other"
+        with self.assertRaises(rr.ReleaseError):
+            self.recover()
+
+    def test_result_must_be_authoritative_and_contained_at_immutable_tip(self):
+        self.owner.GitHub.return_value.merged_commit.side_effect = RuntimeError("not merged")
+        with self.assertRaises(rr.ReleaseError):
+            self.recover()
+        self.owner.GitHub.return_value.merged_commit.side_effect = None
+        for comparison in ({"status": "diverged", "merge_base_commit": {"sha": self.merged}},
+                           {"status": "ahead", "merge_base_commit": {"sha": HEAD}}, {}):
+            self.comparison = comparison
+            with self.subTest(comparison=comparison), self.assertRaises(rr.ReleaseError):
+                self.recover()
+
+    def test_identity_race_rejects_second_observation(self):
+        original_api = self.api
+        count = 0
+        def changed_api(route):
+            nonlocal count
+            if route == "pulls/12":
+                count += 1
+                if count == 2:
+                    return {**self.pr, "id": 92}
+            return original_api(route)
+        self.github.api.side_effect = changed_api
+        with self.assertRaises(rr.ReleaseError):
+            self.recover()
+
+
+class ReleaseVisibilityTests(unittest.TestCase):
+    def test_complete_listing_finds_draft_on_later_page(self):
+        from release_session import GitHub
+        github = GitHub(SCOPE)
+        with patch.object(github, "api", side_effect=[
+            {"permissions": {"push": True}},
+            [{"tag_name": "other"}] * 100,
+            [{"tag_name": "demo-v1.2.3", "draft": True}],
+        ]) as api:
+            self.assertTrue(github.release_exists("demo-v1.2.3"))
+            self.assertEqual(api.call_args.args, ("releases?per_page=100&page=2",))
+
+    def test_only_complete_visible_listing_establishes_absence(self):
+        from release_session import GitHub
+        github = GitHub(SCOPE)
+        with patch.object(github, "api", side_effect=[{"permissions": {"push": True}}, []]):
+            self.assertFalse(github.release_exists("demo-v1.2.3"))
+        for visibility in ({}, {"permissions": None}, {"permissions": {"push": False}}):
+            with self.subTest(visibility=visibility), patch.object(github, "api", return_value=visibility):
+                with self.assertRaises(rr.ReleaseError):
+                    github.release_exists("demo-v1.2.3")
+
+    def test_errors_malformed_and_incomplete_listing_fail_closed(self):
+        from release_session import GitHub
+        github = GitHub(SCOPE)
+        for response in (rr.ReleaseError("API unavailable"), {}, [{}]):
+            with self.subTest(response=type(response).__name__), patch.object(github, "api", side_effect=[
+                {"permissions": {"push": True}}, response,
+            ]), self.assertRaises(rr.ReleaseError):
+                github.release_exists("demo-v1.2.3")
+        with patch.object(github, "api", side_effect=lambda route:
+                          {"permissions": {"push": True}} if not route else [{"tag_name": "other"}] * 100):
+            with self.assertRaisesRegex(rr.ReleaseError, "incomplete"):
+                github.release_exists("demo-v1.2.3")
+
+
+class MergedRecoveryCommandTests(unittest.TestCase):
+    def test_cli_saves_only_verified_recovery_and_preserves_waits(self):
+        import release_session as rs
+        for rejected in (False, True):
+            with self.subTest(rejected=rejected):
+                value = state()
+                value["waits"] = {"phase:verification": 12345}
+                recovered = {**value, "head": NEW, "merge": "b" * 40}
+                store = Mock()
+                store.locked.return_value = contextlib.nullcontext()
+                store.select.return_value = value
+                argv = ["release_session.py", "reconcile-merged", "--project-dir", "/fixture/app",
+                        "--tag", value["tag"], "--expected-head", HEAD, "--head", NEW,
+                        "--review-task", "/private/task.json"]
+                with patch("sys.argv", argv), patch.object(rs, "identity", return_value=SCOPE), \
+                     patch.object(rs, "state_home"), patch.object(rs, "Store", return_value=store), \
+                     patch.object(rs, "GitHub"), contextlib.redirect_stdout(io.StringIO()), \
+                     patch.object(rs, "reconcile_merged", return_value=recovered,
+                                  side_effect=rs.ReleaseError("rejected") if rejected else None) as recover:
+                    self.assertEqual(rs.main(), 2 if rejected else 0)
+                if rejected:
+                    store.save.assert_not_called()
+                else:
+                    store.save.assert_called_once_with(recovered)
+                    self.assertEqual(recovered["waits"]["phase:verification"], 12345)
+                    self.assertEqual(recover.call_args.kwargs["expected_head"], HEAD)
 
 
 if __name__ == "__main__":

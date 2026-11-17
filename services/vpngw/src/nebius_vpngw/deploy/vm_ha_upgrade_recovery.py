@@ -281,6 +281,26 @@ def validate_checkpoint(state: VMHALifecycleState) -> None:
             raise ValueError("upgrade recovery artifact binding changed")
 
 
+def unfinished_recovery(state: VMHALifecycleState | None) -> dict[str, str] | None:
+    """Exact pre-readiness owner; this alone never authorizes a successor."""
+    if (
+        state is None
+        or state.transaction is None
+        or state.status is not VMHALifecycleStatus.ACTIVATING
+    ):
+        return None
+    record = recovery_authority(state)
+    if record is None or READY in dict(state.transaction.resource_bindings):
+        return None
+    validate_checkpoint(state)
+    if state.transaction.pending_effect not in {
+        None,
+        *(install_effect(m.node_id) for m in state.members),
+    }:
+        return None
+    return record
+
+
 def host_digest(evidence: dict[str, Any]) -> str:
     # Controller checkpoints are progress, never allocation authority. Their
     # pending intent is independently validated below, including after restart.
@@ -402,7 +422,9 @@ def validate_host_evidence(
             "apply_locked": True,
             "cluster_id": state.cluster_id,
             "node_id": member.node_id,
-            "generation_id": generation if lock_generations is None else lock_generations[member.node_id],
+            "generation_id": generation
+            if lock_generations is None
+            else lock_generations[member.node_id],
             "operation_id": (
                 item["staged"]["apply_operation_id"]
                 if lock_operations is None

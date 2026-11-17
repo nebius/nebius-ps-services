@@ -1906,6 +1906,9 @@ Customers advertise private Nebius VPC subnets through their own hosted Tailscal
 
 - AC-014: Both Tailscale wizards retry invalid/repeated tags at the tag prompt. Require tag: plus a letter-led alphanumeric/hyphen name without automatic prefixing. Config validation distinguishes list type, required emptiness, syntax and duplicates with actionable examples.
 
+- AC-015: Gateway readiness requires fresh READY observations for every configured component/member, with exact nonempty coverage and no duplicate identities. Reports retain pending members after partial failures, preserve earlier client evidence across components, and keep infrastructure, gateway and client readiness separate without changing report schema 1.
+- AC-016: Client status and OS-route command timeouts, execution failures and malformed responses produce sanitized actionable verification failures. Optional client verification records PENDING without failing an otherwise-ready deployment; required verification fails deployment while retaining independently proven router readiness. Explicit verify exits unsuccessfully without raw subprocess output.
+
 #### Negative Criteria
 
 - NC-001: No mandatory MysteryBox/ESO, automatic WireGuard migration, exit nodes, Headscale, site-to-site routing, source-IP preservation, unscoped source/destination grants (explicitly scoped all-traffic grants are supported) or unverified zone-HA claims.
@@ -1923,5 +1926,46 @@ Unit and integration fixtures, Terraform/provider schema, CLI/wheel contracts an
 Authorized disposable Nebius/tailnet install, repeat deploy, reboot and independent client/failover readback; local proof never implies live qualification.
 
 <!-- /REQUIREMENT: REQ-054 -->
+
+<!-- REQUIREMENT: REQ-055 status=active priority=P1 type=reliability -->
+### REQ-055: Reuse exact-commit release qualification
+
+#### User Story
+
+Maintainers need shorter delivery with complete, identity-bound validation and
+recoverable publication rather than repeated or unrelated work.
+
+#### Acceptance Criteria
+
+- AC-001: Require the cxcli CI and Nsight native/chart CI and shared publisher contract producers for the frozen
+  merged commit before tagging. Bind quality, Python compatibility, wheel and all native/chart matrix results to trusted run/attempt and artifact identities. Include dependency manifest and lock changes in Nsight trigger routing.
+  Publication retains tagged runtime version, final wheel build, installation and
+  CLI smoke checks plus independent remote byte verification. Optional cloud UAT
+  is not a new release prerequisite. Keep existing service and release-specific wheel/catalog checks.
+- AC-002: Preserve user checkout state, original release identities and required
+  protection, review, failure and cleanup gates.
+
+#### Negative Criteria
+
+- NC-001: Never treat missing evidence, skipped required jobs, uncertain effects,
+  expired artifacts or unrelated successful runs as qualification.
+- NC-002: Do not activate the disabled AI controller or overwrite published data.
+
+#### Validation Method
+
+Focused source regressions and workflow contract tests, followed by independent
+installation and deployed workflow evidence at their respective boundaries.
+
+#### Test Method
+
+Cover exact identity, failure and skip rejection, stale attempts, concurrent
+observation, interruption, duplicate notifications and retained evidence expiry.
+
+#### Evaluation Method
+
+Compare selected test inventories and repeated work; report observed timings and
+separate local checks from deployed qualification without claiming unrun tests.
+
+<!-- /REQUIREMENT: REQ-055 -->
 
 <!-- maintain-project-specs:requirements:end -->

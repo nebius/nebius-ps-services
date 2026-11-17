@@ -2124,6 +2124,9 @@ class VMHAControllerRuntime:
         self.repair_fence: Callable[[RepairAttempt], object] = lambda _repair: self.guard()
         self.tunnel_step: Callable[[], None] = lambda: None
         self.tunnel_runtime: Any = None
+        # The owning runtime injects the heartbeat publisher's send-health
+        # snapshot; status stays well-formed when no publisher exists.
+        self.heartbeat_send_status: Callable[[], Mapping[str, Any]] = lambda: {}
         policy = VMHAController(
             peer_timeout_seconds=peer_timeout_seconds,
             suspicion_seconds=suspicion_seconds,
@@ -2450,6 +2453,7 @@ class VMHAControllerRuntime:
                 "peer_health_fresh": bool(
                     peer is not None and peer.local_health_fresh(snapshot.now)
                 ),
+                **dict(getattr(self, "heartbeat_send_status", lambda: {})()),
             },
             "origination": {
                 "required": snapshot.readiness.origination_required,
@@ -2734,6 +2738,7 @@ class DefaultVMHAControllerRuntime:
             clock=self.monotonic_clock,
         )
         self.controller.snapshots.observation_observer = self.publisher.observed
+        self.controller.heartbeat_send_status = self.publisher.send_status
         cast(
             VMHAEffectAdapter, self.controller.controller.effects
         ).progress_observer = self.publisher.progress

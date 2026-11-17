@@ -10805,7 +10805,7 @@ Guest MTU/MSS, immutable bootstrap and client verification implemented. Empty pe
 
 <!-- /FEATURE: FEAT-060 -->
 
-<!-- FEATURE: FEAT-061 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=10 -->
+<!-- FEATURE: FEAT-061 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=11 -->
 ### FEAT-061: Tailscale HA gateways
 
 #### Requirements Covered
@@ -10826,6 +10826,10 @@ Both wizards: dim SSH/custody guidance, shared tags (approval pending; availabil
 
 Shared parsing preserves literal comma lists, validates YAML, safely retries controls/errors and navigation. One tag validator serves config/both wizards: tag: plus letter-led alphanumeric/hyphen name, unique entries. Retry without prefix guessing/raw input errors. Distinct type/empty/syntax/duplicate errors; infrastructure empty tags remain optional.
 
+Gateway reports seed one PENDING slot per configured (component, member) before observations and replace exact slots as verification finishes. Aggregate readiness requires exact nonempty identity coverage without duplicates and all READY; infrastructure results retain their distinct status. Every publication retains accumulated client evidence. Schema 1 and existing consumers remain unchanged; client checks never redefine router readiness.
+
+Client status/OS-route readers normalize expected command timeouts, execution errors and malformed responses into sanitized RuntimeError diagnostics. Keep existing subprocess timeouts and failover polling; no blanket catch, raw output or new retries. Optional client failures remain PENDING; required failures raise after evidence publication. Keep report, journal, authentication and route-approval contracts otherwise unchanged.
+
 #### Selected Option
 
 Staged activation, scoped VPN defaults, shared validators; fixed stack.
@@ -10844,6 +10848,8 @@ Config, wizard, SDK, lifecycle, reports/guides.
 - TDD-002: Both wizards explain custody/preserve mixed rules.
 - TDD-003: Parser/checkbox/tag retries, persistence, ports/navigation.
 - TDD-004: Preserve grants; narrowing is not revocation.
+- TDD-005: Second-member and later-component failures retain complete pending coverage and earlier client evidence; single-member, HA and mixed-stage results produce accurate published summaries.
+- TDD-006: Status/route timeouts and malformed responses remain sanitized; optional/required/explicit verification have distinct correct outcomes. Public-safe upstream-format fixtures exercise real readers and API parsing; actual CLI dispatch covers operational status, diagnosis, verification and auth checks.
 
 #### Validation Plan
 
@@ -10867,13 +10873,129 @@ Separate local/live proof.
 
 #### Implementation Evidence
 
-Shared validate_tags/prompt_tags wired to runtime/setup/onboarding.
+Existing tag validation remains implemented. `tailscale_deploy.py` now seeds current member coverage, gates aggregate readiness on exact unique coverage and preserves accumulated client evidence. `tailscale_verify.py` normalizes expected local command/response failures and safely handles absent router addresses. Schema 1, journal ownership and route approvals are unchanged. Regression and transport/CLI coverage lives in `tests/test_tailscale_reporting.py`, `tests/test_tailscale_verify.py` and `tests/test_tailscale_transports.py`, with synthetic vendor fixtures under `tests/fixtures/tailscale/`.
 
 #### Verification Evidence
 
-Tags: 358 pass/4 skip; red controls, Ruff/mypy/Markdown/ratchet/review pass. Config loads. Live unverified.
+Before remediation, the new regressions produced 20 failures and four passes, reproducing the reporting and client-boundary defects. After remediation, 270 focused offline tests passed (Tailscale suites plus deployment reports); four native policy tests were deselected because Go is unavailable locally. Scoped Ruff, Markdown lint, whitespace checks and the existing mypy ratchet passed. Changed-scope alignment and read-only code/security review found no new blocker. CLI, guest, API and OS-route transports were mocked; no live tailnet, data-path, TLS or failover qualification was performed.
 
 <!-- /FEATURE: FEAT-061 -->
+
+<!-- FEATURE: FEAT-062 reqs=REQ-055 status=ready delivery=implemented priority=P1 version=3 -->
+### FEAT-062: Reuse exact-commit release qualification
+
+#### Requirements Covered
+
+- REQ-055: Reuse exact-commit release qualification.
+
+#### Context Evidence
+
+The workflow audit found repeated validation, missing dependency routing and
+publication retry gaps. Existing protected merge and artifact owners are reused.
+
+#### Design Details
+
+Require the cxcli CI and Nsight native/chart CI and shared publisher contract producers for the frozen
+merged commit before tagging. Bind quality, Python compatibility, wheel and complete native/chart matrix
+results to trusted run/attempt and artifact identities. Include dependency manifest and lock changes in Nsight trigger routing.
+Publication retains tagged runtime version, final wheel build, installation and
+CLI smoke checks plus independent remote byte verification. Optional cloud UAT
+is not a new release prerequisite. Keep existing service and release-specific wheel/catalog checks.
+
+The alignment pass authenticates historical routes only for source discovery;
+current-attempt provenance still gates qualification. An unresolved trusted
+result producer cannot disappear behind an older green run. Publication history
+accounts for deleted receipts and every attempt; proven pre-effect failures may
+retry, while every image or chart recovery effect retains new attempt-bound
+evidence for the original digest or archive before publication.
+
+#### Selected Option
+
+Use explicit qualification profiles, immutable evidence and existing workflow
+owners; separate merge settlement from downstream verification.
+
+#### Alternatives Considered
+
+Reject bypassing required CI, blanket live-test requirements, existence-only
+publication checks and a new always-running coordinator.
+
+#### Implementation Boundaries
+
+Workflow YAML, owning skills/helpers, policy, tests, templates and documentation.
+No product networking behavior, registry destination or credential expansion.
+
+#### Test-First Success Criteria
+
+- TDD-001: Qualification retains all required coverage and rejects false success.
+- TDD-002: Interrupted effects reconcile original identity without overwrite.
+- TDD-003: Observation does not monopolize state or reset fixed budgets.
+
+#### Validation Plan
+
+Run focused negative controls, workflow inventory checks and scoped alignment.
+
+#### Test Plan
+
+Inject missing/skipped jobs, changed identities, concurrent resume, partial
+publication, expired evidence and duplicate/lost notifications.
+
+#### Evaluation Plan
+
+Measure removed duplicate work against the frozen baseline. Keep local,
+installed and deployed results separate.
+
+#### Rollout And Rollback
+
+Integrate approved recovery source, update templates and skills together, and
+coordinate exact-path Actions event policy changes after reviewable deployment.
+Preserve existing checkpoints and user checkout; roll back only owned changes.
+
+#### Done Definition
+
+Source changes and required tests pass; installation and deployed qualification
+are independently reported, including any remaining rollout prerequisites.
+
+#### Implementation Evidence
+
+The source implements exact-commit release profiles and qualification evidence,
+scoped publication gates, non-sliding eight-hour release phases, short-lock
+observations and exclusive effect ownership. CI producers retain required native,
+package and matrix coverage. The status observer, dispatch-only broker and
+verified targeted completion callbacks separate responsibilities. Publication
+intents preserve original image digests and chart archive bytes/destination.
+Optional UAT is distinct from required CI and accepted delivery criteria. The
+AI controller remains disabled. Source templates and operator cutover guidance
+are aligned; installed and deployed qualification are separate boundaries.
+
+#### Verification Evidence
+
+Initial local validation passed 116 merge gate/completion tests, 71 release
+owner/recovery tests, 47 workflow/publication/qualification tests and the 2 MiB
+spec size boundary regression. The two offline dependency tests, 80 repair
+control tests and 85 authentication-owner tests also pass (402 source tests total).
+Tests include stale observations, interrupted
+one-time dispatch, pending plus missing producers, partial image aliases,
+original chart bytes, destination drift, expired evidence and superseded runs.
+Ruff and Python syntax pass. All active workflows pass Actionlint apart from
+its known unsupported concurrency.queue key; the provider documents queue:max.
+Seven changed skill structures pass for Codex and Claude with one existing
+progressive-disclosure warning. Disposable npx discovery, both-host copy parity,
+repeat installation and isolation pass. The installed release skill received
+only the independent eight-hour budget update: 68 tests pass and all five saved
+checkpoints are byte-for-byte unchanged. Full installed skill synchronization
+remains paired with the trusted workflow deployment. These checks do not establish hosted workflow, registry or native
+agent qualification. The observer event-policy cutover and live acceptance
+checks remain deployment prerequisites; no live policy changes are claimed.
+
+Subsequent alignment passed 136 focused workflow/publication/qualification and
+release-owner tests. Regressions cover routing-free and rerunning result
+producers, deleted receipt rows, same-run retries, pre-effect failures, image
+receipt families and repeated recovery with original identities. Active and
+generic publishers carry matching operator identity and explicit PR-read
+permissions. Read-only review found no remaining blocker in that repair scope;
+GitHub deployment and registry behavior remain unverified.
+
+<!-- /FEATURE: FEAT-062 -->
 
 <!-- maintain-project-specs:design:end -->
 

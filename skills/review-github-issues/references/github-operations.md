@@ -6,12 +6,17 @@ Before repository discovery or any GitHub call, parse the entire invocation:
 every flag, every comma-separated entry and every repository/issue/priority
 value. Reject unknown flags, missing values, empty entries and
 positional arguments; do not execute a valid prefix of an invalid invocation.
+Reject repeated flags (distinct from repeated entries within a CSV value).
 Trim entries and deduplicate normalized values while preserving first occurrence.
 Do not interpolate any argument into shell commands.
 
 - `--repo`: require `OWNER/REPO` names or repository URLs; reject issue/PR URLs
   and credential-bearing URLs. Live identity/access resolution happens later.
 - `--issue`: require positive decimal integers, not URLs, ranges or expressions.
+- `--label`: require one nonempty literal label, not CSV, glob or search syntax;
+  preserve its spelling. Reject combination with `--issue`.
+- `--issue-batch`: require a positive decimal integer and `--label`; default
+  five when omitted in label mode. It is a total invocation limit, not page size.
 - `--priority`: require repository-relative project paths. Reject absolute paths,
   `..` components and empty entries before normalization. Treat `.` and `./` as
   root ownership; otherwise remove leading `./`, trailing `/` and redundant
@@ -53,7 +58,7 @@ host's repository identity. Keep non-public hostnames out of public queries.
 
 ## Collect the selected set
 
-Process repositories in first-occurrence `--repo` order. With no `--issue`,
+Process repositories in first-occurrence `--repo` order. With no `--issue` or `--label`,
 request open issues explicitly and follow every continuation page, without a
 recent-date, author, label, project or fixed-count cutoff. Deduplicate full
 issue identities. Prove exhaustion; an empty page alone is not proof when a
@@ -80,6 +85,39 @@ New issues arriving after collection wait for another invocation. State changes
 among selected issues require reassessment before effects, not an unbounded
 rediscovery loop. Never claim exact point-in-time consistency from pagination.
 Follow [grouping and batches](batching.md) to map and order the frozen set.
+
+### Bounded label mode
+
+For `--label`, replace unbounded discovery with this algorithm:
+
+1. Resolve repositories in supplied order. Verify the exact label exists in
+   each reached repo; distinguish a missing label/access gap from no matches.
+   A missing label is reported for that repo without creating it; independent
+   later repos may continue. Unresolved access/order evidence leaves bounded
+   selection pending because it could change which oldest items fill the cap.
+2. Request open issues using a repository-scoped structured literal label
+   filter and creation-time ascending pagination. Exclude PRs and deduplicate
+   full identities before counting. Break creation-time ties by issue number;
+   resolve a cutoff tie before selection. Semantic search and interpolated
+   search/shell expressions cannot implement exact selection. If a transport
+   cannot preserve filtering/order/pagination, report the capability gap.
+3. Collect up to N issues total across repositories. Continue to the next repo
+   only after proven exhaustion of the current one. Stop on N; do not enumerate
+   remaining repos/backlog or claim their counts. Report them as unvisited.
+4. Freeze this invocation's selected identities before any effect, then group
+   and review them using `--priority` and remediation rules. Priority affects
+   only the selected set, not admission or the cap. A failed/incomplete selection
+   has no partial effects; it is not a smaller successful batch.
+5. Before each selected item, refresh identity, open state and selection label.
+   A transferred, closed or externally relabeled item is skipped/pending and
+   still consumes its slot. No refills. This invocation's own changes do not
+   remove items already being processed; recheck effect-specific preconditions.
+
+Finish this batch subject to existing limits and user stops, without adding an
+overall time cap or starting another batch. Reruns select afresh; still-matching
+oldest items can recur, with equivalent prior decisions reused. Numeric batch
+limits are distinct from shared remediation groups. Incomplete-pagination
+rules above remain unchanged for unbounded discovery.
 
 ## Read the relevant evidence
 
@@ -109,7 +147,9 @@ needed operation cannot be completed.
 For each operation, bind the exact repository and issue, intended disposition,
 concise comment body and state reason. Leave every unrelated field unset.
 Do not call tools that implement fixes, create issues, transfer issues, edit
-titles/bodies, change metadata, dispatch workflows or modify PRs.
+titles/bodies, change unrelated metadata, dispatch workflows or modify PRs.
+Existing issue-label changes follow [label management](labels.md); keep exact
+additions/removals separate from comment and closure intents.
 
 Immediately before publication, reread the issue and new/edited comments for
 material changes. Before each acceptance, also refresh the sibling issues and
@@ -145,6 +185,9 @@ For a materially changed decision, publish one new concise explanation.
    latest issue still supports closure. Set the correct state reason.
 4. Independently read the issue state and reason; for a duplicate also verify
    the canonical reference when the API exposes it. Report any missing proof.
+5. Reconcile justified existing labels under the label policy and read back
+   each effect. Terminal labels follow observed closure. Report label failures
+   separately; they do not invalidate verified comment/state outcomes.
 
 Accepted, deferred and needs-information issues remain open. An already-closed
 issue is assessed without reopening it or posting redundant closure notices.
@@ -162,7 +205,7 @@ verified canonical identity; otherwise leave closure pending.
 
 ## Failure and retry
 
-Treat comment creation and closure as separate effects, not one transaction.
+Treat label edits, comment creation and closure as separate effects, not one transaction.
 After a timeout, connection loss or unclear response, reread before retry:
 
 - Verified matching comment exists: reuse it; do not repost.
@@ -172,6 +215,8 @@ After a timeout, connection loss or unclear response, reread before retry:
 - Comment verified, close failed: keep the comment and retry only closure if
   fresh state still justifies it; otherwise report the actual open state.
 - Closed state/reason already match: no repeated closure.
+- Label additions/removals partly succeeded: preserve unrelated labels and
+  reconcile only the missing still-authorized operations after readback.
 
 Honor provider retry guidance for rate limits. Avoid unbounded polling. Never
 switch transports to blindly repeat an uncertain write. Do not automatically

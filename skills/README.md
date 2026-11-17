@@ -1720,6 +1720,14 @@ read-only and does not configure connectors or save reports automatically. See
 
 ### `review-github-issues`
 
+Both review skills support opt-in exact-label batches:
+`$review-pr --label being-fixed --pr-batch 10` and
+`$review-github-issues --label being-fixed --issue-batch 10`.
+Omitting the batch flag defaults to five total selected items; limits never
+repeat automatically. Existing no-flags selection remains unchanged. Issue
+review may reuse documented existing labels, preserving unrelated labels;
+linked issues retain independent closure evidence and authority.
+
 `review-github-issues` reviews all open issues in the current GitHub repository
 by default. Optional `--repo` accepts comma-separated repository names or URLs;
 `--issue` checks comma-separated numbers in every selected repo. Finish repos
@@ -1728,7 +1736,7 @@ roots first, then remaining projects follow by issue count. Related issues form
 shared remediation batches ordered by severity, then size; each issue retains
 its own assessment and disposition.
 
-Explicit invocation applies justified comments and closures; valid low-priority
+Explicit invocation applies justified existing labels, comments and closures; valid low-priority
 issues stay open. Accepted batches use internal `research` and `design` advisers,
 save one verified plan under the owning project's `docs/github-issues/` using
 `batch-<anchor-number>-<topic-slug>.md`, then publish individual acceptance.
@@ -1737,6 +1745,12 @@ read-only modes and maintainer implementation/Git ownership remain protected.
 See [usage and boundaries](review-github-issues/README.md).
 
 ### `review-pr`
+
+Use `$review-pr --pr 42` for an explicit single target (number, URL or branch).
+`--pr` requires a value and overrides valid `--label` and `--pr-batch` options
+with a notice. Review still considers the PR's actual labels and state and may
+update status labels under existing authority; ignored options never set labels.
+Existing positional/current-branch and label-only batch selection remain supported.
 
 `review-pr` preserves your working branch, index and files throughout every
 standalone or nested review. Checkout-dependent work uses an independent private
@@ -1752,6 +1766,13 @@ For a matching active Agentic SDLC run it instead becomes
 findings-and-readiness-only: the PR head must equal the clean exact promoted
 SHA, and every required branch change returns to the coordinator before review
 resumes.
+
+Explicit review-and-close requests include independently resolved directly
+closing-linked issues unless the user excludes issue changes. Selecting only
+one PR does not exclude its issues. When replacement work is already merged,
+verify current-default coverage and each issue's criteria, then comment, close
+as completed and verify each effect before returning. Report concrete gaps for
+issues left open; plain review, audit-only and enrolled ownership limits remain.
 
 ### `shell-scripting`
 

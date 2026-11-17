@@ -70,3 +70,11 @@ next run blocks for maintainer reconciliation. It never rebuilds over them.
 An explicit main-only manual request for `latest` may reuse an already verified
 manual digest. It copies that digest to the mutable alias under the same lock
 and verifies equality afterward; immutable aliases are never rebuilt or changed.
+
+Before assigning aliases, push by digest, independently inspect that digest and
+retain a `publication-image-intent/v1` artifact for 90 days. Resume by the original
+digest even when no aliases were assigned. Conflicting aliases block; an old
+intent never authorizes a new `latest` update.
+Each attempt that can assign an immutable alias or update `latest` preserves its
+own intent first, using the original digest on recovery. Deleted receipts are
+detected from attempt history; missing evidence is not permission to rebuild.

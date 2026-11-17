@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Align workflow validation with GitHub's 25-input dispatch limit while retaining
+  every required candidate identity field.
+
 - Keep enrollment, controller effects and build-only release workflows as
   deployment templates. Preserve ordinary protected publication until activation
   is separately authorized and qualified.

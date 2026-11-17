@@ -222,7 +222,8 @@ Official contracts: [built-in token](https://docs.github.com/en/actions/concepts
 
 ## Targeted events and hourly recovery
 
-Protected merge has no schedule. PR events and trusted PR CI `in_progress` and
+Protected merge is dispatch-only. CI status observer owns PR events and trusted
+PR CI `in_progress` and
 `completed` events update only affected current heads. Starts must remain wired
 so a same-SHA rerun cannot leave stale green Required CI. Push and result-CI
 runs do not enter that aggregate path.
@@ -240,8 +241,9 @@ normal CI start/completion handlers should update the affected head directly.
 Merge completion has the sole hourly recovery schedule (`17 * * * *`) and manual
 recovery. A separate default-branch-only status-write job repairs Required CI
 for all open default-base PRs. Completion event discovery reads the producer
-run's artifacts; ordinary CI and CI-only broker runs are filtered before runner
-allocation. GitHub may still display skipped workflow-run rows.
+run's artifacts. Completion listens only to the broker; the observer sends a
+paired source run/attempt callback for verified result CI. Targeted callbacks
+skip global recovery enumeration. GitHub can still show skipped observer rows.
 
 Validated result inputs produce an immutable `merge-result-route/v1` receipt
 before tests. It binds repository, workflow/run/attempt, broker/PR/result and

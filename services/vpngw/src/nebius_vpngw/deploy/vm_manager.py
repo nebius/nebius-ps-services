@@ -54,6 +54,7 @@ from .ssh_policy import (
     VM_HA_SSH_HOST_KEY_PATH,
     SSHHostKeyEnrollment,
     SSHHostKeyRecovery,
+    SSHTrustBinding,
     SSHTrustPolicy,
     TrustedSSHMemberImport,
     VMHASSHTrustScope,
@@ -3344,6 +3345,7 @@ class VMManager:
         public_ip: str,
         spec: GatewayGroupSpec,
         lifecycle_snapshot: VMHALifecycleSnapshot | None,
+        require_lifecycle_identity: bool = False,
     ) -> FormerVMHAProvenance:
         if spec.vm_ha is None or not self.project_id:
             raise RuntimeError("VM-HA SSH recovery requires exact deployment identity")
@@ -3376,8 +3378,13 @@ class VMManager:
             )
             if topology is None:
                 raise RuntimeError("VM-HA SSH recovery provisioning identity does not match")
-            return provenance
-        if provenance not in {None, FormerVMHAProvenance.LEGACY_RUNTIME}:
+            if not require_lifecycle_identity:
+                return provenance
+        if provenance not in {
+            None,
+            FormerVMHAProvenance.LEGACY_RUNTIME,
+            FormerVMHAProvenance.CURRENT_MARKER,
+        }:
             raise RuntimeError("VM-HA SSH recovery has no product provisioning identity")
         if lifecycle_snapshot is None:
             raise RuntimeError("VM-HA legacy SSH recovery requires hardened lifecycle authority")
@@ -3473,6 +3480,7 @@ class VMManager:
         retained_hosts: t.Iterable[str],
         lifecycle_snapshot_loader: t.Callable[[], VMHALifecycleSnapshot | None] | None = None,
         ordinary_migration_hosts: t.Iterable[str] = (),
+        require_lifecycle_identity: bool = False,
     ) -> dict[str, t.Callable[[], None]]:
         """Bind retained members to immutable Compute and provisioning evidence."""
 
@@ -3521,7 +3529,8 @@ class VMManager:
                 )
                 assertion_lifecycle_snapshot = self._vm_ha_ssh_lifecycle_snapshot
                 if lifecycle_snapshot_loader is not None and (
-                    expected_ordinary_migration
+                    require_lifecycle_identity
+                    or expected_ordinary_migration
                     or raw_expected_provenance in {None, FormerVMHAProvenance.LEGACY_RUNTIME}
                 ):
                     assertion_lifecycle_snapshot = lifecycle_snapshot_loader()
@@ -3542,6 +3551,7 @@ class VMManager:
                         public_ip=expected_public_ip,
                         spec=spec,
                         lifecycle_snapshot=assertion_lifecycle_snapshot,
+                        require_lifecycle_identity=require_lifecycle_identity,
                     )
                 current = self._get_vm_by_id_for_vm_ha_preflight(client, expected[0])
                 if self._vm_ha_ssh_member_signature(current) != expected:
@@ -3562,11 +3572,13 @@ class VMManager:
                         public_ip=expected[4],
                         spec=spec,
                         lifecycle_snapshot=assertion_lifecycle_snapshot,
+                        require_lifecycle_identity=require_lifecycle_identity,
                     )
                 if current_provenance is not expected_provenance:
                     raise RuntimeError(f"VM-HA SSH recovery evidence changed for {expected_name}")
                 if assertion_lifecycle_snapshot is not None and (
-                    expected_ordinary_migration
+                    require_lifecycle_identity
+                    or expected_ordinary_migration
                     or expected_provenance
                     in {
                         FormerVMHAProvenance.LEGACY_RUNTIME,
@@ -3575,7 +3587,12 @@ class VMManager:
                 ):
                     assertion_lifecycle_snapshot.assert_current()
 
-            assertions[name] = assert_current
+            assertions[name] = SSHTrustBinding(
+                hashlib.sha256(
+                    json.dumps(expected_signature, separators=(",", ":")).encode()
+                ).hexdigest(),
+                assert_current,
+            )
         self._vm_ha_ssh_binding_assertions = dict(assertions)
         return assertions
 
@@ -3618,7 +3635,8 @@ class VMManager:
                 )
                 path = (
                     VM_HA_SSH_HOST_KEY_PATH
-                    if provenance is FormerVMHAProvenance.CURRENT_MARKER
+                    if provenance
+                    in {FormerVMHAProvenance.CURRENT_MARKER, FormerVMHAProvenance.LIFECYCLE_STATE}
                     else LEGACY_VM_HA_SSH_HOST_KEY_PATH
                 )
             recovered[name] = SSHHostKeyRecovery(
@@ -3882,9 +3900,13 @@ class VMManager:
                 "host key verification failed" in detail
                 or "remote host identification has changed" in detail
             ):
-                raise RuntimeError(
-                    f"SSH host identity verification failed for existing VM-HA member {name}"
-                )
+                from .recovery import SSHAccessFailure, ssh_failure_code
+
+                raise SSHAccessFailure(ssh_failure_code(detail))
+            if "permission denied" in detail:
+                from .recovery import SSHAccessFailure
+
+                raise SSHAccessFailure("ssh-client-authentication-failed")
             raise RuntimeError(f"Existing VM-HA member {name} is unreachable before cloud mutation")
 
     def verify_ordinary_existing_identities(
@@ -3939,6 +3961,13 @@ class VMManager:
                 )
                 return
             except RuntimeError as error:
+                from .recovery import SSHAccessFailure
+
+                if isinstance(error, SSHAccessFailure) and error.code in {
+                    "ssh-host-key-changed",
+                    "ssh-host-key-unverified",
+                }:
+                    raise
                 if "identity verification failed" in str(error).lower():
                     raise
                 last_error = error

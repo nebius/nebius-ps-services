@@ -1,6 +1,6 @@
 ---
 name: review-github-issues
-description: "Use only by explicit invocation to review GitHub issues: discover open backlogs or select issue numbers across repositories, group by project and shared remediation, apply justified triage, and save batch plans. Never implements work or reviews PRs."
+description: "Use only by explicit invocation to review GitHub issues: discover backlogs, select numbers or bounded exact-label batches, group shared remediation, apply justified labels/comments/closures, and save accepted plans. Never implements work or reviews PRs."
 disable-model-invocation: true
 ---
 
@@ -25,6 +25,8 @@ authorization.
 ```text
 $review-github-issues [--repo <OWNER/REPO-or-URL,...>] [--issue <NUMBER,...>]
                      [--priority <PROJECT/PATH,...>]
+$review-github-issues [--repo <OWNER/REPO-or-URL,...>] --label <exact-label>
+                     [--issue-batch <positive-integer>] [--priority <PROJECT/PATH,...>]
 $review-github-issues --help
 $review-github-issues -h
 ```
@@ -33,8 +35,11 @@ $review-github-issues -h
   Otherwise resolve the unambiguous repository for the current local Git root.
 - `--issue` selects comma-separated positive issue numbers. Check every number
   in every selected repository and review every existing issue match.
-- Without `--issue`, review all open issues across each selected repository,
+- Without `--issue` or `--label`, review all open issues across each selected repository,
   including projects outside the current working subdirectory.
+- `--label` selects oldest-created open issues with one exact existing label.
+- `--issue-batch` limits total selected issues across this invocation; default
+  five in label mode. Requires `--label`; label mode cannot combine with `--issue`.
 - `--priority` orders exact repository-relative project roots, highest first,
   independently within each repository. Remaining projects follow by descending
   selected-issue count. This orders work; it does not filter issues or set severity.
@@ -56,7 +61,8 @@ not a separately installed command-line executable.
 
 Explicit invocation required. Use only after explicit skill invocation.
 An ordinary invocation authorizes
-decision comments and justified closures on the resolved, selected issues,
+decision comments, justified closures and existing documented repository-label
+changes on the resolved, selected issues,
 and accepted plan files in their owning projects. Do not ask for repeated
 approval of those effects. Invocation cannot bypass tool permissions,
 repository policy or host execution limits.
@@ -102,6 +108,7 @@ the maintainer's constraints and explicitly accepted project decisions.
   the discovered issue set.
 - Read [triage decisions](references/triage.md) before assessing an issue.
 - Read [comment guidance](references/comments.md) before preparing decisions.
+- Read [issue labels](references/labels.md) before recommending or changing labels.
 - Read applicable ancestor/project instructions, README, contribution and
   security policies, canonical requirements/design, and relevant code/tests.
   Missing documents are evidence gaps, not proof that the issue is irrelevant.
@@ -111,10 +118,12 @@ the maintainer's constraints and explicitly accepted project decisions.
 
 ## Writes
 
-- GitHub: concise decision comments and evidence-backed issue closure only.
+- GitHub: concise decision comments, evidence-backed issue closure and justified
+  existing-label changes under the label policy. No separate confirmation for
+  these ordinary invocation effects is needed.
 - Repository: accepted plans under the owning project's `docs/github-issues/`
   only. These are intentionally repository-owned planning artifacts.
-- No product code, tests, configuration, canonical specs, labels, assignments,
+- No product code, tests, configuration, canonical specs, label creation, assignments,
   milestones, issue-body edits, transfers, Git operations or PR actions.
 
 Routine issue review does not edit this skill. Canonical spec changes needed
@@ -130,10 +139,13 @@ apply only to accepted work; other dispositions proceed to step 7.
 1. **Validate, resolve and collect targets.** Validate all flags and entries
    locally using the operations reference before repository or GitHub discovery.
    Bind repository identities and process repos
-   in supplied order. Without `--issue`, exhaust open-issue pagination; otherwise
-   check every repository/number pair. Exclude PRs and freeze full issue identities
+   in supplied order. Without selectors, exhaust open-issue pagination; with
+   `--issue`, check every repository/number pair. Label mode follows the bounded
+   selection algorithm in the operations reference. Exclude PRs and freeze full issue identities
    for the collection interval. Report missing/access gaps. Incomplete discovery
-   leaves that repo's ordered review and effects pending; continue independent repos.
+   leaves that repo's ordered review and effects pending in unbounded/number modes;
+   independent repos may continue. In label mode an unresolved earlier repo
+   leaves the whole bounded selection pending, with no partial effects.
 2. **Establish ownership and evidence.** Read each complete relevant discussion,
    affected versions, linked PRs and duplicate candidates. Map the owning
    project and affected shared components from code and documentation. Compare
@@ -179,10 +191,12 @@ apply only to accepted work; other dispositions proceed to step 7.
    Check prior equivalent
    comments first. For closure, verify the rationale comment before closing.
    Follow the operations reference for exact reasons, partial failures and
-   independent readback. Never send implementation steps or plan excerpts.
+   independent readback. Apply only documented label mappings, preserving
+   unrelated labels; absent mappings remain recommendations without blocking
+   independent authorized effects. Never send implementation steps or plan excerpts.
 8. **Report.** Show repositories in processing order, project counts, batch
    membership and each issue's disposition, brief rationale, verified local
-   plan path when applicable, and observed GitHub result or remaining blocker.
+   plan path when applicable, and separate verified label/comment/closure results.
    Distinguish reviewed, pending and unreviewed issues plus discovery/access gaps.
    Never include plan content, claim implementation is complete, or promise
    delivery.
@@ -192,9 +206,19 @@ apply only to accepted work; other dispositions proceed to step 7.
 Read `review-pr/references/pr-lifecycle.md` from the installed sibling skill when an
 outer authorized PR workflow requests linked-issue assessment. Return independent
 criterion evidence and dispositions read-only to that owner; do not write a new
-plan or infer closure from PR closure alone. A rejected PR can leave a valid issue
-open. Verified resolution after merge may use the owner's explicit closure
-fallback. Standalone triage retains its planning and effect ownership below.
+plan, apply standalone effects, recurse into backlog selection, or infer closure
+from PR closure alone. Return label recommendations under the label policy.
+Deduplicate shared issues across selected PRs, consider all relevant PR evidence,
+and invalidate dependent assessments after material drift. A rejected PR can leave a valid issue
+open. Verified resolution on current default may use the owner's explicit
+closure continuation even when the selected PR closes without merging because
+another merged PR already resolved the issue. An explicit review-and-close
+request includes that completion unless issue writes are excluded; selecting
+only one PR does not exclude its directly linked issues. Assess the reported
+defect and accepted criteria, distinguishing optional suggestions and separately
+tracked follow-ups without inventing release/live gates. Return exact evidence
+or criterion gaps; the outer owner alone refreshes, comments, closes and verifies.
+Standalone triage retains its planning and effect ownership below.
 
 ## Idempotency
 
@@ -215,7 +239,8 @@ fallback. Standalone triage retains its planning and effect ownership below.
 - Unknown repository/project, missing checkout, incomplete material evidence or
   unresolved product intent: ask only for the missing decision or information.
 - Incomplete discovery: leave that repository's ordered review and effects
-  pending, report coverage, and continue independent repositories. Do not use
+  pending and report coverage. Unbounded/number modes may continue independent
+  repositories; label mode leaves the whole bounded selection pending. Do not use
   partial counts as complete priorities or claim an access failure proves absence.
 - Missing access/tools: report the exact unavailable operation; never repair
   authentication, change scopes or install integrations automatically.
@@ -259,7 +284,7 @@ No unselected issue, product implementation or unrelated artifact was changed.
 
 Return repository/project groups in processing order, their counts and batches,
 then concise per-issue results: fully qualified issue identity, disposition,
-brief rationale, local plan-file link when applicable, verified comment/state
+brief rationale, local plan-file link when applicable, verified label/comment/state
 outcome and limitations. Report unmatched priority paths and missing/inaccessible
 selectors separately. Never embed the plan or describe it as implemented.
 

@@ -45,7 +45,8 @@ direction. Ask the maintainer when accepted scope leaves such a decision open.
 ## Severity, priority and effort
 
 Use the project's scale if present. Otherwise explain one of these categories
-without creating or changing GitHub labels:
+without inventing GitHub labels or mappings. Apply existing documented severity
+labels only under [label management](labels.md):
 
 - **Critical:** severe data loss, credible critical security impact or a core
   service/workflow failure requiring urgent maintainer attention. Sensitive

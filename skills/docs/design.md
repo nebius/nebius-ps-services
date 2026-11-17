@@ -7737,7 +7737,7 @@ explicit release resume renews it. Ordinary PR readiness, merge settlement and r
 independent fixed 24-hour deadline for the current explicitly requested attempt.
 An explicit user continuation starts a new observation attempt, records the prior
 outcome and retains the original transaction. Caller-supplied checkpoint deadlines
-remain authoritative, including the release workflow's existing three-hour phases. Neutral/skipped conclusions are
+remain authoritative, including the release workflow's current eight-hour phases. Neutral/skipped conclusions are
 explicitly disclosed as non-executed or non-successful tests even when accepted
 by check policy. No reruns, dispatch, requeue, or automatic rollback is performed.
 
@@ -7814,7 +7814,8 @@ continuation preserves transaction identity and prior outcomes; caller checkpoin
 retain precedence. Protection, review, exact-result gates, 30-second polling,
 minute progress, API limits and metadata settlement are unchanged.
 
-The three-hour update uses independent 10,800-second observation budgets. Release
+The historical three-hour update used independent 10,800-second observation budgets.
+The current eight-hour defaults and scoped completion boundary are specified in FEAT-083. Release
 checkpoints own post-merge verification timing through a private budget action;
 repeated checks, gate changes, canonical repairs and reruns retain deadlines.
 Existing stored deadlines remain unchanged until explicit resume. API ceilings,
@@ -8050,7 +8051,7 @@ implemented; source and installation evidence do not establish native behavior.
 
 <!-- /FEATURE: FEAT-040 -->
 
-<!-- FEATURE: FEAT-041 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=4 -->
+<!-- FEATURE: FEAT-041 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=5 -->
 ### FEAT-041: Resumable end-to-end GitHub Release publication
 
 #### Requirements Covered
@@ -8076,7 +8077,7 @@ Bare invocation means complete and wait. --resume selects one project checkpoint
 a tag disambiguates multiple releases. Explicit partial modes remain scoped.
 Local review-pr and safe repairs precede Actions approval and protected automatic
 merge through merge-pr. PR readiness, merge settlement, post-merge verification
-and release execution each use one fixed 10,800-second deadline. Additional human/environment approval gates
+and release execution each use one fixed 28,800-second deadline. Additional human/environment approval gates
 consume that same phase budget, with 15-second polling and minute progress;
 there is no separate ten-minute timer or gate-specific deadline. Gate changes and
 partial approvals, canonical repairs and reruns cannot extend the phase. Only
@@ -8108,6 +8109,25 @@ before saving. Ordinary bind-pr continues to reject every head change; resume
 only renews waits. Reconciliation neither resets deadlines nor supplies merge
 permission. The broker remains responsible for all independent CI/protection
 admission before any merge effect. A missing sibling owner fails closed.
+
+A separate private reconcile-merged action handles an explicit resumed release
+after an external merge of an authorized canonical repair. It takes the expected
+old head, exact published descendant and registered execution manifest; it does
+not create a review, approve or merge. The installed commit owner verifies the
+active two-way grant, clean published descendant and numeric repository/PR binding.
+The installed merge owner supplies the authoritative result SHA. Require confirmed
+merged state/timestamp, unchanged same-repository refs/default, immutable result-to-
+default-tip containment, and no existing tag or publication evidence. Recheck
+identity, execution proof and remote tag absence before one atomic checkpoint
+write. Preserve old/new/result identities and all deadlines; repeating the exact
+record is idempotent, conflicting retries fail. The existing open-PR transition
+and ordinary bind remain unchanged. The selected exact-commit release profile remains a pre-tag gate; unrelated
+result CI and Pages are observed separately.
+The separate recovery addition is implemented in the release owner and CLI;
+focused source verification is recorded below. The installed helper also
+recovered an authorized externally merged descendant in the current native
+session, preserving the original checkpoint and binding the authoritative result.
+This verifies recovery only; release CI and artifact publication remain separate.
 
 The local deterministic helper remains the state owner; no new service, model,
 credential or workflow is introduced. Alternatives rejected: silently rebinding
@@ -8195,7 +8215,8 @@ The approved cleanup removed three project-local entry points, consolidated
 release dispatch tests and updated setup/README boundaries. Installed skills
 and live releases are unchanged.
 
-The three-hour update uses independent 10,800-second observation budgets. Release
+The historical three-hour update used independent 10,800-second observation budgets.
+The current eight-hour defaults and scoped completion boundary are specified in FEAT-083. Release
 checkpoints own post-merge verification timing through a private budget action;
 repeated checks, gate changes, canonical repairs and reruns retain deadlines.
 Existing stored deadlines remain unchanged until explicit resume. API ceilings,
@@ -8219,6 +8240,17 @@ permission changed. Existing project helper copies and installed skills were not
 updated during this source-review task.
 
 #### Verification Evidence
+
+The merged-repair recovery addition passes 75 release owner/helper regressions,
+including original publication behavior, CLI save/no-save routing, exact retries,
+identity/ancestry/result failures, tag/release creation races and complete draft
+visibility. Ruff syntax checks and Codex/Claude structure and trigger validation
+pass. An independent read-only review found and closed a missing draft-release
+guard; no blocking findings remain. The installed copy passes 26 reconciliation
+regressions. Actual npx discovery, Codex/Claude copy parity, repeat installation
+and isolation pass. Live recovery independently accepted the registered descendant
+and exact merged result with no tag or publication effect. Fresh skill-trigger
+behavior and full release publication remain separate evidence lanes.
 
 Release-entry cleanup: all 64 release-skill tests passed, including direct shared
 client dispatch, explicit repository identity, invalid/unregistered requests and
@@ -8291,9 +8323,9 @@ Completion schedules recover only already-authorized operator-dispatched positiv
 
 The workflow rationalization retains the useful fifteen repository workflow boundaries. Protected merge drops its cron and routes PR and CI in_progress/completed events to affected current open PR heads only. Completion owns hourly recovery at minute 17 and manual recovery; a separate least-privilege job repairs all-open-PR Required CI. Event jobs are filtered before runner allocation and use producer-run artifact discovery. Keep bounded effect-journal reconciliation where needed. Immutable early result-CI routing receipts bind repository/workflow/run/attempt, original broker/PR/result and correlation. Failed test runs may route recovery; only independently validated latest-attempt success evidence can complete it. Target receipt errors yield blocked target diagnostics and a failing summary while valid targets proceed. Global transport/authentication/permission/listing failures stop discovery before effects.
 
-Preserve seven CI workflow names, dispatch fields, setup ordering and successful result artifacts. Policy is the workflow inventory authority; baseline CI checks listeners, filters and publishing definitions. Shared pure publication helpers own validation, ancestry, notes, manifests and verification without a generic privileged shell workflow. Release publishers upload immutable pre-effect manifests with exact tag object/commit, run provenance and asset SHA-256/size before publishing. Existing releases download and compare assets against trusted original evidence. Classify absent, verified-existing, conflict and unverifiable explicitly; missing/expired legacy evidence blocks automated repair, never manufactures expected hashes from remote assets.
+Preserve the complete configured CI inventory, dispatch fields, setup ordering and successful result artifacts. Policy is the workflow inventory authority; baseline CI checks listeners, filters and publishing definitions. Shared pure publication helpers own validation, ancestry, notes, manifests and verification without a generic privileged shell workflow. Release publishers upload immutable pre-effect manifests with exact tag object/commit, run provenance and asset SHA-256/size before publishing. Existing releases download and compare assets against trusted original evidence. Classify absent, verified-existing, conflict and unverifiable explicitly; missing/expired legacy evidence blocks automated repair, never manufactures expected hashes from remote assets.
 
-Image tag builds exclusively own X.Y.Z and X.Y.Z-gSHA; manual builds own sha-SHA and optional main-only latest. Delete release_version without an alias. One destination image lock uses cancel-in-progress:false and queue:max across preflight, publication, verification and manifest. Inspect all immutable aliases, block partial/conflicting/unverifiable states, and verify every remote digest equals the build digest. Preserve existing remote tags, registry targets/credentials, Helm exact-package/anonymous-pull/digest checks and service-specific release qualification. The github-workflows release template is the sole YAML owner; publish-release delegates setup, and release observation uses the existing 10800-second phase budgets.
+Image tag builds exclusively own X.Y.Z and X.Y.Z-gSHA; manual builds own sha-SHA and optional main-only latest. Delete release_version without an alias. One destination image lock uses cancel-in-progress:false and queue:max across preflight, publication, verification and manifest. Inspect all immutable aliases, block partial/conflicting/unverifiable states, and verify every remote digest equals the build digest. Preserve existing remote tags, registry targets/credentials, Helm exact-package/anonymous-pull/digest checks and service-specific release qualification. The github-workflows release template is the sole YAML owner; publish-release delegates setup, and release observation uses the existing 28800-second phase budgets.
 
 Reviewer routing uses trusted base policy to add configured nonauthor reviewers to same-repository nondraft PRs, preserving manually requested users and teams. No PR checkout or removal effect. Validate local source, template parity and installed payloads separately from GitHub deployment or live publication; this change does not authorize those effects.
 
@@ -10701,7 +10733,7 @@ fresh model selection, deployment health or unrelated authorization paths.
 
 <!-- /FEATURE: FEAT-051 -->
 
-<!-- FEATURE: FEAT-052 reqs=REQ-053 status=ready delivery=implemented priority=P1 version=2 -->
+<!-- FEATURE: FEAT-052 reqs=REQ-053 status=ready delivery=implemented priority=P1 version=3 -->
 ### FEAT-052: Contribution acceptance and fork-safe specification repair
 
 #### Requirements Covered
@@ -10720,6 +10752,12 @@ Extend the canonical Git task with independently frozen PR base/head repository 
 
 Version strict task and review/intent evidence consistently. Merge admission, recovery and CI checkout retain trusted default code and protected exact-head effects while accepting bound forks. Confirmed merged completion can tolerate a deleted head repository only through immutable prior admission plus authoritative result/base evidence. Freeze trusted installed/default helper provenance before checkout and isolate candidate execution from operator credentials. Never let candidate policy suppress its own review.
 
+The ordinary review coordinator consumes a private read-only `inspect-pr-access` command from the existing commit transaction CLI. A shared pure assessment in `pr_publication.py` serves this preflight and the final publication check; do not duplicate the permission formula in agent reasoning. Return exact observed actor and PR/base/head identities, boolean-or-unknown permission facts, an eligible/denied/unknown result, its basis and a sanitized reason. Missing or malformed relevant facts and failed identity reads remain unknown. Positive evidence for either supported route suffices; denial needs conclusive negative evidence for both routes. Metadata eligibility is not a tested push and creates no execution authority.
+
+Preflight uses bounded GitHub reads only: no checkout, Git invocation, state allocation, credential changes or probe push. Reobserve actor and selected PR identity to detect drift. Known repository-scoped Actions tokens do not inherit a human maintainer's fork permission; enrolled controllers retain their existing effect ownership. Existing publication checks remain fresh and retain transport, remote-head, non-force and ambiguous-outcome protections.
+
+Needed safe repairs with eligible access continue through private preparation. Denied or unknown access blocks only the needed repair and must be reported accurately. Unsafe conflict semantics remain blocked even with access. Unchanged candidates continue ordinary review. Status comments/labels use their separate upstream authority, preserve unrelated labels and verify readback; use canonical `blocked`, never a new alias. Update source guidance and deterministic/behavioral regressions, then refresh only affected installed copies through the existing installer. No live PR mutation, merge or commit is included in this skill update.
+
 #### Selected Option
 
 Reuse existing local agent and Python/Git/GitHub Actions owners. Deterministic helpers own validation and publication; the root agent owns semantic acceptance and canonical spec authoring.
@@ -10730,7 +10768,7 @@ A merge-level spec writer duplicates ownership. Filename-only checks miss semant
 
 #### Implementation Boundaries
 
-Review/code-review/spec guidance and evaluations; create-pr and commit publication helpers; merge admission/completion and workflow templates/consumers; matching README, changelog and tests. No live PR edits, merges, credential changes or production installation are part of this implementation.
+Review/code-review/spec guidance and evaluations; create-pr and commit publication helpers; merge admission/completion and workflow templates/consumers; matching README, changelog and tests. No live PR edits, merges, credential changes or production installation are part of this implementation. The permission-preflight increment refreshes only the three affected local skill copies; hosted deployment remains separate.
 
 #### Test-First Success Criteria
 
@@ -10760,9 +10798,13 @@ Source behavior and all direct consumers align, focused tests pass and evidence 
 
 #### Implementation Evidence
 
+Permission-preflight increment implemented: the private read-only CLI and final publication boundary share a three-valued assessment. Maintainer access requires a verified human identity; environment variable names never establish token provenance. Review instructions distinguish needed repairs, denied versus unknown access, and separate status-write outcomes. Source-owned review-pr, commit and create-pr installations were refreshed; their payload bytes match source, with unrelated installed skills, hook files and hook registrations unchanged. Earlier delivery evidence below remains historical.
+
 Implemented contribution assessment and root-owned spec handoff in review-pr, code-review, maintain-project-specs and merge-pr, with canonical per-project outcomes and behavioral cases. Create-pr now uses private bound intake and publish-target through commit_transaction.py and pr_publication.py. Task/checkpoint/closure v3 binds separate repository identities and journals non-force publication. Trusted pre-push rejection witnesses permit safe cancellation; advanced contributor heads are durably fenced in one atomic checkpoint. Single stable push destinations, exact branch/PR readback and final publication proof prevent wrong-target or incomplete completion. Review/intent v2 admission and completion accept bound forks, including deletion after confirmed merge. Release consumers, SDLC operation guards, installer expectations, CI and guidance use the same contracts.
 
 #### Verification Evidence
+
+Permission-preflight verification: the broader 63-case publication suite passed on the initial implementation snapshot. After actor and credential-provenance hardening, 14 focused assessment cases and two real disposable publication cases pass on the final helper, including a valid maintainer repair and malformed/bot actor rejection before push. Seven commit-contract checks, Codex/Claude structure validation, scoped Python/Markdown lint and diff checks pass. Source and installed read-only GitHub observations both report maintainer-edit eligibility with direct fork push=false, upstream push=true and maintainer edits enabled; no push was attempted. Model quality probes on both hosts report UNAVAILABLE because isolated-runner authentication is absent. Source, installed-copy and read-only metadata evidence do not certify semantic model behavior or live repair publication.
 
 Passing source checks: 61 merge-gate tests, 39 merge-completion tests, 16 real disposable publication cases, a targeted interruption-at-settlement regression, 47 release-consumer tests, 6 commit-contract checks and the SDLC direct-helper guard case. Codex/Claude structural validation, standard-field checks, Ruff and Markdown checks pass. Real pinned npx installation validates both hosts, copied resources, repeat installation and isolation. All 90 transaction regression cases pass on the final helper code: 89 passed in the parallel run and one 30-second checkout-completion timeout passed unchanged in an isolated 12.8-second rerun. Two focused native installed-helper/upgrade cases pass on both hosts using a frozen source snapshot whose four product-helper files match the final source. Together the focused suites cover 262 distinct cases. The ten affected skills pass Codex/Claude structure and disposable copied-payload checks. Native comparative quality runs were attempted on both hosts but authentication was unavailable in isolated homes. No live GitHub PR mutation, workflow activation, protected bootstrap, native semantic quality pass or production deployment is claimed.
 
@@ -10815,13 +10857,14 @@ Delivery remains implemented, not live verified. Historical grants require their
 retirement; their presence alone does not block new v4 operations. No schema
 translation or unrelated-session closure is authorized. Fresh model
 trigger and comparative output-quality runs are unavailable without clean-runner
-credentials. No real PR repair, push, merge or active installation refresh is
-claimed. Executable hooks, non-LFS filters and external drivers await an enforced
+credentials. The historical private-execution delivery did not claim a real PR
+repair, push, merge or active installation refresh; the permission-preflight
+increment records its scoped local installation evidence above. Executable hooks, non-LFS filters and external drivers await an enforced
 restricted runner. FEAT-068 separately verifies unused LFS configuration with
 sentinel executables; actual LFS content remains unsupported.
 
 <!-- /FEATURE: FEAT-052 -->
-<!-- FEATURE: FEAT-053 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=2 -->
+<!-- FEATURE: FEAT-053 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=3 -->
 ### FEAT-053: Project-grouped GitHub issue review and batch plans
 
 #### Requirements Covered
@@ -10847,17 +10890,19 @@ Accept --repo CSV repository names/URLs, --issue CSV positive numbers, and
 --priority CSV project roots; help is side-effect-free. Validate every flag and
 entry locally before repository discovery or GitHub calls, including priority
 path normalization and traversal/absolute-path rejection. Remove positional
-selectors. With no issue flag, collect all open issues in each selected repo;
+selectors. With neither issue nor label flag, collect all open issues in each selected repo;
 without --repo, resolve the unambiguous repository for the current Git root.
 Check every explicit issue number in every selected repo. Preserve supplied
 repo order, deduplicate identities, exclude PRs, and distinguish inaccessible
 matches from proven absence. Explicit closed issues are assessed without
 implicit reopening or redundant closure effects.
 
-Complete collection per repo before ranking it. Freeze the observed issue set
+In unbounded/number modes, complete collection per repo before ranking it. Freeze the observed issue set
 for that collection interval and revalidate before effects; new arrivals wait
 for another invocation. Incomplete collection blocks that repo's ordered review
-and effects, not independent repositories. Map each issue to one primary
+and effects, not independent repositories. Label mode instead freezes the whole
+bounded selection before effects and leaves it pending on an unresolved earlier
+repository. Map each issue to one primary
 project with affected-project references. Keep verified root ownership separate
 from uncertain ownership. Exact repo-relative priority paths apply in each repo;
 report unmatched paths. Explicit priorities lead, then remaining groups by
@@ -10891,6 +10936,22 @@ Unavailable material evidence keeps dependent acceptance pending. Material
 drift requires reassessment and verified updated coverage before publication. Track
 partial effects per member; do not reverse verified effects as compensation.
 
+Label-filtered review is an opt-in bounded mode: --label accepts one literal
+existing label, --issue-batch defaults to five and requires a positive integer.
+Reject repeated singleton flags and combinations with --issue before discovery.
+Select oldest-created open issues (number ties), consuming one total across
+repositories in supplied order. Stop at the limit or exhaustion, then freeze
+identities before effects; never refill changed/failed slots. Project priorities
+order only selected members. Unbounded discovery retains complete pagination.
+No overall batch deadline or automatic continuation is added.
+
+Refactor label prohibition into ordinary invocation authority to reuse existing,
+documented repository labels. Preserve unrelated labels and remove only mapped
+mutually exclusive workflow statuses. Missing or ambiguous meanings remain
+recommendations, not invented labels. Comments, labels and closure have separate
+preconditions, readbacks and pending outcomes; human reopening prevents stale
+closure. PR-caller mode remains read-only and never inherits standalone effects.
+
 #### Selected Option
 
 Extend the instruction-only skill with a focused grouping reference, shared
@@ -10911,6 +10972,8 @@ workflow. Issue counts set project order but cannot substitute for severity.
 Modify review-github-issues and its catalog README/Unreleased references plus
 REQ-054 and FEAT-053 through paired publication. Preserve unrelated changes.
 No shared validator, plugin membership, installed-home or live issue changes.
+Shared PR lifecycle and label-policy references are updated together; mock
+composition evaluations must load both actual sibling instructions.
 
 #### Test-First Success Criteria
 
@@ -10963,6 +11026,13 @@ remains explicit.
 
 #### Implementation Evidence
 
+The current label-batch revision is implemented in both skill instructions,
+help, READMEs, native metadata and focused references. Shared lifecycle and
+issue-label policies preserve existing effects, per-item owners and caller
+checkout isolation. Added 22 behavioral and eight trigger definitions across
+the two skills; source now contains 83 quality and 41 trigger definitions.
+Earlier implementation evidence below describes prior revisions.
+
 The version 2 workflow and scoped alignment repairs are implemented. Argument
 preflight now precedes discovery; every acceptance refreshes its shared member
 and source dependencies. Evaluation coverage includes sibling drift discovery,
@@ -10977,6 +11047,25 @@ removed. No live issue effects, real-home installation or shared-runner changes
 were performed; unrelated working edits are preserved.
 
 #### Verification Evidence
+
+Current label-batch revision: STATIC_PASS for standard fields and repository
+Codex/Claude validation, canonical pair validation, scoped Markdown/whitespace,
+eval schemas and 41 relative references. Native explicit-only frontmatter is
+an intentional host extension. Pinned skills CLI 1.5.26 discovery, both-host
+copy parity, repeat installation and isolation passed in disposable homes.
+Initial checks with system Python lacked PyYAML; rerunning in an existing
+prepared environment passed without dependency or source changes.
+
+Independent code/security review found and resolved three instruction conflicts:
+bounded discovery failure precedence, terminal-audit-before-merge routing and
+severity-label prohibition. Focused regression assertions cover each. Final
+review found no blocking contract or serious security issue. Native Codex and
+Claude trigger attempts and a Codex baseline quality attempt were UNAVAILABLE
+because disposable homes lacked authentication. Mock cross-skill effect
+execution remains UNAVAILABLE: the existing runner installs only one skill and
+provides no mock ledger/sibling composition. Definitions and review are not
+runtime effect proof. No live GitHub changes or real-home installation occurred.
+Historical verification below does not qualify the new instruction behavior.
 
 STATIC_PASS: standard fields, repository core/Codex/Claude structure and optional
 stateful profile; both plugin catalogs; canonical pair; relative references;
@@ -14000,7 +14089,7 @@ The failed trial and its original repair budget remain unchanged.
 <!-- /FEATURE: FEAT-076 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-077 reqs=REQ-078 status=ready delivery=implemented priority=P0 version=4 -->
+<!-- FEATURE: FEAT-077 reqs=REQ-078 status=ready delivery=implemented priority=P0 version=7 -->
 ### FEAT-077: Unified PR lifecycle and verified issue completion
 
 #### Requirements Covered
@@ -14044,6 +14133,77 @@ explicit fallback requires fresh resolution proof and verified rationale. Later
 human reopening or objection stops closure. Cross-repository access is never
 assumed and the merge broker receives no extra issue permissions.
 
+Label-filtered review adds --label and --pr-batch (positive integer, default
+five) on the current repository, independent of working subdirectory. Reject
+positional PR selectors combined with label mode; explicit --pr overrides
+label and batch selection as described below. Select oldest-created matches
+(number ties), freeze full identities and run the existing per-PR owners in
+order. Active/custom labels select open PRs including drafts; merged/closed
+labels audit all states, without fresh repair, merge or automatic reopen.
+Labels grant no authority; being-fixed requires independently verified complete
+merged replacement coverage, current default and fresh objections before closure.
+Preserve caller isolation, per-item budgets and enrolled authority; no batch-wide
+time cap, refills, scheduler or automatic next batch. Hosted runtime is unchanged.
+
+Explicit --pr accepts one required number, URL or branch. Validate full syntax
+before discovery, including ignored values and duplicate/unknown flags; reject
+combination with a positional selector. With --pr, skip label existence and
+batch dependencies/discovery, report ignored --label/--pr-batch once, and bind
+exactly one target. Full URLs bind their host/repository; branch ambiguity or
+absence stops without choosing latest, current branch or a batch fallback.
+Reuse existing resolution and owners; add no executable parser or runtime.
+
+For --pr, actual terminal state or live merged/closed labels takes audit-only
+precedence, including stale terminal labels on open PRs and mixed status labels.
+Next, a live being-fixed label requires lineage and complete merged coverage;
+otherwise use ordinary assessment. Ignored filter labels never influence this
+routing or get applied. Keep one shared lifecycle behavior reference; batches
+retain selection semantics, and positional/no-flags resolution is unchanged.
+Refresh relevant evidence before every dispatch/effect. Keep status-label
+updates within existing authority, preserve unrelated labels and verify writes.
+Closed/merged audits never dispatch enrolled process or delegate a new merge.
+
+Before any per-PR dispatch, collect one-hop explicit closing-linked issues
+across the frozen PR set, keyed by host/repository/API identity. The actual issue skill advises read-only; the
+outer PR owner alone applies already-authorized labels/comments/closures after
+fresh independent criteria assessment. Shared issues receive one coordinated
+assessment with all selected PR evidence; later source changes invalidate it.
+All directly linked issues are assessed even above the PR cap. Preserve shared
+assessment/effect context across supported owner handoffs and reconcile each
+result before continuing; unsupported coordination leaves dependent effects
+pending. Terminal audits never dispatch enrolled process or bypass its owner. No backlog
+recursion, redundant accepted plans or inferred closure from PR status. Preserve
+native closure attribution, human reopening, uncertain-write readback and distinct
+per-effect outcomes. Instruction-based batch contracts add no execution engine.
+
+Explicit review-and-close intent includes independent completion of directly
+closing-linked issues already resolved on current default, unless the user
+excludes issue changes. Selection wording such as only one PR limits targets,
+not their issue obligations. Plain review, report-only, Plan Mode and active
+SDLC retain their existing boundaries. No new public flag is added. Labels
+and contributor prose grant no effect authority; closure-only intent grants no
+merge authority.
+
+Discover issue scope before PR closure and use the existing read-only issue
+adviser. Assess actual reported defects and accepted criteria; distinguish
+optional suggestions without inventing release or live-test gates. After
+verified superseded-PR closure, refresh current-default coverage, issue scope,
+discussion and events. The outer owner posts and reads back a concise rationale
+linking the resolving merged PR/commit, closes eligible issues as completed,
+and independently verifies state/reason before returning per-issue results.
+Unresolved or uncertain issues stay open with concrete gaps. Preserve a valid
+PR closure when an independent issue write fails and continue other eligible
+issues. No recursive backlog selection or additional issue permissions.
+
+Reconcile unknown write outcomes before retrying; reuse equivalent comments.
+A renewed explicit closure request may complete outstanding issue obligations
+for an already-closed PR with fresh proof and without reopening it. Never
+replay closure over a later human reopening or unresolved objection. Enrolled
+repositories use only their existing authorized completion owner/capability;
+closure-only intent never dispatches broader process or falls back locally.
+The instruction workflow and existing coordination records remain canonical;
+no executable helper, service, schema or hosted-runtime change is introduced.
+
 #### Selected Option
 
 Extend existing owners with typed bounded handoffs and one status vocabulary.
@@ -14072,6 +14232,18 @@ Ruff, workflow contracts, canonical validation, explicit align and install parit
 
 #### Test Plan
 
+Cover explicit close-only selection, explicit issue exclusion, mixed resolved
+criteria, rejected PRs with valid defects, shared identities, head-only fixes,
+reverts/default drift, later human reopening, already-closed issues, permission
+denial and interrupted comment/close recovery. Preserve plain-review, audit,
+Plan Mode, SDLC and enrolled completion-only limits. Compare instruction quality
+against captured working bytes; static/quality results are not actual GitHub
+effect-order or live proof. Missing composition tooling remains unavailable.
+
+Add explicit target/ignored-option cases, invalid syntax before discovery,
+ambiguous branches, live versus ignored labels, terminal/enrolled precedence,
+status-update authority, independent issues and preserved no-flags/batch paths.
+
 Cover the complete status matrix, sanitized failure transport, repair/retest,
 adoption inheritance and coverage, terminal reconciliation, issue drift and races.
 
@@ -14093,6 +14265,28 @@ qualification are reported separately, with remaining access limitations explici
 
 #### Implementation Evidence
 
+The linked-issue closure continuation is implemented in the review-pr contract,
+shared lifecycle and label-batch reference, issue-adviser caller boundary,
+enrolled authority reference, native metadata and affected READMEs/changelog.
+Added 16 instruction-quality cases and seven trigger definitions across the
+three affected skills. Existing cases and accepted --pr work are preserved.
+No executable runtime, hosted schema or new completion capability was added.
+
+Explicit --pr revision is implemented in the skill, shared lifecycle routing,
+selection guidance, README/help, native metadata and catalog/changelog. Added
+10 focused behavior and four trigger definitions. The existing instruction
+workflow owns selection; no new parser service, scheduler or runtime was added.
+Existing positional/no-flags selection, batch semantics, status-update authority,
+caller isolation and independent linked-issue assessment remain supported.
+Earlier evidence below applies only to prior revisions.
+
+The current label-batch revision is implemented in both skill instructions,
+help, READMEs, native metadata and focused references. Shared lifecycle and
+issue-label policies preserve existing effects, per-item owners and caller
+checkout isolation. Added 22 behavioral and eight trigger definitions across
+the two skills; source now contains 83 quality and 41 trigger definitions.
+Earlier implementation evidence below describes prior revisions.
+
 The shared review-pr lifecycle reference aligns review-pr, review-github-issues,
 merge-pr, test-live-on-nebius and the existing local issue handoff without
 fabricating Implement authority. README/changelog and hosted bundle references
@@ -14110,6 +14304,62 @@ lost successful issue-close responses settle through observation without another
 close request. Execution expiry alone does not revive or erase these obligations.
 
 #### Verification Evidence
+
+Linked-issue closure revision: STATIC_PASS for all three skills under portable
+core and repository Codex/Claude structural checks, canonical trigger/quality
+schemas, scoped Markdown/whitespace and paired canonical-spec validation.
+Native explicit-only frontmatter remains an intentional host extension.
+Pinned skills CLI 1.5.26 discovery, copied payload parity, repeat installation
+and isolation passed for both hosts in disposable homes. Existing evaluations
+remain unchanged; totals are 53/54/47 quality cases and 28/22/19 trigger cases
+for review-pr, review-github-issues and merge-pr respectively. Independent
+nested code-review and security review found no blocking instruction issue.
+
+Fresh Codex 0.169.0 and Claude 2.1.311 baseline-comparative quality attempts
+were UNAVAILABLE because isolated native authentication was unavailable.
+Native triggering shares that missing dependency and is UNAVAILABLE. No
+credential files were copied or authentication changed. Static definitions,
+manual contract review and installation parity are not observed model behavior
+or GitHub effect-order proof. No live GitHub effects, active user-skill refresh
+or commit was performed. The source is ready for the existing installation
+workflow; earlier verification below does not qualify this new behavior.
+
+Explicit --pr revision: standard-field and repository Codex/Claude structural
+checks passed. Native explicit-only frontmatter remains an intentional extension.
+Pinned skills CLI 1.5.26 discovery, copied payload parity, repeat installation
+and isolation passed for both hosts in disposable homes. Independent nested
+code-review and security review found no blocking instruction-contract issue.
+Focused cases cover target resolution, ignored/invalid options, live-label
+precedence, authority, linked issues, prior selectors and help boundaries.
+
+Fresh Codex and Claude trigger attempts and the Codex baseline-comparative
+quality attempt were UNAVAILABLE because isolated native authentication was
+unavailable. Definitions and static review are not runtime behavior proof.
+No live GitHub effects, actual user-skill installation or commit was performed.
+Prior passes below do not qualify this revision.
+
+Current label-batch revision: STATIC_PASS for standard fields and repository
+Codex/Claude validation, canonical pair validation, scoped Markdown/whitespace,
+eval schemas and 41 relative references. Native explicit-only frontmatter is
+an intentional host extension. Pinned skills CLI 1.5.26 discovery, both-host
+copy parity, repeat installation and isolation passed in disposable homes.
+Initial checks with system Python lacked PyYAML; rerunning in an existing
+prepared environment passed without dependency or source changes.
+
+Independent code/security review found and resolved three instruction conflicts:
+bounded discovery failure precedence, terminal-audit-before-merge routing and
+severity-label prohibition. Focused regression assertions cover each. Final
+review found no blocking contract or serious security issue. Native Codex and
+Claude trigger attempts and a Codex baseline quality attempt were UNAVAILABLE
+because disposable homes lacked authentication. Mock cross-skill effect
+execution remains UNAVAILABLE: the existing runner installs only one skill and
+provides no mock ledger/sibling composition. Definitions and review are not
+runtime effect proof. No live GitHub changes or real-home installation occurred.
+A subsequent explicit align pass fixed two further ordering gaps: shared
+closing-link discovery now precedes per-PR handoffs, and terminal audits cannot
+enter enrolled process dispatch. Both have focused evaluation definitions;
+source-contract review and static checks remain separate from runtime proof.
+Historical verification below does not qualify the new instruction behavior.
 
 Local full controller suite: 247 tests passed, including loss/replay, status,
 issue scope/reopening/merged-tree, fork adoption, manual renewal, failed-live waiver,
@@ -15177,6 +15427,125 @@ Earlier helper benchmarks do not measure the final Git-supervision overhead.
 Retained failed or interrupted trials cannot satisfy the remaining gates.
 
 <!-- /FEATURE: FEAT-082 -->
+
+<!-- FEATURE: FEAT-083 reqs=REQ-084 status=ready delivery=implemented priority=P1 version=3 -->
+### FEAT-083: Bounded delivery and recoverable workflow publication
+
+#### Requirements Covered
+
+- REQ-084: Bounded delivery and recoverable workflow publication.
+
+#### Context Evidence
+
+The workflow audit found repeated validation, missing dependency routing and
+publication retry gaps. Existing protected merge and artifact owners are reused.
+
+#### Design Details
+
+Ordinary protected merge completes after authoritative merge and containment.
+Required CI and code review remain mandatory; additional live UAT is opt-in.
+Release observation has four independent 28800-second non-sliding budgets.
+Observers use short atomic state locks and a separate exclusive effect lock.
+Release profiles bind exact result commits, required jobs, trusted producers and
+14-day artifact evidence; unrelated CI and Pages do not gate publication.
+Separate status observation, dispatched merge and targeted completion recovery.
+Keep AI effects disabled. Preserve original Helm archives and image intent before
+alias publication, with 90-day evidence and conflict-safe interrupted recovery.
+
+The alignment pass authenticates historical routes only for source discovery;
+current-attempt provenance still gates qualification. An unresolved trusted
+result producer cannot disappear behind an older green run. Publication history
+accounts for deleted receipts and every attempt; proven pre-effect failures may
+retry, while every image or chart recovery effect retains new attempt-bound
+evidence for the original digest or archive before publication.
+
+#### Selected Option
+
+Use explicit qualification profiles, immutable evidence and existing workflow
+owners; separate merge settlement from downstream verification.
+
+#### Alternatives Considered
+
+Reject bypassing required CI, blanket live-test requirements, existence-only
+publication checks and a new always-running coordinator.
+
+#### Implementation Boundaries
+
+Workflow YAML, owning skills/helpers, policy, tests, templates and documentation.
+No product networking behavior, registry destination or credential expansion.
+
+#### Test-First Success Criteria
+
+- TDD-001: Qualification retains all required coverage and rejects false success.
+- TDD-002: Interrupted effects reconcile original identity without overwrite.
+- TDD-003: Observation does not monopolize state or reset fixed budgets.
+
+#### Validation Plan
+
+Run focused negative controls, workflow inventory checks and scoped alignment.
+
+#### Test Plan
+
+Inject missing/skipped jobs, changed identities, concurrent resume, partial
+publication, expired evidence and duplicate/lost notifications.
+
+#### Evaluation Plan
+
+Measure removed duplicate work against the frozen baseline. Keep local,
+installed and deployed results separate.
+
+#### Rollout And Rollback
+
+Integrate approved recovery source, update templates and skills together, and
+coordinate exact-path Actions event policy changes after reviewable deployment.
+Preserve existing checkpoints and user checkout; roll back only owned changes.
+
+#### Done Definition
+
+Source changes and required tests pass; installation and deployed qualification
+are independently reported, including any remaining rollout prerequisites.
+
+#### Implementation Evidence
+
+The source implements exact-commit release profiles and qualification evidence,
+scoped publication gates, non-sliding eight-hour release phases, short-lock
+observations and exclusive effect ownership. CI producers retain required native,
+package and matrix coverage. The status observer, dispatch-only broker and
+verified targeted completion callbacks separate responsibilities. Publication
+intents preserve original image digests and chart archive bytes/destination.
+Optional UAT is distinct from required CI and accepted delivery criteria. The
+AI controller remains disabled. Source templates and operator cutover guidance
+are aligned; installed and deployed qualification are separate boundaries.
+
+#### Verification Evidence
+
+Initial local validation passed 116 merge gate/completion tests, 71 release
+owner/recovery tests, 47 workflow/publication/qualification tests and the 2 MiB
+spec size boundary regression. The two offline dependency tests, 80 repair
+control tests and 85 authentication-owner tests also pass (402 source tests total).
+Tests include stale observations, interrupted
+one-time dispatch, pending plus missing producers, partial image aliases,
+original chart bytes, destination drift, expired evidence and superseded runs.
+Ruff and Python syntax pass. All active workflows pass Actionlint apart from
+its known unsupported concurrency.queue key; the provider documents queue:max.
+Seven changed skill structures pass for Codex and Claude with one existing
+progressive-disclosure warning. Disposable npx discovery, both-host copy parity,
+repeat installation and isolation pass. The installed release skill received
+only the independent eight-hour budget update: 68 tests pass and all five saved
+checkpoints are byte-for-byte unchanged. Full installed skill synchronization
+remains paired with the trusted workflow deployment. These checks do not establish hosted workflow, registry or native
+agent qualification. The observer event-policy cutover and live acceptance
+checks remain deployment prerequisites; no live policy changes are claimed.
+
+Subsequent alignment passed 136 focused workflow/publication/qualification and
+release-owner tests. Regressions cover routing-free and rerunning result
+producers, deleted receipt rows, same-run retries, pre-effect failures, image
+receipt families and repeated recovery with original identities. Active and
+generic publishers carry matching operator identity and explicit PR-read
+permissions. Read-only review found no remaining blocker in that repair scope;
+GitHub deployment and registry behavior remain unverified.
+
+<!-- /FEATURE: FEAT-083 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

@@ -6,7 +6,11 @@
       "paths": [
         "services/vpngw/**",
         ".github/workflows/vpngw-ci.yml",
-        ".github/workflows/vpngw-release.yml"
+        ".github/workflows/vpngw-release.yml",
+        "skills/github-workflows/scripts/publication.py",
+        "skills/github-workflows/scripts/release_qualification.py",
+        "skills/publish-release/scripts/**",
+        ".github/merge-policy.json"
       ]
     },
     {
@@ -18,7 +22,11 @@
         "helm-charts/nccl-test/**",
         "platform-infra/modules/**",
         ".github/workflows/nebius-cxcli-ci.yml",
-        ".github/workflows/nebius-cxcli-release.yml"
+        ".github/workflows/nebius-cxcli-release.yml",
+        "skills/github-workflows/scripts/publication.py",
+        "skills/github-workflows/scripts/release_qualification.py",
+        "skills/publish-release/scripts/**",
+        ".github/merge-policy.json"
       ]
     },
     {
@@ -28,7 +36,9 @@
         "services/nebius-cxcli/src/nebius_cxcli/flux_render.py",
         "services/nebius-cxcli/scripts/verify_nsight*.py",
         "services/nebius-cxcli/tests/test_nsight*.py",
-        ".github/workflows/nebius-cxcli-nsight.yml"
+        ".github/workflows/nebius-cxcli-nsight.yml",
+        "services/nebius-cxcli/pyproject.toml",
+        "services/nebius-cxcli/uv.lock"
       ]
     },
     {
@@ -57,11 +67,106 @@
       "file": "ai-support-agent-ci.yml",
       "paths": [
         "agents/ai-support-agent/**",
-        ".github/workflows/ai-support-agent-ci.yml"
+        ".github/workflows/ai-support-agent-ci.yml",
+        "README.md"
+      ]
+    },
+    {
+      "file": "github-ai-automation-ci.yml",
+      "paths": [
+        "github-ai-automation/**",
+        ".github/workflows/github-ai-*.yml",
+        "skills/merge-pr/scripts/candidate_ci.py"
       ]
     }
   ],
   "merge_workflow": "skills-merge-pr.yml",
   "completion_workflow": "merge-completion.yml",
-  "pages_enabled": true
+  "pages_enabled": true,
+  "status_workflow": "ci-status-observer.yml",
+  "release_profiles": {
+    "services/vpngw": {
+      "publisher": "vpngw-release.yml",
+      "workflows": {
+        "vpngw-ci.yml": {
+          "jobs": {
+            "ordinary-job-settlement": [
+              "Ordinary systemd and networkd settlement"
+            ],
+            "historical-package-upgrades": [
+              "Authentic release package upgrades"
+            ],
+            "lint": [
+              "lint"
+            ],
+            "unit-tests": [
+              "unit-tests"
+            ],
+            "build": [
+              "build"
+            ]
+          },
+          "reports": [
+            {
+              "name": "vpngw-native-{attempt}",
+              "contract": "native-cases/v1"
+            },
+            {
+              "name": "vpngw-package-history-{attempt}",
+              "contract": "package-history/v1"
+            }
+          ]
+        },
+        "merge-automation-ci.yml": {
+          "jobs": {
+            "contracts": [
+              "contracts"
+            ]
+          }
+        }
+      }
+    },
+    "services/nebius-cxcli": {
+      "publisher": "nebius-cxcli-release.yml",
+      "workflows": {
+        "nebius-cxcli-ci.yml": {
+          "jobs": {
+            "python-compatibility": [
+              "Python 3.12 offline suite",
+              "Python 3.13 offline suite",
+              "Python 3.14 offline suite"
+            ],
+            "verify": [
+              "Quality, coverage, and wheel"
+            ],
+            "wheel-compatibility": [
+              "Python 3.12 exact wheel contract",
+              "Python 3.13 exact wheel contract",
+              "Python 3.14 exact wheel contract"
+            ]
+          }
+        },
+        "nebius-cxcli-nsight.yml": {
+          "jobs": {
+            "native-packages": [
+              "Nsight Ubuntu 22.04 native amd64",
+              "Nsight Ubuntu 22.04 native arm64",
+              "Nsight Ubuntu 24.04 native amd64",
+              "Nsight Ubuntu 24.04 native arm64"
+            ],
+            "official-chart": [
+              "official-chart"
+            ]
+          }
+        },
+        "merge-automation-ci.yml": {
+          "jobs": {
+            "contracts": [
+              "contracts"
+            ]
+          }
+        }
+      }
+    }
+  }
 }

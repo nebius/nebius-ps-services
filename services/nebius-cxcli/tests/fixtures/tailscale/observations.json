@@ -1,0 +1,42 @@
+{
+  "client_status": {
+    "Version": "1.104.4-test",
+    "BackendState": "Running",
+    "CurrentTailnet": {"Name": "example.ts.net", "MagicDNSSuffix": "example.ts.net"},
+    "Peer": {
+      "nodekey:fixture-a": {
+        "ID": "node-a", "Online": true, "Tags": ["tag:router"],
+        "TailscaleIPs": ["100.64.0.1", "fd7a:115c:a1e0::1"],
+        "AllowedIPs": ["100.64.0.1/32", "10.20.0.0/24"],
+        "PrimaryRoutes": ["10.20.0.0/24"]
+      },
+      "nodekey:fixture-b": {
+        "ID": "node-b", "Online": true, "Tags": ["tag:router"],
+        "TailscaleIPs": ["100.64.0.2"],
+        "AllowedIPs": ["100.64.0.2/32", "10.20.0.0/24"],
+        "PrimaryRoutes": null
+      }
+    }
+  },
+  "guest_status": {
+    "Version": "1.104.4-test",
+    "BackendState": "Running",
+    "CurrentTailnet": {"Name": "example.ts.net", "MagicDNSSuffix": "example.ts.net"},
+    "Self": {
+      "ID": "node-a", "Online": true, "Tags": ["tag:router"],
+      "TailscaleIPs": ["100.64.0.1"],
+      "AllowedIPs": ["100.64.0.1/32", "10.20.0.0/24"],
+      "Expired": false, "KeyExpiry": "0001-01-01T00:00:00Z"
+    }
+  },
+  "prefs": {
+    "AdvertiseRoutes": ["10.20.0.0/24"], "RouteAll": false, "CorpDNS": false,
+    "NoSNAT": false, "RunSSH": false, "NoStatefulFiltering": "false", "NetfilterMode": 2
+  },
+  "device": {
+    "id": "device-a", "nodeId": "node-a", "name": "router-a.example.ts.net",
+    "addresses": ["100.64.0.1"], "tags": ["tag:router"],
+    "authorized": true, "keyExpiryDisabled": true
+  },
+  "routes": {"advertisedRoutes": ["10.20.0.0/24"], "enabledRoutes": ["10.20.0.0/24"]}
+}

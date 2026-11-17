@@ -4,20 +4,23 @@ from __future__ import annotations
 
 import argparse
 import contextvars
+import copy
 import fnmatch
 import hashlib
 import json
 import os
 import re
 import subprocess
+import sys
 import time
+import uuid
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from release_checkpoint import SCHEMA, SHA, ReleaseError, Store, state_home
-from release_reconcile import execution_proof, reconcile_pr
+from release_reconcile import execution_proof, reconcile_merged, reconcile_pr
 
-PHASE_SECONDS = 10800
+PHASE_SECONDS = 28800
 POLL_SECONDS = 15
 REMOTE_DEADLINE = contextvars.ContextVar("release_remote_deadline", default=None)
 
@@ -162,6 +165,25 @@ class GitHub:
         )
         return json.loads(raw)
 
+    def release_exists(self, tag: str) -> bool:
+        # The by-tag endpoint does not establish absence of draft releases.
+        repo = self.api("")
+        permissions = repo.get("permissions") if isinstance(repo, dict) else None
+        if not isinstance(permissions, dict) or permissions.get("push") is not True:
+            raise ReleaseError("Release recovery requires visibility of draft releases")
+        for page in range(1, 101):
+            rows = self.api(f"releases?per_page=100&page={page}")
+            if not isinstance(rows, list) or any(
+                not isinstance(row, dict) or not isinstance(row.get("tag_name"), str)
+                for row in rows
+            ):
+                raise ReleaseError("Release listing is malformed")
+            if any(row["tag_name"] == tag for row in rows):
+                return True
+            if len(rows) < 100:
+                return False
+        raise ReleaseError("Release listing is incomplete")
+
     def queue(self, number: int) -> dict:
         owner, repo = self.scope["repo"].split("/")
         query = """query($owner:String!,$repo:String!,$number:Int!){
@@ -248,7 +270,7 @@ def merged_observation(value: dict, pr: dict, github: GitHub) -> dict:
     value["merge"] = merged
     return {
         "status": "ready",
-        "next": "merge-pr must verify exact-result CI",
+        "next": "publish-release must verify its exact-commit qualification profile",
         "commit": merged,
     }
 
@@ -433,6 +455,123 @@ def verification_budget(value: dict, now: float) -> dict:
     return {**result, "poll_seconds": 30}
 
 
+def observe_once(store, github, tag, phase, *, clock=time.time):
+    """Observe without holding the state lock; discard superseded snapshots."""
+    with store.locked():
+        snapshot = store.load(tag)
+        snapshot["waits"].setdefault(f"phase:{phase}", clock() + PHASE_SECONDS)
+        store.save(snapshot)
+        snapshot = copy.deepcopy(snapshot)
+    value = copy.deepcopy(snapshot)
+    deadline = value["waits"][f"phase:{phase}"]
+    token = REMOTE_DEADLINE.set(time.monotonic() + max(0, deadline - clock()))
+    try:
+        if clock() >= deadline:
+            raise WaitExpired("Release observation deadline reached")
+        observed = observation(value, github, phase)
+        if clock() >= deadline:
+            raise WaitExpired("Release observation deadline reached")
+        result = timed_observation(value, observed, phase, clock())
+    except WaitExpired:
+        result = {"status": "timed_out", "gate": phase, "deadline": deadline,
+                  "resume": f"$publish-release --resume --tag {tag}"}
+    finally:
+        REMOTE_DEADLINE.reset(token)
+    with store.locked():
+        if store.load(tag) != snapshot:
+            return None
+        store.save(value)
+    return result
+
+
+def qualify(store, tag):
+    """Reconcile and dispatch only missing producers under one effect owner."""
+    helper = Path(__file__).resolve().parents[2] / "github-workflows/scripts"
+    if not (helper / "release_qualification.py").is_file():
+        raise ReleaseError("Install the sibling github-workflows qualification owner")
+    sys.path.insert(0, str(helper))
+    import release_qualification as qualification
+    import publication
+    with store.locked(effect=True):
+        with store.locked():
+            value = store.load(tag)
+            budget = verification_budget(value, time.time())
+            store.save(value)
+        if budget["status"] == "timed_out":
+            return budget
+        if value["tag_object"]:
+            raise ReleaseError("Already-tagged releases retain their original publication contract")
+        prior_repo = os.environ.get("GITHUB_REPOSITORY")
+        os.environ["GITHUB_REPOSITORY"] = value["scope"]["repo"]
+        token = REMOTE_DEADLINE.set(time.monotonic() + budget["remaining_seconds"])
+        evidence_token = publication.REMOTE_DEADLINE.set(REMOTE_DEADLINE.get())
+        try:
+            api = qualification.GitHub()
+            project, commit = value["scope"]["project"], value["merge"]
+            _, profile_digest = qualification.profile_at(api, commit, project)
+            with store.locked():
+                value = store.load(tag)
+                saved = value.setdefault("qualification", {"profile_digest": profile_digest, "operations": {}})
+                if saved["profile_digest"] != profile_digest:
+                    raise ReleaseError("Frozen release profile changed")
+                store.save(value)
+            result = qualification.verify(api, project, commit, publisher=value["workflow"])
+            if result["status"] == "qualified":
+                with store.locked():
+                    current = store.load(tag)
+                    if current["merge"] != commit:
+                        raise ReleaseError("Release identity changed during qualification")
+                    current["qualification"]["proof"] = result
+                    store.save(current)
+                return result
+            default = api.api("")["default_branch"]
+            for workflow in result["missing"]:
+                with store.locked():
+                    current = store.load(tag)
+                    operations = current["qualification"]["operations"]
+                    operation = operations.get(workflow)
+                if operation:
+                    runs = api.pages(f"actions/workflows/{quote(workflow, safe='')}/runs", "workflow_runs")
+                    matches = [r for r in runs if r.get("display_title") == qualification.title(project, commit, operation["id"])]
+                    if len(matches) > 1:
+                        raise ReleaseError("Ambiguous qualification dispatch; reconcile before retry")
+                    if matches:
+                        with store.locked():
+                            current = store.load(tag)
+                            current["qualification"]["operations"][workflow]["run_id"] = matches[0]["id"]
+                            store.save(current)
+                    # Prepared journal plus no run is an uncertain effect, never permission to retry.
+                    continue
+                operation = {"id": uuid.uuid4().hex, "state": "prepared", "run_id": None}
+                with store.locked():
+                    current = store.load(tag)
+                    current["qualification"]["operations"][workflow] = operation
+                    store.save(current)
+                argv = api.args(f"actions/workflows/{quote(workflow, safe='')}/dispatches") + [
+                    "--method", "POST", "-f", f"ref={default}",
+                    "-f", f"inputs[qualification_sha]={commit}",
+                    "-f", f"inputs[qualification_profile]={project}",
+                    "-f", f"inputs[qualification_id]={operation['id']}"]
+                command(argv, Path(value["scope"]["root"]))
+                with store.locked():
+                    current = store.load(tag)
+                    current["qualification"]["operations"][workflow]["state"] = "submitted"
+                    store.save(current)
+            return {"status": "waiting", "gate": "release_qualification",
+                    "missing": result["missing"], "pending": result.get("pending", [])}
+        except (qualification.Unverifiable, WaitExpired) as error:
+            if time.time() >= budget["deadline"]:
+                return verification_budget(value, time.time())
+            raise ReleaseError(str(error)) from error
+        finally:
+            publication.REMOTE_DEADLINE.reset(evidence_token)
+            REMOTE_DEADLINE.reset(token)
+            if prior_repo is None:
+                os.environ.pop("GITHUB_REPOSITORY", None)
+            else:
+                os.environ["GITHUB_REPOSITORY"] = prior_repo
+
+
 def watch(
     value: dict,
     github: GitHub,
@@ -445,31 +584,11 @@ def watch(
 ) -> dict:
     last_message = -float("inf")
     prior_gate = None
-    prior_result = None
-    phase_deadline = value["waits"].setdefault(
-        f"phase:{phase}", clock() + PHASE_SECONDS
-    )
     while True:
-        now = clock()
-        deadline = prior_result["deadline"] if prior_result else phase_deadline
-        token = REMOTE_DEADLINE.set(time.monotonic() + max(0, deadline - now))
-        try:
-            if now >= deadline:
-                raise WaitExpired("Release observation deadline reached")
-            observed = observation(value, github, phase)
-            if clock() >= deadline:
-                raise WaitExpired("Release observation deadline reached")
-            result = timed_observation(value, observed, phase, clock())
-        except WaitExpired:
-            result = {
-                "status": "timed_out",
-                "gate": prior_gate or phase,
-                "deadline": deadline,
-                "resume": f"$publish-release --resume --tag {value['tag']}",
-            }
-        finally:
-            REMOTE_DEADLINE.reset(token)
-        store.save(value)
+        result = observe_once(store, github, value["tag"], phase, clock=clock)
+        if result is None:
+            sleep(POLL_SECONDS)
+            continue
         if result["status"] != "waiting":
             return result
         now = clock()
@@ -486,7 +605,6 @@ def watch(
                     flush=True,
                 )
             last_message, prior_gate = now, result["gate"]
-        prior_result = result
         sleep(min(POLL_SECONDS, max(0, result["deadline"] - clock())))
 
 
@@ -500,7 +618,9 @@ def parser() -> argparse.ArgumentParser:
             "status",
             "bind-pr",
             "reconcile-pr",
+            "reconcile-merged",
             "verification-budget",
+            "qualify",
             "observe",
             "wait",
             "record-tag",
@@ -541,7 +661,29 @@ def main() -> int:
         scope = identity(args.project_dir)
         store = Store(state_home(), scope)
         github = GitHub(scope)
-        with store.locked():
+        if args.action == "qualify":
+            with store.locked():
+                tag = store.select(args.tag)["tag"]
+            result = qualify(store, tag)
+            print(json.dumps(result, sort_keys=True))
+            return 2 if result["status"] in {"waiting", "timed_out", "blocked"} else 0
+        if args.action in {"observe", "wait"}:
+            with store.locked():
+                value = store.select(args.tag)
+            if args.action == "wait":
+                result = watch(value, github, store, args.phase)
+            else:
+                result = observe_once(store, github, value["tag"], args.phase)
+                if result is None:
+                    result = {"status": "waiting", "gate": "checkpoint_changed"}
+            print(json.dumps(result, sort_keys=True))
+            return 2 if result["status"] in {"waiting", "timed_out", "blocked"} else 0
+        if args.action == "status":
+            with store.locked():
+                result = store.select(args.tag)
+            print(json.dumps(result, sort_keys=True))
+            return 0
+        with store.locked(effect=True), store.locked():
             if args.action == "open":
                 if not all(
                     (args.tag, args.branch, args.base, args.workflow, args.asset)
@@ -680,27 +822,30 @@ def main() -> int:
                     )
                     store.save(value)
                     result = value
-                elif args.action in {"observe", "wait", "complete"}:
-                    phase = "release" if args.action == "complete" else args.phase
-                    if args.action == "wait":
-                        result = watch(value, github, store, phase)
-                    else:
-                        result = timed_observation(
-                            value, observation(value, github, phase), phase, time.time()
+                elif args.action == "reconcile-merged":
+                    value = reconcile_merged(
+                        value, github, expected_head=args.expected_head,
+                        head=args.head, review_task=args.review_task,
+                    )
+                    verification_budget(value, time.time())
+                    store.save(value)
+                    result = value
+                elif args.action == "complete":
+                    result = timed_observation(
+                        value, observation(value, github, "release"), "release", time.time()
+                    )
+                    # Asset contents must be verified, not merely existence asserted.
+                    if result["status"] != "ready" or not args.checkout:
+                        raise ReleaseError(
+                            "Complete requires ready release and downloaded assets directory"
                         )
-                    if args.action == "complete":
-                        # Asset contents must be verified, not merely existence asserted.
-                        if result["status"] != "ready" or not args.checkout:
-                            raise ReleaseError(
-                                "Complete requires ready release and downloaded assets directory"
-                            )
-                        verify_downloads(args.checkout, result["assets"], value)
-                        value["complete"] = True
-                        result = {
-                            "status": "published",
-                            "release_url": result["release_url"],
-                            "tag": value["tag"],
-                        }
+                    verify_downloads(args.checkout, result["assets"], value)
+                    value["complete"] = True
+                    result = {
+                        "status": "published",
+                        "release_url": result["release_url"],
+                        "tag": value["tag"],
+                    }
                     store.save(value)
                 elif args.action in {"record-tag", "restore-tag"}:
                     if not args.checkout or not value["merge"]:

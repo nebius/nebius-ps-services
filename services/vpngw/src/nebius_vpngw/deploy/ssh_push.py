@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import atexit
 import base64
 import csv
 import errno
@@ -12,11 +11,7 @@ import math
 import os
 import re
 import shlex
-import shutil
 import stat
-import subprocess
-import sys
-import tempfile
 import threading
 import time
 import zipfile
@@ -26,11 +21,8 @@ from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from email.parser import BytesParser
 from enum import Enum
-from importlib import metadata
 from pathlib import Path
 from typing import Any, BinaryIO
-from urllib.parse import unquote, urlparse
-from urllib.request import url2pathname, urlopen
 
 import yaml
 
@@ -1006,48 +998,34 @@ class SSHPush:
             timeout=timeout,
         )
 
+    def select_vm_ha_agent_wheel(self) -> tuple[Path, str]:
+        """Resolve the exact installed/build artifact, never an arbitrary local wheel."""
+        from .agent_artifact import resolve
+
+        return resolve(self._find_project_root())
+
     def resolve_vm_ha_agent_artifact(self) -> VMHAAgentArtifact:
-        """Resolve one existing wheel without building, deleting, or falling back."""
+        """Resolve and freeze the exact CLI-compatible artifact before admission."""
+        path, source = self.select_vm_ha_agent_wheel()
+        try:
+            from .agent_artifact import cache_wheel
 
-        wheel_override = os.environ.get("VPNGW_AGENT_WHEEL")
-        if wheel_override:
-            try:
-                return VMHAAgentArtifact.from_wheel(
-                    Path(wheel_override),
-                    source="VPNGW_AGENT_WHEEL",
-                )
-            except OSError as error:
-                raise VMHAAgentArtifactError(
-                    VMHAAgentArtifactProblem.MISSING,
-                    "configured VM-HA agent artifact is unavailable",
-                ) from error
-
-        project_root = self._find_project_root()
-        search_dirs = (
-            (project_root / "dist",)
-            if project_root is not None
-            else (Path.cwd(), Path.cwd() / "dist")
-        )
-        candidates = sorted(
-            candidate
-            for directory in search_dirs
-            if directory.is_dir()
-            for candidate in directory.glob("nebius_vpngw-*.whl")
-        )
-        if not candidates:
+            artifact = VMHAAgentArtifact.from_wheel(path, source=source)
+            artifact.verify_current()
+            cached = cache_wheel(artifact.path, expected=artifact.sha256)
+            return VMHAAgentArtifact.from_wheel(cached, source=source)
+        except OSError as error:
+            if source != "VPNGW_AGENT_WHEEL":
+                raise
             raise VMHAAgentArtifactError(
                 VMHAAgentArtifactProblem.MISSING,
-                "VM-HA planning requires one existing agent wheel; set VPNGW_AGENT_WHEEL",
-            )
-        if len(candidates) != 1:
-            raise VMHAAgentArtifactError(
-                VMHAAgentArtifactProblem.AMBIGUOUS,
-                "VM-HA planning found multiple agent wheels; set VPNGW_AGENT_WHEEL exactly",
-            )
-        try:
-            return VMHAAgentArtifact.from_wheel(candidates[0], source="local-prebuilt-wheel")
+                "configured VM-HA agent artifact is unavailable",
+            ) from error
         except VMHAAgentArtifactError as error:
-            if error.problem is not VMHAAgentArtifactProblem.MISSING:
+            if (
+                source == "VPNGW_AGENT_WHEEL"
+                or error.problem is not VMHAAgentArtifactProblem.MISSING
+            ):
                 raise
             raise VMHAAgentArtifactError(
                 VMHAAgentArtifactProblem.CHANGED,
@@ -1831,12 +1809,18 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
             from .. import ha_repair
 
             if predecessor_record_sha256 is not None:
-                if predecessor_operation_id is not None or re.fullmatch(r"[a-f0-9]{64}", predecessor_record_sha256) is None:
+                if (
+                    predecessor_operation_id is not None
+                    or re.fullmatch(r"[a-f0-9]{64}", predecessor_record_sha256) is None
+                ):
                     raise ValueError("VM-HA owner adoption exact predecessor is invalid")
                 previous_digest = predecessor_record_sha256
             else:
                 assert predecessor_operation_id is not None
-                if re.fullmatch(r"[a-f0-9]{64}", predecessor_operation_id) is None or predecessor_operation_id == lock_receipt.operation_id:
+                if (
+                    re.fullmatch(r"[a-f0-9]{64}", predecessor_operation_id) is None
+                    or predecessor_operation_id == lock_receipt.operation_id
+                ):
                     raise ValueError("VM-HA owner adoption predecessor is invalid")
                 previous = json.loads(encoded)
                 previous["operation_id"] = predecessor_operation_id
@@ -3095,7 +3079,12 @@ printf "VM_HA_MUTATION_SERVICES_STOPPED=1\\n"
         )
 
     def inspect_vm_ha_predecessor(
-        self, ssh_target: str, instance_name: str, local_cfg: dict, *, generation_id: str | None = None
+        self,
+        ssh_target: str,
+        instance_name: str,
+        local_cfg: dict,
+        *,
+        generation_id: str | None = None,
     ) -> dict:
         """Observe the old locked generation without trusting the new configuration."""
         from .checkpoint_conversion import source as checkpoint_source
@@ -3105,9 +3094,14 @@ printf "VM_HA_MUTATION_SERVICES_STOPPED=1\\n"
         if generation_id is not None:
             if re.fullmatch(r"[a-f0-9]{64}", generation_id) is None:
                 raise ValueError("HA predecessor generation is invalid")
-            script = script.replace("generation_id = original_lock['generation_id']", "generation_id = " + repr(generation_id))
+            script = script.replace(
+                "generation_id = original_lock['generation_id']",
+                "generation_id = " + repr(generation_id),
+            )
         return self._inspect_vm_ha_host(
-            ssh_target, instance_name, local_cfg,
+            ssh_target,
+            instance_name,
+            local_cfg,
             script=checkpoint_source() + script,
         )
 
@@ -3326,190 +3320,19 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
                 return parent
         return None
 
-    def _select_wheel_from_dirs(self, search_dirs: list[Path]) -> Path | None:
-        """Pick the best available wheel from search dirs, preferring current version."""
-        version = None
-        try:
-            version = metadata.version("nebius-vpngw")
-        except metadata.PackageNotFoundError:
-            version = None
+    def _build_wheel(self, *, allow_installed_fallback: bool = True) -> Path:
+        """Use the same exact artifact resolver for ordinary and HA deployment."""
+        from .agent_artifact import cache_wheel
 
-        candidates: list[Path] = []
-        for directory in search_dirs:
-            if not directory.exists():
-                continue
-            wheels = sorted(
-                directory.glob("nebius_vpngw-*.whl"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            if not wheels:
-                continue
-            if version:
-                for wheel in wheels:
-                    if f"nebius_vpngw-{version}-" in wheel.name:
-                        return wheel
-            candidates.extend(wheels)
-
-        if not candidates:
-            return None
-        return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)[0]
-
-    def _download_install_wheel(self, wheel_url: str, wheel_name: str) -> Path | None:
-        if self._temp_wheel_dir is None:
-            self._temp_wheel_dir = Path(tempfile.mkdtemp(prefix="nebius-vpngw-wheel-"))
-
-        target_path = self._temp_wheel_dir / wheel_name
-        if target_path.exists():
-            return target_path
-
-        print("[SSHPush] Downloading the originally installed release wheel...")
-        try:
-            with urlopen(wheel_url, timeout=60) as response, target_path.open("wb") as target:
-                shutil.copyfileobj(response, target)
-        except Exception as e:
-            if target_path.exists():
-                target_path.unlink()
-            print(f"[SSHPush] WARNING: Failed to download the original install wheel: {e}")
-            return None
-        return target_path
-
-    def _wheel_from_install_metadata(self) -> Path | None:
-        try:
-            distribution = metadata.distribution("nebius-vpngw")
-        except metadata.PackageNotFoundError:
-            return None
-
-        direct_url_raw = distribution.read_text("direct_url.json")
-        if not direct_url_raw:
-            return None
-
-        try:
-            direct_url = json.loads(direct_url_raw)
-        except json.JSONDecodeError:
-            print("[SSHPush] WARNING: Could not parse direct_url.json for installed package")
-            return None
-
-        wheel_url = direct_url.get("url")
-        if not isinstance(wheel_url, str) or not wheel_url:
-            return None
-
-        parsed_url = urlparse(wheel_url)
-        wheel_name = Path(unquote(parsed_url.path)).name
-        if not wheel_name.endswith(".whl"):
-            return None
-
-        if parsed_url.scheme == "file":
-            local_path_str = url2pathname(unquote(parsed_url.path))
-            if parsed_url.netloc:
-                local_path_str = f"//{parsed_url.netloc}{local_path_str}"
-            local_path = Path(local_path_str)
-            if local_path.is_file():
-                print(f"[SSHPush] Reusing install wheel from local file: {local_path.name}")
-                return local_path
-            print(
-                "[SSHPush] WARNING: The original install wheel is no longer present at the "
-                "recorded file path"
-            )
-            return None
-
-        if parsed_url.scheme in {"http", "https"}:
-            downloaded_wheel = self._download_install_wheel(wheel_url, wheel_name)
-            if downloaded_wheel:
-                print(f"[SSHPush] Reusing install wheel from original URL: {downloaded_wheel.name}")
-            return downloaded_wheel
-
-        return None
-
-    def _build_wheel(self, *, allow_installed_fallback: bool = True) -> Path | None:
-        """Build the nebius-vpngw wheel package if not already built."""
-        if self._wheel_path and self._wheel_path.exists():
-            if self._wheel_is_installed_fallback and not allow_installed_fallback:
-                return None
+        if self._wheel_path is not None:
+            VMHAAgentArtifact.from_wheel(
+                self._wheel_path, source="retained-candidate"
+            ).verify_current()
             return self._wheel_path
-
-        wheel_override = os.environ.get("VPNGW_AGENT_WHEEL")
-        if wheel_override:
-            override_path = Path(wheel_override).expanduser()
-            if override_path.is_file():
-                self._wheel_path = override_path
-                self._wheel_is_installed_fallback = False
-                print(f"[SSHPush] Using wheel from VPNGW_AGENT_WHEEL: {override_path.name}")
-                return self._wheel_path
-            print(f"[SSHPush] WARNING: VPNGW_AGENT_WHEEL not found: {override_path}")
-
-        # Find project root (where pyproject.toml is) from the installed module path.
-        project_root = self._find_project_root()
-        if not project_root:
-            # Release/pipx install: look for a local wheel in cwd or ./dist
-            local_wheel = self._select_wheel_from_dirs([Path.cwd(), Path.cwd() / "dist"])
-            if local_wheel:
-                self._wheel_path = local_wheel
-                self._wheel_is_installed_fallback = False
-                print(f"[SSHPush] Using local wheel: {self._wheel_path.name}")
-                return self._wheel_path
-            install_wheel = self._wheel_from_install_metadata()
-            if install_wheel and allow_installed_fallback:
-                self._wheel_path = install_wheel
-                self._wheel_is_installed_fallback = True
-                print(f"[SSHPush] Using install wheel: {self._wheel_path.name}")
-                return self._wheel_path
-            print(
-                "[SSHPush] WARNING: No local wheel found. "
-                "Set VPNGW_AGENT_WHEEL, keep the original release URL/file accessible, "
-                "or run apply from a directory containing the wheel (or ./dist)."
-            )
-            return None
-
-        build_directory = tempfile.TemporaryDirectory(prefix="vpngw-agent-wheel-")
-        atexit.register(build_directory.cleanup)
-        dist_dir = Path(build_directory.name)
-
-        # Always attempt to build latest wheel if pyproject is present
-        if (project_root / "pyproject.toml").exists():
-            print("[SSHPush] Building nebius-vpngw wheel package with python -m build...")
-            try:
-                result = subprocess.run(
-                    [sys.executable, "-m", "build", "--wheel", "--outdir", str(dist_dir)],
-                    cwd=project_root,
-                    capture_output=True,
-                    text=True,
-                    timeout=90,
-                    env={**os.environ, "SOURCE_DATE_EPOCH": "315532800"},
-                )
-                if result.returncode != 0:
-                    print(f"[SSHPush] Wheel build failed: {result.stderr}")
-            except FileNotFoundError:
-                print(
-                    "[SSHPush] WARNING: 'build' module not found. Install with: pip install build"
-                )
-            except Exception as e:
-                print(f"[SSHPush] Wheel build error: {e}")
-
-        # Reuse newest existing wheel (works with python -m build)
-        selected_wheel = self._select_wheel_from_dirs([dist_dir]) if dist_dir.exists() else None
-        if selected_wheel:
-            self._wheel_path = selected_wheel
-            self._wheel_is_installed_fallback = False
-            print(f"[SSHPush] Using wheel: {selected_wheel.name}")
-            return selected_wheel
-
-        install_wheel = self._wheel_from_install_metadata()
-        if install_wheel and allow_installed_fallback:
-            print(
-                "[SSHPush] WARNING: Fresh build unavailable; falling back to the originally "
-                "installed wheel. Local source changes will not be deployed."
-            )
-            self._wheel_path = install_wheel
-            self._wheel_is_installed_fallback = True
-            print(f"[SSHPush] Using fallback wheel: {self._wheel_path.name}")
-            return self._wheel_path
-
-        if dist_dir.exists():
-            print("[SSHPush] No wheel found in dist/ after build attempt")
-        else:
-            print("[SSHPush] dist/ directory not found; wheel not built")
-        return None
+        artifact = self.resolve_vm_ha_agent_artifact()
+        artifact.verify_current()
+        self._wheel_path = cache_wheel(artifact.path, expected=artifact.sha256)
+        return self._wheel_path
 
     def activation_control(
         self,

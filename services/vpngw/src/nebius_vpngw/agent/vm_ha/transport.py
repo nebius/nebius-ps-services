@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import math
@@ -30,8 +31,22 @@ _MAX_CONFIGURABLE_FRAME_BYTES = 1024 * 1024
 _NODE_ID_SAN_PREFIX = "urn:nebius-vpngw:node:"
 
 
+PEER_TRANSPORT_ERROR_KINDS = frozenset({"timeout", "refused", "unreachable", "tls", "protocol"})
+
+# Errnos that prove the peer endpoint is unreachable at the network layer, as
+# a blocked security-group rule or broken route produces, rather than a peer
+# that answered and misbehaved.
+_UNREACHABLE_ERRNOS = frozenset({errno.EHOSTUNREACH, errno.ENETUNREACH, errno.ETIMEDOUT})
+
+
 class PeerTransportError(RuntimeError):
-    """A secret-safe peer transport failure."""
+    """A secret-safe peer transport failure with a machine-readable kind."""
+
+    def __init__(self, message: str, *, kind: str = "protocol") -> None:
+        if kind not in PEER_TRANSPORT_ERROR_KINDS:
+            raise ValueError("unsupported peer transport error kind")
+        super().__init__(message)
+        self.kind = kind
 
 
 def _require_positive_finite_timeout(name: str, value: float) -> None:
@@ -88,7 +103,7 @@ class MutualTLSConfig:
         snapshot: MTLSSnapshot,
     ) -> None:
         if not snapshot.peer_certificate_pems:
-            raise PeerTransportError("managed peer certificate trust is empty")
+            raise PeerTransportError("managed peer certificate trust is empty", kind="tls")
         peer_bundle = b"\n".join(snapshot.peer_certificate_pems).decode("ascii")
         context.verify_mode = ssl.CERT_REQUIRED
         context.options |= ssl.OP_NO_TICKET
@@ -110,7 +125,9 @@ class MutualTLSConfig:
         except PeerTransportError:
             raise
         except (OSError, UnicodeError, ssl.SSLError, ValueError):
-            raise PeerTransportError("unable to load managed peer TLS identity") from None
+            raise PeerTransportError(
+                "unable to load managed peer TLS identity", kind="tls"
+            ) from None
 
     def server_context(self) -> tuple[ssl.SSLContext, MTLSSnapshot]:
         try:
@@ -124,26 +141,28 @@ class MutualTLSConfig:
         except PeerTransportError:
             raise
         except (OSError, UnicodeError, ssl.SSLError, ValueError):
-            raise PeerTransportError("unable to load managed peer TLS identity") from None
+            raise PeerTransportError(
+                "unable to load managed peer TLS identity", kind="tls"
+            ) from None
 
 
 def _authenticated_node_id(peer_certificate: Mapping[str, Any] | None) -> str:
     """Derive the node identity solely from one verified URI SAN."""
 
     if not peer_certificate:
-        raise PeerTransportError("peer certificate identity is missing")
+        raise PeerTransportError("peer certificate identity is missing", kind="tls")
     subject_alt_names = peer_certificate.get("subjectAltName")
     if not isinstance(subject_alt_names, (list, tuple)):
-        raise PeerTransportError("peer certificate identity is missing")
+        raise PeerTransportError("peer certificate identity is missing", kind="tls")
     node_ids: list[str] = []
     for entry in subject_alt_names:
         if not isinstance(entry, (list, tuple)) or len(entry) != 2:
-            raise PeerTransportError("peer certificate identity is malformed")
+            raise PeerTransportError("peer certificate identity is malformed", kind="tls")
         kind, value = entry
         if kind == "URI" and isinstance(value, str) and value.startswith(_NODE_ID_SAN_PREFIX):
             node_ids.append(value.removeprefix(_NODE_ID_SAN_PREFIX))
     if len(node_ids) != 1 or not node_ids[0]:
-        raise PeerTransportError("peer certificate must contain one node identity")
+        raise PeerTransportError("peer certificate must contain one node identity", kind="tls")
     return node_ids[0]
 
 
@@ -230,10 +249,10 @@ class MutualTLSPeerTransport:
     ) -> tuple[str, str, int]:
         node_id = _authenticated_node_id(channel.getpeercert())
         if node_id != self._expected_peer_node_id:
-            raise PeerTransportError("peer certificate belongs to the wrong node")
+            raise PeerTransportError("peer certificate belongs to the wrong node", kind="tls")
         certificate_der = channel.getpeercert(binary_form=True)
         if not isinstance(certificate_der, bytes) or not certificate_der:
-            raise PeerTransportError("peer certificate identity is missing")
+            raise PeerTransportError("peer certificate identity is missing", kind="tls")
         fingerprint = hashlib.sha256(certificate_der).hexdigest()
         peers = {
             peer.certificate_fingerprint: peer
@@ -242,7 +261,7 @@ class MutualTLSPeerTransport:
         }
         peer = peers.get(fingerprint)
         if peer is None:
-            raise PeerTransportError("peer certificate is not an exact managed pin")
+            raise PeerTransportError("peer certificate is not an exact managed pin", kind="tls")
         return node_id, fingerprint, peer.epoch
 
     def send(self, heartbeat: PeerHeartbeat, *, timeout_seconds: float = 2.0) -> None:
@@ -275,8 +294,25 @@ class MutualTLSPeerTransport:
         except PeerTransportError:
             raise
         except TimeoutError:
-            raise PeerTransportError("peer transport timed out") from None
-        except (OSError, ssl.SSLError, ValueError):
+            raise PeerTransportError("peer transport timed out", kind="timeout") from None
+        except ssl.SSLError:
+            raise PeerTransportError(
+                "peer authentication or transport failed", kind="tls"
+            ) from None
+        except ConnectionRefusedError:
+            raise PeerTransportError(
+                "peer authentication or transport failed", kind="refused"
+            ) from None
+        except socket.gaierror:
+            raise PeerTransportError(
+                "peer authentication or transport failed", kind="unreachable"
+            ) from None
+        except OSError as error:
+            raise PeerTransportError(
+                "peer authentication or transport failed",
+                kind="unreachable" if error.errno in _UNREACHABLE_ERRNOS else "protocol",
+            ) from None
+        except ValueError:
             raise PeerTransportError("peer authentication or transport failed") from None
 
     def receive(self, *, timeout_seconds: float) -> AuthenticatedPeerMessage:
@@ -311,8 +347,25 @@ class MutualTLSPeerTransport:
         except PeerTransportError:
             raise
         except TimeoutError:
-            raise PeerTransportError("peer transport timed out") from None
-        except (OSError, ssl.SSLError, struct.error, ValueError):
+            raise PeerTransportError("peer transport timed out", kind="timeout") from None
+        except ssl.SSLError:
+            raise PeerTransportError(
+                "peer authentication or transport failed", kind="tls"
+            ) from None
+        except ConnectionRefusedError:
+            raise PeerTransportError(
+                "peer authentication or transport failed", kind="refused"
+            ) from None
+        except socket.gaierror:
+            raise PeerTransportError(
+                "peer authentication or transport failed", kind="unreachable"
+            ) from None
+        except OSError as error:
+            raise PeerTransportError(
+                "peer authentication or transport failed",
+                kind="unreachable" if error.errno in _UNREACHABLE_ERRNOS else "protocol",
+            ) from None
+        except (struct.error, ValueError):
             raise PeerTransportError("peer authentication or transport failed") from None
 
 

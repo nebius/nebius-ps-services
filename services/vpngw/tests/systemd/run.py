@@ -26,6 +26,7 @@ def main() -> None:
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ssh-bootstrap-only", action="store_true")
+    parser.add_argument("--support-bundle-only", action="store_true")
     parser.add_argument("--ingress-only", action="store_true")
     parser.add_argument("--modernization-only", action="store_true")
     parser.add_argument("--package-migration-only", action="store_true")
@@ -40,6 +41,16 @@ def main() -> None:
     )
     parser.add_argument("--platform", default="linux/amd64")
     args = parser.parse_args()
+    if args.support_bundle_only and any(
+        (
+            args.ssh_bootstrap_only,
+            args.ingress_only,
+            args.modernization_only,
+            args.package_migration_only,
+            args.historical_package_upgrades,
+        )
+    ):
+        parser.error("support-bundle qualification is a separate fixture lane")
     if args.historical_package_upgrades:
         if not args.candidate_wheel or not args.report:
             parser.error("historical qualification requires --candidate-wheel and --report")
@@ -58,7 +69,11 @@ def main() -> None:
         return
     project = Path(__file__).resolve().parents[2]
     tests = ["/workspace/tests/integration/test_ssh_bootstrap.py"]
-    if args.package_migration_only:
+    if args.support_bundle_only:
+        if not args.candidate_wheel or not args.candidate_wheel.is_file():
+            parser.error("support-bundle qualification requires an existing --candidate-wheel")
+        tests = ["/workspace/tests/integration/test_support_bundle_native.py"]
+    elif args.package_migration_only:
         tests = ["/workspace/tests/integration/test_runtime_modernization.py"]
     elif args.modernization_only:
         tests = [
@@ -148,6 +163,14 @@ def main() -> None:
             f"type=bind,src={project / 'tests'},dst=/workspace/tests,readonly",
             "--mount",
             f"type=bind,src={project / 'pyproject.toml'},dst=/workspace/pyproject.toml,readonly",
+            *(
+                [
+                    "--mount",
+                    f"type=bind,src={args.candidate_wheel.resolve()},dst=/support-candidate/{args.candidate_wheel.name},readonly",
+                ]
+                if args.support_bundle_only
+                else []
+            ),
             image_id,
             timeout=30,
         )

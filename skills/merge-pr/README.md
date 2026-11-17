@@ -202,3 +202,11 @@ request. Candidate CI and protected merge bind the active request and both sourc
 and destination identities. Fork merge eligibility defaults off through
 `AI_AUTOMATION_MERGE_FORK_CONTRIBUTION`; enabling it grants no fork branch writes.
 See [the authority contract](../merge-pr/references/automation-authority.md).
+
+## Delivery waiting and optional UAT
+
+Ordinary merge returns after confirmed merge and destination containment.
+Use `merge-pr --wait-for-result` to wait for full result CI and Pages. Release
+publication instead verifies its exact-commit service/shared publisher profile.
+Additional live/cloud/UAT campaigns are opt-in; required CI, review, recorded
+failures and cleanup remain binding. SDLC retains its accepted delivery boundary.

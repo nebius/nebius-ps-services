@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -13,6 +14,44 @@ from pathlib import Path
 from typing import Any
 
 _DEFAULT_PRIVATE_KEY_NAMES = ("id_ed25519", "id_ecdsa", "id_rsa")
+
+
+def normalize_ssh_access(vm_spec: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve only existing SSH access fields, without deployment/secret loading."""
+    result = dict(vm_spec)
+    for key in ("ssh_username", "ssh_public_key", "ssh_public_key_path", "ssh_private_key_path"):
+        value = result.get(key)
+        if isinstance(value, str):
+            result[key] = re.sub(
+                r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}",
+                lambda match: os.environ.get(match[1], match[0]),
+                value,
+            )
+    if result.get("ssh_public_key_path") and not result.get("ssh_public_key"):
+        path = Path(str(result["ssh_public_key_path"])).expanduser()
+        try:
+            with path.open(encoding="utf-8") as stream:
+                public = stream.read(16385)
+            if len(public) > 16384:
+                raise ValueError("The configured SSH public key file is too large")
+            result["ssh_public_key"] = public.strip()
+        except (OSError, UnicodeError, ValueError):
+            if operator_identity() is None:
+                raise
+    return result
+
+
+def configured_ssh_client_auth(vm_spec: Mapping[str, Any]) -> SSHClientAuth | None:
+    """Use the established operator override, exact public match or private selector."""
+    selected = operator_identity()
+    if selected is not None:
+        return selected
+    public = str(vm_spec.get("ssh_public_key") or "").strip()
+    private = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
+    path = Path(str(private)).expanduser() if private else None
+    if public:
+        return resolve_ssh_client_auth(public, explicit_private_key=path)
+    return select_operator_identity(path) if path is not None else None
 
 
 def _configured_public_key(value: str | None) -> tuple[str, str]:

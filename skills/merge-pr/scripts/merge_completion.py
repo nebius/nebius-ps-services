@@ -492,10 +492,43 @@ def route_target(api, policy, run):
     }
 
 
+def notification_source(api, values):
+    fields = ("source_run_id", "source_run_attempt")
+    require(all(re.fullmatch(r"[1-9][0-9]*", str(values.get(k, ""))) for k in fields),
+            "Notification requires a positive run ID and attempt together")
+    run_id, attempt = (int(values[k]) for k in fields)
+    run = api.api(f"actions/runs/{run_id}/attempts/{attempt}")
+    require(run.get("id") == run_id and run.get("run_attempt") == attempt
+            and run.get("status") == "completed", "Notification source identity drift")
+    return run
+
+
+def notify_result(api, policy, event):
+    trusted_runtime(api)
+    default = api.repo_info()["default_branch"]
+    require(os.environ.get("GITHUB_EVENT_NAME") == "workflow_run"
+            and os.environ.get("GITHUB_WORKFLOW_REF") ==
+            f"{api.repo}/{workflow_path(policy['status_workflow'])}@refs/heads/{default}",
+            "Only the trusted status observer may notify completion")
+    source = event["workflow_run"]
+    values = {"source_run_id": str(source["id"]),
+              "source_run_attempt": str(source["run_attempt"])}
+    run = notification_source(api, values)
+    route_target(api, policy, run)
+    api.api(f"actions/workflows/{quote(policy['completion_workflow'], safe='')}/dispatches",
+            "POST", {"ref": default, "inputs": values})
+    return {"outcome": "notified", **values}
+
+
 def targets(api, policy, event):
     # Listing/transport failures remain global. Receipt errors are isolated by
     # artifact identity and become failing matrix entries, not successful skips.
     default = api.repo_info()["default_branch"]
+    inputs = event.get("inputs") or {}
+    if any(inputs.get(k) for k in ("source_run_id", "source_run_attempt")):
+        require(os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch",
+                "Notification inputs require workflow_dispatch")
+        return [route_target(api, policy, notification_source(api, inputs))]
     if os.environ.get("GITHUB_EVENT_NAME") == "workflow_run":
         source = event["workflow_run"]
         run = api.api(
@@ -771,6 +804,7 @@ def main():
     parser.add_argument(
         "action",
         choices=[
+            "notify-result",
             "targets",
             "prepare-dispatch",
             "prepare-pages",
@@ -808,6 +842,7 @@ def main():
             else {}
         )
         if args.action in {
+            "notify-result",
             "targets",
             "prepare-dispatch",
             "prepare-pages",
@@ -815,7 +850,9 @@ def main():
             "pages",
         }:
             trusted_runtime(api)
-        if args.action == "targets":
+        if args.action == "notify-result":
+            result = notify_result(api, policy, event)
+        elif args.action == "targets":
             result = targets(api, policy, event)
         elif args.action == "ci-inputs":
             result = ci_inputs(api, policy, event, args.workflow)

@@ -402,8 +402,10 @@ or bypass any other check. Explicit revocation uses the same waiver owner.
    observed check state.
    In an Agentic SDLC run, include requirements covered, feature list,
    validation, tests, evaluation, and UAT evidence summary in the PR body when
-   that local evidence exists. If UAT failed or is missing, stop and route
-   through the coordinator instead of creating an early Agentic SDLC PR.
+   that local evidence exists. Optional UAT that was not requested or remains
+   pending does not by itself block an otherwise eligible PR. Route actual
+   failures, active trials, cleanup obligations and independently required
+   acceptance evidence through the coordinator before declaring readiness.
    Record the PR URL and readiness summary in the active SDLC run evidence
    when local run state is available; if local state cannot be updated, report
    the missing write explicitly.

@@ -6,6 +6,19 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Align offline contract and workflow assertions with release qualification,
+  shared publisher dependencies and required PR-read permission.
+
+- Require complete, unique current member coverage for Tailscale gateway readiness
+  and retain earlier client evidence across progress reports and later failures.
+- Handle Tailscale client and OS-route command failures without exposing subprocess
+  output: optional verification stays pending, required verification fails deploy,
+  and explicit verification returns a readable error. Add offline vendor-response
+  fixtures and CLI coverage for verification, status, doctor and authentication.
+
+- Verify exact-commit CI qualification before release publication, retaining
+  final tagged package and artifact checks while excluding unrelated CI/Pages.
+
 - Explicitly reject absent static authentication or service-account identity
   during SDK initialization, preserving fail-closed identity checks and type safety.
 
