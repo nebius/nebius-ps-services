@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 import zipfile
 
+import publication as pub
 import release_qualification as q
 
 SHA = "a" * 40
@@ -24,6 +25,28 @@ JOBS = [
 
 
 class QualificationTests(unittest.TestCase):
+    def test_repository_root_lookup_uses_canonical_api_endpoint(self):
+        responses = {
+            "repos/example/repo": {"id": 123, "default_branch": "main"},
+            "repos/example/repo/commits/main": {"sha": SHA},
+            f"repos/example/repo/compare/{SHA}...{SHA}": {"status": "identical"},
+        }
+
+        def request(args, **kwargs):
+            payload = responses.get(args[-1])
+            return Mock(
+                returncode=0 if payload is not None else 1,
+                stdout=json.dumps(payload or {"status": "404"}).encode(),
+            )
+
+        with (
+            patch.dict(q.os.environ, {"GITHUB_REPOSITORY": "example/repo"}),
+            patch.object(pub.subprocess, "run", side_effect=request),
+        ):
+            self.assertEqual(
+                q.main_history(q.GitHub(), SHA), responses["repos/example/repo"]
+            )
+
     def test_checkout_scopes_read_token_to_fetch_and_disables_git_hooks(self):
         identity = {"checkout_sha": SHA}
         with (

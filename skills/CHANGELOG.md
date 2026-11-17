@@ -4,6 +4,20 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Load repository-scoped merge operator IDs during local release qualification,
+  preserving broker evidence validation and restoring the caller's environment.
+
+- Continue authorized tasks after repairing repository-owned skill defects:
+  update canonical source, validate, install through the existing script and
+  resume while preserving checkpoints, deadlines and security boundaries.
+
+- Reconcile an explicitly reviewed follow-up fix PR before release tagging,
+  preserving original merge evidence and deadlines while requiring fresh ownership,
+  protected merge and exact-result qualification.
+
+- Use the canonical GitHub repository metadata endpoint in publication helpers,
+  fixing release qualification failures caused by a trailing-slash HTTP 404.
+
 - Discard failed GNU/BSD `stat` probe output during agent authentication setup,
   preserving ownership and permission checks on Linux and macOS.
 

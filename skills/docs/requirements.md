@@ -533,7 +533,7 @@ plan and open transition. Keep installed and live connector proof separate.
 <!-- /REQUIREMENT: REQ-006 -->
 
 <!-- REQUIREMENT: REQ-007 status=active priority=P0 type=constraint -->
-### REQ-007: Repair repo-owned Codex guard defects without evasion
+### REQ-007: Repair repo-owned skill and guard defects without evasion
 
 #### User Story
 
@@ -554,6 +554,14 @@ at its causal owner and retried.
   enterprise policy, an external or unknown-provenance guard, or a source
   outside current authority, the workflow reports the exact blocker and the
   smallest out-of-band action instead of attempting evasion.
+
+- AC-004: When a repo-owned skill implementation defect blocks an already
+  authorized task, diagnose and repair its canonical skill source, validate it,
+  install the reviewed fix with the repository's installer and continue the
+  interrupted task. Reuse existing authorization instead of requesting another
+  approval solely for an in-scope skill repair. Preserve grants, checkpoints,
+  uncertain effects and deadlines; genuine external policy or authority limits
+  remain boundaries. Never patch only installed copies or weaken a guard to pass.
 
 #### Negative Criteria
 
@@ -3560,6 +3568,14 @@ and receive a verified GitHub Release URL.
   immutable remote-default containment. Reject existing tag/publication evidence;
   preserve checkpoint history and deadlines, and require selected release-profile
   qualification before tagging; unrelated CI and Pages do not gate it. Do not manufacture a retrospective review or replay a merge.
+  An explicitly authorized follow-up repair may select a different reviewed open
+  PR before tagging through a separate guarded successor transition. Require the
+  original authoritative merged result, a newly owned published descendant, fresh
+  exact-head/base operator review and unchanged repository/default identity.
+  Reject recorded or remote tags/releases and any prior qualification operations
+  or proof. Archive the replaced selection and qualification state, preserve all
+  deadlines, and repeat protected merge and exact-result qualification. Ordinary
+  resume/binding never select a successor implicitly.
 - AC-005: Tag only the verified merged commit in remote default history from an
   isolated checkout. Create its annotated tag before SCM runtime verification;
   push after success. Default advancement cannot change release contents.

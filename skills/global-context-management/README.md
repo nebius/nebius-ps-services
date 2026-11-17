@@ -342,6 +342,10 @@ For a complex task, the intended flow is:
 6. Inspect the diff and run focused validation.
 7. Use `risk_reviewer` near the end only for non-trivial or risky changes.
 8. Address serious findings or record why they are out of scope.
+   If an in-scope skill bug interrupts the task, fix its canonical source,
+   validate and install it with the repository script, then continue under the
+   existing authorization. Preserve checkpoints and actual security boundaries;
+   report source, installed and resumed-operation evidence separately.
 9. Update task state and return the final summary.
 
 ## Your Mental Model

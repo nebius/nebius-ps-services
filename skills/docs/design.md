@@ -1121,8 +1121,8 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-005 -->
 
-<!-- FEATURE: FEAT-006 reqs=REQ-007 status=ready delivery=unassessed priority=P0 version=1 -->
-### FEAT-006: Owner-correct recovery from config write denials
+<!-- FEATURE: FEAT-006 reqs=REQ-007 status=ready delivery=implemented priority=P0 version=2 -->
+### FEAT-006: Source-first recovery from skill and config defects
 
 #### Requirements Covered
 
@@ -1151,6 +1151,17 @@ manual action. Prohibit redirection, alternate tools, direct installed-hook
 edits, disabling or unregistering the guard, cwd tricks, or pre-repair target
 mutation in both branches.
 
+Global context management applies the same source-first recovery sequence to
+proven repository-owned skill implementation defects encountered during an
+authorized task. Locate the canonical source and installed provenance, reproduce
+the failure, make the narrow repair, review and validate it, install it using the
+existing repository script, verify installed parity and retry the original
+operation. Continue toward the original objective; installation failures are
+diagnosed at their owner. Do not re-request authority already supplied, invent
+new grants, discard checkpoints, reset budgets or bypass an actual external
+control. Preserve uncertain effects and reconcile them before another mutation.
+This adds workflow guidance, not a background daemon or automatic privileged loop.
+
 #### Selected Option
 
 Use provenance- and authority-gated source-first repair, with manual fallback
@@ -1164,7 +1175,8 @@ payloads loses provenance and will drift on the next installation.
 
 #### Implementation Boundaries
 
-Owned surfaces are the config-codex skill contract, setup documentation,
+Owned surfaces are config-codex and global-context-management skill contracts,
+setup documentation,
 cross-surface tests, root changelog, and the canonical source/install workflow.
 
 #### Test-First Success Criteria
@@ -1203,11 +1215,18 @@ operation without teaching or using a bypass.
 
 #### Implementation Evidence
 
-No implementation evidence was recorded before schema v2 migration.
+Global context management now documents source-first skill repair, reviewed
+installation and continuation under existing authority. Its README and canonical
+requirements preserve genuine external controls and uncertain-effect recovery.
+Historical config-denial implementation evidence remains unassessed.
 
 #### Verification Evidence
 
-No independent verification evidence was recorded before schema v2 migration.
+Changed Markdown and source review pass. The repository installer updated the
+selected global-context-management, github-workflows and publish-release skills
+without removing unrelated skills; repaired source/installed bytes match. The
+installed publication helper successfully reads repository metadata after the
+endpoint repair. Native guidance compliance beyond this operation is unverified.
 
 <!-- /FEATURE: FEAT-006 -->
 
@@ -8051,7 +8070,7 @@ implemented; source and installation evidence do not establish native behavior.
 
 <!-- /FEATURE: FEAT-040 -->
 
-<!-- FEATURE: FEAT-041 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=5 -->
+<!-- FEATURE: FEAT-041 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=6 -->
 ### FEAT-041: Resumable end-to-end GitHub Release publication
 
 #### Requirements Covered
@@ -8128,6 +8147,33 @@ focused source verification is recorded below. The installed helper also
 recovered an authorized externally merged descendant in the current native
 session, preserving the original checkpoint and binding the authoritative result.
 This verifies recovery only; release CI and artifact publication remain separate.
+
+A private reconcile-successor transition handles an explicitly authorized fix
+PR after the original PR merged but before any tag or release. It takes the
+expected original merge and the new PR, branch, head, COMMENT review and private
+execution manifest. Require the original PR/head/result to remain authoritatively
+merged in default history. The new PR must be open, nondraft, in the same numeric
+repository, target the same default, include both the original merge and current
+base, and carry a fresh configured-operator review. Its own active canonical grant
+and clean published private execution prove ownership; the old grant supplies no
+new authority. Reobserve identities, ancestry, execution and complete tag/release
+absence before one atomic save under the existing effect lock.
+
+Reject any recorded publication, remote tag or draft/published release, nonempty
+qualification operation journal or qualification proof. Preserve the complete old
+selection and qualification evidence in bounded successor history; replace only
+the active PR/branch/head, clear its merge and qualification, and retain all wait
+deadlines, scope, artifact families, workflow and tag. Exact retries are idempotent;
+conflicting retries fail. The normal protected broker then merges the successor
+and the existing merge observer freezes its result for fresh qualification.
+No automatic successor selection, checkpoint recreation, retrospective review,
+old-grant reopening, remote-tag rewrite or direct default push is permitted.
+
+The successor revision is implemented. Regression coverage includes
+success/history/deadline retention, exact and conflicting retry, stale reviews,
+missing execution ownership, ancestry/identity drift, qualification uncertainty,
+tag/release races and CLI save/no-save behavior. Endpoint formatting restores the
+existing GitHub repository metadata contract and receives a real-builder regression.
 
 The local deterministic helper remains the state owner; no new service, model,
 credential or workflow is introduced. Alternatives rejected: silently rebinding
@@ -8240,6 +8286,15 @@ permission changed. Existing project helper copies and installed skills were not
 updated during this source-review task.
 
 #### Verification Evidence
+
+The follow-up successor addition passes 91 release-owner/helper tests, including
+new selection/history/deadline, exact retry, ownership/review/ancestry, remote
+absence races, qualification uncertainty and CLI save/no-save cases. The separate
+GitHub endpoint correction passes 44 publication/qualification tests; its negative
+control reproduces the original HTTP-boundary failure. Independent read-only
+review found no blocker. Ruff, Markdown and diff checks pass. The repository installer updated the publication owners and byte parity passed.
+The installed metadata lookup succeeded. Actual successor reconciliation and
+release publication remain separate evidence until observed.
 
 The merged-repair recovery addition passes 75 release owner/helper regressions,
 including original publication behavior, CLI save/no-save routing, exact retries,

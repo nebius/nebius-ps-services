@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from release_checkpoint import SCHEMA, SHA, ReleaseError, Store, state_home
-from release_reconcile import execution_proof, reconcile_merged, reconcile_pr
+from release_reconcile import execution_proof, reconcile_merged, reconcile_pr, reconcile_successor
 
 PHASE_SECONDS = 28800
 POLL_SECONDS = 15
@@ -502,11 +502,20 @@ def qualify(store, tag):
         if value["tag_object"]:
             raise ReleaseError("Already-tagged releases retain their original publication contract")
         prior_repo = os.environ.get("GITHUB_REPOSITORY")
+        prior_operators = os.environ.get("MERGE_OPERATOR_IDS")
         os.environ["GITHUB_REPOSITORY"] = value["scope"]["repo"]
         token = REMOTE_DEADLINE.set(time.monotonic() + budget["remaining_seconds"])
         evidence_token = publication.REMOTE_DEADLINE.set(REMOTE_DEADLINE.get())
         try:
             api = qualification.GitHub()
+            try:
+                operators = json.loads(api.api("actions/variables/MERGE_OPERATOR_IDS")["value"])
+            except (KeyError, TypeError, ValueError) as error:
+                raise ReleaseError("Configured merge operator IDs are unavailable") from error
+            if (not isinstance(operators, list) or not operators
+                    or any(type(item) is not int or item <= 0 for item in operators)):
+                raise ReleaseError("Configured merge operator IDs are invalid")
+            os.environ["MERGE_OPERATOR_IDS"] = json.dumps(operators)
             project, commit = value["scope"]["project"], value["merge"]
             _, profile_digest = qualification.profile_at(api, commit, project)
             with store.locked():
@@ -570,6 +579,10 @@ def qualify(store, tag):
                 os.environ.pop("GITHUB_REPOSITORY", None)
             else:
                 os.environ["GITHUB_REPOSITORY"] = prior_repo
+            if prior_operators is None:
+                os.environ.pop("MERGE_OPERATOR_IDS", None)
+            else:
+                os.environ["MERGE_OPERATOR_IDS"] = prior_operators
 
 
 def watch(
@@ -619,6 +632,7 @@ def parser() -> argparse.ArgumentParser:
             "bind-pr",
             "reconcile-pr",
             "reconcile-merged",
+            "reconcile-successor",
             "verification-budget",
             "qualify",
             "observe",
@@ -641,6 +655,7 @@ def parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--pr", type=int)
     p.add_argument("--expected-head", help="Frozen PR head before an authorized repair")
+    p.add_argument("--expected-merge", help="Frozen merged result before a follow-up repair")
     p.add_argument("--head", help="Exact newly reviewed PR head")
     p.add_argument("--review-task", type=Path, help="Canonical private review execution manifest")
     p.add_argument(
@@ -828,6 +843,14 @@ def main() -> int:
                         head=args.head, review_task=args.review_task,
                     )
                     verification_budget(value, time.time())
+                    store.save(value)
+                    result = value
+                elif args.action == "reconcile-successor":
+                    value = reconcile_successor(
+                        value, github, expected_merge=args.expected_merge,
+                        pr=args.pr, branch=args.branch, head=args.head,
+                        review_id=args.review_id, review_task=args.review_task,
+                    )
                     store.save(value)
                     result = value
                 elif args.action == "complete":

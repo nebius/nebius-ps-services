@@ -437,5 +437,294 @@ class MergedRecoveryCommandTests(unittest.TestCase):
                     self.assertEqual(recover.call_args.kwargs["expected_head"], HEAD)
 
 
+class SuccessorTests(unittest.TestCase):
+    def setUp(self):
+        self.value = state()
+        self.merged = "b" * 40
+        self.value.update(
+            merge=self.merged,
+            qualification={"profile_digest": "f" * 64, "operations": {}},
+            waits={"phase:pr": 123, "phase:verification": 456},
+        )
+        self.repo = {"id": 1, "full_name": SCOPE["repo"], "default_branch": "main"}
+        self.original = {
+            "id": 91,
+            "number": 12,
+            "state": "closed",
+            "merged": True,
+            "merged_at": "2026-11-17T01:00:00Z",
+            "head": {"ref": "feature/demo", "sha": HEAD, "repo": self.repo},
+            "base": {"ref": "main", "sha": BASE, "repo": self.repo},
+        }
+        self.successor = {
+            "id": 92,
+            "number": 13,
+            "state": "open",
+            "draft": False,
+            "head": {"ref": "feature/fix", "sha": NEW, "repo": self.repo},
+            "base": {"ref": "main", "sha": BASE, "repo": self.repo},
+        }
+        self.evidence = {
+            "schema": "skills-review/v2",
+            "repository": SCOPE["repo"],
+            "pr": 13,
+            "head": NEW,
+            "base": "main",
+            "base_sha": BASE,
+            "base_repository_id": 1,
+            "head_repository_id": 1,
+            "head_repository": SCOPE["repo"],
+            "head_ref": "feature/fix",
+            "verdict": "passed",
+            "unresolved_findings": 0,
+            "validation": ["Tests passed"],
+            "contribution": {
+                "verdict": "passed",
+                "compatibility": "preserved",
+                "evidence": ["Repair"],
+            },
+            "specs": [{"project": ".", "outcome": "aligned", "evidence": "Owner validation"}],
+        }
+        self.review = {
+            "id": 42,
+            "state": "COMMENTED",
+            "user": {"id": 7},
+            "commit_id": NEW,
+            "body": json.dumps(self.evidence),
+        }
+        self.github = Mock()
+        self.github.api.side_effect = self.api
+        self.github.tag.return_value = (None, None)
+        self.github.release_exists.return_value = False
+        self.owner = rr.review_owner()
+        self.enterContext(patch.object(rr, "review_owner", return_value=self.owner))
+        api = self.enterContext(patch.object(self.owner, "GitHub"))
+        self.merge_read = api.return_value.merged_commit
+        self.merge_read.return_value = self.merged
+        self.proof = self.enterContext(
+            patch.object(
+                rr,
+                "execution_proof",
+                return_value={
+                    "repo_root": "/private/followup",
+                    "head": NEW,
+                    "task_sha256": "f" * 64,
+                },
+            )
+        )
+
+    def api(self, route):
+        rows = {
+            "": self.repo,
+            "pulls/12": self.original,
+            "pulls/13": self.successor,
+            "git/ref/heads/main": {"object": {"sha": BASE}},
+            f"compare/{self.merged}...{BASE}": {
+                "status": "ahead",
+                "merge_base_commit": {"sha": self.merged},
+            },
+            f"compare/{BASE}...{NEW}": {"status": "ahead", "merge_base_commit": {"sha": BASE}},
+            "actions/variables/MERGE_OPERATOR_IDS": {"value": "[7]"},
+            "pulls/13/reviews/42": self.review,
+        }
+        return copy.deepcopy(rows[route])
+
+    def reconcile(self, **changes):
+        return rr.reconcile_successor(
+            self.value,
+            self.github,
+            **{
+                "expected_merge": self.merged,
+                "pr": 13,
+                "branch": "feature/fix",
+                "head": NEW,
+                "review_id": 42,
+                "review_task": "/private/new-task.json",
+                **changes,
+            },
+        )
+
+    def test_success_archives_selection_preserves_deadlines_and_uses_new_owner(self):
+        before = copy.deepcopy(self.value)
+        result = self.reconcile()
+        self.assertEqual(self.value, before)
+        for key in ("scope", "tag", "workflow", "assets", "base", "waits"):
+            self.assertEqual(result[key], before[key])
+        self.assertEqual(
+            (result["pr"], result["branch"], result["head"], result["merge"]),
+            (13, "feature/fix", NEW, None),
+        )
+        self.assertNotIn("qualification", result)
+        old = result["successor_reconciliations"][0]["previous"]
+        for key in ("pr", "branch", "head", "merge", "qualification"):
+            self.assertEqual(old[key], before[key])
+        self.assertEqual(self.proof.call_args.args[0]["pr"], 13)
+        self.assertEqual(self.proof.call_args.kwargs["ancestor"], self.merged)
+        self.assertEqual(self.proof.call_count, 2)
+
+    def test_exact_retry_is_idempotent_and_conflicting_retry_fails(self):
+        self.value = self.reconcile()
+        before = copy.deepcopy(self.value)
+        self.assertEqual(self.reconcile(), before)
+        with self.assertRaises(rr.ReleaseError):
+            self.reconcile(review_id=43)
+        self.value["successor_reconciliations"][-1]["evidence"]["pr_id"] = 999
+        with self.assertRaises(rr.ReleaseError):
+            self.reconcile()
+
+    def test_missing_or_wrong_selection_rejected(self):
+        for changes in (
+            {"expected_merge": HEAD},
+            {"expected_merge": False},
+            {"pr": 12},
+            {"pr": True},
+            {"head": "bad"},
+            {"branch": ""},
+            {"review_id": 0},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(rr.ReleaseError):
+                self.reconcile(**changes)
+        self.value["merge"] = None
+        with self.assertRaises(rr.ReleaseError):
+            self.reconcile()
+
+    def test_publication_or_uncertain_qualification_rejected(self):
+        for key in ("tag_object", "tag_payload", "run", "complete"):
+            with (
+                self.subTest(key=key),
+                patch.dict(self.value, {key: True}),
+                self.assertRaises(rr.ReleaseError),
+            ):
+                self.reconcile()
+
+    def test_malformed_history_and_changed_default_rejected(self):
+        for history in ("bad", [None], [{"next": {}}]):
+            with (
+                patch.dict(self.value, {"successor_reconciliations": history}),
+                self.assertRaises(rr.ReleaseError),
+            ):
+                self.reconcile()
+        with patch.dict(self.repo, {"default_branch": "other"}), self.assertRaises(rr.ReleaseError):
+            self.reconcile()
+        for qualification in (
+            {"operations": {"ci.yml": {"state": "prepared"}}},
+            {"operations": {}, "proof": {}},
+            {"operations": []},
+            "bad",
+        ):
+            with (
+                self.subTest(qualification=qualification),
+                patch.dict(self.value, {"qualification": qualification}),
+                self.assertRaises(rr.ReleaseError),
+            ):
+                self.reconcile()
+
+    def test_remote_tag_and_draft_release_creation_races_rejected(self):
+        for target, outcomes in (
+            (self.github.tag, [(None, None), ("c" * 40, self.merged)]),
+            (self.github.release_exists, [False, True]),
+        ):
+            target.side_effect = outcomes
+            with self.assertRaises(rr.ReleaseError):
+                self.reconcile()
+            target.side_effect = None
+        self.github.release_exists.side_effect = rr.ReleaseError("visibility unavailable")
+        with self.assertRaises(rr.ReleaseError):
+            self.reconcile()
+
+    def test_stale_review_execution_original_merge_and_fork_rejected(self):
+        with patch.dict(self.review, {"commit_id": HEAD}), self.assertRaises(rr.ReleaseError):
+            self.reconcile()
+        self.merge_read.return_value = HEAD
+        with self.assertRaises(rr.ReleaseError):
+            self.reconcile()
+        self.merge_read.return_value = self.merged
+        self.proof.side_effect = rr.ReleaseError("new grant unavailable")
+        with self.assertRaises(rr.ReleaseError):
+            self.reconcile()
+        self.proof.side_effect = None
+        with (
+            patch.dict(self.successor["head"], {"repo": {"id": 2, "full_name": "fork/demo"}}),
+            self.assertRaises(rr.ReleaseError),
+        ):
+            self.reconcile()
+        for changes in ({"state": "closed"}, {"draft": True}):
+            with patch.dict(self.successor, changes), self.assertRaises(rr.ReleaseError):
+                self.reconcile()
+
+    def test_ancestry_and_observation_races_rejected(self):
+        def diverged(route):
+            result = self.api(route)
+            if route.startswith("compare/"):
+                result["merge_base_commit"]["sha"] = NEW
+            return result
+
+        self.github.api.side_effect = diverged
+        with self.assertRaises(rr.ReleaseError):
+            self.reconcile()
+        reads = [0]
+
+        def changed(route):
+            result = self.api(route)
+            if route == "pulls/13":
+                reads[0] += 1
+                if reads[0] == 2:
+                    result["id"] = 999
+            return result
+
+        self.github.api.side_effect = changed
+        with self.assertRaises(rr.ReleaseError):
+            self.reconcile()
+
+    def test_cli_saves_only_verified_successor_without_renewing_waits(self):
+        import release_session as rs
+
+        for rejected in (False, True):
+            result = {**self.value, "pr": 13, "head": NEW, "branch": "feature/fix", "merge": None}
+            store = Mock()
+            store.locked.return_value = contextlib.nullcontext()
+            store.select.return_value = self.value
+            argv = [
+                "release_session.py",
+                "reconcile-successor",
+                "--project-dir",
+                "/fixture/app",
+                "--tag",
+                self.value["tag"],
+                "--expected-merge",
+                self.merged,
+                "--head",
+                NEW,
+                "--pr",
+                "13",
+                "--branch",
+                "feature/fix",
+                "--review-id",
+                "42",
+                "--review-task",
+                "/private/task.json",
+            ]
+            with (
+                patch("sys.argv", argv),
+                patch.object(rs, "identity", return_value=SCOPE),
+                patch.object(rs, "state_home"),
+                patch.object(rs, "Store", return_value=store),
+                patch.object(rs, "GitHub"),
+                contextlib.redirect_stdout(io.StringIO()),
+                patch.object(
+                    rs,
+                    "reconcile_successor",
+                    return_value=result,
+                    side_effect=rr.ReleaseError("rejected") if rejected else None,
+                ) as transition,
+            ):
+                self.assertEqual(rs.main(), 2 if rejected else 0)
+            if rejected:
+                store.save.assert_not_called()
+            else:
+                store.save.assert_called_once_with(result)
+                self.assertEqual(result["waits"], self.value["waits"])
+                self.assertEqual(transition.call_args.kwargs["expected_merge"], self.merged)
+
 if __name__ == "__main__":
     unittest.main()
