@@ -77,6 +77,9 @@ queue entry. Removal from a previously observed external queue remains a blocker
 
 Repository discovery uses GitHub's canonical repository endpoint without a
 trailing slash; nested release and workflow reads retain their resource paths.
+Local qualification reads the selected repository's configured merge operator IDs
+before authenticating broker evidence, then restores the caller's environment.
+Missing or malformed configuration blocks qualification without dispatching work.
 
 ## Workflow and ownership
 

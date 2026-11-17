@@ -4,6 +4,9 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Load repository-scoped merge operator IDs during local release qualification,
+  preserving broker evidence validation and restoring the caller's environment.
+
 - Continue authorized tasks after repairing repository-owned skill defects:
   update canonical source, validate, install through the existing script and
   resume while preserving checkpoints, deadlines and security boundaries.

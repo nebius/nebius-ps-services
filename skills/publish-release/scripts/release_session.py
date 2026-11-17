@@ -502,11 +502,20 @@ def qualify(store, tag):
         if value["tag_object"]:
             raise ReleaseError("Already-tagged releases retain their original publication contract")
         prior_repo = os.environ.get("GITHUB_REPOSITORY")
+        prior_operators = os.environ.get("MERGE_OPERATOR_IDS")
         os.environ["GITHUB_REPOSITORY"] = value["scope"]["repo"]
         token = REMOTE_DEADLINE.set(time.monotonic() + budget["remaining_seconds"])
         evidence_token = publication.REMOTE_DEADLINE.set(REMOTE_DEADLINE.get())
         try:
             api = qualification.GitHub()
+            try:
+                operators = json.loads(api.api("actions/variables/MERGE_OPERATOR_IDS")["value"])
+            except (KeyError, TypeError, ValueError) as error:
+                raise ReleaseError("Configured merge operator IDs are unavailable") from error
+            if (not isinstance(operators, list) or not operators
+                    or any(type(item) is not int or item <= 0 for item in operators)):
+                raise ReleaseError("Configured merge operator IDs are invalid")
+            os.environ["MERGE_OPERATOR_IDS"] = json.dumps(operators)
             project, commit = value["scope"]["project"], value["merge"]
             _, profile_digest = qualification.profile_at(api, commit, project)
             with store.locked():
@@ -570,6 +579,10 @@ def qualify(store, tag):
                 os.environ.pop("GITHUB_REPOSITORY", None)
             else:
                 os.environ["GITHUB_REPOSITORY"] = prior_repo
+            if prior_operators is None:
+                os.environ.pop("MERGE_OPERATOR_IDS", None)
+            else:
+                os.environ["MERGE_OPERATOR_IDS"] = prior_operators
 
 
 def watch(

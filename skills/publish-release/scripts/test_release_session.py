@@ -79,6 +79,50 @@ class SnapshotStore:
 
 
 class GitHubApiTests(unittest.TestCase):
+    def test_qualification_scopes_live_operator_ids_and_restores_environment(self):
+        rs.sys.path.insert(0, str(Path(rs.__file__).resolve().parents[2] / "github-workflows/scripts"))
+        import release_qualification as q
+        for prior in (None, "[99]"):
+            for rejected in (False, True):
+                store = SnapshotStore({**state(), "merge": MERGED})
+                api = Mock()
+                api.api.return_value = {"value": "[7]"}
+                def verify(*args, **kwargs):
+                    self.assertEqual(rs.os.environ["MERGE_OPERATOR_IDS"], "[7]")
+                    self.assertEqual(rs.os.environ["GITHUB_REPOSITORY"], SCOPE["repo"])
+                    if rejected:
+                        raise q.Unverifiable("proof unavailable")
+                    return {"status": "qualified"}
+                with patch.dict(rs.os.environ, {"GITHUB_REPOSITORY": "other/repo"}), \
+                     patch.object(q, "GitHub", return_value=api), \
+                     patch.object(q, "profile_at", return_value=({}, "digest")), \
+                     patch.object(q, "verify", side_effect=verify), patch.object(rs, "command") as effect:
+                    if prior is None:
+                        rs.os.environ.pop("MERGE_OPERATOR_IDS", None)
+                    else:
+                        rs.os.environ["MERGE_OPERATOR_IDS"] = prior
+                    if rejected:
+                        with self.assertRaisesRegex(rs.ReleaseError, "proof unavailable"):
+                            rs.qualify(store, store.value["tag"])
+                    else:
+                        self.assertEqual(rs.qualify(store, store.value["tag"])["status"], "qualified")
+                    self.assertEqual(rs.os.environ.get("MERGE_OPERATOR_IDS"), prior)
+                    self.assertEqual(rs.os.environ["GITHUB_REPOSITORY"], "other/repo")
+                    effect.assert_not_called()
+
+    def test_qualification_rejects_missing_or_invalid_operator_configuration(self):
+        rs.sys.path.insert(0, str(Path(rs.__file__).resolve().parents[2] / "github-workflows/scripts"))
+        import release_qualification as q
+        for response in ({}, {"value": "[]"}, {"value": "[true]"}, {"value": "[0]"}, {"value": "bad"}):
+            store = SnapshotStore({**state(), "merge": MERGED})
+            api = Mock()
+            api.api.return_value = response
+            with patch.object(q, "GitHub", return_value=api), patch.object(q, "verify") as verify, \
+                 patch.object(rs, "command") as effect, self.assertRaises(rs.ReleaseError):
+                rs.qualify(store, store.value["tag"])
+            verify.assert_not_called()
+            effect.assert_not_called()
+
     def test_blocked_observation_has_nonzero_cli_exit(self):
         store = SnapshotStore(state())
         with patch.object(rs, "identity", return_value=SCOPE), patch.object(rs, "Store", return_value=store), patch.object(rs, "observe_once", return_value={"status": "blocked"}), patch.object(rs.sys, "argv", ["release_session.py", "observe", "--project-dir", "/fixture"]), contextlib.redirect_stdout(io.StringIO()):
@@ -114,7 +158,7 @@ class GitHubApiTests(unittest.TestCase):
         import release_qualification as q
         store = SnapshotStore({**state(), "merge": MERGED})
         api = Mock()
-        api.api.return_value = {"default_branch": "main"}
+        api.api.return_value = {"default_branch": "main", "value": "[7]"}
         api.args.return_value = ["gh", "api", "dispatches"]
         api.pages.return_value = []
         def dispatch(*args):
