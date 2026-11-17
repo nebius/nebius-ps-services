@@ -335,6 +335,9 @@ uv sync --locked
 make all
 ```
 
+Workflow validation requires all five candidate identity inputs and enforces
+GitHub's current limit of 25 dispatch inputs, including release qualification.
+
 See [architecture and research decisions](docs/architecture.md), canonical
 [requirements](docs/requirements.md) and [design](docs/design.md).
 

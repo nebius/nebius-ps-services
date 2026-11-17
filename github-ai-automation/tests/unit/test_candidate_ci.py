@@ -144,7 +144,8 @@ def test_enrolled_ci_workflows_bind_all_five_candidate_inputs():
         text = (root / ".github/workflows" / entry["file"]).read_text()
         data = yaml.load(text, Loader=yaml.BaseLoader)
         inputs = data["on"]["workflow_dispatch"]["inputs"]
-        assert len(inputs) <= 10
+        # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onworkflow_dispatchinputs
+        assert len(inputs) <= 25
         assert {
             "candidate_pr",
             "candidate_head",
