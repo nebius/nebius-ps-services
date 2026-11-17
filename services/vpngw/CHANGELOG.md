@@ -11,6 +11,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Keep installed wheel and frozen-binary help checks independent of terminal
+  styling, with forced-color regression coverage.
+
 ## [nebius-vpngw-v0.6.6] - 2026-11-16
 
 ### Changed

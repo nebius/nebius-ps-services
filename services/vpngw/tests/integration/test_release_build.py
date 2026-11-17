@@ -10,6 +10,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
+from click import unstyle
 
 pytestmark = pytest.mark.integration
 
@@ -100,9 +101,10 @@ def test_wheel_staging_excludes_operator_configuration(monkeypatch, tmp_path) ->
     assert all((staged / name).is_file() for name in ("pyproject.toml", "README.md", "LICENSE"))
 
 
-def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
+def test_wheel_build_uses_package_local_version_file(tmp_path, monkeypatch) -> None:
     from nebius_vpngw.deploy.ssh_push import VMHAAgentArtifact
 
+    monkeypatch.setenv("FORCE_COLOR", "1")
     wheel_path = _build_wheel(tmp_path)
     artifact = VMHAAgentArtifact.from_wheel(wheel_path, source="release-build-test")
     assert artifact.path == wheel_path.resolve()
@@ -164,7 +166,8 @@ def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
         timeout=30,
     )
     assert support_help.returncode == 0, support_help.stderr
-    assert "--since" in support_help.stdout and "--output" in support_help.stdout
+    help_text = unstyle(support_help.stdout)
+    assert "--since" in help_text and "--output" in help_text
     support_smoke = subprocess.run(
         [
             sys.executable,
@@ -271,7 +274,8 @@ def test_wheel_metadata_retains_runtime_dependency_bounds(tmp_path) -> None:
     )
 
 
-def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
+def test_frozen_binary_starts_and_contains_routing_assets(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("FORCE_COLOR", "1")
     binary_path = _build_frozen_binary(tmp_path)
 
     version = subprocess.run(
@@ -292,7 +296,7 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
         timeout=30,
     )
     assert support_help.returncode == 0, support_help.stderr
-    assert "--since" in support_help.stdout
+    assert "--since" in unstyle(support_help.stdout)
     worker = subprocess.run(
         [str(binary_path), "--support-bundle-worker"],
         input='{"kind":"invalid"}',

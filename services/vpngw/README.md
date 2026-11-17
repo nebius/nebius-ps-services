@@ -5495,6 +5495,9 @@ remains a strict explicit override for both topologies.
 
 ### Testing Changes
 
+Release-build tests exercise installed wheel and frozen-binary help with forced
+color, comparing rendered option names after stripping terminal styling.
+
 **Schema validation:**
 
 ```bash
