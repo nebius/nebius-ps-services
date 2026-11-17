@@ -228,12 +228,27 @@ safe_chmod_credential() {
   python3 "$LEASE_HELPER" "${helper_args[@]}"
 }
 
+file_stat_field() {
+  local file="$1"
+  local gnu_format="$2"
+  local bsd_format="$3"
+  local value=""
+
+  # A failed GNU -f probe can still print filesystem details. Publish only
+  # the output of a successful dialect; empty metadata keeps callers fail-closed.
+  if value="$(stat -c "$gnu_format" "$file" 2>/dev/null)"; then
+    printf '%s\n' "$value"
+  elif value="$(stat -f "$bsd_format" "$file" 2>/dev/null)"; then
+    printf '%s\n' "$value"
+  fi
+}
+
 ensure_nebius_dir() {
   if [[ -e "$HOME/.nebius" || -L "$HOME/.nebius" ]]; then
     [[ ! -L "$HOME/.nebius" && -d "$HOME/.nebius" ]] \
       || die "$HOME/.nebius must be a non-symlink directory."
     local owner_uid=""
-    owner_uid="$(stat -f '%u' "$HOME/.nebius" 2>/dev/null || stat -c '%u' "$HOME/.nebius" 2>/dev/null || true)"
+    owner_uid="$(file_stat_field "$HOME/.nebius" '%u' '%u')"
     [[ "$owner_uid" == "$(id -u)" ]] || die "$HOME/.nebius must be owned by the current user."
   fi
   run mkdir -p "$HOME/.nebius"
@@ -249,10 +264,10 @@ plan_nebius_dir() {
   [[ ! -L "$HOME/.nebius" && -d "$HOME/.nebius" ]] \
     || die "$HOME/.nebius must be a non-symlink directory."
   local owner_uid=""
-  owner_uid="$(stat -f '%u' "$HOME/.nebius" 2>/dev/null || stat -c '%u' "$HOME/.nebius" 2>/dev/null || true)"
+  owner_uid="$(file_stat_field "$HOME/.nebius" '%u' '%u')"
   [[ "$owner_uid" == "$(id -u)" ]] \
     || die "$HOME/.nebius must be owned by the current user."
-  mode="$(stat -f '%Lp' "$HOME/.nebius" 2>/dev/null || stat -c '%a' "$HOME/.nebius" 2>/dev/null || true)"
+  mode="$(credential_mode "$HOME/.nebius")"
   [[ "$mode" == "700" ]] \
     || PLANNED_MUTATIONS+=("set local Nebius directory permissions to 0700")
 }
@@ -820,7 +835,7 @@ verify_credential_local_safety() {
 
   [[ -e "$file" || -L "$file" ]] || return 0
   [[ ! -L "$file" && -f "$file" ]] || die "Credential path must be a regular non-symlink file; refusing mutation."
-  owner_uid="$(stat -f '%u' "$file" 2>/dev/null || stat -c '%u' "$file" 2>/dev/null || true)"
+  owner_uid="$(file_stat_field "$file" '%u' '%u')"
   [[ -n "$owner_uid" && "$owner_uid" == "$(id -u)" ]] || die "Credential file is not owned by the current user; refusing mutation."
 }
 
@@ -1247,7 +1262,7 @@ ensure_working_profile_with_one_replacement() {
 
 credential_mode() {
   local file="$1"
-  stat -f '%Lp' "$file" 2>/dev/null || stat -c '%a' "$file" 2>/dev/null || true
+  file_stat_field "$file" '%a' '%Lp'
 }
 
 credential_sha256() {
@@ -1267,14 +1282,14 @@ verify_repair_lease_directory() {
 
   [[ ! -L "$HOME/.nebius" && -d "$HOME/.nebius" ]] \
     || die "$HOME/.nebius must be an existing non-symlink directory before repair-lease use."
-  owner_uid="$(stat -f '%u' "$HOME/.nebius" 2>/dev/null || stat -c '%u' "$HOME/.nebius" 2>/dev/null || true)"
+  owner_uid="$(file_stat_field "$HOME/.nebius" '%u' '%u')"
   mode="$(credential_mode "$HOME/.nebius")"
   [[ "$owner_uid" == "$(id -u)" && "$mode" == "700" ]] \
     || die "$HOME/.nebius must be owned by the current user at mode 0700."
 
   [[ ! -L "$LEASE_DIR" && -d "$LEASE_DIR" ]] \
     || die "Repair-lease directory must be a non-symlink directory: $LEASE_DIR"
-  owner_uid="$(stat -f '%u' "$LEASE_DIR" 2>/dev/null || stat -c '%u' "$LEASE_DIR" 2>/dev/null || true)"
+  owner_uid="$(file_stat_field "$LEASE_DIR" '%u' '%u')"
   mode="$(credential_mode "$LEASE_DIR")"
   [[ "$owner_uid" == "$(id -u)" && "$mode" == "700" ]] \
     || die "Repair-lease directory must be owned by the current user at mode 0700: $LEASE_DIR"
@@ -1314,7 +1329,7 @@ build_repair_lease_plan() {
     || die "The matching profile lacks authoritative tenant quota-allowance read access. Complete IAM repair before issuing a lease."
   [[ ! -L "$HOME/.nebius" && -d "$HOME/.nebius" ]] \
     || die "$HOME/.nebius must be an owned non-symlink directory before lease issuance."
-  owner_uid="$(stat -f '%u' "$HOME/.nebius" 2>/dev/null || stat -c '%u' "$HOME/.nebius" 2>/dev/null || true)"
+  owner_uid="$(file_stat_field "$HOME/.nebius" '%u' '%u')"
   [[ "$owner_uid" == "$(id -u)" ]] || die "$HOME/.nebius must be owned by the current user."
   nebius_mode="$(credential_mode "$HOME/.nebius")"
   if [[ "$nebius_mode" != "700" ]]; then
@@ -1323,7 +1338,7 @@ build_repair_lease_plan() {
   if [[ -e "$LEASE_DIR" || -L "$LEASE_DIR" ]]; then
     [[ ! -L "$LEASE_DIR" && -d "$LEASE_DIR" ]] \
       || die "Repair-lease path must be a non-symlink directory: $LEASE_DIR"
-    owner_uid="$(stat -f '%u' "$LEASE_DIR" 2>/dev/null || stat -c '%u' "$LEASE_DIR" 2>/dev/null || true)"
+    owner_uid="$(file_stat_field "$LEASE_DIR" '%u' '%u')"
     [[ "$owner_uid" == "$(id -u)" ]] || die "Repair-lease directory must be owned by the current user."
     if [[ "$(credential_mode "$LEASE_DIR")" != "700" ]]; then
       PLANNED_MUTATIONS+=("set repair-lease directory '$LEASE_DIR' permissions to 0700")

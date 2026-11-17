@@ -4,6 +4,9 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Discard failed GNU/BSD `stat` probe output during agent authentication setup,
+  preserving ownership and permission checks on Linux and macOS.
+
 - Share fork branch-access assessment between review preflight and publication.
   Recognize direct writes or upstream maintainer edits, distinguish denied from
   unknown evidence, preserve repository-token scope, and block only needed
