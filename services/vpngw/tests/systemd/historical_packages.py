@@ -89,9 +89,9 @@ def run_historical(args) -> None:
     manifest_path = args.manifest or Path(__file__).with_name("historical-releases.json")
     inputs = json.loads(manifest_path.read_text())
     releases = inputs["releases"]
-    if inputs["schema"] != "nebius-vpngw.package-qualification-inputs.v1" or len(releases) != 4:
-        raise ValueError("Qualification requires the frozen four-release input manifest")
-    if len({release["version"] for release in releases}) != 4:
+    if inputs["schema"] != "nebius-vpngw.package-qualification-inputs.v1" or len(releases) != 5:
+        raise ValueError("Qualification requires the frozen five-release input manifest")
+    if len({release["version"] for release in releases}) != 5:
         raise ValueError("Qualification release versions must be distinct")
     for release in releases:
         version = release["version"]
@@ -148,7 +148,9 @@ def run_historical(args) -> None:
             )
         },
         "topology": args.topology,
-        "coverage": "complete" if len(selected) == 4 and args.topology == "all" else "partial",
+        "coverage": "complete"
+        if len(selected) == len(releases) and args.topology == "all"
+        else "partial",
         "expected_cases": len(expected),
         "expected_case_ids": expected,
         "expected_repeats": len(expected),

@@ -1,13 +1,15 @@
-"""Isolated bounded cloud/SSH readers. Only projected NDJSON leaves this process."""
+"""Isolated bounded cloud/SSH readers with projected and redacted NDJSON output."""
 
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import ipaddress
 import json
 import logging
 import os
 import re
+import stat
 import sys
 import time
 from dataclasses import asdict
@@ -16,8 +18,19 @@ from typing import Any
 
 import yaml
 
+from .diagnostics import CollectionFailure, clean_progress, failure
 from .probe import read_regular
 from .projection import MAX_BYTES, project, safe_identifier
+from .redaction import redact_text
+
+_STAGE = "discovery"
+_ATTEMPTED = False
+
+
+def progress(stage: str, state: str = "started") -> None:
+    global _STAGE
+    _STAGE = stage
+    print(json.dumps({"kind": "progress", "stage": stage, "state": state}), flush=True)
 
 
 def scope(path: Path, project_id: str | None = None, region: str | None = None) -> dict[str, Any]:
@@ -54,9 +67,17 @@ def scope(path: Path, project_id: str | None = None, region: str | None = None) 
         ]
     vm = group.get("vm_spec")
     if isinstance(vm, dict):
-        for key in ("ssh_username", "ssh_public_key", "ssh_private_key_path"):
+        for key in (
+            "ssh_username",
+            "ssh_public_key",
+            "ssh_public_key_path",
+            "ssh_private_key_path",
+        ):
             if key in vm:
                 vm[key] = expand(vm[key])
+    ha = group.get("vm_ha")
+    if isinstance(ha, dict) and "cluster_id" in ha:
+        ha["cluster_id"] = expand(ha["cluster_id"])
     count = group.get("instance_count")
     if type(count) is not int or not 1 <= count <= 10 or not safe_identifier(group.get("name")):
         raise ValueError("invalid-data")
@@ -90,6 +111,40 @@ def emit(name: str, value: Any, outcome: str = "ok") -> None:
         ),
         flush=True,
     )
+
+
+def selected_artifact() -> None:
+    """Inspect exact provenance inside the parent's cancellable probe budget."""
+    from packaging.utils import parse_wheel_filename
+
+    from ..deploy.ssh_push import SSHPush
+
+    progress("artifact")
+    wheel, source = SSHPush().select_vm_ha_agent_wheel()
+    _name, version, _build, _tags = parse_wheel_filename(wheel.name)
+    descriptor = os.open(wheel, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size > 128 * MAX_BYTES:
+            raise CollectionFailure("source-limit")
+        digest = hashlib.sha256()
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            while chunk := stream.read(65536):
+                digest.update(chunk)
+        after = os.fstat(descriptor)
+        changed = (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size)
+        emit(
+            "selected-artifact",
+            {
+                "artifact_sha256": digest.hexdigest(),
+                "version": str(version),
+                "source_kind": source,
+            },
+            "changed" if changed else "ok",
+        )
+        progress("artifact", "completed")
+    finally:
+        os.close(descriptor)
 
 
 def cloud(
@@ -332,10 +387,36 @@ def cloud(
         sdk.sync_close()
 
 
+def standalone_source() -> str:
+    """One source assembly path for installed wheels and frozen binaries."""
+    import ast
+
+    folder = Path(__file__).parent
+    assembled = []
+    for name in ("redaction.py", "projection.py", "probe.py"):
+        source = (folder / name).read_text()
+        lines = source.splitlines(keepends=True)
+        remove: set[int] = set()
+        for node in ast.parse(source).body:
+            if isinstance(node, ast.ImportFrom) and (node.module == "__future__" or node.level):
+                if node.level and (
+                    node.level != 1 or node.module not in {"projection", "redaction"}
+                ):
+                    raise ValueError("Unsupported standalone probe dependency")
+                remove.update(range(node.lineno - 1, node.end_lineno or node.lineno))
+        assembled.append("".join(line for index, line in enumerate(lines) if index not in remove))
+    return "from __future__ import annotations\n" + "\n".join(assembled)
+
+
 def remote(config: dict[str, Any], request: dict[str, Any]) -> None:
     import paramiko  # type: ignore[import-untyped]
 
-    from ..deploy.ssh_client_auth import resolve_ssh_client_auth, select_operator_identity
+    from ..deploy.ssh_client_auth import (
+        OPERATOR_IDENTITY,
+        configured_ssh_client_auth,
+        normalize_ssh_access,
+        select_operator_identity,
+    )
     from ..deploy.ssh_policy import (
         KNOWN_HOSTS_ENV,
         VMHASSHTrustScope,
@@ -344,6 +425,8 @@ def remote(config: dict[str, Any], request: dict[str, Any]) -> None:
         require_vm_ha_ssh_policy,
     )
 
+    global _ATTEMPTED
+    progress("trust")
     group = config["gateway_group"]
     ha = group.get("vm_ha") or {}
     trust = VMHASSHTrustScope(
@@ -360,7 +443,7 @@ def remote(config: dict[str, Any], request: dict[str, Any]) -> None:
     if (
         ha.get("enabled") is True
         or KNOWN_HOSTS_ENV in os.environ
-        or managed_ssh_trust_available(trust)
+        or (all(trust.values()) and managed_ssh_trust_available(trust))
     ):
         pairs = (
             tuple(
@@ -374,42 +457,47 @@ def remote(config: dict[str, Any], request: dict[str, Any]) -> None:
             else ((hostname, target),)
         )
         policy = require_vm_ha_ssh_policy(pairs, enrollment_hosts=set(), trust_scope=trust)
-    vm = group.get("vm_spec") or {}
-    key = vm.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
-    auth = (
-        select_operator_identity(Path(request["identity"]))
-        if request.get("identity")
-        else resolve_ssh_client_auth(
-            vm.get("ssh_public_key"), explicit_private_key=Path(key).expanduser() if key else None
-        )
+    progress("trust", "completed")
+    progress("identity")
+    if request.get("identity"):
+        OPERATOR_IDENTITY.set(select_operator_identity(Path(request["identity"])))
+    vm = normalize_ssh_access(group.get("vm_spec") or {})
+    auth = configured_ssh_client_auth(vm)
+    emit(
+        "access",
+        {
+            "ssh_identity_source": auth.source if auth is not None else "library-default",
+            "ssh_trust_source": "explicit-known-hosts"
+            if KNOWN_HOSTS_ENV in os.environ
+            else "managed-pins"
+            if policy is not None
+            else "system-known-hosts",
+        },
     )
     client = paramiko.SSHClient()
     configure_paramiko_host_verification(
         client, paramiko, policy=policy, hostname=hostname, transport_host=target
     )
+    stderr = bytearray()
+    exit_code = None
     try:
+        progress("identity", "completed")
+        progress("connect")
+        _ATTEMPTED = True
         client.connect(
             hostname=target,
             username=vm.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu"),
             timeout=15,
             auth_timeout=15,
             banner_timeout=15,
-            **auth.paramiko_connect_kwargs(),
+            **(auth.paramiko_connect_kwargs() if auth is not None else {}),
         )
-        folder = Path(__file__).parent
-        projection = (folder / "projection.py").read_text()
-        probe = (
-            (folder / "probe.py")
-            .read_text()
-            .replace("from __future__ import annotations", "")
-            .replace("from .projection import ENUMS, MAX_BYTES, project", "")
-        )
+        progress("connect", "completed")
+        progress("sudo")
         payload = {"since": request["since"], "until": request["until"], "budget": 180}
         script = (
-            projection
-            + "\n"
-            + probe
-            + "\ncollect_probe("
+            standalone_source()
+            + '\nprint(json.dumps({"kind": "progress", "stage": "startup", "state": "completed"}), flush=True)\ncollect_probe('
             + repr(payload)
             + ", emit=lambda record: print(json.dumps(record), flush=True))\n"
         )
@@ -424,38 +512,101 @@ def remote(config: dict[str, Any], request: dict[str, Any]) -> None:
         deadline = time.monotonic() + 190
         buffer = bytearray()
         received = 0
-        while not channel.exit_status_ready() or channel.recv_ready():
+        began = False
+        channel.settimeout(0.2)
+        while True:
             if time.monotonic() >= deadline:
                 raise TimeoutError("timeout")
-            if channel.recv_ready():
+            if channel.recv_stderr_ready():
+                chunk = channel.recv_stderr(65536)
+                stderr.extend(chunk[: max(0, MAX_BYTES - len(stderr))])
+            try:
                 chunk = channel.recv(65536)
+            except TimeoutError:
+                continue
+            if not chunk:
+                break
+            if chunk:
                 received += len(chunk)
                 buffer.extend(chunk)
-                if len(buffer) > MAX_BYTES or received > 32 * MAX_BYTES:
-                    raise ValueError("source-limit")
+                if len(buffer) > 4 * MAX_BYTES or received > 32 * MAX_BYTES:
+                    raise CollectionFailure("source-limit")
                 while b"\n" in buffer:
                     line, _, rest = buffer.partition(b"\n")
                     buffer = bytearray(rest)
                     record = json.loads(line)
-                    # Parent validates the envelope and re-projects every returned field.
-                    print(json.dumps(record), flush=True)
+                    if record.get("kind") == "progress":
+                        event = clean_progress(record)
+                        if event:
+                            began = True
+                            progress("startup", "completed")
+                            progress("collect")
+                    else:
+                        # Parent re-projects fields and re-redacts every text source.
+                        print(json.dumps(record), flush=True)
             if channel.recv_stderr_ready():
-                channel.recv_stderr(65536)  # Never print or persist arbitrary stderr.
+                chunk = channel.recv_stderr(65536)
+                stderr.extend(chunk[: max(0, MAX_BYTES - len(stderr))])
             time.sleep(0.01)
-        if channel.recv_exit_status() != 0:
-            raise RuntimeError("ssh-transport")
+        while channel.recv_stderr_ready():
+            chunk = channel.recv_stderr(65536)
+            stderr.extend(chunk[: max(0, MAX_BYTES - len(stderr))])
+        while not channel.exit_status_ready():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("timeout")
+            time.sleep(0.01)
+        exit_code = channel.recv_exit_status()
+        if exit_code != 0:
+            detail = stderr.decode("utf-8", errors="replace").lower()
+            code = (
+                "sudo-denied"
+                if not began and "sudo" in detail
+                else "python-unavailable"
+                if not began
+                and "python3" in detail
+                and ("not found" in detail or "no such file" in detail)
+                else "probe-failed"
+            )
+            raise CollectionFailure(code)
+        if not began:
+            raise CollectionFailure("invalid-output")
         if buffer:
-            raise ValueError("invalid-data")
+            raise CollectionFailure("invalid-output")
+        progress("collect", "completed")
     finally:
         client.close()
+        if stderr:
+            print(
+                json.dumps(
+                    {
+                        "probe": "startup",
+                        "data": {},
+                        "outcome": "partial"
+                        if exit_code is None
+                        else "ok"
+                        if exit_code == 0
+                        else "unavailable",
+                        "text": {
+                            "stderr": redact_text(
+                                stderr.decode("utf-8", errors="replace"),
+                                complete=exit_code is not None and len(stderr) < MAX_BYTES,
+                            )
+                        },
+                    }
+                ),
+                flush=True,
+            )
 
 
 def main() -> None:
     request = json.loads(sys.stdin.buffer.read(MAX_BYTES))
     logging.disable(logging.CRITICAL)
     try:
-        config = scope(Path(request["config"]), request.get("project"), request.get("region"))
         with open(os.devnull, "w") as sink, contextlib.redirect_stderr(sink):
+            if request["action"] == "artifact":
+                selected_artifact()
+                return
+            config = scope(Path(request["config"]), request.get("project"), request.get("region"))
             if request["action"] == "cloud":
                 cloud(config, request.get("operations"), request.get("resources"))
             elif request["action"] == "remote":
@@ -463,21 +614,24 @@ def main() -> None:
             else:
                 raise ValueError("invalid-data")
     except Exception as error:
-        from paramiko import (  # type: ignore[import-untyped]
-            AuthenticationException,
-            BadHostKeyException,
+        detail = failure(error, _STAGE, _ATTEMPTED)
+        print(
+            json.dumps(
+                {"kind": "progress", "stage": detail["stage"], "state": "failed", "failure": detail}
+            ),
+            flush=True,
         )
-
-        reason = "unavailable"
-        if isinstance(error, TimeoutError):
-            reason = "timeout"
-        elif isinstance(error, AuthenticationException):
-            reason = "authentication"
-        elif isinstance(error, BadHostKeyException):
-            reason = "ssh-transport"
-        elif isinstance(error, PermissionError):
-            reason = "permission"
-        emit("worker", {"reason": reason}, "timeout" if reason == "timeout" else "unavailable")
+        print(
+            json.dumps(
+                {
+                    "probe": "worker",
+                    "data": {},
+                    "failure": detail,
+                    "outcome": "timeout" if detail["code"] == "timeout" else "unavailable",
+                }
+            ),
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

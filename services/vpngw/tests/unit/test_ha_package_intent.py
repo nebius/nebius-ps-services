@@ -178,6 +178,11 @@ def test_only_bound_corrective_proposal_can_plan_beyond_old_pending_packages(pac
         assert plan.manifest["runtime_plan"] == {"new": "native closure"}
         assert plan.manifest["wheel_sha256"] == packages.manifest["wheel_sha256"]
         assert calls == ["corrective-inspect", "corrective-plan", "corrective-plan"]
+        plan.assert_predecessor()
+        assert calls[-1] == "corrective-plan"
+        packages.observed["boot_id"] = "different-boot"
+        with pytest.raises(vm_ha_package.VMHAAgentPackageError, match="predecessor changed"):
+            plan.assert_predecessor()
         assert pending == before
     finally:
         plan.close()

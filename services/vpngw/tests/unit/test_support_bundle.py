@@ -7,7 +7,6 @@ import sys
 import time
 import zipfile
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -66,6 +65,12 @@ def config(tmp_path, monkeypatch):
 
 
 def fake_runner(request, _timeout):
+    if request["action"] == "artifact":
+        return [
+            {"probe": "selected-artifact", "data": {"artifact_sha256": "a" * 64}, "outcome": "ok"}
+        ], "ok"
+    if request["action"] == "status":
+        return [{"probe": "status", "data": {}, "outcome": "ok"}], "ok"
     if request["action"] == "cloud":
         return [
             {
@@ -136,6 +141,16 @@ def test_output_never_overwrites(config, tmp_path, kind):
 
 def test_untrusted_probe_name_never_reaches_archive(config, tmp_path):
     def run(request, timeout):
+        if request["action"] == "artifact":
+            return [
+                {
+                    "probe": "selected-artifact",
+                    "data": {"artifact_sha256": "a" * 64},
+                    "outcome": "ok",
+                }
+            ], "ok"
+        if request["action"] == "status":
+            return [{"probe": "status", "data": {}, "outcome": "ok"}], "ok"
         if request["action"] == "cloud":
             return [], "ok"
         return [
@@ -164,6 +179,32 @@ def test_projection_bounds_alias_dag_cycles_and_omits_unknowns():
     cyclic["members"] = [cyclic]
     assert projection.project(cyclic) == {"members": []}
     assert projection.project({"uptime": float("nan"), "epoch": 10**500}) == {}
+
+
+def test_projection_keeps_classified_peer_send_health():
+    data = projection.project(
+        {
+            "heartbeat": {
+                "schema_version": 6,
+                "peer_v6_fresh": False,
+                "peer_health_fresh": True,
+                "peer_send_error_kind": "unreachable",
+                "peer_send_last_error_age_seconds": 2.5,
+                "peer_send_last_success_age_seconds": None,
+                "peer_send_consecutive_failures": 12,
+            }
+        }
+    )
+    heartbeat = data["heartbeat"]
+    assert heartbeat["peer_send_error_kind"] == "unreachable"
+    assert heartbeat["peer_send_consecutive_failures"] == 12
+    assert heartbeat["peer_send_last_error_age_seconds"] == 2.5
+    # A never-succeeded send has no age; projection omits the empty field.
+    assert "peer_send_last_success_age_seconds" not in heartbeat
+    assert heartbeat["peer_health_fresh"] is True
+
+    bogus = projection.project({"heartbeat": {"peer_send_error_kind": "raw sensitive text"}})
+    assert "peer_send_error_kind" not in bogus.get("heartbeat", {})
 
 
 def test_cloud_routes_and_firewall_payload_are_not_silently_empty():
@@ -207,13 +248,17 @@ def test_cloud_routes_and_firewall_payload_are_not_silently_empty():
         ("Traceback (most recent call last): PRIVATE", "python-exception"),
     ],
 )
-def test_known_log_events_keep_codes_not_messages(message, reason):
+def test_known_log_events_keep_codes_and_redacted_messages(message, reason):
     raw = json.dumps(
         {"MESSAGE": message, "__REALTIME_TIMESTAMP": "123456789", "_BOOT_ID": "boot-one"}
     )
     data = projection.project(probe.journal_events(raw))
-    assert data[0]["reasons"] == [reason]
-    assert "PRIVATE" not in json.dumps(data)
+    assert data["events"][0]["reasons"] == [reason]
+    assert (
+        "PRIVATE" in json.dumps(data)
+        if "token" not in message
+        else "PRIVATE" not in json.dumps(data)
+    )
 
 
 def test_only_required_access_placeholders_expand(config, monkeypatch):
@@ -246,7 +291,12 @@ def test_operator_identity_propagates_privately(config, tmp_path, monkeypatch):
         return fake_runner(request, timeout)
 
     path, _code = collector.collect(config, output=tmp_path / "identity.zip", runner=run)
-    assert all(request["identity"] == str(identity_path) for request in requests)
+    assert all(
+        request["identity"] == str(identity_path)
+        for request in requests
+        if request["action"] != "artifact"
+    )
+    assert all("identity" not in request for request in requests if request["action"] == "artifact")
     with zipfile.ZipFile(path) as archive:
         assert b"private-selector" not in b"".join(archive.read(n) for n in archive.namelist())
 
@@ -272,7 +322,7 @@ def test_window_and_cli_failures_do_not_print_raw_config(config, tmp_path):
         collector.time_window("2026-01-01", now)
     config.write_text("not: [valid SUPER_PRIVATE_PSK")
     result = CliRunner().invoke(
-        cli.app, ["collect-logs", "-c", str(config), "--output", str(tmp_path / "bad.zip")]
+        cli.app, ["support-bundle", "-c", str(config), "--output", str(tmp_path / "bad.zip")]
     )
     assert result.exit_code == 2
     assert "SUPER_PRIVATE_PSK" not in result.output
@@ -280,15 +330,7 @@ def test_window_and_cli_failures_do_not_print_raw_config(config, tmp_path):
 
 
 def test_standalone_probe_compiles_without_installed_package():
-    folder = Path(probe.__file__).parent
-    source = (
-        (folder / "projection.py").read_text()
-        + "\n"
-        + (folder / "probe.py")
-        .read_text()
-        .replace("from __future__ import annotations", "")
-        .replace("from .projection import ENUMS, MAX_BYTES, project", "")
-    )
+    source = worker.standalone_source()
     namespace = {"__name__": "probe_test"}
     exec(compile(source, "support-probe", "exec"), namespace)
     assert callable(namespace["collect_probe"])
@@ -319,6 +361,26 @@ def test_activation_classifier_preserves_acceptance_and_exact_failures(monkeypat
         ("controller_capabilities", [], "heartbeat-capability-missing"),
         ("heartbeat", {"schema_version": 5}, "heartbeat-schema-mismatch"),
         ("heartbeat", {"schema_version": 6, "peer_v6_fresh": False}, "peer-heartbeat-not-fresh"),
+        (
+            "heartbeat",
+            {
+                "schema_version": 6,
+                "peer_v6_fresh": False,
+                "peer_send_error_kind": "unreachable",
+                "peer_send_consecutive_failures": 12,
+            },
+            "peer-heartbeat-endpoint-unreachable",
+        ),
+        (
+            "heartbeat",
+            {
+                "schema_version": 6,
+                "peer_v6_fresh": False,
+                "peer_send_error_kind": "tls",
+                "peer_send_consecutive_failures": 12,
+            },
+            "peer-heartbeat-tls-failure",
+        ),
         ("promotion_ready", True, "promotion-readiness-mismatch"),
     ):
         assert check({**status, field: value}) == reason
@@ -587,6 +649,16 @@ def test_cloud_reads_real_sdk_shapes_cidr_targets_routes_groups_and_operations(m
 
 def test_changed_configuration_and_boot_are_reported(config, tmp_path):
     def run(request, timeout):
+        if request["action"] == "artifact":
+            return [
+                {
+                    "probe": "selected-artifact",
+                    "data": {"artifact_sha256": "a" * 64},
+                    "outcome": "ok",
+                }
+            ], "ok"
+        if request["action"] == "status":
+            return [{"probe": "status", "data": {}, "outcome": "ok"}], "ok"
         if request["action"] == "cloud":
             return [], "ok"
         config.write_text(config.read_text().replace("connection-one", "connection-two"))
@@ -606,6 +678,16 @@ def test_changed_configuration_and_boot_are_reported(config, tmp_path):
 
 def test_cloud_source_metadata_survives_projection(config, tmp_path):
     def run(request, timeout):
+        if request["action"] == "artifact":
+            return [
+                {
+                    "probe": "selected-artifact",
+                    "data": {"artifact_sha256": "a" * 64},
+                    "outcome": "ok",
+                }
+            ], "ok"
+        if request["action"] == "status":
+            return [{"probe": "status", "data": {}, "outcome": "ok"}], "ok"
         if request["action"] == "cloud":
             return [
                 {
@@ -630,9 +712,19 @@ def test_cloud_source_metadata_survives_projection(config, tmp_path):
 
 
 def test_current_state_from_both_nodes_precedes_log_budget(config, tmp_path, monkeypatch):
-    monkeypatch.setattr(collector, "TOTAL_LIMIT", 6000)
+    monkeypatch.setattr(collector, "TOTAL_LIMIT", 20000)
 
     def run(request, timeout):
+        if request["action"] == "artifact":
+            return [
+                {
+                    "probe": "selected-artifact",
+                    "data": {"artifact_sha256": "a" * 64},
+                    "outcome": "ok",
+                }
+            ], "ok"
+        if request["action"] == "status":
+            return [{"probe": "status", "data": {}, "outcome": "ok"}], "ok"
         if request["action"] == "cloud":
             return [], "ok"
         if request["hostname"].endswith("-0"):
@@ -640,7 +732,14 @@ def test_current_state_from_both_nodes_precedes_log_budget(config, tmp_path, mon
                 {
                     "probe": "logs/kernel",
                     "outcome": "ok",
-                    "data": [{"name": "event" * 10, "total": 1234} for _ in range(40)],
+                    "data": probe.journal_events(
+                        "\n".join(
+                            json.dumps(
+                                {"MESSAGE": "apply-lock-held", "__REALTIME_TIMESTAMP": str(index)}
+                            )
+                            for index in range(2000)
+                        )
+                    ),
                 }
             ], "ok"
         return [
@@ -661,6 +760,16 @@ def test_current_state_from_both_nodes_precedes_log_budget(config, tmp_path, mon
 
 def test_nonempty_projection_truncation_is_not_complete(config, tmp_path):
     def run(request, timeout):
+        if request["action"] == "artifact":
+            return [
+                {
+                    "probe": "selected-artifact",
+                    "data": {"artifact_sha256": "a" * 64},
+                    "outcome": "ok",
+                }
+            ], "ok"
+        if request["action"] == "status":
+            return [{"probe": "status", "data": {}, "outcome": "ok"}], "ok"
         if request["action"] == "cloud":
             return [], "ok"
         return [
@@ -680,7 +789,7 @@ def test_nonempty_projection_truncation_is_not_complete(config, tmp_path):
     assert any(row["outcome"] == "source-limit" for row in manifest["probes"])
 
 
-def test_journal_limit_is_visible_without_exporting_messages(monkeypatch):
+def test_journal_limit_is_visible_with_redacted_messages(monkeypatch):
     monkeypatch.setattr(probe, "read_regular", lambda path: b"{}")
     event = json.dumps(
         {"MESSAGE": "apply-lock-held PRIVATE_RAW_MESSAGE", "__REALTIME_TIMESTAMP": "123"}
@@ -697,7 +806,7 @@ def test_journal_limit_is_visible_without_exporting_messages(monkeypatch):
     )
     logs = [row for row in records if row["probe"].startswith("logs/")]
     assert logs and all(row["outcome"] == "source-limit" for row in logs)
-    assert "PRIVATE_RAW_MESSAGE" not in json.dumps(records)
+    assert "PRIVATE_RAW_MESSAGE" in json.dumps(records)
 
 
 def test_cloud_next_hops_survive_safe_projection(config, tmp_path):
@@ -707,6 +816,16 @@ def test_cloud_next_hops_survive_safe_projection(config, tmp_path):
     assert projection.project(value) == value
 
     def run(request, timeout):
+        if request["action"] == "artifact":
+            return [
+                {
+                    "probe": "selected-artifact",
+                    "data": {"artifact_sha256": "a" * 64},
+                    "outcome": "ok",
+                }
+            ], "ok"
+        if request["action"] == "status":
+            return [{"probe": "status", "data": {}, "outcome": "ok"}], "ok"
         if request["action"] == "cloud":
             return [{"probe": "cloud/routes/0", "data": value, "outcome": "ok"}], "ok"
         return [], "unavailable"
@@ -740,6 +859,16 @@ def test_exact_activation_predicate_survives_bundle(config, tmp_path, reason):
 
 def test_remote_record_limit_is_visible(config, tmp_path):
     def run(request, timeout):
+        if request["action"] == "artifact":
+            return [
+                {
+                    "probe": "selected-artifact",
+                    "data": {"artifact_sha256": "a" * 64},
+                    "outcome": "ok",
+                }
+            ], "ok"
+        if request["action"] == "status":
+            return [{"probe": "status", "data": {}, "outcome": "ok"}], "ok"
         if request["action"] == "cloud":
             return [], "ok"
         return [{"probe": "host/time", "data": {}, "outcome": "ok"} for _ in range(257)], "ok"
@@ -755,15 +884,23 @@ def test_remote_record_limit_is_visible(config, tmp_path):
 
 
 def test_archive_trimming_preserves_newest_events_across_sources():
+    def envelope(timestamps):
+        return json.dumps(
+            {
+                "coverage": {"exported": 2, "discarded": 0},
+                "events": [{"timestamp": stamp} for stamp in timestamps],
+            }
+        ).encode()
+
     entries = {
-        "nodes/0/logs/kernel.json": json.dumps([{"timestamp": "30"}, {"timestamp": "10"}]).encode(),
-        "nodes/1/logs/kernel.json": json.dumps([{"timestamp": "40"}, {"timestamp": "20"}]).encode(),
+        "nodes/0/logs/kernel.json": envelope(["30", "10"]),
+        "nodes/1/logs/kernel.json": envelope(["40", "20"]),
         "nodes/1/ha-0/native.json": b'{"apply_locked":true}',
     }
     manifest = [{"file": name, "outcome": "ok"} for name in entries]
     assert collector.trim_oldest_logs(entries, manifest)
-    assert json.loads(entries["nodes/0/logs/kernel.json"]) == [{"timestamp": "30"}]
-    assert json.loads(entries["nodes/1/logs/kernel.json"]) == [{"timestamp": "40"}]
+    assert json.loads(entries["nodes/0/logs/kernel.json"])["events"] == [{"timestamp": "30"}]
+    assert json.loads(entries["nodes/1/logs/kernel.json"])["events"] == [{"timestamp": "40"}]
     assert entries["nodes/1/ha-0/native.json"] == b'{"apply_locked":true}'
     assert sum(row.get("truncated_events", 0) for row in manifest) == 2
 
@@ -812,7 +949,9 @@ def test_probe_observes_timer_os_and_newest_journal_first(monkeypatch):
     assert facts["os_id"] == "ubuntu" and facts["os_version_id"] == "24.04"
     assert any(row["probe"] == "services/nebius-vpngw-fix-routes.timer" for row in records)
     assert all(
-        row["data"][0]["timestamp"] == "200" for row in records if row["probe"].startswith("logs/")
+        row["data"]["events"][0]["timestamp"] == "200"
+        for row in records
+        if row["probe"].startswith("logs/")
     )
     assert "PRIVATE_OS_TEXT" not in json.dumps(records)
 
@@ -977,3 +1116,51 @@ def test_package_request_states_survive_projection_and_archive(config, tmp_path)
         assert b"PRIVATE_REQUEST" not in b"".join(archive.read(n) for n in archive.namelist())
     # A digest-shaped key is only meaningful inside the product's requests map.
     assert projection.project({"members": {"0" * 64: {"state": "accepted"}}}) == {"members": {}}
+
+
+@pytest.mark.parametrize("repair", [False, True])
+def test_prepared_worker_identity_survives_guest_and_archive(config, tmp_path, monkeypatch, repair):
+    identity = "a" * 64
+    unit = f"nebius-vpngw-{'repair-' if repair else ''}package-{identity}-1.service"
+    transport = {"identity": identity, "unit": unit, "requests": {}, "waiting": True}
+    path = tmp_path / "transport.json"
+    path.write_text(json.dumps(transport))
+    root = (
+        "/var/lib/nebius-vpngw-repair/workers"
+        if repair
+        else "/var/lib/nebius-vpngw/runtime-migration/workers"
+    )
+    monkeypatch.setattr(
+        probe,
+        "select_worker_transports",
+        lambda selected, deadline: ([path] if str(selected) == root else [], False),
+    )
+    monkeypatch.setattr(probe, "bounded_command", lambda *a, **k: (b"{}", "ok", 0))
+    monkeypatch.setattr(probe.time, "sleep", lambda seconds: None)
+    records = probe.collect_probe({"since": "2026-01-01", "until": "2026-01-02"})
+    selected = [record for record in records if record["probe"] == "state/worker/0"]
+    assert len(selected) == 1
+    assert selected[0]["data"] == transport
+    bundle, _ = collector.collect(
+        config,
+        output=tmp_path / "worker.zip",
+        runner=lambda request, timeout: (
+            (selected, "ok") if request["action"] == "remote" else ([], "ok")
+        ),
+    )
+    with zipfile.ZipFile(bundle) as archive:
+        assert json.loads(archive.read("nodes/0/state/worker/0.json")) == transport
+
+
+def test_worker_identifiers_reject_unrecognized_text():
+    assert projection.project({"identity": "PRIVATE_IDENTITY", "unit": "private.service"}) == {}
+    for identity in ("a" * 63, "g" * 64, "a" * 65):
+        assert (
+            projection.project(
+                {"identity": identity, "unit": f"nebius-vpngw-package-{identity}-1.service"}
+            )
+            == {}
+        )
+    assert projection.project({"identity": {"node_id": "gateway-0"}}) == {
+        "identity": {"node_id": "gateway-0"}
+    }

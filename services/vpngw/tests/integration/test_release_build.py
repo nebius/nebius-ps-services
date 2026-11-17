@@ -116,6 +116,7 @@ def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
     assert "nebius_vpngw/ordinary_routes.py" in names
     assert "nebius_vpngw/replay_window.py" in names
     assert "nebius_vpngw/packet_health.py" in names
+    assert "nebius_vpngw/support_bundle/redaction.py" in names
     assert "nebius_vpngw/support_bundle/projection.py" in names
     assert "nebius_vpngw/support_bundle/probe.py" in names
     assert "nebius_vpngw/systemd/nebius-vpngw-esp4-preflight.sh" in names
@@ -154,7 +155,7 @@ def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(install_root)
     support_help = subprocess.run(
-        [sys.executable, "-m", "nebius_vpngw", "collect-logs", "--help"],
+        [sys.executable, "-m", "nebius_vpngw", "support-bundle", "--help"],
         cwd=tmp_path,
         env=environment,
         capture_output=True,
@@ -170,14 +171,22 @@ def test_wheel_build_uses_package_local_version_file(tmp_path) -> None:
             "-c",
             """
 import json, pathlib, zipfile
-from nebius_vpngw.support_bundle.collector import collect
+from functools import partial
+from typer.testing import CliRunner
+from nebius_vpngw import cli
+from nebius_vpngw.support_bundle import collector
 p=pathlib.Path('support-fixture.json')
 p.write_text(json.dumps({'project_id':'project-fixture','gateway_group':{'name':'fixture','instance_count':1},'psk':'SYNTHETIC_PRIVATE_VALUE'}))
 def unavailable(request, timeout): return [], 'unavailable'
-out, code=collect(p, output=pathlib.Path('support-fixture.zip'), runner=unavailable)
-assert code == 1
+collector.collect = partial(collector.collect, runner=unavailable)
+out=pathlib.Path('support-fixture.zip')
+result=CliRunner().invoke(cli.app, ['support-bundle', '-c', str(p), '--output', str(out)])
+assert result.exit_code == 1, result.output
+assert CliRunner().invoke(cli.app, ['collect-logs', '--help']).exit_code == 2
 with zipfile.ZipFile(out) as archive:
     assert 'manifest.json' in archive.namelist()
+    assert json.loads(archive.read('manifest.json'))['schema'] == 'nebius-vpngw/support-bundle-v3'
+    assert {'summary.md','analysis-guide.md','timeline.json','evidence-index.json'} <= set(archive.namelist())
     assert all(b'SYNTHETIC_PRIVATE_VALUE' not in archive.read(name) for name in archive.namelist())
 """,
         ],
@@ -276,7 +285,7 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
     assert version.stdout.startswith("nebius-vpngw ")
 
     support_help = subprocess.run(
-        [str(binary_path), "collect-logs", "--help"],
+        [str(binary_path), "support-bundle", "--help"],
         capture_output=True,
         text=True,
         check=False,
@@ -293,7 +302,7 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
         timeout=30,
     )
     assert worker.returncode == 0, worker.stderr
-    assert json.loads(worker.stdout)["outcome"] == "unavailable"
+    assert json.loads(worker.stdout.splitlines()[-1])["outcome"] == "unavailable"
     assert "Traceback" not in worker.stderr
 
     archive = subprocess.run(
@@ -331,6 +340,7 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path) -> None:
     from nebius_vpngw import ingress_policy, packet_health, replay_window
 
     for source in (
+        "support_bundle/redaction.py",
         "support_bundle/projection.py",
         "support_bundle/probe.py",
         *replay_window.REPLAY_WINDOW_SOURCES,

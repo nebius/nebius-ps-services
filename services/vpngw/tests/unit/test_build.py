@@ -73,7 +73,12 @@ def test_build_binary_invokes_pyinstaller_with_systemd_assets(tmp_path, monkeypa
     dist_binary.parent.mkdir(parents=True, exist_ok=True)
     dist_binary.write_text("", encoding="utf-8")
 
+    artifact = Mock(path=tmp_path / "nebius_vpngw-0.6.6-py3-none-any.whl")
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.ssh_push.SSHPush.resolve_vm_ha_agent_artifact", lambda _self: artifact
+    )
     build.build_binary()
+    artifact.verify_current.assert_called_once_with()
 
     cmd = run_mock.call_args[0][0]
     assert cmd[:3] == [build.sys.executable, "-m", "PyInstaller"]
@@ -91,6 +96,7 @@ def test_build_binary_invokes_pyinstaller_with_systemd_assets(tmp_path, monkeypa
     from nebius_vpngw.repair_bootstrap import SOURCES as REPAIR_SOURCES
 
     data = {cmd[index + 1] for index, arg in enumerate(cmd) if arg == "--add-data"}
+    assert f"{artifact.path}{build.os.pathsep}nebius_vpngw/agent-wheel" in data
     for _module, relative in (*SOURCES, *REPAIR_SOURCES):
         source = Path(build.__file__).parent / relative
         destination = str(Path("nebius_vpngw") / Path(relative).parent)

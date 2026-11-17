@@ -364,3 +364,49 @@ def test_composite_prerequisite_uses_public_approval_from_real_command(context):
     assert not prerequisite_matches(
         checkpoint, {"prerequisite": checkpoint["transaction"]["approval"]}
     )
+
+
+def test_second_interrupted_successor_preserves_every_artifact_and_execution(context):
+    _state, _manager, command, _child, _observed = context
+    with command.journal:
+        command.begin()
+        command.start_runtime()
+    executions = {command.execution_id}
+    for revision in ("1", "2"):
+        previous = command.journal.snapshot()
+        original = command.journal.path.read_bytes()
+        failed = lifecycle(command)
+        failed.status = VMHALifecycleStatus.ACTIVATING
+        failed.transaction.accepted_cloud_operation_id = None
+        proposal = ha_command.reviewed_successor(
+            previous,
+            lifecycle=failed,
+            kind="corrective-release",
+            old_scope=command.plan.configuration_sha256,
+            action_scope="b" * 64,
+            targets=("compute-a",),
+            attachment_child=None,
+        )
+        next_command = ha_command.create(
+            command.journal,
+            scope=digest(["scope", revision]),
+            artifact=revision * 64,
+            action_scope="b" * 64,
+            targets=("compute-a",),
+            approval=digest(["approval", revision]),
+            runtime_scope=digest(["runtime", revision]),
+            report={"kind": "corrective-release"},
+            attachment_plan=None,
+            successor=proposal,
+        )
+        with next_command.journal:
+            next_command.begin()
+            next_command.start_runtime()
+        assert (
+            command.journal.root / "history" / (digest(previous) + ".json")
+        ).read_bytes() == original
+        assert previous["transaction"]["plan"]["artifact_sha256"] == command.plan.artifact_sha256
+        assert next_command.execution_id not in executions
+        executions.add(next_command.execution_id)
+        command = next_command
+    assert len(executions) == 3

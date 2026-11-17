@@ -704,7 +704,7 @@ Replace operator-supplied VM-HA CA/leaf/key bundles with one self-signed CA-fals
 
 **Rotation transaction:** `apply --rotate-mtls` dispatches before ordinary facade conversion or convergence. It accepts the required local config plus the existing dry-run and exact approval options, retains human text output, and rejects candidate output, force, standby-policy, explicit-region, and JSON combinations before external effects. Its dry-run binds a secret-free plan digest to the exact config, lifecycle, cluster, members, Compute identities, owner/allocation observation, current epochs/fingerprints, target epoch, and ordered phases. Each mutation-free inspection first queries both fixed installed-agent capability documents over exact-pinned SSH and requires `vm-ha-mtls-rotation-quiescence-v1`; it then requires that same fixed feature in the exact current-generation status persisted by each running controller process. An absent command, malformed document, missing feature, restart-skewed controller, timeout, or transport failure stops before the plan/approval boundary and directs the operator to deploy this CLI's agent through `apply`. The command announces that passive-first overlap trust is designed to preserve VPN availability, renders only the operation kind, target epoch, member count, and exact plan digest, and uses the shared best-effort stderr progress reporter so a TTY sees an animated identity-free rotation row while noninteractive streams receive only its terminal row. After interactive confirmation or exact noninteractive approval, acquire the shared writer lock, install inhibition on the passive, and wait until that exact operation has passed through a controller observation with no pending controller, accepted cloud, or rearm effect and the former owner still Running. Install and prove the owner inhibition only after the passive barrier succeeds. Node-local controller transfer dispatch, rearm, apply locking, and inhibition installation serialize through `rearm.lock`; transfer dispatch re-reads both apply and mTLS inhibition while holding that lock and skips a stale decision without writing an effect receipt. Prepare both pending identities only after both barriers, expand trust to old/new, switch the passive local identity, switch the owner, independently reread active slots and served fingerprints, and require three consecutive fresh bidirectional epoch-bound heartbeats after connection draining before commit/prune. Before any new served leaf is observed the exact transaction may roll back; afterward it can only roll forward. Remote journals, not the CLI's last acknowledgement, decide recovery after any lost response or restart.
 
-**Failure handling:** A pending exact transaction is resumed rather than replaced. An inhibition-only interruption is also rendered as resumable rotation. Installed-agent or running-controller skew fails at capability admission before any rotation write and has one canonical recovery: complete `apply` with the same local configuration and CLI version, verify both members and controller services, then retry; the CLI never interprets an older apply-lock projection as rotation inhibition. If topology or controller evidence drifts before any prepare may have begun, the CLI releases every exact inhibition it attempted and exits with retry guidance, so an already-authorized transfer can finish and rearm rather than being stranded. After prepare may have begun, failures retain inhibition for journal-based recovery. Fresh contexts disable session tickets/resumption and old connections are drained before pruning. The controller continues to enforce cloud-ownership fencing while rotation inhibition makes transfer gates fail closed without changing a healthy owner's active dataplane or the non-owner's passive dataplane; rearm reads the same inhibition directly. Both exact members may rebuild an unusable old mTLS pair entirely over strict SSH when both are Running and cloud ownership is unambiguous. Missing SSH trust, a stopped member, identity/topology drift, an unfenced former member, conflicting writer state, corrupt cross-node receipts, or inability to prove inhibition blocks with a closed status reason. `status` is observation-only; bare `apply` delegates restoration to the internal sole Compute-start writer and only explicit `--rotate-mtls` grants the facade rotation authority.
+**Failure handling:** A pending exact transaction is resumed rather than replaced. An inhibition-only interruption is also rendered as resumable rotation. `status` renders a pending apply-kind transaction bound to the member's exact retained apply operation, while that member remains apply-locked, as the resumable `managed-mtls-apply-interrupted` with a resume-the-apply action; only a foreign pending transaction renders the blocking `managed-mtls-transaction-conflict`. Fenced activation verification waits up to five minutes per member for fresh bidirectional proof before reporting operation-timeout, and expiry leaves only the exact-operation locks that the unchanged apply command resumes. Installed-agent or running-controller skew fails at capability admission before any rotation write and has one canonical recovery: complete `apply` with the same local configuration and CLI version, verify both members and controller services, then retry; the CLI never interprets an older apply-lock projection as rotation inhibition. If topology or controller evidence drifts before any prepare may have begun, the CLI releases every exact inhibition it attempted and exits with retry guidance, so an already-authorized transfer can finish and rearm rather than being stranded. After prepare may have begun, failures retain inhibition for journal-based recovery. Fresh contexts disable session tickets/resumption and old connections are drained before pruning. The controller continues to enforce cloud-ownership fencing while rotation inhibition makes transfer gates fail closed without changing a healthy owner's active dataplane or the non-owner's passive dataplane; rearm reads the same inhibition directly. Both exact members may rebuild an unusable old mTLS pair entirely over strict SSH when both are Running and cloud ownership is unambiguous. Missing SSH trust, a stopped member, identity/topology drift, an unfenced former member, conflicting writer state, corrupt cross-node receipts, or inability to prove inhibition blocks with a closed status reason. `status` is observation-only; bare `apply` delegates restoration to the internal sole Compute-start writer and only explicit `--rotate-mtls` grants the facade rotation authority.
 
 #### Selected Option
 
@@ -1192,7 +1192,7 @@ Migrated from a validated Task Implementer design record.
 
 #### Design Details
 
-Keep one operator trust-store engine under `~/.ssh/nebius-vpngw/<scope-sha256>/` for ordinary and VM-HA deployments. Bind the scope digest to canonical tenant, project, region, gateway-group, and either the fixed ordinary topology discriminator or the VM-HA cluster identity. Store one v2 stable-hostname receipt with closed per-member authority plus one derived exact-address OpenSSH projection; VM-HA is pre-adoption, so v1 has no reader. Keep `VPNGW_SSH_KNOWN_HOSTS_FILE` as the strict highest-precedence import/override. When it is unset and scoped public authority is missing for a retained member, let actual `apply` consult literal `~/.ssh/known_hosts` as a read-only one-time migration candidate, then authenticated product cloud-init. If neither source exists for one exact unchanged pre-branch ordinary VM, admit only the named `legacy-ordinary-network-enrollment-v1` transaction. It observes stable H1/cloud/H2, authenticates with H1 pinned and only the configured client identity, correlates guest and Compute identity, reproves cloud state, and publishes once. The accepted limitation is an active transparent attacker during that first observation; no retry may relearn a published member. When `VPNGW_SSH_HOST_KEYS_DIR` is absent, keep the private namespace at `~/.ssh/nebius-vpngw/host-keys/<gateway-group>/<scope-sha256>`; an explicit value still wins. Prepare a missing key only for a genuinely fresh member, install it through product cloud-init before first SSH, and use the stable member hostname as `HostKeyAlias` for every transport. The rotation exception remains limited to an approved, authoritatively absent current non-owner whose trust receipt and private-key namespace are both product-managed.
+Keep one operator trust-store engine under `~/.ssh/nebius-vpngw/<scope-sha256>/` for ordinary and VM-HA deployments. Bind the scope digest to canonical tenant, project, region, gateway-group, and either the fixed ordinary topology discriminator or the VM-HA cluster identity. Store one v2 stable-hostname receipt with closed per-member authority plus one derived exact-address OpenSSH projection; REQ-043 permits only verified apply-time v1 conversion to canonical v2; runtime readers remain canonical. Keep `VPNGW_SSH_KNOWN_HOSTS_FILE` as the strict highest-precedence import/override. When it is unset and scoped public authority is missing for a retained member, let actual `apply` consult literal `~/.ssh/known_hosts` as a read-only one-time migration candidate, then authenticated product cloud-init. If neither source exists for one exact unchanged pre-branch ordinary VM, admit only the named `legacy-ordinary-network-enrollment-v1` transaction. It observes stable H1/cloud/H2, authenticates with H1 pinned and only the configured client identity, correlates guest and Compute identity, reproves cloud state, and publishes once. The accepted limitation is an active transparent attacker during that first observation; no retry may relearn a published member. When `VPNGW_SSH_HOST_KEYS_DIR` is absent, keep the private namespace at `~/.ssh/nebius-vpngw/host-keys/<gateway-group>/<scope-sha256>`; an explicit value still wins. Prepare a missing key only for a genuinely fresh member, install it through product cloud-init before first SSH, and use the stable member hostname as `HostKeyAlias` for every transport. The rotation exception remains limited to an approved, authoritatively absent current non-owner whose trust receipt and private-key namespace are both product-managed.
 
 **Ordinary-to-HA refinement:** The ordinary source must first complete ordinary `apply`; `apply` checks for its authority-bearing receipt before any prompt, candidate publication, or passive allocation reservation. Migration imports the retained active's exact pin into the HA receipt with the ordinary predecessor digest and a freshly proved Compute binding, and the desired receipt digest enters the public approval. After shared-alias attachment and passive creation, `cli.py` performs fresh exact member discovery and rebuilds the immutable policy with the same managed pins before any staging SSH; only the Compute revision closure changes. An explicit candidate cannot reconstruct its source path, so a missing predecessor returns generic `<ordinary-source>` guidance without effects.
 
@@ -1204,7 +1204,7 @@ Keep one operator trust-store engine under `~/.ssh/nebius-vpngw/<scope-sha256>/`
 
 #### Selected Option
 
-Keep one operator trust-store engine under `~/.ssh/nebius-vpngw/<scope-sha256>/` for ordinary and VM-HA deployments. Bind the scope digest to canonical tenant, project, region, gateway-group, and either the fixed ordinary topology discriminator or the VM-HA cluster identity. Store one v2 stable-hostname receipt with closed per-member authority plus one derived exact-address OpenSSH projection; VM-HA is pre-adoption, so v1 has no reader. Keep `VPNGW_SSH_KNOWN_HOSTS_FILE` as the strict highest-precedence import/override. When it is unset and scoped public authority is missing for a retained member, let actual `apply` consult literal `~/.ssh/known_hosts` as a read-only one-time migration candidate, then authenticated product cloud-init. If neither source exists for one exact unchanged pre-branch ordinary VM, admit only the named `legacy-ordinary-network-enrollment-v1` transaction. It observes stable H1/cloud/H2, authenticates with H1 pinned and only the configured client identity, correlates guest and Compute identity, reproves cloud state, and publishes once. The accepted limitation is an active transparent attacker during that first observation; no retry may relearn a published member. When `VPNGW_SSH_HOST_KEYS_DIR` is absent, keep the private namespace at `~/.ssh/nebius-vpngw/host-keys/<gateway-group>/<scope-sha256>`; an explicit value still wins. Prepare a missing key only for a genuinely fresh member, install it through product cloud-init before first SSH, and use the stable member hostname as `HostKeyAlias` for every transport. The rotation exception remains limited to an approved, authoritatively absent current non-owner whose trust receipt and private-key namespace are both product-managed.
+Keep one operator trust-store engine under `~/.ssh/nebius-vpngw/<scope-sha256>/` for ordinary and VM-HA deployments. Bind the scope digest to canonical tenant, project, region, gateway-group, and either the fixed ordinary topology discriminator or the VM-HA cluster identity. Store one v2 stable-hostname receipt with closed per-member authority plus one derived exact-address OpenSSH projection; REQ-043 permits only verified apply-time v1 conversion to canonical v2; runtime readers remain canonical. Keep `VPNGW_SSH_KNOWN_HOSTS_FILE` as the strict highest-precedence import/override. When it is unset and scoped public authority is missing for a retained member, let actual `apply` consult literal `~/.ssh/known_hosts` as a read-only one-time migration candidate, then authenticated product cloud-init. If neither source exists for one exact unchanged pre-branch ordinary VM, admit only the named `legacy-ordinary-network-enrollment-v1` transaction. It observes stable H1/cloud/H2, authenticates with H1 pinned and only the configured client identity, correlates guest and Compute identity, reproves cloud state, and publishes once. The accepted limitation is an active transparent attacker during that first observation; no retry may relearn a published member. When `VPNGW_SSH_HOST_KEYS_DIR` is absent, keep the private namespace at `~/.ssh/nebius-vpngw/host-keys/<gateway-group>/<scope-sha256>`; an explicit value still wins. Prepare a missing key only for a genuinely fresh member, install it through product cloud-init before first SSH, and use the stable member hostname as `HostKeyAlias` for every transport. The rotation exception remains limited to an approved, authoritatively absent current non-owner whose trust receipt and private-key namespace are both product-managed.
 
 #### Alternatives Considered
 
@@ -3892,7 +3892,7 @@ unverified live; historical verification below does not qualify this repair.
 
 Add a separate strict `standby-restoration-authorization-v1` authority rather than extending the heartbeat TTL or overloading the maintenance-only auto-healing recovery record. A replay-bound enabled-policy agreement certificate is captured while both members still agree. Planned transfer request admission records that certificate under `rearm.lock`; automatic transfer dispatch captures it and arms authorization immediately before the first effect. The existing rearm service consumes only the exact committed authorization and remains the sole Compute-start writer. The mutable latest-agreement file is admission evidence only: after authorization is armed, a later fresh heartbeat may update that cache but cannot revoke or replace the exact accepted transfer authority.
 
-**Artifact approval and recovery boundary:** `cli.py` adds one private `artifact-standby-recovery` apply-plan kind and one immutable local artifact descriptor carrying a regular-file path, SHA-256, source class, and verified capability set. The public result remains `nebius-vpngw/vm-ha-result-v1`; artifact-changing approval objects add `artifact_sha256`, and the internal command-approval domain advances to v2. Read-only planning selects only an explicit override or one unambiguous existing non-fallback local wheel and never builds or deletes artifacts. Replanning under `VMHAApplyLock` rehashes the same file, and the apply engine receives that descriptor rather than selecting or rebuilding a wheel. The private remote staging directory preserves the validated wheel basename so pip receives a valid wheel filename; exact-byte hashing and shell quoting remain independent of that name. Package preparation also installs service assets directly from the remotely rehashed wheel. Staged activation requires the same immutable descriptor, rechecks it locally, and performs no second build, selection, package upload, or local-source asset copy.
+**Artifact approval and recovery boundary:** `cli.py` adds one private `artifact-standby-recovery` apply-plan kind and one immutable local artifact descriptor carrying a regular-file path, SHA-256, source class, and verified capability set. The public result remains `nebius-vpngw/vm-ha-result-v1`; artifact-changing approval objects add `artifact_sha256`, and the internal command-approval domain advances to v2. Planning resolves the exact CLI-compatible artifact through the shared provenance resolver, including a frozen editable-source build when needed, and retains immutable cached bytes. It never deletes or replaces referenced artifacts. Replanning under `VMHAApplyLock` rehashes the same file, and the apply engine receives that descriptor rather than selecting or rebuilding a wheel. The private remote staging directory preserves the validated wheel basename so pip receives a valid wheel filename; exact-byte hashing and shell quoting remain independent of that name. Package preparation also installs service assets directly from the remotely rehashed wheel. Staged activation requires the same immutable descriptor, rechecks it locally, and performs no second build, selection, package upload, or local-source asset copy.
 
 **Artifact-first control flow:** a recovery-only inspector may accept one raw owner status that satisfies every ordinary identity, generation, lifecycle, allocation, route, forwarding, policy, lock, and pending-operation invariant except the required restoration capability. That evidence never becomes healthy or transfer authority. The pre-upgrade owner's exact blocked-policy projection is accepted only when rearm is inhibited specifically for either unavailable stopped-peer policy evidence or the known v1 latest-certificate replacement defect, peer agreement and accepted-start are both false, and the runtime evidence proves a bound committed-enabled local policy. The stopped-peer case requires blocked policy status; the certificate-replacement case requires transitional policy status, which distinguishes it from a real current-policy change. When cloud authority simultaneously proves the owner Running and the alias-free non-owner Stopped, the executor installs and proves the approved artifact on the owner, refreshes the guard, controller, and rearm services without configuration, allocation, route, or forwarding effects, then strictly reproves the owner. It reuses the existing owner-side rearm request and cloud/SSH wait only through exact-pinned SSH readiness; the stale peer is not required to advertise the new capability before installation. With both members reachable, canonical apply resumes after accepting transitional policy state only when the sole rearm writer owns the accepted start. All other policy or transition states fail closed. Canonical apply receives the same descriptor and retains its ordinary non-owner-first staging, package, lock, activation, and terminal two-sample verification order. Additional drift or a crash requires a fresh plan from current journals and authority; recovery is forward-only and never downgrades the serving owner.
 
@@ -3902,7 +3902,7 @@ Add a separate strict `standby-restoration-authorization-v1` authority rather th
 
 **Operator workflow:** The existing planned CLI restoration deadline is an observation budget and never cancellation authority. Timeout remains nonzero but says durable background retries continue. `apply` joins an active authorization and, only for an exact inert `BLOCKED` record under committed enabled policy, renders and executes the existing approval-bound recovery path as a new `operator-restoration` authorization. Missing, corrupt, disabled, or split policy continues through the explicit `--standby-auto-healing enabled` transaction. Conversion, JSON result, public status rows, default-No confirmation, and exit classes remain unchanged.
 
-**Capability admission:** `agent/main.py` advertises `vm-ha-standby-restoration-v2` in both its configuration-independent private capability document and every current controller status, including blocked status. `cli.py` requires that controller capability whenever an active lifecycle runtime binding is validated, so ordinary status projection marks an older installed runtime as `agent-status-stale`; `apply` consequently plans apply-owned convergence instead of reporting healthy. The private standby-policy action probe requires the fixed feature as well as the v2 policy capability. Planned preparation reuses the same status validator and therefore stops before publishing a failover/failback request or admitting any external transfer effect. Version strings and configuration-generation parity are deliberately insufficient because editable and previously built artifacts may share them. Package preparation resolves only a current build, explicit override, or other non-fallback local artifact, binds its SHA-256, uploads it below a fresh mode-0700 temporary directory, verifies the remote bytes before installation, and runs the configuration-independent capability document in a fresh process before emitting its package receipt. An artifact recorded by the existing installation is not eligible as a VM-HA convergence fallback. One canonical exported capability constant is shared by runtime advertisement, CLI status admission, local wheel inspection, upload receipt, and fresh remote proof, so a v1-only wheel is rejected before approval.
+**Capability admission:** `agent/main.py` advertises `vm-ha-standby-restoration-v2` in both its configuration-independent private capability document and every current controller status, including blocked status. `cli.py` requires that controller capability whenever an active lifecycle runtime binding is validated, so ordinary status projection marks an older installed runtime as `agent-status-stale`; `apply` consequently plans apply-owned convergence instead of reporting healthy. The private standby-policy action probe requires the fixed feature as well as the v2 policy capability. Planned preparation reuses the same status validator and therefore stops before publishing a failover/failback request or admitting any external transfer effect. Version strings and configuration-generation parity are deliberately insufficient because editable and previously built artifacts may share them. Package preparation resolves only a current frozen build, explicit override, bundled wheel, or verified CLI installation artifact, binds its SHA-256, uploads it below a fresh mode-0700 temporary directory, verifies the remote bytes before installation, and runs the configuration-independent capability document in a fresh process before emitting its package receipt. An artifact recorded by the existing gateway installation is not a convergence fallback; exact current CLI installation provenance is an authoritative source. One canonical exported capability constant is shared by runtime advertisement, CLI status admission, local wheel inspection, upload receipt, and fresh remote proof, so a v1-only wheel is rejected before approval.
 
 **Concurrency and failure policy:** Active phases inhibit competing writers. `COMPLETED` is inert; `BLOCKED` carries no automatic effect authority and is disposable only through exact current-authority recovery. A partially prepared disable does not revoke an already armed automatic restoration when promotion wins; the policy operation replans after redundancy is restored. If a terminal automatic promotion cannot commit its exact restoration authority, the same writer lock durably discards that unusable authorization so the terminal receipt remains authoritative and restoration is disabled. The equivalent planned-transfer failure propagates and retains lineage. Restoration and policy failures cross the durable status boundary only as a closed identity-free reason code shared with the CLI allowlist; exception messages remain internal and never become `rearm_reason`. The generic `controller-reported-condition` projection is reserved for malformed, foreign, or unknown evidence. Transition-only structured logs publish phase, attempt, and closed reason without resource identities, raw exceptions, or loop spam.
 
@@ -5246,8 +5246,9 @@ Classify replay-window capability rejection with a dedicated exception. The publ
 apply boundary renders a concise rebuild/selection instruction and exits nonzero;
 VM-HA projects the same condition as an incompatible-artifact prerequisite. Disable
 traceback locals explicitly across CLI apps, including supported Typer versions that
-enable them by default. Keep source identity checks and prebuilt-only HA selection;
-developers rebuild after source edits before selecting an exact wheel. Validate stale
+enable them by default. Keep source identity checks and exact CLI/agent parity.
+Editable installs freeze and build declared source inputs before admission; installed
+and standalone CLIs resolve their exact provenance-bound wheel automatically. Validate stale
 and matching artifacts, dry-run and normal apply, structured VM-HA output and real
 terminal exception rendering with synthetic secret sentinels. Ordinary replay-window
 admission uses the same typed rejection when wheel preparation returns no artifact.
@@ -8834,7 +8835,7 @@ separate; preserve failed/intervened trials.
 
 #### Evaluation Plan
 
-Qualify package transitions from the four latest stable published VPNGW releases
+For release 0.6.6, qualify package transitions from authentic releases 0.6.1 through 0.6.5
 in isolated Ubuntu 24.04 containers. Qualify live upgrades from the latest stable
 published release only in all four topology/routing combinations, plus fresh
 installs, migration and recovery. Require unchanged resource identities,
@@ -8850,8 +8851,8 @@ bytes and successful validation by the current runtime reader. Record the
 predecessor digest with the explicit absence; any receipt creation, removal or
 change between repeat observations fails comparison. This covers predecessors
 already using the current checkpoint schema without fabricating conversion work.
-The frozen package manifest now covers releases 0.6.1 through 0.6.4; retain prior
-manifest results separately. The frozen candidate package matrix passed all
+The prior frozen package manifest covered releases 0.6.1 through 0.6.4; retain those
+results separately from the expanded 0.6.1 through 0.6.5 manifest. That prior candidate matrix passed all
 20 current cases, including four latest-release interruptions and 20 repeat
 checks. This is package qualification, not final-artifact VPN qualification.
 The product-wheel fault records each selected service asset immediately before
@@ -11034,7 +11035,7 @@ documentation evidence does not qualify native supervision.
 
 <!-- /FEATURE: FEAT-037 -->
 
-<!-- FEATURE: FEAT-038 reqs=REQ-038 status=ready delivery=implemented priority=P0 version=5 -->
+<!-- FEATURE: FEAT-038 reqs=REQ-038 status=ready delivery=implemented priority=P0 version=7 -->
 ### FEAT-038: Confirmed full software repair on retained VMs
 
 #### Requirements Covered
@@ -11051,6 +11052,32 @@ provide reusable transport and installation primitives, not full reset authority
 The exact cause of the reported customer mismatch remains unproven.
 
 #### Design Details
+
+Keep the recovery order visible: normal apply, retained-VM software repair with
+authenticated SSH, then separately confirmed destruction and fresh apply for
+unrecoverable guests. Reuse the canonical destruction and provisioning owners;
+introduce no hidden destructive fallback or alternate SDK deletion path. The
+last-resort notice distinguishes replaced VM/boot-disk/private-allocation identity
+from retained public allocations, network containers and external peer resources.
+
+For fresh deployment after terminal DESTROYED, reread the hardened lifecycle and
+both exact Compute names before selecting or publishing managed SSH identities.
+Only absent fresh members can retire obsolete managed pins whose private keys
+are unavailable or differ from already staged fresh keys. Keep old receipt and
+projection bytes as CAS expectations; publish through the canonical command and
+SSH child journals. Replays reuse selected private keys through key, receipt and
+child-completion interruptions. Explicit operator pins and custom key directories
+retain their existing checks. A validated v1 receipt may be consumed only as
+retired destruction history for the complete absent member set, never as current
+host identity evidence. Missing, malformed or foreign history is not adopted.
+
+Before guard installation archives the ingress unit, inspect the two known
+`40-vpngw-ingress.conf` SSH drop-ins. Archive only exact root-owned, single-link,
+non-writable product bytes requiring and ordering after the ingress service.
+Retain other SSH units/drop-ins. Refuse changed or unsafe product files before
+service mutation. Keep the original dependency bytes in the protected repair
+archive. This prevents an obsolete SSH dependency from pointing at a removed
+service on the next boot without weakening host-key verification.
 
 Add repair selection before old-state parsing in apply and propagate it through
 pair apply. Resolve configuration, exact existing cloud bindings, pinned SSH and
@@ -11530,6 +11557,31 @@ regional pairs, authentic published-release upgrades and remaining original
 campaign obligations remain open. The repaired source and final release artifact
 are not yet release-qualified.
 
+An earlier focused live repair reached guarded reboot and then failed with
+SSH connection refusal before package installation. Authenticated provisioning
+contained the obsolete SSH dependency on one member. A native Ubuntu/OpenSSH
+fixture reproduced listener loss with that dependency and the old guard; retiring
+the exact dependency preserved the listener and boot fence after restart. This
+proves the local mechanism, not the unobserved live guest journal. Preserve that
+failed trial and its subsequent operator-start intervention as separate evidence.
+
+Authorized recovery used the existing destroy and normal apply paths. The first
+fresh attempt exposed stale managed SSH pins requiring private keys from deleted
+VMs; it stopped before creating replacement resources. The scoped DESTROYED-state
+identity fix passed 245 SSH/publication/CLI regressions, including lost publication
+and Compute appearing during revalidation. Fresh apply then completed HA activation
+and independently reported HEALTHY with the same YAML and public allocations and
+new VMs/boot disks.
+
+The subsequent clean repair on the frozen 0.6.6 candidate completed without
+external intervention. Both retained VMs passed authenticated SSH after reboot,
+software reconstruction, HA activation and final verification. Independent status
+reported both members ready with healthy mTLS, four established IPsec/BGP paths
+and healthy routing. Independent runtime and cloud checks verified exact candidate
+Python sources and retained VM/disk/public-allocation identities. This closes the
+focused HA BGP repair trial; broader topology, interruption, architecture and
+traffic qualification obligations above remain separate.
+
 <!-- /FEATURE: FEAT-038 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
@@ -11754,7 +11806,7 @@ GitHub deployment and registry behavior remain unverified.
 <!-- /FEATURE: FEAT-040 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-041 reqs=REQ-041 status=ready delivery=implemented priority=P1 version=6 -->
+<!-- FEATURE: FEAT-041 reqs=REQ-041 status=ready delivery=implemented priority=P1 version=12 -->
 ### FEAT-041: Private read-only support bundle and exact activation diagnostics
 
 #### Requirements Covered
@@ -11773,8 +11825,8 @@ A dedicated support_bundle package owns safe projection, a standard-library prob
 streamed over verified SSH, bounded orchestration and private archive publication.
 The CLI only binds public options. Parse diagnostic scope without resolving secret
 references or creating defaults. Use existing cloud credentials and host pins;
-missing prerequisites yield partial evidence. Probe stdout and errors cross a typed
-allowlist before persistence. Native status and independent file/service/network
+missing prerequisites yield partial evidence. Structured observations cross a typed allowlist; command and journal text crosses
+a bounded credential redactor before emission or persistence. Native status and independent file/service/network
 observations remain separately labelled. No product writer is invoked.
 
 Collect current HA and traffic counters twice at least two seconds apart. Include
@@ -11790,8 +11842,10 @@ sixty-four-MiB uncompressed and twenty-five-MiB ZIP limits. Reserve current fact
 from every member before log records; read journals newest-first and detect the
 event cap with one extra record. Trim oldest timestamped events across sources
 deterministically. Inspect bounded package-worker history, prioritize unfinished
-workers and mark overflow or incomplete inspection. Observe route-fix timer state and allowlisted OS identity/version. Manifest schema is
-nebius-vpngw/support-bundle-v1 and records source, timing, outcome and omissions.
+workers and mark overflow or incomplete inspection. Preserve exact worker digests
+and product-pattern service names even before the first request is accepted.
+Observe route-fix timer state and allowlisted OS identity/version. Manifest schema is
+nebius-vpngw/support-bundle-v3 and records source, timing, outcome and omissions.
 Atomic exclusive publication uses mode 0600. Exit codes are 0 complete, 1 partial,
 2 no bundle. No automatic upload. All source and archive names are product-owned.
 
@@ -11799,15 +11853,72 @@ Share one activation evaluator between readiness acceptance and reason reporting
 Preserve first/latest failure and owner-replacement semantics. Expected apply locks
 are context, not an initiating failure. Do not change recovery admission or fencing.
 
+The enhanced support-bundle is the sole public diagnostic command; existing flags
+and exit codes remain. Structured journal envelopes keep coverage independent of
+bounded event arrays. Count invalid, unrecognized and recognized records separately;
+record exact versus lower-bound counts, requested/observed windows and unknown
+retention. Rich event parsers export only reviewed codes, numeric facts, known
+exceptions and canonical product frame IDs. Ordinary unknown messages also remain
+available after targeted redaction, alongside structured event classification.
+
+Collect cloud-init JSON status without waiting, all four cloud-init units, five
+one-second host intervals, PSI, scoped cgroup/OOM facts, clock observations and
+managed service listeners. Unsupported observations stay explicit. Preserve
+standalone operation against 0.6.5 or broken agents without changing gateway state.
+
+Allocate stable evidence IDs and reserve report space. Preserve current facts and
+failure landmarks before trimming routine events. Regenerate summary.md, timeline,
+evidence index and offline guide from final retained records; references must
+resolve. Order monotonic events only within a node/boot and mark cross-host time
+uncertainty. Current resource samples cannot explain past failures without temporal
+overlap. Collection remains deterministic with no AI service or upload.
+
+Live acquisition shares read-only SSH access normalization with normal loading:
+expand access fields and load configured public-key files, preserve explicit
+operator identity precedence and public/private matching, then reuse existing
+managed or explicit pins. Apply-only enrollment, migration and publication remain
+outside collection. Unsupported trust receipts fail with the existing explicit
+known-hosts override guidance; no legacy reader is introduced.
+
+Stream closed stage/progress/failure events from isolated workers to the parent.
+Report trust, identity, connect/auth, sudo, startup and individual probe failures,
+including whether SSH was attempted. Safe runtime/access-source provenance and
+per-member guest coverage accompany terminal and manifest results.
+
+Retain redacted stdout/stderr beside structured probes, with command IDs, exit
+codes, timing, byte and redaction counts. Collect actual public status once under
+a budget of at most ninety seconds from the remaining total, service status, native HA, journals, uptime,
+free/vmstat/dmesg and fixed VPNGW/cloud-init log tails. File tails are not claimed
+to be journal-window filtered. Discarded historical installer output stays unknown.
+
+Use a standard-library stateful redactor for multiline keys, assignments and
+sensitive dumps. Parent-side known literal config-secret checks and final scans
+provide defense in depth; no extra secret-store discovery. Bound raw buffers and
+discard incomplete sensitive tails. Reserve finalization time within five minutes;
+retain current facts, then failure landmarks, then routine bounded history.
+
+Aggregate public status performs multiple gateway/cloud observations; it is not
+one guest probe. Use min(90 seconds, remaining total minus 20 seconds) for that
+subprocess. Keep guest probes and artifact lookup at thirty seconds, the overall
+five-minute deadline and two member workers unchanged. Do not reduce guest evidence
+or enlarge the total deadline. A full status observation exceeding thirty seconds
+must survive when overall time remains; it stays explicitly partial when its
+bounded budget is exhausted. Earlier live trials completed standalone status in
+just over thirty seconds while the original collector truncated it at thirty.
+The narrower alternative of omitting packet details would reduce required evidence;
+unbounded status and an enlarged total deadline are rejected.
+
 #### Selected Option
 
 Deterministic Python using existing Typer, SSH and SDK dependencies plus standard
-library ZIP support. Ship diagnostics first in explicitly selected patch v0.6.6.
+library ZIP support. Deliver the enhanced command and schema together through the
+next authorized diagnostic release; published tags and artifacts remain immutable.
 
 #### Alternatives Considered
 
-Raw filesystem/log dumps with regex-only redaction were rejected because arbitrary
-messages and cloud user data can contain credentials. Gateway upgrades and automatic
+Unrestricted filesystem/config dumps remain excluded. Broader fixed-source logs
+with stateful credential redaction replace v2 blanket omission; private support
+handling and explicit residual disclosure risk remain necessary. Gateway upgrades and automatic
 repair during collection were rejected because they disturb the incident evidence.
 
 #### Implementation Boundaries
@@ -11818,6 +11929,12 @@ or persisted deployment-schema changes and no live customer actions are included
 
 #### Test-First Success Criteria
 
+- Journal omission metadata survives traversal/event/byte/archive caps.
+- Recognized failure fixtures support causal distinctions; missing evidence stays
+  unknown. Generated citations resolve after final archive trimming.
+- Cloud-init degraded output, time formats, five resource intervals, OOM scope and
+  safe exception context survive the probe, worker and archive boundaries.
+- New help and installed wheel/binary execute support-bundle; collect-logs fails.
 - Injected secret values never reach archive members or console diagnostics.
 - Probe timeout/unavailability yields bounded partial evidence with no mutation.
 - Each activation failure reports its exact predicate without relaxing acceptance.
@@ -11840,7 +11957,8 @@ A bundle is evidence for diagnosis, never an authorization or readiness receipt.
 
 #### Rollout And Rollback
 
-Publish v0.6.6 through protected PR/merge and tag qualification. Run collection from
+Select the release version through the release owner and run protected PR/merge
+and exact-tag qualification. Never replace an existing release. Run collection from
 an isolated pipx environment so the previous operator CLI and exact wheel remain
 available. Do not invoke apply until support reviews the bundle. Stop using the new
 collector if it fails; no gateway rollback is required for read-only collection.
@@ -11852,31 +11970,384 @@ and installed smoke tests; required release qualification and asset checks pass.
 
 #### Implementation Evidence
 
-Implemented support_bundle projection, bounded cloud/SSH workers, read-only Linux
-probes and atomic ZIP publication. CLI collect-logs and shared activation failure
-evaluation are wired; readable probe sources are packaged in wheels and binaries.
-README, CLI help, recovery guidance and release notes describe the safe collection
-contract and explicitly selected v0.6.6 patch exception.
+Support-bundle v3 implements live cloud and SSH acquisition using shared access
+normalization, existing exact host trust and operator identity precedence. It
+reports acquisition stages, closed failure codes and SSH-attempt evidence, plus
+per-member successful probe and text-file coverage. Access provenance includes
+only closed identity/trust source labels, never key material or key paths.
+
+The standalone guest reader exports bounded structured facts and redacted command
+stdout/stderr, ordinary journal messages, fixed log tails, service status and host
+commands. The public status command runs once directly in its owned process group
+under a budget of at most ninety seconds from the remaining total, preserving
+twenty seconds for archive finalization; cancellation cannot leave a second
+worker-owned status process running. Parent projection, redaction and final export checks apply
+before exclusive mode-0600 ZIP publication. Reports and journal text views track
+only the final retained evidence after trimming.
+
+Live verification exposed and repaired two additional collector defects. SSH
+collection now drains stdout through EOF before accepting remote exit status.
+The VICI reader merges existing child-SA names without duplicate-keyword errors,
+preserving IPsec counters. XFRM policy is captured through its native text format.
+Credential tests cover chunk boundaries, multiline keys and assignments, escaped
+quotes, command-line credentials, key dumps and configured literal PSKs. Broad text
+remains private operational evidence with explicit residual disclosure limits.
+
+No HA fencing, recovery admission, trust migration or gateway mutation is introduced
+by this collector revision. Concurrent HA/package work remains separately owned.
+
+Alignment fixes preserve source journal order for multiline redaction when wall
+clocks repeat or move backwards. Exact artifact selection runs inside the existing
+isolated worker with a thirty-second budget; timeout retains partial provenance
+and collection continues. Captured SSH startup stderr survives exceptional
+completion with incomplete tails discarded. These repairs preserve public flags,
+archive schema and established SSH trust.
 
 #### Verification Evidence
 
-Alignment verification passed 504 focused unit tests and four release-build checks,
-including installed-wheel and frozen-binary smoke. Ruff, mypy (222 source files),
-Markdown lint and canonical-pair validation passed. Read-only review covered the
-final fixes and cross-surface wiring; security review covered safe projections,
-SSH trust reuse, command arguments and private archive publication.
-Regression coverage includes exact activation predicates and route next hops,
-source metadata, structural/journal limits, current facts before logs, oldest-event
-trimming, timer/OS facts, unfinished-worker history priority/limits and secret
-exclusion. A subsequent focused code review reproduced and fixed three evidence
-gaps: missing latest apply failures and first/latest labels, filtered native
-interface counters, and omitted digest-keyed package-request states. Four new
-regression cases failed before the fixes and passed afterward. All 59 collector
-and packaging checks then passed, including installed-wheel and frozen-binary
-checks, with Ruff and five-source support-package mypy validation. Required
-release qualification and published-asset verification remain separate gates. No live customer HA recovery
-or production qualification is claimed.
+After the aggregate-status budget repair, the combined collector/access,
+configuration/build/CLI, qualification-selection and release-build run passed
+812 cases in 75.86 seconds. Two new negative controls reproduced status clipping
+at thirty seconds and caller budget clipping; four focused cases then passed,
+including a short remaining budget and the twenty-second archive reserve.
+Scoped Ruff/format, mypy, Markdown, diff-integrity and canonical spec validation
+passed. The nested code/security review found no remaining blocker in this repair.
+
+Before this timing adjustment, the rebuilt candidate wheel's packaged Python
+sources matched the working tree. Four native Linux tests passed in 76.12 seconds:
+installed wheel and frozen binary both collected through real SSH/systemd with
+absent and broken guest agent imports. They checked service/journal/file/host
+evidence, credential canaries, archive hashes and unchanged configuration, host
+pins and service identity. This native lane was not repeated after the timing
+adjustment. It remains an explicitly invoked candidate-wheel lane, separate from
+default native CI and exact-commit release qualification.
+
+A fresh authorized live trial after the timing repair used the project virtual
+environment with unchanged source throughout collection. Both gateways yielded
+104 successful guest probes, 727 total archive records and 378 text files. The
+actual public status command completed with exit zero in 31.69 seconds, and no
+SSH or status failure remained. Both earlier thirty-second timeout bundles were
+preserved; the standalone pre-fix status reproducer completed in 32.08 seconds.
+
+Independent checks verified ZIP integrity, manifest and report references, content
+hashes, owner-only permissions, size bounds, targeted credential redaction and
+configured literal-secret exclusion. Before/after observations found the checked
+service identities and selected configuration/HA files unchanged. Both members
+provided paired native HA and IPsec evidence plus 23 journal sources each.
+
+The final archive correctly remained partial: structured firewall observations
+reached projection limits, and each cloud-final journal contained six unsupported
+non-text records. Retained text, coverage and omissions remain inspectable. These
+limits must not be described as SSH failures or complete diagnostic coverage.
+
+Delivery is implemented with source, installed-build and bounded live collector
+verification as qualified above. Exact-commit release qualification, publication,
+published-asset verification and customer HA recovery remain outside this proof;
+no unresolved customer HA cause is claimed fixed.
+
 <!-- /FEATURE: FEAT-041 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-042 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=2 -->
+### FEAT-042: Classified peer heartbeat channel diagnosis and pre-fence gate
+
+#### Requirements Covered
+
+- REQ-042: Classified VM-HA peer channel diagnosis across status and apply.
+
+#### Context Evidence
+
+The heartbeat sender discards every failed peer send (`except
+PeerTransportError: pass` in the publisher), and the publisher error slot only
+records worker crashes, so a blocked VM-to-VM TCP 9443 endpoint is invisible:
+`status` never reads the heartbeat section and only generic freshness evidence
+exists. Security-group rules are customer-owned, so the product cannot create
+the 9443 rule and must diagnose its absence. A customer fenced-verification
+timeout with healthy data plane and no named cause motivated this feature.
+
+#### Design Details
+
+Classification flows transport to publisher to agent status to CLI projection.
+`PeerTransportError` gains an optional machine-readable kind with a compatible
+default. The concrete send path classifies with ordered except clauses:
+`TimeoutError` as timeout; `ssl.SSLError` before `OSError` as tls;
+`ConnectionRefusedError` as refused; `OSError` with host/network-unreachable or
+timed-out errno and name-resolution failures as unreachable; the remainder and
+framing errors as protocol. Explicit certificate-pinning raises carry tls and
+frame-size raises carry protocol. Redacted messages are preserved byte for
+byte.
+
+The publisher records send outcomes under its existing lock: last success and
+last error monotonic instants, last error kind and a consecutive-failure
+counter, exposed through a locked snapshot accessor returning ages in seconds.
+The status writer cannot see the publisher, so the runtime uses the existing
+callable-attribute injection pattern to merge the snapshot additively into the
+status heartbeat section with schema version 6 unchanged. Receive-side
+recording is out of scope because the peer's own sender covers ingress
+blockage.
+
+`status` reads the member heartbeat section and renders
+`peer-heartbeat-endpoint-unreachable` or `peer-heartbeat-tls-failure` as
+degraded reasons when the peer heartbeat is not fresh and roughly ten
+consecutive classified failures accumulated, with an Action naming TCP 9443
+and customer-owned security-group rules or managed-mTLS guidance. Both codes
+join the CLI safe-reason codes and the support-bundle safe-reason allowlist;
+the projection value and diagnostic-string sets retain the new typed fields
+and the previously dropped peer freshness fields.
+
+`apply` inserts a bounded per-node `verify-peer-channel-node-N` wait inside the
+fenced verification step, after the progress step opens and before the long
+per-node fenced waits, reusing the same status fetch bindings. The gate
+requires a provably up channel (fresh peer heartbeat or a recent successful
+send) and otherwise fails fast with the classified reason through the existing
+first/latest diagnostics; a resume whose transition already started skips it.
+Fenced-predicate failures additionally carry the send-error kind when peer
+freshness is the unmet condition. No heartbeat or failover timers change; the
+1 s cadence with 5 s suspicion and 10 s staleness is validated conservative
+against RFC 9568 VRRP, corosync token and etcd tuning references.
+
+#### Selected Option
+
+Classify the sends the agent already makes every second: zero added traffic,
+the correct vantage (the member's own egress to its peer), continuous coverage
+and no new runtime surface.
+
+#### Alternatives Considered
+
+- Workstation or SSH-driven connectivity probe at apply time only: wrong
+  vantage, observes nothing between operator runs, adds a guest dependency.
+- A separate prober daemon or active TCP checker: new service, new traffic and
+  lifecycle for information the sender already has.
+- Bumping the heartbeat status schema version: breaks the exact version-6
+  admission contract for no additive benefit.
+
+#### Implementation Boundaries
+
+Agent transport, heartbeat publisher and runtime status writer; CLI status
+view, activation gate and safe-reason codes; support-bundle projection key
+sets; README security-group prerequisite; changelog; focused unit tests. No
+wire heartbeat, timer, cloud or security-group behavior changes.
+
+#### Test-First Success Criteria
+
+Each classified kind is asserted through injected transport failures with
+redaction preserved; publisher success and failure recording and the
+consecutive counter are proven with the fake clock; the written status
+document carries the new fields; the status view renders each new reason and
+Action only under the persistence gates, with healthy and foreign cases
+unchanged; the pre-fence gate fails fast with the classified reason; the
+projection retains the new fields.
+
+#### Validation Plan
+
+Full unit suite plus mypy, Ruff check and format, and markdownlint on changed
+documents.
+
+#### Test Plan
+
+Extend the transport, heartbeat, agent-runtime, CLI-helper status-view and
+support-bundle projection test modules with the cases above, reusing their
+existing fake transports, fake clocks and member-view fixtures.
+
+#### Evaluation Plan
+
+On the authorized live test pair, normal apply must safely settle an interrupted
+0.6.5 operation and deploy the candidate without requiring repair merely because
+the artifact changed. Require healthy status, unchanged apply convergence and
+healthy status again. Then independently exercise explicit apply --repair and
+verify healthy runtime, tunnels, BGP and routes. Peer-channel fault injection
+remains separate qualification; it is not part of this quick upgrade trial.
+
+#### Rollout And Rollback
+
+Ships in the 0.6.6 wheel through the existing apply artifact binding. Status
+fields are additive and optional for readers. This status-schema compatibility
+does not authorize deployment rollback or replacement of an unfinished operation
+artifact; apply retains immutable pins and uses the REQ-043 successor policy. Live fault injection is reversible on-VM state only.
+
+#### Done Definition
+
+Local gates green; live evaluation scenarios produce the expected reasons and
+recoveries; requirements and design carry implementation and verification
+evidence.
+
+#### Implementation Evidence
+
+Delivered on branch nebius-23654: transport error kinds with ordered except
+classification and byte-preserved redacted messages; publisher send-outcome
+recording with a locked snapshot accessor returning ages; runtime callable
+injection and additive status merge under schema version 6 with a defensive
+snapshot read for fake-bound writers; `status` degraded reasons with TCP 9443
+and managed-mTLS actions behind the ten-failure persistence gate; the bounded
+pre-fence `verify-peer-channel-node-N` gate aborting only on classified
+predicates; projection and safe-reason allowlists including the previously
+dropped peer freshness fields; the README security-group prerequisite and the
+0.6.6 changelog entries.
+
+#### Verification Evidence
+
+Local gates on the full tree: 7601 unit tests passed, including sixteen new
+transport-classification, publisher-recording, runtime-merge, status-view,
+predicate and projection tests; mypy clean across 220 source files; Ruff check
+clean with changed files format-clean; markdownlint clean on changed
+documents. The OSError constructor's ETIMEDOUT-to-TimeoutError mapping is
+covered explicitly. Live test-pair scenarios (interrupted-apply resume and
+blocked-9443 fault injection) remain pending and own the step from implemented
+to verified; no unresolved customer cause is claimed fixed.
+
+<!-- /FEATURE: FEAT-042 -->
+
+<!-- FEATURE: FEAT-043 reqs=REQ-043,REQ-013,REQ-035 status=ready delivery=implemented priority=P1 version=2 -->
+### FEAT-043: Automatic release convergence with immutable operation history
+
+#### Requirements Covered
+
+- REQ-043: Converge supported releases with ordinary apply.
+- REQ-013: Preserve exact gateway SSH trust.
+- REQ-035: Preserve safe apply ownership and operation history.
+
+#### Context Evidence
+
+Before this change, HA required a prebuilt local wheel and excluded several
+preparation states from successor settlement. The observed deployment has a v1
+trust receipt plus changed-key failures. Independent authenticated Compute evidence
+also proved an incorrect host-key recovery path for an ordinary-origin retained
+member. These are separate from package compatibility or artifact integrity.
+
+#### Design Details
+
+Use the existing SSH, artifact, command journal, preparation, settlement and
+convergence owners. Resolve a strict explicit wheel override first; otherwise use
+verified installation provenance or the official release digest manifest. Editable
+installs build a frozen source snapshot; standalone binaries carry their matching
+wheel. Cache by digest and retain pending-operation artifacts. Preserve integrity
+and CLI/agent source parity; publish the public digest manifest from the existing
+release owner's frozen asset evidence, without changing publication authority.
+
+Before status-based apply planning, verify SSH trust against exact current Compute
+and lifecycle bindings. Convert unchanged validated legacy receipts once to v2.
+Changed-key reconciliation is a separate authenticated authority transition. Keep
+strict host verification, stable HostKeyAlias, immutable snapshots and CAS writes;
+status never enrolls or repairs trust.
+
+For candidate changes, compare complete effects and ownership before admitting a
+package-only successor automatically. Settle predecessors using their owning locks,
+revalidate scope and candidate under execution locks, archive unchanged prior
+records, then persist a new execution identity and artifact digest. Never rewrite
+old pins or represent policy admission as reused approval. Complete preparation,
+continuations and successor chains receive explicit owner-aware settlement paths.
+Unknown outcomes stay pending; expanded effects retain fresh approval.
+
+Use specific allowlisted diagnostics and selector provenance for recovery output.
+Require two fresh agreeing health observations and independent role-appropriate
+runtime, tunnel, BGP and route verification; preserve maintenance semantics.
+
+#### Selected Option
+
+Extend canonical owners with automatic bounded successor admission and one-time
+verified trust conversion. No new service, CLI upgrade flag or runtime legacy mode.
+
+#### Alternatives Considered
+
+Requiring repair for release changes violates the requested workflow. Replacing
+artifact pins or blindly accepting changed host keys loses operation/identity
+safety. Reinstalling healthy unchanged packages adds avoidable interruption.
+
+#### Implementation Boundaries
+
+Artifact resolution/build/release evidence, apply orchestration and existing
+journals/settlement, SSH policy and CLI status/diagnostics, associated tests/docs.
+Preserve unrelated working-tree edits and current provider/dependency stack.
+
+#### Test-First Success Criteria
+
+- Changed valid artifacts create immutable successors without requiring repair.
+- Unchanged deployments avoid unnecessary package and service changes.
+- SSH identity and health failures remain specific, safe and independently tested.
+
+#### Validation Plan
+
+Focused tests cover all four deployment modes, provenance routes, valid legacy
+conversion, separate key conflict recovery, races and successive interrupted
+operations. Preserve authentic 0.6.1-0.6.4 fixtures and add authentic 0.6.5.
+Run required local checks and installed lanes before the named authorized live pair.
+
+#### Test Plan
+
+Normal upgrade, two fresh healthy status observations, unchanged apply with no
+unnecessary package/service effects, healthy status, then explicit repair and
+healthy status. Freeze each candidate and keep environment recovery separate.
+
+#### Evaluation Plan
+
+Fix causal owners and rerun affected trials; retain failed evidence and report
+source, installed, historical and live coverage separately.
+
+#### Rollout And Rollback
+
+Ship through the existing release owner; never overwrite releases. No automatic
+downgrade guarantee. Original artifacts remain available for safe settlement.
+
+#### Done Definition
+
+Required local tests pass, authorized normal apply and repair complete, status
+is independently healthy, and canonical documentation reflects actual evidence.
+
+#### Implementation Evidence
+
+The shared artifact resolver, release digest manifest and bundled-wheel build now
+select exact CLI-compatible bytes. Canonical HA command and settlement owners admit
+bounded release successors, retain immutable predecessor authority and revalidate
+package observations under the command lock. Exact persisted-plan parsing preserves
+same-operation interruption resumes. Apply-owned SSH preparation converts legacy
+receipts, separately reconciles authenticated provisioning keys, and refreshes
+post-rearm authority with original receipt/projection CAS. Status remains read-only;
+recovery commands omit YAML-derived selectors. No release was published.
+
+The historical fixture manifest includes authentic 0.6.5 alongside 0.6.1-0.6.4;
+all-mode qualification now declares 24 cases including latest-release interruption
+and repeat checks.
+
+#### Verification Evidence
+
+The initial implementation passed 7,647 unit tests and 160 integration cases
+with 134 isolated-fixture skips. Subsequent affected checks passed 249 command and
+successor regressions, 127 repair/failure-boundary regressions and 245 SSH,
+publication and CLI regressions. Typing passed across 222 source files; changed
+Python and Markdown surfaces passed lint. Counts retain their source scopes.
+
+The final frozen 0.6.6 candidate passed all 24 native ARM64 historical package
+cases and their repeats for authentic releases 0.6.1 through 0.6.5, ordinary/HA
+and Static/BGP. Evidence capture and owned fixture cleanup completed. These are
+package-component checks, not full cloud activation or encrypted-traffic tests.
+The earlier amd64-emulated fixture failed before product package execution and
+does not provide amd64 historical qualification. The first frozen matrix was
+stopped before any case when review found an exact-resume serialization defect;
+preserve those attempts separately.
+
+An earlier frozen candidate upgraded the existing live pair with ordinary apply,
+then passed independent healthy status and an unchanged apply with identical
+packages, service processes, boot identities and retained VMs/disks. Its later
+repair failed before package installation, and subsequent recovery included an
+operator-started VM; that trial is not a clean repair pass.
+
+After the authorized last-resort recovery described in FEAT-038, the final frozen
+candidate passed fresh normal apply, independent HEALTHY status, unchanged apply,
+another HEALTHY status, explicit repair and a final HEALTHY status on the live
+x86_64 HA BGP pair. Independent checks proved exact candidate Python sources,
+unchanged package/service/boot/resource identities for the no-op, retained VM/disk
+identities through repair, and retained public allocations through the rebuild.
+All four IPsec/BGP paths and both members' routing and mTLS were healthy. This is
+focused live qualification; no release was published and it does not establish
+every architecture, topology, failover or traffic campaign obligation.
+
+An isolated local fixture also converted the actual archived v1 SSH receipt using
+current authenticated Compute evidence and strict SSH against the rebuilt pair.
+It reached HEALTHY while leaving the real managed trust store unchanged. This
+tests archived-receipt conversion with changed-key reconciliation, not continuity
+of the destroyed predecessor VMs.
+
+<!-- /FEATURE: FEAT-043 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

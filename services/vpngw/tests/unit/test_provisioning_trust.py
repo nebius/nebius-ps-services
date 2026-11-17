@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -11,11 +12,31 @@ from nebius_vpngw.deploy.apply_plan import CommandPlan, Effect
 
 
 @pytest.mark.parametrize("boundary", ["keys", "selection", "receipt", "complete", None])
+@pytest.mark.parametrize("destroyed", [False, "v2", "v1"])
 def test_ssh_prelude_resumes_every_publication_frontier_without_replacing_keys(
-    tmp_path, monkeypatch, boundary
+    tmp_path, monkeypatch, boundary, destroyed
 ):
     monkeypatch.setenv("HOME", str(tmp_path))
     scope = _trust_scope(cluster_id="ordinary-v1")
+    if destroyed:
+        old = ssh_policy.require_vm_ha_ssh_policy(
+            (("gateway-0", "gateway-0"),),
+            {},
+            enrollment_hosts={"gateway-0"},
+            trust_scope=scope,
+            allow_managed_repair=True,
+            persist_default_host_keys=True,
+            managed_root=tmp_path / "managed",
+        )
+        ssh_policy.publish_vm_ha_ssh_trust(old)
+        if destroyed == "v1":
+            path = ssh_policy._managed_trust_paths(scope, tmp_path / "managed").receipt
+            payload = json.loads(path.read_bytes())
+            payload["schema"] = "nebius-vpngw/vm-ha-ssh-trust-v1"
+            for member in payload["members"]:
+                member.pop("authority")
+            path.write_text(json.dumps(payload))
+        (_default_host_key_directory(tmp_path, scope) / "gateway-0.key").unlink()
 
     def observe(*, allow_repair=True):
         return ssh_policy.require_vm_ha_ssh_policy(
@@ -26,6 +47,7 @@ def test_ssh_prelude_resumes_every_publication_frontier_without_replacing_keys(
             allow_managed_repair=allow_repair,
             persist_default_host_keys=True,
             managed_root=tmp_path / "managed",
+            destroyed_hosts={"gateway-0"} if destroyed and allow_repair else (),
         )
 
     desired = provisioning_trust.intent(observe(), ("gateway-0",))

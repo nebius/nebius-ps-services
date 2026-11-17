@@ -115,7 +115,7 @@ live gateway upgrades, cloud fencing and VM failover require separate live trial
 ## Authentic historical package upgrades
 
 `run.py --historical-package-upgrades --candidate-wheel /path/to/candidate.whl
---report /path/to/matrix.json` uses `Dockerfile.packages` and the four pinned
+--report /path/to/matrix.json` uses `Dockerfile.packages` and the five pinned
 source-release wheels in `historical-releases.json`. The default platform is
 `linux/amd64`; select the VM architecture explicitly when it differs. This lane
 does not require XFRM support and does not establish IPsec or BGP sessions.
@@ -169,3 +169,15 @@ from a separate virtual environment; installed files are checked using system
 Python. These are package-stage and roll-forward checks, not full `apply`, HA
 activation, VM reboot, traffic interruption or mutation-free full-apply proof.
 The report preserves every case, artifact digests and exact-owned cleanup result.
+
+## Live support-bundle qualification
+
+`python3 tests/systemd/run.py --support-bundle-only --candidate-wheel /path/to/candidate.whl --report /path/to/new-report.json`
+runs installed-wheel and frozen-binary collection over real SSH/systemd in the
+isolated Linux fixture. It checks host/service/journal/file evidence, credential
+canaries, broken guest imports, hashes and unchanged service/trust/configuration
+state. No cloud credentials are mounted; missing cloud/status prerequisites make
+the test bundles partial. This is collector qualification, not HA recovery proof.
+This candidate-wheel lane is explicitly invoked; the default native CI selection
+does not run it. Record its candidate digest and results separately from default
+CI and release qualification.

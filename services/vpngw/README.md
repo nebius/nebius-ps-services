@@ -159,10 +159,20 @@ state formats, VM/allocation identities, SSH trust, and HA ownership rules are
 preserved. An older agent can be upgraded even when it lacks the new ordinary
 confirmation capability. An actual update may interrupt VPN traffic.
 
-If an interrupted HA transaction belongs to a different configuration or release,
-apply reports the specific mismatch and the repair command before changing
-credentials or gateway software. VM-HA convergence preserves that cause and
-recovery guidance instead of reporting only an unclassified preparation failure.
+Install the new CLI release, then run `nebius-vpngw apply -c <config.yaml>` to
+upgrade the existing gateways. An unchanged apply reconciles supported drift or
+succeeds without unnecessary package installation or service restart. A release
+change alone does not require `--repair`. Interrupted updates keep their original
+artifact and operation records; apply settles the prior owners before admitting a
+new package update. Changes to resources, credentials, trust or interruption scope
+still require review. Uncertain writers and cloud operations remain explicit
+prerequisites.
+
+Apply can convert a validated legacy SSH trust receipt after proving the exact VM
+identities and pinned keys. A changed host key requires independent authenticated
+proof; an SSH failure is never permission to accept an unknown key. Status is
+read-only. Recovery examples use the YAML selectors and retain only explicit CLI
+overrides.
 
 Ordinary-to-HA conversion binds package reservations to the approved operation
 before staging. Settled route creation receipts remain with their route owner;
@@ -187,6 +197,22 @@ explains that blocker and provides the retained-VM repair command. Retrying does
 not reset the correction allowance; ownership and submitted work must still be
 reconciled before reconstruction.
 
+Use this recovery order:
+
+1. `apply -c <config.yaml>` deploys, upgrades or reconciles the gateways.
+2. `apply -c <config.yaml> --repair` reconstructs software when authenticated SSH
+   is available, retaining Ubuntu, VMs and disks.
+3. If the existing VMs cannot be recovered, use the explicit last-resort rebuild:
+   `destroy -c <config.yaml>`, then `apply -c <config.yaml>`. Confirm destruction
+   before it replaces VMs and boot disks. Public IP allocations and network
+   containers are retained; private allocations and owned routes are recreated.
+   Keep the same YAML and verify healthy status and peer connectivity afterward.
+
+A release change alone uses the first step. Last-resort rebuilding is never an
+implicit consequence of `apply` or `apply --repair`.
+After verified destruction, fresh apply can establish new managed SSH identities
+without the deleted VMs' private host keys. Explicit operator pins remain binding.
+
 For a complete software rebuild on the existing gateway VMs, install the desired
 CLI release and [uv](https://docs.astral.sh/uv/getting-started/installation/) on the
 computer running the command, then run:
@@ -208,7 +234,7 @@ foreign-owned directories remain blockers with actionable recovery guidance.
 Ubuntu, VM and disk identities, IP allocations, SSH access and external peer
 credentials are retained. Repair has no overall outage limit. VPN traffic can
 remain interrupted for the entire rebuild; the two-minute target applies to
-normal apply operations, not this last-resort reconstruction.
+normal apply operations, not this software reconstruction.
 
 Repair uses the current operator authentication; verify its access to the selected
 deployment. The `--sa` impersonation option is supported only for ordinary apply
@@ -1321,8 +1347,8 @@ reported impact and schedule an appropriate maintenance window.
   references. Allow capacity and quota for the additional VM, disk and allocations.
 - Arrange access to the remote peer so you can configure the additional tunnels.
   The wizard does not configure the remote provider for you.
-- Select an existing deployable agent wheel. Material HA planning does not build
-  or download one automatically. Use the same file for preview and execution:
+- Apply resolves its matching wheel automatically. To select an explicit candidate,
+  use the same verified file for preview and execution:
 
 ```bash
 export VPNGW_AGENT_WHEEL=/absolute/path/to/nebius_vpngw-VERSION-py3-none-any.whl
@@ -1463,14 +1489,15 @@ the guest controller retains automatic failover and healing ownership. Repair
 reconstructs the managed VPN software on retained Single or HA VMs with one
 default-No confirmation; it has no dry-run mode or overall outage limit.
 
-Material VM-HA planning is read-only, classifies destructive and VPN-traffic
-impact independently, and requires one existing deployable wheel. Set
-`VPNGW_AGENT_WHEEL` to the exact wheel, or keep exactly one
-`nebius_vpngw-*.whl` in the project `dist/` directory. The planner validates
-that the wheel contains standby restoration, publishes its SHA-256 as
-`approval.artifact_sha256`, and binds that digest plus the typed impact into
-the exact plan. It never
-builds, deletes, downloads, or falls back to an installed package. Planning
+Material VM-HA planning leaves gateways unchanged and classifies destructive and
+VPN-traffic impact independently. Both ordinary and HA apply resolve the exact
+CLI-compatible wheel: a strict `VPNGW_AGENT_WHEEL` override, the installed wheel's
+recorded provenance or official release digest manifest, a frozen source build for
+editable installs, or the bundled wheel for standalone binaries. Planning may build
+or download this artifact locally. It never guesses from `dist/` filenames.
+Verified wheels remain in a content-addressed cache for interrupted operations.
+The planner publishes the artifact SHA-256 as `approval.artifact_sha256` and binds
+that digest plus the typed impact into the exact plan. Planning
 opens the selected regular file without following a final symlink, validates
 its wheel metadata and `RECORD` entries for the real agent capability entry
 point, and binds both file identity and digest. Execution rechecks that same
@@ -2738,12 +2765,11 @@ nebius-vpngw status --local-config-file my-vpn.config.yaml --packet-details
 Installing the CLI alone does not change a gateway. Apply deploys the matching
 agent and configuration, rejects an incompatible selected wheel before applying
 the setting, and retains the existing disruption approval and HA safety checks.
-In a source checkout, rebuild the wheel after source edits with
-`python -m build --wheel --no-isolation` in the prepared project environment.
-VM-HA selects one existing wheel from `dist/`, or the exact file specified by
-`VPNGW_AGENT_WHEEL`; it does not rebuild during planning. A stale wheel produces
-a concise rebuild/selection diagnostic. The check compares source bytes, so
-matching CLI and wheel version numbers alone are insufficient.
+In a source checkout, apply builds a frozen snapshot automatically using the
+prepared development environment. `VPNGW_AGENT_WHEEL` selects an explicit wheel;
+a stale or incompatible override fails before gateway changes. Source-byte and
+wheel-integrity checks remain mandatory; matching version labels alone do not
+prove compatibility.
 Ordinary apply reports the same prerequisite if no deployable wheel is available,
 before provisioning or recreating VMs.
 Activating an IPsec change can restart strongSwan and interrupt tunnels on an
@@ -4783,6 +4809,15 @@ Security groups are customer-owned external firewalls. YAML owns the desired
 attachments through `gateway_group.security_group_ids`; customers own group rules.
 Guest permits cannot override an external deny.
 
+VM-HA pairs additionally require **TCP 9443 between the two gateway members'
+private addresses** in both directions: the members exchange their mutually
+authenticated heartbeat on that port, and fenced activation verification,
+automatic failover and standby policy all depend on it. The product never
+creates or widens that rule. When the attached groups block it, `status`
+reports `peer-heartbeat-endpoint-unreachable` with the owning fix, and `apply`
+fails fast in `verify-peer-channel-node-N` instead of timing out in fenced
+verification.
+
 The host uses a dedicated nftables `inet nebius_vpngw_ingress` INPUT table ahead of
 UFW's broad accepts. Updates replace only that table in a validated atomic transaction
 for both address families; unrelated customer tables, UFW rules and fail2ban remain.
@@ -4918,18 +4953,60 @@ Run this on the operator workstation using the same configuration and existing
 Nebius/SSH access as the deployment:
 
 ```bash
-nebius-vpngw collect-logs --local-config-file nebius-vpngw.config.yaml
+nebius-vpngw support-bundle --local-config-file nebius-vpngw.config.yaml
 ```
 
-The command writes one private ZIP in the current directory. Attach it manually
-only to a private support ticket. It retains operational identifiers, including
-IP addresses, gateway names and resource IDs. It excludes credentials, private
-keys, raw configuration, cloud-init user data, environment dumps, packet captures
-and arbitrary log messages. Recognized log events are exported as safe event
-codes and typed fields; unknown fields and messages are omitted and counted.
+The command connects to the configured gateways and writes one private ZIP on the
+operator workstation. Attach it manually only to a private support ticket. It
+retains operational identifiers, including IP addresses, gateway names and resource
+IDs. Journals and command stdout/stderr retain ordinary diagnostic messages, with
+targeted redaction of private-key blocks, PSKs, passwords, tokens and sensitive key
+dumps. Redaction cannot guarantee removal of every possible secret; review the
+bundle before private sharing. Raw configuration, cloud-init user data, environment
+dumps, packet captures and XFRM cryptographic state are not collected.
+
+SSH uses the deployment's existing public-key file or inline public key, exact
+matching private identity, username and established host trust. The root
+`--ssh-identity` override is respected. Collection does not enroll, convert or
+repair trust. If an existing trust receipt is incompatible, select an independently
+verified existing known-hosts file using `VPNGW_SSH_KNOWN_HOSTS_FILE`; investigate a
+host-key mismatch before changing pins.
+
+Progress identifies discovery, trust, identity selection, connection, sudo, guest
+startup, collection, status and archive stages. Failures include a stable reason,
+whether SSH was attempted and a next action. The final gateway count makes a bundle
+without guest evidence explicitly partial. Detailed outcomes remain in the ZIP.
+
+`support-bundle` replaces `collect-logs`; the old command is not an alias.
+The v3 bundle is collected live and intended for offline investigation, including review by
+Codex or Claude. It does not call an AI service or upload anything automatically.
+
+Additional evidence includes:
+
+- Journal severity, PID, boot/invocation identity, UTC/monotonic timestamps,
+  recognized exception/errno facts and canonical product traceback frames.
+- Cloud-init JSON status and stage errors, plus all four cloud-init service units.
+- Five one-second resource intervals: CPU (including iowait/steal), load,
+  memory/swap/paging and available CPU/memory/I/O pressure statistics.
+- Scoped service cgroup OOM counters, kernel OOM victim facts, disk/inode space,
+  component versions, normalized clock observations and managed-service listeners.
+
+Readable evidence also includes `systemctl status --full --no-pager`, the actual
+public `status --packet-details` output, native HA status, uptime, free, five vmstat
+intervals, dmesg and `cloud-init status --long`. Fixed bounded tails cover
+`/var/log/vpngw-fix-routes.log`, `/var/log/vpngw-firewall-setup.log`,
+`/var/log/cloud-init.log` and `/var/log/cloud-init-output.log`. Only journals honor
+`--since`; file tails and current status are separately labelled observations.
+Historical package-installer stdout/stderr discarded by units configured with
+`StandardOutput=null` and `StandardError=null` cannot be recovered.
+
+Unsupported facilities are explicit evidence gaps. Current resource
+samples describe collection time, not necessarily the historical failure.
 
 Collection observes the workstation's selected wheel and pending deployment
-records, separately labelled first/latest apply failures, package-request states,
+records, separately labelled first/latest apply failures, exact package-worker
+identities and service names (including workers awaiting their first request),
+package-request states,
 both HA members, mTLS/heartbeat/fencing state, services and route-fix
 timers, OS/kernel versions, host resources and paired interface counters,
 IPsec/BGP/network state and relevant cloud resources. It does not run apply,
@@ -4946,28 +5023,55 @@ Options:
 - The root `--ssh-identity PATH` option selects an existing operator identity.
 
 Collection is bounded to five minutes and two simultaneous gateway workers, with
-30-second command budgets, 2 MiB per probe, 64 MiB uncompressed and a 25 MiB ZIP.
+30-second guest-probe budgets, 2 MiB per probe, 64 MiB uncompressed and a 25 MiB ZIP.
+The aggregate public status command can use up to 90 seconds of the remaining
+five-minute budget, preserving 20 seconds for archive finalization.
 Missing permissions, unreachable members, timeouts and truncation remain visible
 in `manifest.json`. Privacy omissions and structural truncation have separate
-counts. Current facts from every member take priority over journal history;
-journals are read newest-first and archive trimming removes older events first.
-Exit `0` means complete, `1` means a usable partial ZIP, and
-`2` means no valid ZIP. Missing historical logs cannot be reconstructed. Review
-`README.txt` and the manifest before attaching the bundle.
+counts. Journal coverage is retained independently of event lists, including
+scanned, recognized, unrecognized, invalid, exported and discarded counts. Source
+limits make counts lower bounds; an empty successful query does not prove that
+the requested history was retained. Current facts from every member take priority
+over journal history. Trimming removes routine events before failure landmarks,
+oldest first within each priority.
+
+Artifact provenance lookup has its own 30-second worker budget; a slow artifact
+build or download leaves a partial record and collection continues to the VMs.
+Captured SSH startup stderr is retained after interruption, with incomplete tails
+discarded. Multiline journal redaction follows journal entry order even when
+wall-clock timestamps repeat or move backwards.
+
+Exit `0` means collection completed under policy, `1` means a usable partial ZIP,
+and `2` means no valid ZIP. A complete collection does not establish gateway
+health or sufficient evidence for a root cause. Missing history stays unknown.
+The archive includes:
+
+- `summary.md`: collection coverage and investigation entry points.
+- `manifest.json`: schema `nebius-vpngw/support-bundle-v3`, source outcomes,
+  acquisition times, hashes, coverage and omissions.
+- `evidence-index.json`: every source and pointers to important retained facts.
+- `timeline.json`: a bounded event index with stable references and boot identity.
+- `analysis-guide.md`: investigation steps, units and evidence limitations.
+- `operator/status.txt`: bounded, redacted output of the public status command.
+- Per-source `.stdout.txt` and `.stderr.txt` views, with timing, exit status,
+  redaction and truncation metadata in the manifest.
+
+Reports are regenerated after trimming; references resolve to retained records.
+The timeline orders within nodes/boots and does not assert cross-host causality.
+Review the guide and manifest before attaching the ZIP to a private ticket.
 
 To retain an older CLI needed for an unfinished operation, run the diagnostic
 release in an isolated environment after verifying its published wheel:
 
 ```bash
 pipx run --python /usr/bin/python3.12 --spec /path/to/nebius_vpngw-X.Y.Z-py3-none-any.whl \
-  nebius-vpngw collect-logs --local-config-file nebius-vpngw.config.yaml
+  nebius-vpngw support-bundle --local-config-file nebius-vpngw.config.yaml
 ```
 
-`artifact-changed` compares the selected deployment wheel's SHA-256 with the
-unfinished operation's pin. The installed CLI version alone does not prove a
-match: HA selects `VPNGW_AGENT_WHEEL` or the existing local wheel. Preserve
-lifecycle records and collect evidence before changing artifacts or retrying
-recovery. The zero-byte local `.write.lock` file is not proof that a writer holds
+Artifact digests identify immutable operation payloads. A different release gets a
+new operation after safe predecessor settlement; it does not rewrite the old pin.
+An artifact that changes during one invocation is an integrity failure and requires
+a fresh plan. Preserve lifecycle records when investigating interrupted work. The zero-byte local `.write.lock` file is not proof that a writer holds
 its OS lock. A gateway apply lock is a persistent forwarding fence; activation
 verification deliberately requires it until the pair proves readiness.
 
@@ -5376,11 +5480,10 @@ python -m build --wheel --no-isolation
 nebius-vpngw apply --local-config-file <file>
 ```
 
-Ordinary source/editable applies rebuild and upload the fresh wheel automatically.
-VM-HA planning requires a prebuilt wheel: rebuild after source edits, and use
-`VPNGW_AGENT_WHEEL` to select an exact wheel if `dist/` contains more than one.
-Ordinary wheel-based release/pipx installs reuse the original wheel URL/file metadata
-(or `VPNGW_AGENT_WHEEL`) instead of rebuilding from source.
+Ordinary and HA source/editable applies build a frozen source wheel automatically.
+Release/pipx installs use the exact original wheel provenance or official release
+digest manifest. Standalone binaries include their wheel. `VPNGW_AGENT_WHEEL`
+remains a strict explicit override for both topologies.
 
 ### Testing Changes
 
@@ -5428,7 +5531,7 @@ python3 tests/systemd/run.py --historical-package-upgrades \
   --report /path/to/qualification/package-matrix.json
 ```
 
-The checked-in release manifest pins four authentic stable source wheels.
+The checked-in release manifest pins five authentic stable source wheels.
 Baseline dependencies are resolved from current repositories and recorded; this
 rebuilds the source release's environment, not its original release-date image.
 Each source release is installed into a cached predecessor image using its own

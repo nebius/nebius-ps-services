@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -589,7 +590,10 @@ def test_read_only_enrollment_reuses_exact_published_default_keys(
         assert observed.managed_action is None
         assert {identity.hostname for identity in observed.identities} == set(enrollment)
         for hostname in enrollment:
-            assert observed.identity_for(hostname).private_key == policy.identity_for(hostname).private_key
+            assert (
+                observed.identity_for(hostname).private_key
+                == policy.identity_for(hostname).private_key
+            )
         assert publish_vm_ha_ssh_trust(observed) is False
     assert snapshot() == before
 
@@ -937,9 +941,11 @@ def test_recreation_with_managed_receipt_never_persists_a_replacement_key(
     assert f"replacement or recreation member {hostname}" in str(captured.value)
 
 
+@pytest.mark.parametrize("destroyed", [False, True])
 def test_recreation_with_explicit_pin_never_persists_a_replacement_key(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    destroyed: bool,
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     hostname = "gateway-0"
@@ -960,11 +966,97 @@ def test_recreation_with_explicit_pin_never_persists_a_replacement_key(
             allow_managed_repair=True,
             persist_default_host_keys=True,
             managed_root=tmp_path / "managed",
+            destroyed_hosts=(hostname,) if destroyed else (),
         )
 
     assert not default_private_key.exists()
     assert f"replacement or recreation member {hostname}" in str(captured.value)
     assert captured.value.rotation_intent is None
+
+
+def test_destroyed_deployment_reenrolls_without_retired_private_keys(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    scope = _trust_scope()
+    host = "gateway-0"
+    root = tmp_path / "managed"
+    old_keys = tmp_path / "old-keys"
+    _private_host_keys(old_keys, (host,))
+    old = require_vm_ha_ssh_policy(
+        (host,),
+        {HOST_KEYS_DIR_ENV: str(old_keys)},
+        enrollment_hosts=(host,),
+        trust_scope=scope,
+        allow_managed_repair=True,
+        managed_root=root,
+    )
+    publish_vm_ha_ssh_trust(old)
+    (old_keys / f"{host}.key").unlink()
+    receipt = ssh_policy_module._managed_trust_paths(scope, root).receipt
+    before = receipt.read_bytes()
+
+    def prepare(**kwargs):
+        return require_vm_ha_ssh_policy(
+            (host,),
+            {},
+            enrollment_hosts=(host,),
+            destroyed_hosts=(host,),
+            trust_scope=scope,
+            allow_managed_repair=True,
+            persist_default_host_keys=True,
+            managed_root=root,
+            **kwargs,
+        )
+
+    first, second = prepare(), prepare()
+    key = _default_host_key_directory(tmp_path, scope) / f"{host}.key"
+    assert not key.exists() and receipt.read_bytes() == before
+    assert first.fresh_identity_approval_sha256 == second.fresh_identity_approval_sha256
+    assert first.identity_for(host) != second.identity_for(host)
+    assert first.identity_for(host) != old.identity_for(host)
+    with pytest.raises(ValueError, match="fresh managed enrollment"):
+        prepare(retained_hosts=(host,))
+    assert publish_vm_ha_ssh_trust(first)
+    assert key.read_bytes() == first.identity_for(host).private_key
+    with pytest.raises(RuntimeError, match="conflicts"):
+        publish_vm_ha_ssh_trust(second)
+    assert key.read_bytes() == first.identity_for(host).private_key
+    repeated = prepare()
+    assert repeated.identity_for(host) == first.identity_for(host)
+    assert repeated.managed_action is None
+
+
+@pytest.mark.parametrize("changed", ["scope", "members", "fingerprint", "extra"])
+def test_destroyed_legacy_history_rejects_foreign_or_malformed_receipts(tmp_path, changed):
+    scope = _trust_scope()
+    key_type, key_data = _ed25519_public_key(tmp_path)
+    row = {
+        "hostname": "gateway-0",
+        "keys": [
+            {
+                "key_type": key_type,
+                "key_data": key_data,
+                "fingerprint": ssh_policy_module._public_key_fingerprint(key_data),
+            }
+        ],
+    }
+    payload = {
+        "schema": "nebius-vpngw/vm-ha-ssh-trust-v1",
+        "scope": scope.as_dict(),
+        "scope_sha256": scope.digest,
+        "members": [row],
+    }
+    if changed == "scope":
+        payload["scope_sha256"] = "f" * 64
+    elif changed == "members":
+        row["hostname"] = "foreign"
+    elif changed == "fingerprint":
+        row["keys"][0]["fingerprint"] = "invalid"
+    else:
+        payload["unexpected"] = True
+    with pytest.raises(ValueError):
+        ssh_policy_module._retired_legacy_receipt(
+            json.dumps(payload).encode(), scope, {"gateway-0"}
+        )
 
 
 @pytest.mark.parametrize("predecessor", ("missing", "non-ed25519"))
@@ -2104,3 +2196,321 @@ def test_exact_trust_publication_resumes_its_split_write_without_changing_key(
     assert before == {
         p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in managed.iterdir() if p.is_file()
     }
+
+
+@pytest.fixture
+def legacy_trust(tmp_path):
+    import hashlib
+
+    scope = _trust_scope()
+    hosts = {"gateway-0": "203.0.113.10", "gateway-1": "203.0.113.11"}
+    key_type, key_data = _ed25519_public_key(tmp_path)
+    pins = {name: {key_type: key_data} for name in hosts}
+    authorities = {name: SSHTrustAuthority("product-provisioning-v1") for name in hosts}
+    payload = json.loads(ssh_policy_module._build_receipt(scope, pins, authorities))
+    payload["schema"] = "nebius-vpngw/vm-ha-ssh-trust-v1"
+    for row in payload["members"]:
+        del row["authority"]
+    original = ssh_policy_module._canonical_json(payload)
+    root = tmp_path / "managed"
+    paths = ssh_policy_module._managed_trust_paths(scope, root)
+    with ssh_policy_module._managed_trust_lock(paths):
+        ssh_policy_module._write_atomic(paths.receipt, original)
+        ssh_policy_module._write_atomic(
+            paths.projection,
+            ssh_policy_module._canonical_known_hosts(
+                pins, {name: {name, address} for name, address in hosts.items()}
+            ),
+        )
+    bindings = {
+        name: ssh_policy_module.SSHTrustBinding(
+            hashlib.sha256(name.encode()).hexdigest(), lambda: None
+        )
+        for name in hosts
+    }
+    return scope, hosts, root, paths, original, pins, bindings
+
+
+def test_apply_only_legacy_conversion_verifies_all_members_before_publication(legacy_trust):
+    scope, hosts, root, paths, original, pins, bindings = legacy_trust
+    with pytest.raises(ValueError, match="wrong schema"):
+        require_vm_ha_ssh_policy(
+            tuple(hosts.items()), {}, enrollment_hosts=(), trust_scope=scope, managed_root=root
+        )
+    verified = []
+    policy = ssh_policy_module.prepare_retained_vm_ha_ssh_policy(
+        hosts,
+        scope=scope,
+        bindings=bindings,
+        verify=lambda name, policy: verified.append(name),
+        recover=lambda names: pytest.fail("unchanged pins need no key recovery"),
+        environment={},
+        managed_root=root,
+    )
+    assert set(verified) == set(hosts)
+    assert paths.receipt.read_bytes() == original
+    publish_vm_ha_ssh_trust(policy)
+    after, authorities = ssh_policy_module._parse_receipt(paths.receipt.read_bytes(), scope)
+    assert after == pins
+    assert {a.kind for a in authorities.values()} == {"legacy-receipt-conversion-v1"}
+    assert list(paths.scope_directory.glob("receipt-*.json"))[0].read_bytes() == original
+    require_vm_ha_ssh_policy(
+        tuple(hosts.items()), {}, enrollment_hosts=(), trust_scope=scope, managed_root=root
+    )
+
+
+def test_legacy_conversion_does_not_publish_when_one_host_key_conflicts(legacy_trust):
+    from nebius_vpngw.deploy.recovery import SSHAccessFailure
+
+    scope, hosts, root, paths, original, _, bindings = legacy_trust
+
+    def verify(name, policy):
+        if name == "gateway-1":
+            raise SSHAccessFailure("ssh-host-key-changed")
+
+    with pytest.raises(SSHAccessFailure, match="differs"):
+        ssh_policy_module.prepare_retained_vm_ha_ssh_policy(
+            hosts,
+            scope=scope,
+            bindings=bindings,
+            verify=verify,
+            recover=lambda names: {},
+            environment={},
+            managed_root=root,
+        )
+    assert paths.receipt.read_bytes() == original
+    assert not list(paths.scope_directory.glob("receipt-*.json"))
+
+
+def test_legacy_conversion_rechecks_receipt_at_publication(legacy_trust):
+    scope, hosts, root, paths, original, _, bindings = legacy_trust
+    policy = ssh_policy_module.prepare_retained_vm_ha_ssh_policy(
+        hosts,
+        scope=scope,
+        bindings=bindings,
+        verify=lambda name, policy: None,
+        recover=lambda names: {},
+        environment={},
+        managed_root=root,
+    )
+    ssh_policy_module._write_atomic(paths.receipt, original + b"\n")
+    with pytest.raises(RuntimeError, match="changed after preflight"):
+        publish_vm_ha_ssh_trust(policy)
+    assert paths.receipt.read_bytes() == original + b"\n"
+
+
+def test_changed_key_requires_separate_authenticated_provisioning_proof(legacy_trust, tmp_path):
+    from nebius_vpngw.deploy.recovery import SSHAccessFailure
+
+    scope, hosts, root, paths, original, pins, bindings = legacy_trust
+    newdir = tmp_path / "new"
+    newdir.mkdir()
+    key_type, key_data = _ed25519_public_key(newdir)
+    private = (newdir / "observed-host-key").read_bytes()
+    calls = []
+
+    def verify(name, policy):
+        calls.append(name)
+        if name == "gateway-1" and key_data not in policy.known_hosts_file.read_text():
+            raise SSHAccessFailure("ssh-host-key-changed")
+
+    policy = ssh_policy_module.prepare_retained_vm_ha_ssh_policy(
+        hosts,
+        scope=scope,
+        bindings=bindings,
+        verify=verify,
+        recover=lambda names: {"gateway-1": SSHHostKeyRecovery("gateway-1", private, lambda: None)},
+        environment={},
+        managed_root=root,
+    )
+    assert paths.receipt.read_bytes() == original
+    publish_vm_ha_ssh_trust(policy)
+    result, authorities = ssh_policy_module._parse_receipt(paths.receipt.read_bytes(), scope)
+    assert result["gateway-0"] == pins["gateway-0"]
+    assert result["gateway-1"] == {key_type: key_data}
+    assert authorities["gateway-1"].kind == "provisioning-reconciliation-v1"
+    assert calls.count("gateway-0") == 3
+
+
+def test_legacy_stopped_member_keeps_preview_private_until_both_verify(legacy_trust):
+    scope, hosts, root, paths, original, _pins, bindings = legacy_trust
+    running = {"gateway-0"}
+    calls = []
+
+    def verify(name, _policy):
+        calls.append(name)
+        if name not in running:
+            raise RuntimeError("member is stopped")
+
+    policy = ssh_policy_module.prepare_retained_vm_ha_ssh_policy(
+        hosts,
+        scope=scope,
+        bindings=bindings,
+        verify=verify,
+        recover=lambda _names: pytest.fail("unchanged pins need no recovery"),
+        environment={},
+        managed_root=root,
+        available_hosts=frozenset(running),
+    )
+    assert calls == ["gateway-0"]
+    token = ssh_policy_module.APPLY_POLICIES.set({})
+    try:
+        ssh_policy_module.retain_apply_policy(scope, policy)
+        assert (
+            require_vm_ha_ssh_policy(
+                tuple(hosts.items()),
+                {},
+                enrollment_hosts=(),
+                trust_scope=scope,
+                managed_root=root,
+            )
+            is policy
+        )
+        assert paths.receipt.read_bytes() == original
+        with pytest.raises(RuntimeError, match="stopped"):
+            publish_vm_ha_ssh_trust(policy)
+        assert paths.receipt.read_bytes() == original
+        running.add("gateway-1")
+        assert publish_vm_ha_ssh_trust(policy)
+        assert (
+            json.loads(paths.receipt.read_bytes())["schema"]
+            == ssh_policy_module.VM_HA_SSH_TRUST_SCHEMA
+        )
+    finally:
+        ssh_policy_module.APPLY_POLICIES.reset(token)
+    assert (
+        require_vm_ha_ssh_policy(
+            tuple(hosts.items()),
+            {},
+            enrollment_hosts=(),
+            trust_scope=scope,
+            managed_root=root,
+        ).managed_action
+        is None
+    )
+
+
+def test_rearm_rebinds_same_pins_after_compute_revision_changes(legacy_trust):
+    scope, hosts, root, paths, original, _pins, bindings = legacy_trust
+    revision = [1]
+
+    def assert_old():
+        if revision[0] != 1:
+            raise RuntimeError("old Compute revision")
+
+    old_bindings = {
+        name: ssh_policy_module.SSHTrustBinding(binding.compute_binding_sha256, assert_old)
+        for name, binding in bindings.items()
+    }
+    policy = ssh_policy_module.prepare_retained_vm_ha_ssh_policy(
+        hosts,
+        scope=scope,
+        bindings=old_bindings,
+        verify=lambda *_: None,
+        recover=lambda _: {},
+        environment={},
+        managed_root=root,
+        available_hosts=frozenset({"gateway-0"}),
+    )
+    token = ssh_policy_module.APPLY_POLICIES.set({scope.digest: policy})
+    try:
+        revision[0] = 2
+        with pytest.raises(RuntimeError, match="old Compute revision"):
+            policy.assert_current()
+        fresh = {name: ssh_policy_module.SSHTrustBinding("b" * 64, lambda: None) for name in hosts}
+        rebound = ssh_policy_module.rebind_apply_policy(
+            scope, bindings=fresh, verify=lambda *_: None
+        )
+        rebound.assert_current()
+        assert rebound.known_hosts_sha256 == policy.known_hosts_sha256
+        assert paths.receipt.read_bytes() == original
+        publish_vm_ha_ssh_trust(rebound)
+        _pins, authorities = ssh_policy_module._parse_receipt(paths.receipt.read_bytes(), scope)
+        assert all(item.compute_binding_sha256 == "b" * 64 for item in authorities.values())
+        assert (
+            paths.scope_directory / ("receipt-" + hashlib.sha256(original).hexdigest() + ".json")
+        ).read_bytes() == original
+    finally:
+        ssh_policy_module.APPLY_POLICIES.reset(token)
+
+
+@pytest.mark.parametrize("canonical", [False, True])
+@pytest.mark.parametrize("failure", [None, "proof", "receipt-race", "explicit-key"])
+def test_rearmed_changed_key_refresh_preserves_original_authority(
+    legacy_trust, tmp_path, canonical, failure
+):
+    from nebius_vpngw.deploy.recovery import SSHAccessFailure
+
+    scope, hosts, root, paths, original, pins, bindings = legacy_trust
+    if canonical:
+        original = ssh_policy_module._build_receipt(
+            scope, pins, {name: SSHTrustAuthority("product-provisioning-v1") for name in hosts}
+        )
+        ssh_policy_module._write_atomic(paths.receipt, original)
+    initial = ssh_policy_module.prepare_retained_vm_ha_ssh_policy(
+        hosts,
+        scope=scope,
+        bindings=bindings,
+        verify=lambda *_: None,
+        recover=lambda _: {},
+        environment={},
+        managed_root=root,
+        available_hosts=frozenset({"gateway-0"}),
+    )
+    pending = initial if initial.managed_action is not None else None
+    directory = tmp_path / "rearmed-key"
+    directory.mkdir()
+    key_type, key_data = _ed25519_public_key(directory)
+    private = (directory / "observed-host-key").read_bytes()
+    verified = []
+
+    def verify(name, policy):
+        if name == "gateway-1" and key_data not in policy.known_hosts_file.read_text():
+            raise SSHAccessFailure("ssh-host-key-changed")
+        verified.append(name)
+
+    if failure == "receipt-race" and pending is not None:
+        ssh_policy_module._write_atomic(paths.receipt, original + b"\n")
+
+    def refresh():
+        return ssh_policy_module.prepare_retained_vm_ha_ssh_policy(
+            hosts,
+            scope=scope,
+            bindings=bindings,
+            verify=verify,
+            recover=lambda _: (
+                {}
+                if failure == "proof"
+                else {"gateway-1": SSHHostKeyRecovery("gateway-1", private, lambda: None)}
+            ),
+            environment={ssh_policy_module.HOST_KEYS_DIR_ENV: str(directory)}
+            if failure == "explicit-key"
+            else {},
+            managed_root=root,
+            predecessor_policy=pending,
+        )
+
+    if failure in {"proof", "explicit-key"} or (failure == "receipt-race" and pending):
+        with pytest.raises(RuntimeError):
+            refresh()
+        assert paths.receipt.read_bytes() == original + (
+            b"\n" if failure == "receipt-race" else b""
+        )
+        return
+    refreshed = refresh()
+    assert paths.receipt.read_bytes() == original
+    if pending:
+        assert (
+            refreshed._managed_update.expected_receipt_sha256
+            == pending._managed_update.expected_receipt_sha256
+        )
+    if failure == "receipt-race":
+        ssh_policy_module._write_atomic(paths.receipt, original + b"\n")
+        with pytest.raises(RuntimeError, match="changed after preflight"):
+            publish_vm_ha_ssh_trust(refreshed)
+        return
+    publish_vm_ha_ssh_trust(refreshed)
+    selected, authorities = ssh_policy_module._parse_receipt(paths.receipt.read_bytes(), scope)
+    assert selected["gateway-1"] == {key_type: key_data}
+    assert authorities["gateway-1"].kind == "provisioning-reconciliation-v1"
+    assert set(verified) == set(hosts)

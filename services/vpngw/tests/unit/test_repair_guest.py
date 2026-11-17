@@ -135,6 +135,59 @@ def test_guard_checks_effective_conditions_not_only_files(host):
         guest.verify_guard(operation, run=cleared)
 
 
+def test_guard_retires_only_exact_product_ssh_ordering_before_archiving_ingress(host):
+    _journal, operation, _calls, run = host
+    retained = []
+    for unit in ("ssh.service", "ssh.socket"):
+        directory = guest.SYSTEMD / (unit + ".d")
+        directory.mkdir(parents=True)
+        (directory / "40-vpngw-ingress.conf").write_bytes(guest.SSH_ORDERING)
+        unrelated = directory / "50-customer.conf"
+        unrelated.write_bytes(b"[Unit]\nAfter=network.target\n")
+        retained.append(unrelated)
+    guest.install_guard(operation, run=run)
+    for unit in ("ssh.service", "ssh.socket"):
+        assert not (guest.SYSTEMD / (unit + ".d") / "40-vpngw-ingress.conf").exists()
+        assert (
+            guest.ROOT / "archives" / operation / "ssh-ordering" / unit
+        ).read_bytes() == guest.SSH_ORDERING
+    guest.retire_ssh_ordering(operation)
+    assert all(path.read_bytes() == b"[Unit]\nAfter=network.target\n" for path in retained)
+
+
+@pytest.mark.parametrize(
+    "changed", ["content", "symlink", "parent-symlink", "writable", "hardlink"]
+)
+def test_guard_refuses_modified_ssh_ordering_before_any_service_change(host, changed):
+    import os
+
+    _journal, operation, calls, run = host
+    directory = guest.SYSTEMD / "ssh.socket.d"
+    directory.mkdir(parents=True)
+    path = directory / "40-vpngw-ingress.conf"
+    path.write_bytes(guest.SSH_ORDERING)
+    if changed == "content":
+        path.write_bytes(guest.SSH_ORDERING + b"Requires=customer.service\n")
+    elif changed == "symlink":
+        target = directory / "customer.conf"
+        path.rename(target)
+        path.symlink_to(target)
+    elif changed == "parent-symlink":
+        target = directory.with_name("customer-directory")
+        directory.rename(target)
+        directory.symlink_to(target, target_is_directory=True)
+    elif changed == "writable":
+        path.chmod(0o666)
+    else:
+        os.link(path, directory / "customer.conf")
+    before = path.read_bytes()
+    with pytest.raises(RuntimeError, match="modified SSH ingress ordering"):
+        guest.install_guard(operation, run=run)
+    assert path.read_bytes() == before
+    assert not (guest.SYSTEMD / guest.BOOT_UNIT).exists()
+    assert not calls
+
+
 def test_guard_verifies_native_alias_using_systemd_canonical_identity(host):
     _journal, operation, _calls, run = host
     guest.install_guard(operation, preserve_services=True, run=run)
@@ -417,14 +470,19 @@ def test_private_lock_directory_is_unchanged_while_another_writer_owns_it(tmp_pa
     path.parent.chmod(0o755)
     with guest.lock(path):
         inode = path.stat().st_ino
-        with pytest.raises(RuntimeError, match="still settling"), guest.lock(path, private_parent=True):
+        with (
+            pytest.raises(RuntimeError, match="still settling"),
+            guest.lock(path, private_parent=True),
+        ):
             pytest.fail("A concurrent writer was admitted")
         assert path.parent.stat().st_mode & 0o777 == 0o755
         assert path.stat().st_ino == inode
 
 
 @pytest.mark.parametrize("unsafe", ["writable", "symlink", "foreign-owner"])
-def test_private_lock_directory_rejects_unsafe_parent_without_changing_it(tmp_path, monkeypatch, unsafe):
+def test_private_lock_directory_rejects_unsafe_parent_without_changing_it(
+    tmp_path, monkeypatch, unsafe
+):
     actual = tmp_path / "actual"
     actual.mkdir(mode=0o755)
     path = tmp_path / "mtls/writer.lock"

@@ -3970,6 +3970,59 @@ def test_current_product_marker_binds_exact_compute_member_for_ssh_recovery() ->
 
     assert provenance is FormerVMHAProvenance.CURRENT_MARKER
 
+    # Retained upgrades need lifecycle identity even when a copied marker is valid.
+    manager = VMManager(project_id="project-1", region="eu-north1")
+    with pytest.raises(RuntimeError, match="hardened lifecycle"):
+        manager._validate_vm_ha_ssh_member_binding(
+            name="gateway-0",
+            vm_obj=instance,
+            public_ip="203.0.113.10",
+            spec=spec,
+            lifecycle_snapshot=None,
+            require_lifecycle_identity=True,
+        )
+    from nebius_vpngw.deploy.vm_ha_lifecycle import VMHALifecycleStatus
+
+    members = [
+        SimpleNamespace(
+            instance_name=f"gateway-{m.instance_index}",
+            compute_id=f"compute-{m.instance_index}",
+            public_ip=f"203.0.113.{10 + m.instance_index}",
+            node_id=m.node_id,
+            role=m.role.value,
+        )
+        for m in spec.vm_ha.members
+    ]
+    state = SimpleNamespace(
+        status=VMHALifecycleStatus.ACTIVE,
+        project_id="project-1",
+        gateway_name="gateway",
+        cluster_id=spec.vm_ha.cluster_id,
+        members=members,
+    )
+    snapshot = SimpleNamespace(state=state)
+    assert (
+        manager._validate_vm_ha_ssh_member_binding(
+            name="gateway-0",
+            vm_obj=instance,
+            public_ip="203.0.113.10",
+            spec=spec,
+            lifecycle_snapshot=snapshot,
+            require_lifecycle_identity=True,
+        )
+        is FormerVMHAProvenance.CURRENT_MARKER
+    )
+    members[0].compute_id = "foreign-same-name"
+    with pytest.raises(RuntimeError, match="lifecycle binding"):
+        manager._validate_vm_ha_ssh_member_binding(
+            name="gateway-0",
+            vm_obj=instance,
+            public_ip="203.0.113.10",
+            spec=spec,
+            lifecycle_snapshot=snapshot,
+            require_lifecycle_identity=True,
+        )
+
 
 def test_vm_ha_ssh_compute_reread_uses_bounded_request_policy() -> None:
     vm_mgr = VMManager(project_id="project-1", region="eu-north1")
@@ -4763,3 +4816,21 @@ def test_former_vm_ha_identity_drift_blocks_teardown_after_classification() -> N
         )
         with pytest.raises(RuntimeError, match="evidence changed"):
             vm_mgr.verify_former_vm_ha_member_snapshot(spec, expected)
+
+
+def test_retained_ordinary_origin_uses_current_product_host_key_path(monkeypatch):
+    manager = VMManager(project_id="project-1", region="eu-north1")
+    instance = object()
+    manager._vm_ha_ssh_preflight_snapshot = {"gateway-0": (instance, "203.0.113.10")}
+    check = MagicMock()
+    manager._vm_ha_ssh_binding_assertions = {"gateway-0": check}
+    monkeypatch.setattr(
+        manager,
+        "_validate_vm_ha_ssh_member_binding",
+        lambda **_: FormerVMHAProvenance.LIFECYCLE_STATE,
+    )
+    recover = MagicMock(return_value=b"fixture-private-key")
+    monkeypatch.setattr("nebius_vpngw.deploy.vm_manager.recover_product_host_key", recover)
+    result = manager.recover_vm_ha_ssh_host_keys(frozenset({"gateway-0"}), spec=_ha_spec())
+    recover.assert_called_once_with(instance, path="/etc/ssh/vpngw_host_key")
+    assert result["gateway-0"].assert_current is check

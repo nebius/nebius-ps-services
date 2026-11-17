@@ -168,118 +168,22 @@ def _write_vm_ha_agent_wheel(
         archive.writestr(record_path, "\n".join(record_lines) + "\n")
 
 
-def test_select_wheel_from_dirs_prefers_installed_version(tmp_path) -> None:
-    dist_dir = tmp_path / "dist"
-    dist_dir.mkdir()
-    older = dist_dir / "nebius_vpngw-0.9.0-py3-none-any.whl"
-    preferred = dist_dir / "nebius_vpngw-1.2.3-py3-none-any.whl"
-    newest_other = dist_dir / "nebius_vpngw-2.0.0-py3-none-any.whl"
-
-    older.write_text("", encoding="utf-8")
-    preferred.write_text("", encoding="utf-8")
-    newest_other.write_text("", encoding="utf-8")
-
-    os.utime(older, (1, 1))
-    os.utime(preferred, (2, 2))
-    os.utime(newest_other, (3, 3))
-
-    with patch("nebius_vpngw.deploy.ssh_push.metadata.version", return_value="1.2.3"):
-        selected = SSHPush()._select_wheel_from_dirs([dist_dir])
-
-    assert selected == preferred
-
-
-def test_build_wheel_uses_environment_override(tmp_path, monkeypatch) -> None:
-    wheel_path = tmp_path / "custom.whl"
-    wheel_path.write_text("", encoding="utf-8")
+def test_build_wheel_uses_verified_environment_override(tmp_path, monkeypatch) -> None:
+    wheel_path = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
+    _write_vm_ha_agent_wheel(wheel_path)
     monkeypatch.setenv("VPNGW_AGENT_WHEEL", str(wheel_path))
-
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     selected = SSHPush()._build_wheel()
-
-    assert selected == wheel_path
-
-
-def test_build_wheel_downloads_wheel_from_install_url(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    direct_url = json.dumps(
-        {
-            "url": (
-                "https://github.com/nebius/nebius-ps-services/releases/download/"
-                "nebius-vpngw-v0.5.4/nebius_vpngw-0.5.4-py3-none-any.whl"
-            )
-        }
-    )
-    monkeypatch.setattr(SSHPush, "_find_project_root", lambda self: None)
-    monkeypatch.setattr(
-        "nebius_vpngw.deploy.ssh_push.metadata.distribution",
-        lambda _: _FakeDistribution(direct_url),
-    )
-    monkeypatch.setattr(
-        "nebius_vpngw.deploy.ssh_push.urlopen",
-        lambda url, timeout: _FakeResponse(b"wheel-bytes"),
-    )
-
-    selected = SSHPush()._build_wheel()
-
-    assert selected is not None
-    assert selected.name == "nebius_vpngw-0.5.4-py3-none-any.whl"
-    assert selected.read_bytes() == b"wheel-bytes"
+    assert selected.read_bytes() == wheel_path.read_bytes()
+    assert selected.parent.name == hashlib.sha256(wheel_path.read_bytes()).hexdigest()
 
 
-def test_build_wheel_falls_back_to_original_local_wheel_when_build_fails(
-    tmp_path, monkeypatch
-) -> None:
-    original_wheel = tmp_path / "nebius_vpngw-0.5.4-py3-none-any.whl"
-    original_wheel.write_text("wheel", encoding="utf-8")
-    project_root = tmp_path / "repo"
-    project_root.mkdir()
-    (project_root / "pyproject.toml").write_text(
-        "[project]\nname='nebius-vpngw'\n", encoding="utf-8"
-    )
-    direct_url = json.dumps({"url": original_wheel.resolve().as_uri()})
-
-    monkeypatch.setattr(SSHPush, "_find_project_root", lambda self: project_root)
-    monkeypatch.setattr(
-        "nebius_vpngw.deploy.ssh_push.subprocess.run",
-        lambda *args, **kwargs: SimpleNamespace(
-            returncode=1, stderr="No module named build", stdout=""
-        ),
-    )
-    monkeypatch.setattr(
-        "nebius_vpngw.deploy.ssh_push.metadata.distribution",
-        lambda _: _FakeDistribution(direct_url),
-    )
-
-    selected = SSHPush()._build_wheel()
-
-    assert selected == original_wheel
-
-
-def test_build_wheel_rejects_installed_fallback_for_exact_vm_ha_artifact(
-    tmp_path, monkeypatch
-) -> None:
-    original_wheel = tmp_path / "nebius_vpngw-0.5.4-py3-none-any.whl"
-    original_wheel.write_text("wheel", encoding="utf-8")
-    project_root = tmp_path / "repo"
-    project_root.mkdir()
-    (project_root / "pyproject.toml").write_text(
-        "[project]\nname='nebius-vpngw'\n", encoding="utf-8"
-    )
-    direct_url = json.dumps({"url": original_wheel.resolve().as_uri()})
-
-    monkeypatch.setattr(SSHPush, "_find_project_root", lambda self: project_root)
-    monkeypatch.setattr(
-        "nebius_vpngw.deploy.ssh_push.subprocess.run",
-        lambda *args, **kwargs: SimpleNamespace(
-            returncode=1, stderr="No module named build", stdout=""
-        ),
-    )
-    monkeypatch.setattr(
-        "nebius_vpngw.deploy.ssh_push.metadata.distribution",
-        lambda _: _FakeDistribution(direct_url),
-    )
-
-    assert SSHPush()._build_wheel(allow_installed_fallback=False) is None
+def test_build_wheel_rejects_invalid_override_without_fallback(tmp_path, monkeypatch) -> None:
+    wheel_path = tmp_path / "nebius_vpngw-1.2.3-py3-none-any.whl"
+    wheel_path.write_bytes(b"invalid wheel")
+    monkeypatch.setenv("VPNGW_AGENT_WHEEL", str(wheel_path))
+    with pytest.raises(VMHAAgentArtifactError):
+        SSHPush()._build_wheel()
 
 
 def _credential_payload() -> bytes:
@@ -1200,7 +1104,9 @@ def test_vm_ha_agent_artifact_selection_detects_disappearance(
         path.unlink()
         return original(cls, path, source=source)
 
-    monkeypatch.setattr(SSHPush, "_find_project_root", lambda self: project_root)
+    monkeypatch.setattr(
+        SSHPush, "select_vm_ha_agent_wheel", lambda self: (wheel, "source-snapshot")
+    )
     monkeypatch.setattr(
         VMHAAgentArtifact,
         "from_wheel",
@@ -1310,14 +1216,29 @@ def test_vm_ha_mtls_action_uses_exact_ssh_and_validates_public_evidence(
     assert client.closed
 
 
-@pytest.mark.parametrize("stderr,expected", [
-    (b"managed mTLS action failed: managed mTLS state directory permissions are invalid\n", "managed-mtls-permissions"),
-    (b"managed mTLS action failed: managed mTLS state permissions are invalid\n", "managed-mtls-permissions"),
-    (b"managed mTLS action failed: managed mTLS identity directory permissions are invalid\n", "managed-mtls-permissions"),
-    (b"private-diagnostic", "managed-mtls-action-failed"),
-    (b"managed mTLS action failed: managed mTLS state permissions are invalid\nprivate-diagnostic", "managed-mtls-action-failed"),
-    (b"private-diagnostic" * 1000, "managed-mtls-action-failed"),
-])
+@pytest.mark.parametrize(
+    "stderr,expected",
+    [
+        (
+            b"managed mTLS action failed: managed mTLS state directory permissions are invalid\n",
+            "managed-mtls-permissions",
+        ),
+        (
+            b"managed mTLS action failed: managed mTLS state permissions are invalid\n",
+            "managed-mtls-permissions",
+        ),
+        (
+            b"managed mTLS action failed: managed mTLS identity directory permissions are invalid\n",
+            "managed-mtls-permissions",
+        ),
+        (b"private-diagnostic", "managed-mtls-action-failed"),
+        (
+            b"managed mTLS action failed: managed mTLS state permissions are invalid\nprivate-diagnostic",
+            "managed-mtls-action-failed",
+        ),
+        (b"private-diagnostic" * 1000, "managed-mtls-action-failed"),
+    ],
+)
 def test_vm_ha_mtls_failure_retains_only_bounded_known_cause(monkeypatch, stderr, expected):
     from nebius_vpngw.deploy.apply_diagnostics import ManagedMTLSActionFailure, first_failure
 
@@ -1326,9 +1247,17 @@ def test_vm_ha_mtls_failure_retains_only_bounded_known_cause(monkeypatch, stderr
     client.exec_command = lambda *_args, **_kwargs: (BytesIO(), _CommandStream(b"", 2), stream)
     push = SSHPush(ssh_policy=object())  # type: ignore[arg-type]
     push._paramiko = SimpleNamespace(SSHClient=lambda: client)
-    monkeypatch.setattr("nebius_vpngw.deploy.ssh_push.configure_paramiko_host_verification", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.ssh_push.configure_paramiko_host_verification", lambda *a, **k: None
+    )
     with pytest.raises(ManagedMTLSActionFailure) as result:
-        push.run_vm_ha_mtls_action("203.0.113.10", "gateway-0", {"gateway_group": {"vm_spec": {}}}, action="prepare", request={})
+        push.run_vm_ha_mtls_action(
+            "203.0.113.10",
+            "gateway-0",
+            {"gateway_group": {"vm_spec": {}}},
+            action="prepare",
+            request={},
+        )
     assert first_failure(result.value).predicate == expected
     assert "private-diagnostic" not in str(result.value)
     assert stream.tell() == min(len(stderr), 4097)
@@ -1587,7 +1516,9 @@ def test_vm_ha_apply_owner_adoption_is_bound_to_the_exact_lock(tmp_path, correct
             **(
                 {"predecessor_record_sha256": "8" * 64}
                 if corrective == "record"
-                else {"predecessor_operation_id": "f" * 64} if corrective else {}
+                else {"predecessor_operation_id": "f" * 64}
+                if corrective
+                else {}
             ),
         )
 

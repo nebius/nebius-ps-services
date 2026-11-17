@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import socket
 import ssl
 import struct
 from contextlib import contextmanager
@@ -687,3 +689,52 @@ def test_concrete_transport_rejects_untrusted_certificate_before_state() -> None
         transport.receive(timeout_seconds=1)
 
     assert "PRIVATE-KEY-BYTES" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "kind"),
+    [
+        (TimeoutError("sensitive endpoint"), "timeout"),
+        (ConnectionRefusedError(errno.ECONNREFUSED, "sensitive endpoint"), "refused"),
+        (OSError(errno.EHOSTUNREACH, "sensitive endpoint"), "unreachable"),
+        (OSError(errno.ENETUNREACH, "sensitive endpoint"), "unreachable"),
+        # The OSError constructor maps ETIMEDOUT to TimeoutError, which the
+        # timeout clause owns before errno classification is consulted.
+        (OSError(errno.ETIMEDOUT, "sensitive endpoint"), "timeout"),
+        (socket.gaierror(8, "sensitive endpoint"), "unreachable"),
+        (ssl.SSLError(1, "sensitive endpoint"), "tls"),
+        (OSError("sensitive endpoint"), "protocol"),
+    ],
+)
+def test_concrete_transport_classifies_send_failures(side_effect: Exception, kind: str) -> None:
+    tls = _FakeTLSConfig(_FakeTLSChannel("node-b"), _FakeTLSChannel("node-b"))
+    transport = _concrete_transport(tls)
+
+    with (
+        patch("socket.create_connection", side_effect=side_effect),
+        pytest.raises(PeerTransportError) as error,
+    ):
+        transport.send(_heartbeat())
+
+    assert error.value.kind == kind
+    assert "sensitive endpoint" not in str(error.value)
+
+
+def test_concrete_transport_marks_certificate_pinning_failures_as_tls() -> None:
+    frame = _encode_heartbeat(_heartbeat(), max_frame_bytes=4096)
+    tls = _FakeTLSConfig(_FakeTLSChannel("node-c"), _FakeTLSChannel("node-c", frame))
+    transport = _concrete_transport(tls)
+
+    with (
+        patch("socket.socket", return_value=_FakeListener()),
+        pytest.raises(PeerTransportError) as error,
+    ):
+        transport.receive(timeout_seconds=1)
+
+    assert error.value.kind == "tls"
+
+
+def test_peer_transport_error_kind_defaults_and_rejects_unknown_values() -> None:
+    assert PeerTransportError("plain").kind == "protocol"
+    with pytest.raises(ValueError, match="kind"):
+        PeerTransportError("plain", kind="novel")

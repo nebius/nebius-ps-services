@@ -213,3 +213,80 @@ def test_command_handoff_preserves_preparation_and_rejects_corrupt_authority(pre
         bindings[prep.COMMAND] = json.dumps(command)
         with pytest.raises(ValueError, match="inconsistent command authority"):
             vm_ha_effective_resource_bindings(bindings)
+
+
+def test_completed_preparation_can_archive_into_new_artifact_successor(prepared, tmp_path):
+    from nebius_vpngw.apply_approval import bind, digest
+    from nebius_vpngw.deploy import ha_command
+    from nebius_vpngw.deploy.apply_command import CommandJournal
+
+    lifecycle, options = prepared
+    state = lifecycle.state
+    targets = tuple(sorted(member.compute_id for member in state.members))
+    parent = CommandJournal(state.project_id, state.gateway_name, root=tmp_path / "parent")
+    command = ha_command.create(
+        parent,
+        scope="1" * 64,
+        artifact="a" * 64,
+        action_scope=digest({"prepare": True}),
+        targets=targets,
+        approval="2" * 64,
+        runtime_scope=digest(options["preparation_scope"]),
+        report={},
+        attachment_plan=None,
+        packages={"parent": state.transaction.operation_id},
+        preparation=True,
+    )
+    with parent:
+        command.begin()
+        resources = dict(state.transaction.resource_bindings)
+        resources.update(
+            {
+                "runtime-command-execution": command.execution_id,
+                "runtime-command-approval": json.dumps(
+                    bind(command.approval, options["preparation_scope"])
+                ),
+            }
+        )
+        lifecycle.state = replace(
+            state,
+            transaction=replace(
+                state.transaction, resource_bindings=tuple(sorted(resources.items()))
+            ),
+        )
+        lifecycle.store.path.write_text(json.dumps(lifecycle.state.to_dict()))
+        prep.publish(lifecycle, **options)
+        command.finish_preparation(lifecycle.state)
+    previous = parent.snapshot()
+    original = parent.path.read_bytes()
+    proposal = ha_command.reviewed_successor(
+        previous,
+        lifecycle=lifecycle.state,
+        kind="corrective-release",
+        old_scope="1" * 64,
+        action_scope=digest({"prepare": False}),
+        preparation_action_scope=digest({"prepare": True}),
+        targets=targets,
+        attachment_child=None,
+    )
+    successor = ha_command.create(
+        parent,
+        scope="3" * 64,
+        artifact="b" * 64,
+        action_scope=digest({"prepare": False}),
+        targets=targets,
+        approval="4" * 64,
+        runtime_scope="5" * 64,
+        report={},
+        attachment_plan=None,
+        successor=proposal,
+    )
+    with parent:
+        successor.begin()
+    assert successor.execution_id != previous["transaction"]["execution_id"]
+    assert (parent.root / "history" / (digest(previous) + ".json")).read_bytes() == original
+    assert parent.pending()["plan"]["artifact_sha256"] == "b" * 64
+    assert (
+        dict(lifecycle.state.transaction.resource_bindings)["heartbeat-upgrade-artifact"]
+        == "a" * 64
+    )

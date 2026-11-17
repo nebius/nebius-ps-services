@@ -74,6 +74,10 @@ class HeartbeatPublisher:
         self.generation = 0
         self.counter = 0
         self.threads: list[threading.Thread] = []
+        self.last_send_ok_at: float | None = None
+        self.last_send_error_at: float | None = None
+        self.last_send_error_kind: str | None = None
+        self.consecutive_send_failures = 0
 
     def progress(self, phase: str, invalidates_health: bool = False) -> None:
         with self.lock:
@@ -102,6 +106,25 @@ class HeartbeatPublisher:
         with self.lock:
             if not self.stop.is_set():
                 self.snapshot, self.observed_at = snapshot, self.clock()
+
+    def send_status(self) -> dict[str, object]:
+        """Peer send health as monotonic ages; merged additively into status."""
+        now = self.clock()
+        with self.lock:
+            ok_at = self.last_send_ok_at
+            error_at = self.last_send_error_at
+            kind = self.last_send_error_kind
+            failures = self.consecutive_send_failures
+        return {
+            "peer_send_last_success_age_seconds": (
+                max(0.0, now - ok_at) if ok_at is not None else None
+            ),
+            "peer_send_last_error_age_seconds": (
+                max(0.0, now - error_at) if error_at is not None else None
+            ),
+            "peer_send_error_kind": kind,
+            "peer_send_consecutive_failures": failures,
+        }
 
     def collect(self) -> None:
         started = self.clock()
@@ -224,9 +247,15 @@ class HeartbeatPublisher:
                 if remaining <= 0:
                     return
                 self.send(outgoing, remaining)
+                with self.lock:
+                    self.last_send_ok_at = self.clock()
+                    self.consecutive_send_failures = 0
                 return
-            except PeerTransportError:
-                pass
+            except PeerTransportError as error:
+                with self.lock:
+                    self.last_send_error_at = self.clock()
+                    self.last_send_error_kind = getattr(error, "kind", "protocol")
+                    self.consecutive_send_failures += 1
             finally:
                 self.publication_gate.release()
             self.stop.wait(min(0.05, max(0.0, deadline - self.clock())))

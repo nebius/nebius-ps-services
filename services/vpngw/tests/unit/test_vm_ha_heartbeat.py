@@ -733,3 +733,47 @@ def test_current_passive_authority_cannot_claim_serving(tmp_path):
     records["guard.json"]["data_plane_mode"] = records["data-plane.json"]["mode"] = "passive"
     save()
     assert not runtime._sample_local_health(105).serving_ready
+
+
+def test_publisher_records_classified_send_failures():
+    now, sent = [100.0], []
+
+    def send(value, remaining):
+        sent.append((value, remaining))
+        now[0] += 0.1
+        raise PeerTransportError("peer authentication or transport failed", kind="unreachable")
+
+    pub = publisher(now, sent, send=send)
+    pub.collect()
+    pub.publish()
+
+    assert len(sent) == 3  # every bounded attempt failed and was recorded
+    assert pub.consecutive_send_failures == 3
+    assert pub.last_send_error_kind == "unreachable"
+    status = pub.send_status()
+    assert status["peer_send_error_kind"] == "unreachable"
+    assert status["peer_send_consecutive_failures"] == 3
+    assert status["peer_send_last_success_age_seconds"] is None
+    assert status["peer_send_last_error_age_seconds"] >= 0.0
+
+
+def test_publisher_send_success_resets_consecutive_failures():
+    now, sent = [100.0], []
+    outcomes = iter(("fail", "ok"))
+
+    def send(value, remaining):
+        sent.append((value, remaining))
+        if next(outcomes) == "fail":
+            raise PeerTransportError("peer transport timed out", kind="timeout")
+
+    pub = publisher(now, sent, send=send)
+    pub.collect()
+    pub.publish()
+
+    assert len(sent) == 2
+    assert pub.consecutive_send_failures == 0
+    now[0] += 4.0
+    status = pub.send_status()
+    assert status["peer_send_consecutive_failures"] == 0
+    assert status["peer_send_last_success_age_seconds"] == 4.0
+    assert status["peer_send_error_kind"] == "timeout"  # retained for history

@@ -16,7 +16,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
-from ..apply_approval import digest
+from ..apply_approval import digest, manifest_identity
 from .recovery import ReplanRejected
 from .vm_ha_lifecycle import VMHALifecycleState
 from .vm_ha_upgrade_recovery import UPGRADE_RECOVERY_INSPECTION
@@ -36,7 +36,7 @@ def validate_record(value: dict, *, previous: VMHALifecycleState | None = None) 
     proof = value["proof"]
     if (
         not isinstance(proof, dict)
-        or set(proof)
+        or set(proof) - {"recovery_frontier"}
         != {
             "action",
             "operation",
@@ -56,7 +56,7 @@ def validate_record(value: dict, *, previous: VMHALifecycleState | None = None) 
         or proof["action"] != "settle-ha-predecessor"
     ):
         raise ReplanRejected("HA successor settlement proof is malformed")
-    for key in set(proof) - {"action", "guests", "owners", "generations"}:
+    for key in set(proof) - {"action", "guests", "owners", "generations", "recovery_frontier"}:
         if not isinstance(proof[key], str) or re.fullmatch(r"[a-f0-9]{64}", proof[key]) is None:
             raise ReplanRejected("HA successor settlement digest is malformed")
     if (
@@ -102,6 +102,35 @@ def validate_record(value: dict, *, previous: VMHALifecycleState | None = None) 
             or generation[0] != request["previous_lock"]["generation_id"]
         ):
             raise ReplanRejected("HA successor predecessor generation differs")
+    frontier = proof.get("recovery_frontier")
+    if frontier is not None:
+        if not isinstance(frontier, dict) or set(frontier) != {
+            "lifecycle_artifact",
+            "command_artifact",
+            "manifests",
+        }:
+            raise ReplanRejected("Recovery settlement frontier is malformed")
+        if set(frontier["manifests"]) != set(value["requests"]) or any(
+            not isinstance(item, str) or re.fullmatch(r"[a-f0-9]{64}", item) is None
+            for item in (
+                frontier["lifecycle_artifact"],
+                frontier["command_artifact"],
+                *frontier["manifests"].values(),
+            )
+        ):
+            raise ReplanRejected("Recovery settlement package authority is malformed")
+        if previous is not None:
+            from .vm_ha_upgrade_recovery import ARTIFACT, unfinished_recovery
+
+            recovery = unfinished_recovery(previous)
+            assert previous.transaction is not None
+            if (
+                recovery is None
+                or recovery["artifact"] != frontier["command_artifact"]
+                or dict(previous.transaction.resource_bindings)[ARTIFACT]
+                != frontier["lifecycle_artifact"]
+            ):
+                raise ReplanRejected("Recovery settlement predecessor authority differs")
     if previous is not None and (
         previous.transaction is None
         or proof["lifecycle"] != previous.record_sha256
@@ -151,13 +180,19 @@ PREDECESSOR_INSPECTION = (
 )
 
 
-def predecessor_generations(state: VMHALifecycleState, evidence: dict) -> dict:
+def predecessor_generations(
+    state: VMHALifecycleState, evidence: dict, *, selected_manifests: dict | None = None
+) -> dict:
     """Bind both installed/staged projections to the original approved package."""
     transaction = state.transaction
     if transaction is None:
         raise ReplanRejected("HA predecessor transaction is unavailable")
-    manifests = json.loads(
-        dict(transaction.resource_bindings).get("runtime-package-manifests", "null")
+    manifests = (
+        selected_manifests
+        if selected_manifests is not None
+        else json.loads(
+            dict(transaction.resource_bindings).get("runtime-package-manifests", "null")
+        )
     )
     if (
         not isinstance(manifests, dict)
@@ -258,15 +293,41 @@ def settled_owners(journal, state, credential_plan, ssh_policy) -> tuple[dict, d
     previous = journal.snapshot()
     parent = previous["transaction"] if previous else None
     transaction = state.transaction
-    if parent is None or parent["phase"] != "pending" or transaction is None:
-        raise ReplanRejected("HA settlement requires its exact pending command")
+    from .ha_command import prepared_predecessor
+    from .ha_preparation import command_authority
+
+    prepared = prepared_predecessor(previous, state) if previous else None
+    if parent is None or (parent["phase"] != "pending" and prepared is None) or transaction is None:
+        raise ReplanRejected("HA settlement requires its exact pending or prepared command")
     plan = CommandPlan.parse(parent["plan"])
     runtime = previous["bindings"].get("runtime")
     bindings = dict(transaction.resource_bindings)
-    approval = json.loads(bindings.get("runtime-command-approval", "null"))
+    execution, approval = command_authority(state)
+    successor = runtime.get("successor") if isinstance(runtime, dict) else None
+    successor_authority = None
+    if successor:
+        from .vm_ha_corrective import authority
+        from .vm_ha_upgrade_recovery import recovery_authority
+
+        successor_authority = (
+            authority(state)
+            if successor["kind"] == "corrective-release"
+            else recovery_authority(state)
+        )
+        if (
+            successor_authority is None
+            or successor_authority["approval"] != runtime["approval"]
+            or successor_authority["artifact"] != plan.artifact_sha256
+            or successor_authority["prior_artifact"] != successor["prior_artifact"]
+            or successor_authority["prior_record"] != successor["prior_lifecycle"]
+            or (
+                "settlement" in successor
+                and digest(successor_authority.get("replan")) != successor["settlement"]
+            )
+        ):
+            raise ReplanRejected("HA settlement successor authority differs")
     if (
         not isinstance(runtime, dict)
-        or any(runtime.get(key) for key in ("preparation", "continuation", "successor"))
         or any(
             effect.owner
             not in {"ha-lifecycle", "managed-credentials", "ssh-bootstrap", "security-groups"}
@@ -278,12 +339,29 @@ def settled_owners(journal, state, credential_plan, ssh_policy) -> tuple[dict, d
         != 1
         or tuple(sorted(next(effect for effect in plan.effects if effect.key == "runtime").targets))
         != tuple(sorted(member.compute_id for member in state.members))
-        or bindings.get("runtime-command-execution") != parent["execution_id"]
-        or not isinstance(approval, dict)
-        or approval.get("approval") != runtime["approval"]
-        or approval.get("scope") != runtime["runtime_scope"]
+        or (
+            successor_authority is None
+            and (
+                execution != parent["execution_id"]
+                or not isinstance(approval, dict)
+                or approval.get("approval") != runtime["approval"]
+                or approval.get("scope") != runtime["runtime_scope"]
+            )
+        )
     ):
         raise ReplanRejected("HA settlement command authority differs")
+    if runtime.get("continuation"):
+        from .ha_preparation import continuation_command, receipt
+
+        handoff = continuation_command(bindings)
+        preparation = receipt(state)
+        if (
+            handoff is None
+            or preparation is None
+            or handoff["previous_execution"] != runtime["continuation"]["previous_execution"]
+            or runtime["continuation"]["prepared"] != digest(preparation)
+        ):
+            raise ReplanRejected("HA settlement continuation authority differs")
     if (
         credential_plan.credentials is None
         or credential_plan.action != "reuse"
@@ -455,6 +533,35 @@ class Settlement:
             self.save(record)
 
 
+def recovery_member_manifest(state, name, children, reservation, original):
+    """Select A or B from exact recorded owners, never from the requested C wheel."""
+    from .vm_ha_upgrade_recovery import ARTIFACT, unfinished_recovery
+
+    record = unfinished_recovery(state)
+    if record is None or not isinstance(original, dict) or name not in original:
+        raise ReplanRejected("Recovery predecessor manifests are unavailable")
+    installed = children["runtime"]["artifact"]
+    if installed == dict(state.transaction.resource_bindings)[ARTIFACT]:
+        manifest = original[name]
+    elif installed == record["artifact"] and reservation is not None:
+        manifest = reservation["request"]["package"]["desired"]
+        package = json.loads(record["packages"])[name]
+        if (
+            digest(
+                {key: manifest[key] for key in ("expected_dependencies", "expected_requirements")}
+            )
+            != package["closure"]
+            or manifest["dependency_wheels"] != package["wheels"]
+            or digest(manifest["runtime_plan"]) != package.get("runtime")
+        ):
+            raise ReplanRejected("Recovery reservation changed its approved package closure")
+    else:
+        raise ReplanRejected("Recovery guest has an unproven package artifact")
+    if manifest.get("wheel_sha256") != installed:
+        raise ReplanRejected("Recovery installed artifact differs from its original manifest")
+    return manifest
+
+
 def inspect(
     journal,
     lifecycle_store,
@@ -469,35 +576,34 @@ def inspect(
     inspect_guest,
 ) -> tuple[Settlement, dict]:
     from . import package_reservation, vm_ha_corrective
-    from .vm_ha_upgrade_recovery import ARTIFACT, host_digest, validate_host_evidence
+    from .vm_ha_upgrade_recovery import (
+        ARTIFACT,
+        host_digest,
+        unfinished_recovery,
+        validate_host_evidence,
+    )
 
+    unfinished = unfinished_recovery(state)
     try:
-        vm_ha_corrective.validate_checkpoint(state)
+        if unfinished is None:
+            vm_ha_corrective.validate_checkpoint(state)
     except ValueError as error:
         raise ReplanRejected(
             "HA predecessor is not an exact settled host-only checkpoint",
             code="predecessor-not-settled",
         ) from error
     previous, owners, snapshots = settled_owners(journal, state, credential_plan, ssh_policy)
-    generations = predecessor_generations(state, evidence)
-    require_same_infrastructure(state, desired, generations)
-    locks = {node: value["apply_lock"] for node, value in evidence.items()}
-    validate_host_evidence(
-        state,
-        evidence,
-        generations,
-        lock_operations={node: value["operation_id"] for node, value in locks.items()},
-    )
     parent = previous["transaction"]
     runtime = previous["bindings"]["runtime"]
     root = package_reservation.recovery_owner(journal.root, parent["execution_id"], digest(runtime))
-    if root != (journal.root, parent["execution_id"], digest(runtime)):
-        raise ReplanRejected(
-            "HA settlement must inspect its original composed package owner",
-            code="predecessor-not-settled",
-        )
+    # recovery_owner validates the exact protected child/parent mapping. Bind
+    # that authority into the proof so lock-time refresh detects any change.
     operation = operation_id(state, previous, digest(desired), artifact)
-    requests, guests = {}, {}
+    requests, guests, selected_manifests = {}, {}, {}
+    locks = {node: value["apply_lock"] for node, value in evidence.items()}
+    prior_manifests = json.loads(
+        dict(state.transaction.resource_bindings).get("runtime-package-manifests", "null")
+    )
     for member in state.members:
         node = member.node_id
         reservation = package_reservation.read(*root, member.instance_name)
@@ -509,10 +615,17 @@ def inspect(
                 "package_reservation": reservation,
             },
         )
+        installed_artifact = dict(state.transaction.resource_bindings)[ARTIFACT]
+        if unfinished is not None:
+            baseline = recovery_member_manifest(
+                state, member.instance_name, observed["children"], reservation, prior_manifests
+            )
+            selected_manifests[member.instance_name] = baseline
+            installed_artifact = baseline["wheel_sha256"]
         vm_ha_corrective.completed_children(
             observed["children"],
             parent=state.transaction.operation_id,
-            artifact=dict(state.transaction.resource_bindings)[ARTIFACT],
+            artifact=installed_artifact,
         )
         if observed["boot_id"] != evidence[node]["boot_id"]:
             raise ReplanRejected("HA predecessor boot changed during inspection")
@@ -537,6 +650,16 @@ def inspect(
             key: observed[key]
             for key in ("children", "boot_id", "adoption_sha256", "package_worker")
         }
+    generations = predecessor_generations(
+        state, evidence, selected_manifests=selected_manifests if unfinished else None
+    )
+    require_same_infrastructure(state, desired, generations)
+    validate_host_evidence(
+        state,
+        evidence,
+        generations,
+        lock_operations={node: value["operation_id"] for node, value in locks.items()},
+    )
     proof = {
         "action": "settle-ha-predecessor",
         "operation": operation,
@@ -550,9 +673,21 @@ def inspect(
         "guests": guests,
         "generations": json.loads(json.dumps(generations)),
         "sources": digest({node: item["source_sha256"] for node, item in evidence.items()}),
-        "owners": {name: digest(value) for name, value in snapshots.items()},
+        "owners": {
+            **{name: digest(value) for name, value in snapshots.items()},
+            "package_owner": digest({"execution": root[1], "authority": root[2]}),
+        },
         "ssh_trust": ssh_policy.known_hosts_sha256,
     }
+    if unfinished is not None:
+        proof["recovery_frontier"] = {
+            "lifecycle_artifact": dict(state.transaction.resource_bindings)[ARTIFACT],
+            "command_artifact": unfinished["artifact"],
+            "manifests": {
+                m.node_id: manifest_identity(selected_manifests[m.instance_name])
+                for m in state.members
+            },
+        }
     result = Settlement(
         journal, lifecycle_store, state, previous, owners, snapshots, proof, requests
     )

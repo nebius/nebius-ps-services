@@ -372,6 +372,7 @@ def local_settlement(tmp_path, monkeypatch, request):
         for projection in (item["installed"], item["staged"]):
             projection["unbound_sha256"] = "d" * 64
         manifests[member.instance_name] = {
+            "wheel_sha256": "a" * 64,
             "config_sha256": "d" * 64,
             "files": {"nebius_vpngw/cli.py": "e" * 64},
         }
@@ -437,6 +438,7 @@ def local_settlement(tmp_path, monkeypatch, request):
         options=options,
         inspect=lambda: ha_replan.inspect(journal, store, state, **options)[0],
         guests=guests,
+        old_desired=old_desired,
     )
 
 
@@ -668,10 +670,6 @@ def test_settled_ha_successor_uses_new_intent_and_keeps_old_effects_as_history(
 def test_cli_changed_generation_resumes_exact_successor_reservations(
     local_settlement, monkeypatch, interrupted_write
 ):
-    from nebius_vpngw import cli
-    from nebius_vpngw.deploy import ordinary_handoff, vm_ha_corrective
-    from nebius_vpngw.deploy.vm_ha_lifecycle import VMHALifecycleJournal
-
     ctx = local_settlement
     settlement = ctx.inspect()
     settlement.execute(
@@ -683,6 +681,14 @@ def test_cli_changed_generation_resumes_exact_successor_reservations(
         verify_stopped=lambda: None,
     )
     completed = settlement.read()
+    _execute_settled_successor(ctx, monkeypatch, completed, interrupted_write)
+
+
+def _execute_settled_successor(ctx, monkeypatch, completed, interrupted_write):
+    from nebius_vpngw import cli
+    from nebius_vpngw.deploy import ordinary_handoff, vm_ha_corrective
+    from nebius_vpngw.deploy.vm_ha_lifecycle import VMHALifecycleJournal
+
     desired = ctx.options["desired"]
     evidence = ctx.options["evidence"]
     instances = tuple(
@@ -799,7 +805,9 @@ def test_cli_changed_generation_resumes_exact_successor_reservations(
     assert set(reservations) == {member.node_id for member in state.members}
     from nebius_vpngw.deploy.vm_ha_lifecycle import vm_ha_replacement_ownership_bindings
 
-    assert vm_ha_replacement_ownership_bindings(state) == vm_ha_replacement_ownership_bindings(ctx.state)
+    assert vm_ha_replacement_ownership_bindings(state) == vm_ha_replacement_ownership_bindings(
+        ctx.state
+    )
 
 
 def test_unsettled_checkpoint_has_typed_repair_guidance_without_effects(local_settlement):
@@ -1017,3 +1025,255 @@ def test_real_apply_command_separates_settlement_and_successor_approval(
         assert not actions
         assert not ctx.inspect().path.exists()
         assert not (ctx.journal.root / "history").exists()
+
+
+@pytest.mark.parametrize("member_artifacts", [("a", "a"), ("b", "a"), ("b", "b")])
+def test_unfinished_recovery_selects_each_original_package_without_installing(member_artifacts):
+    from nebius_vpngw.deploy import vm_ha_upgrade_recovery as recovery
+
+    state, evidence = predecessor()
+    original = json.loads(dict(state.transaction.resource_bindings)["runtime-package-manifests"])
+    for manifest in original.values():
+        manifest["wheel_sha256"] = "a" * 64
+    replacement = {
+        **next(iter(original.values())),
+        "wheel_sha256": "b" * 64,
+        "files": {"nebius_vpngw/cli.py": "f" * 64},
+        "expected_dependencies": {"nebius-vpngw": "0.6.6"},
+        "expected_requirements": {"nebius-vpngw": []},
+        "dependency_wheels": {},
+        "runtime_plan": {"packages": []},
+    }
+    packages = {
+        m.instance_name: {
+            "closure": digest(
+                {k: replacement[k] for k in ("expected_dependencies", "expected_requirements")}
+            ),
+            "wheels": {},
+            "runtime": digest(replacement["runtime_plan"]),
+        }
+        for m in state.members
+    }
+    resources = dict(state.transaction.resource_bindings)
+    resources[recovery.ARTIFACT] = "a" * 64
+    resources[recovery.AUTHORITY] = json.dumps(
+        {
+            "approval": "c" * 64,
+            "prior_record": "d" * 64,
+            "prior_artifact": "a" * 64,
+            "artifact": "b" * 64,
+            "ssh_trust": "e" * 64,
+            "hosts": "f" * 64,
+            "owner": state.members[0].node_id,
+            "superseded_effect": "prepare-heartbeat-upgrade",
+            "packages": json.dumps(packages),
+        }
+    )
+    state = replace(
+        state,
+        transaction=replace(
+            state.transaction,
+            pending_effect=None,
+            resource_bindings=tuple(sorted(resources.items())),
+        ),
+    )
+    selected = {}
+    for member, letter in zip(state.members, member_artifacts, strict=True):
+        children = {"runtime": {"artifact": letter * 64}}
+        reservation = {"request": {"package": {"desired": replacement}}} if letter == "b" else None
+        selected[member.instance_name] = ha_replan.recovery_member_manifest(
+            state, member.instance_name, children, reservation, original
+        )
+        if letter == "b":
+            evidence[member.node_id]["source_sha256"] = {"cli.py": "f" * 64}
+    assert len(ha_replan.predecessor_generations(state, evidence, selected_manifests=selected)) == 2
+    with pytest.raises(ValueError, match="unproven"):
+        ha_replan.recovery_member_manifest(
+            state,
+            state.members[0].instance_name,
+            {"runtime": {"artifact": "9" * 64}},
+            None,
+            original,
+        )
+    changed = deepcopy(replacement)
+    changed["runtime_plan"] = {"packages": ["foreign"]}
+    with pytest.raises(ValueError, match="closure"):
+        ha_replan.recovery_member_manifest(
+            state,
+            state.members[0].instance_name,
+            {"runtime": {"artifact": "b" * 64}},
+            {"request": {"package": {"desired": changed}}},
+            original,
+        )
+
+
+@pytest.mark.parametrize(
+    ("member_artifacts", "lost_reply"),
+    [(("a", "a"), False), (("b", "a"), False), (("b", "b"), False), (("b", "a"), True)],
+)
+def test_pre_ready_recovery_settlement_admits_fresh_artifact_successor(
+    local_settlement, monkeypatch, member_artifacts, lost_reply
+):
+    from nebius_vpngw.apply_approval import manifest_identity
+    from nebius_vpngw.deploy import ha_command, package_reservation
+    from nebius_vpngw.deploy import vm_ha_upgrade_recovery as recovery
+    from nebius_vpngw.deploy.apply_command import CommandJournal
+
+    ctx = local_settlement
+    ctx.options["desired"] = ctx.old_desired
+    ctx.inspect = lambda: ha_replan.inspect(ctx.journal, ctx.store, ctx.state, **ctx.options)[0]
+    original = ctx.journal.snapshot()
+    original_bytes = ctx.journal.path.read_bytes()
+    targets = tuple(sorted(member.compute_id for member in ctx.state.members))
+    action_scope = original["bindings"]["runtime"]["action_scope"]
+    b_command = ha_command.create(
+        ctx.journal,
+        scope="1" * 64,
+        artifact="b" * 64,
+        action_scope=action_scope,
+        targets=targets,
+        approval="7" * 64,
+        runtime_scope="5" * 64,
+        report={"kind": "upgrade-artifact-recovery"},
+        attachment_plan=None,
+        successor=ha_command.reviewed_successor(
+            original,
+            lifecycle=ctx.state,
+            kind="upgrade-artifact-recovery",
+            old_scope="1" * 64,
+            action_scope=action_scope,
+            targets=targets,
+            attachment_child=None,
+        ),
+    )
+    with ctx.journal:
+        b_command.begin()
+        b_command.start_runtime()
+    old_state = ctx.state
+    original_manifests = json.loads(
+        dict(old_state.transaction.resource_bindings)["runtime-package-manifests"]
+    )
+    replacement = {
+        **next(iter(original_manifests.values())),
+        "wheel_sha256": "b" * 64,
+        "files": {"nebius_vpngw/cli.py": "f" * 64},
+        "expected_dependencies": {"nebius-vpngw": "0.6.5"},
+        "expected_requirements": {"nebius-vpngw": []},
+        "dependency_wheels": {},
+        "runtime_plan": {"packages": []},
+    }
+    artifact = SimpleNamespace(
+        dependency_plans=tuple(
+            (m.instance_name, SimpleNamespace(manifest=replacement)) for m in old_state.members
+        )
+    )
+    ctx.state = recovery.authorize(
+        old_state,
+        approval=b_command.approval,
+        artifact="b" * 64,
+        ssh_trust=ctx.options["ssh_policy"].known_hosts_sha256,
+        hosts=recovery.host_digest(ctx.options["evidence"]),
+        owner="node-0",
+        packages=recovery.package_authority(artifact),
+    )
+    ctx.store.write_verified(ctx.state, predecessor_sha256=old_state.record_sha256)
+    b_snapshot = ctx.journal.snapshot()
+    b_bytes = ctx.journal.path.read_bytes()
+    owner = (ctx.journal.root, b_command.execution_id, digest(b_command.intent))
+    token = package_reservation.SCOPE.set(owner)
+    pins = {}
+    selected = {}
+    try:
+        for member, letter in zip(ctx.state.members, member_artifacts, strict=True):
+            node, name = member.node_id, member.instance_name
+            ctx.guests[node]["children"]["runtime"]["artifact"] = letter * 64
+            selected[node] = replacement if letter == "b" else original_manifests[name]
+            if letter == "b":
+                ctx.options["evidence"][node]["source_sha256"] = {"cli.py": "f" * 64}
+                package_reservation.admit(
+                    {
+                        "action": "prepare-guarded",
+                        "package": {"host": name, "desired": replacement},
+                    },
+                    "6" * 64,
+                )
+                path = package_reservation.path_for(owner[0], owner[1], name)
+                pins[path] = path.read_bytes()
+    finally:
+        package_reservation.SCOPE.reset(token)
+    assert recovery.READY not in dict(ctx.state.transaction.resource_bindings)
+    assert dict(ctx.state.transaction.resource_bindings)[recovery.ARTIFACT] == "a" * 64
+    settlement = ctx.inspect()
+    assert settlement.proof["recovery_frontier"] == {
+        "lifecycle_artifact": "a" * 64,
+        "command_artifact": "b" * 64,
+        "manifests": {node: manifest_identity(manifest) for node, manifest in selected.items()},
+    }
+    failed = False
+    requests = []
+
+    def settle(node, request):
+        nonlocal failed
+        assert request["action"] == "replan-settle"  # Settlement must never install B.
+        requests.append((node, deepcopy(request)))
+        if lost_reply and node == "node-1" and not failed:
+            failed = True
+            raise RuntimeError("lost settlement reply")
+        return {"settlement": {"state": "complete"}, "request": request}
+
+    if lost_reply:
+        with pytest.raises(RuntimeError, match="lost settlement reply"):
+            settlement.execute(
+                refresh=ctx.inspect, settle_guest=settle, verify_stopped=lambda: None
+            )
+        assert set(settlement.read()["receipts"]) == {"node-0"}
+        ctx.journal = CommandJournal(ctx.state.project_id, ctx.state.gateway_name)
+        resumed = ctx.inspect()
+        assert resumed.proof == settlement.proof and resumed.path == settlement.path
+        settlement = resumed
+    settlement.execute(refresh=ctx.inspect, settle_guest=settle, verify_stopped=lambda: None)
+    completed = settlement.read()
+    assert completed["phase"] == "complete"
+    assert all(request["children"] == ctx.guests[node]["children"] for node, request in requests)
+    next_command = ha_command.create(
+        ctx.journal,
+        scope="1" * 64,
+        artifact="c" * 64,
+        action_scope=action_scope,
+        targets=targets,
+        approval="b" * 64,
+        runtime_scope="8" * 64,
+        report={"kind": "corrective-release"},
+        attachment_plan=None,
+        successor=ha_command.reviewed_successor(
+            b_snapshot,
+            lifecycle=ctx.state,
+            kind="corrective-release",
+            old_scope="1" * 64,
+            action_scope=action_scope,
+            targets=targets,
+            attachment_child=None,
+            settlement=completed,
+        ),
+    )
+    with ctx.journal:
+        next_command.begin()
+        next_command.start_runtime()
+    assert next_command.execution_id not in {
+        original["transaction"]["execution_id"],
+        b_snapshot["transaction"]["execution_id"],
+    }
+    _execute_settled_successor(ctx, monkeypatch, completed, interrupted_write=4)
+    from nebius_vpngw.deploy import vm_ha_corrective
+
+    current = ctx.store.read(
+        expected_project_id=ctx.state.project_id, expected_gateway_name=ctx.state.gateway_name
+    )
+    tampered = deepcopy(vm_ha_corrective.authority(current))
+    tampered["replan"]["proof"]["recovery_frontier"]["manifests"]["node-0"] = "0" * 64
+    tampered["operation"] = ha_replan.successor_operation(ctx.state, tampered["replan"])
+    with pytest.raises(ValueError, match="predecessor package manifest differs"):
+        vm_ha_corrective.successor(ctx.state, tampered, bindings={})
+    for snapshot, raw in ((original, original_bytes), (b_snapshot, b_bytes)):
+        assert (ctx.journal.root / "history" / (digest(snapshot) + ".json")).read_bytes() == raw
+    assert all(path.read_bytes() == raw for path, raw in pins.items())

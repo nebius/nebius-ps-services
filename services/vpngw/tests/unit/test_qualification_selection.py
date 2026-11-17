@@ -18,14 +18,16 @@ qualification = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(qualification)
 
 
-@pytest.mark.parametrize("selection,count", [("all", 20), ("ha", 10), ("ordinary", 10)])
+@pytest.mark.parametrize("selection,count", [("all", 24), ("ha", 12), ("ordinary", 12)])
 def test_package_matrix_preserves_all_predecessors_modes_and_interruptions(selection, count):
-    cases = qualification.package_cases(["0.6.0", "0.6.1", "0.6.2", "0.6.3"], "0.6.3", selection)
+    cases = qualification.package_cases(
+        ["0.6.1", "0.6.2", "0.6.3", "0.6.4", "0.6.5"], "0.6.5", selection
+    )
     assert len(cases) == len(set(cases)) == count
-    assert sum("interrupt" in case for case in cases) == count // 5
+    assert sum("interrupt" in case for case in cases) == count // 6
     if selection != "all":
         assert all(f"-{selection}" in case for case in cases)
-    assert len(qualification.package_cases(["0.6.0"], "0.6.3", selection)) == count // 5
+    assert len(qualification.package_cases(["0.6.1"], "0.6.5", selection)) == count // 6
 
 
 def test_ha_native_selection_keeps_shared_coverage_and_names_ordinary_omissions():

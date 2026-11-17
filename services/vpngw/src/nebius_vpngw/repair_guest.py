@@ -36,6 +36,9 @@ ROUTING_LOCK = Path("/run/nebius-vpngw/fix-routes.lock")
 POLICY = Path("/usr/sbin/policy-rc.d")
 POLICY_BYTES = b"#!/bin/sh\n# nebius-vpngw explicit full repair\nexit 101\n"
 BOOT_UNIT = "nebius-vpngw-repair-fence.service"
+SSH_ORDERING = (
+    b"[Unit]\nRequires=nebius-vpngw-ingress.service\nAfter=nebius-vpngw-ingress.service\n"
+)
 UNITS = (
     "nebius-vpngw-vm-ha-guard.service",
     "nebius-vpngw-vm-ha-rearm.service",
@@ -236,6 +239,38 @@ def archive_directory(path: Path) -> None:
         storage.sync(current.parent)
 
 
+def retire_ssh_ordering(operation: str) -> None:
+    """Retire only the exact product dependency before archiving its service."""
+    selected = []
+    for unit in ("ssh.service", "ssh.socket"):
+        path = SYSTEMD / (unit + ".d") / "40-vpngw-ingress.conf"
+        if any(parent.is_symlink() for parent in path.parents):
+            raise RuntimeError("Repair requires review of modified SSH ingress ordering")
+        if not path.exists() and not path.is_symlink():
+            continue
+        info = path.lstat()
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_nlink != 1
+            or info.st_mode & 0o022
+            or path.read_bytes() != SSH_ORDERING
+        ):
+            raise RuntimeError("Repair requires review of modified SSH ingress ordering")
+        selected.append((unit, path))
+    for unit, path in selected:
+        archive = ROOT / "archives" / operation / "ssh-ordering" / unit
+        archive_directory(archive.parent)
+        if archive.exists() or archive.is_symlink():
+            if archive.is_symlink() or archive.read_bytes() != SSH_ORDERING:
+                raise RuntimeError("Repair SSH ordering archive changed")
+            path.unlink()
+        else:
+            os.rename(path, archive)
+        storage.sync(path.parent)
+        storage.sync(archive.parent)
+
+
 def install_guard(operation: str, *, preserve_services: bool = False, run=command) -> None:
     value = storage.Journal(ROOT).load()
     if (
@@ -245,6 +280,7 @@ def install_guard(operation: str, *, preserve_services: bool = False, run=comman
         and not preserve_services
     ):
         raise RuntimeError("Repair guard requires the confirmed guest operation")
+    retire_ssh_ordering(operation)
     publish_file(ROOT / "startup.py", GUARD, mode=0o600)
     # Inhibit before stopping services; a concurrent restart must fail closed.
     storage.publish(
@@ -622,7 +658,10 @@ def reset(operation: str, *, run=command) -> dict:
         held.enter_context(lock(ROUTING_LOCK))
         for relative in PRESERVED_LOCKS:
             held.enter_context(
-                lock(PRODUCT_STATE / relative, private_parent=relative == Path("vm-ha/mtls/writer.lock"))
+                lock(
+                    PRODUCT_STATE / relative,
+                    private_parent=relative == Path("vm-ha/mtls/writer.lock"),
+                )
             )
         ordinary = not value["intent"]["ha"]
         archive_tree(

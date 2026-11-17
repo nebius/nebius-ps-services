@@ -1770,7 +1770,8 @@ def test_vm_ha_apply_executor_preserves_artifact_failure_from_apply_exit(
 
 
 @pytest.mark.parametrize(
-    "origin", ("apply-exit", "owner-refresh", "artifact-recovery", "recovery-exit", "recovery-error")
+    "origin",
+    ("apply-exit", "owner-refresh", "artifact-recovery", "recovery-exit", "recovery-error"),
 )
 def test_vm_ha_executor_preserves_member_bound_package_failure(monkeypatch, tmp_path, origin):
     report = _VMHAApplyPlanReport(
@@ -2440,7 +2441,7 @@ def test_vm_ha_standby_auto_healing_dry_run_emits_exact_plan_without_effects(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: healthy,
+        lambda _path, **_kwargs: healthy,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._run_vm_ha_auto_healing_statuses",
@@ -2548,7 +2549,7 @@ def test_vm_ha_missing_owner_policy_dry_run_plans_exact_bootstrap_recovery(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: blocked,
+        lambda _path, **_kwargs: blocked,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._run_vm_ha_auto_healing_statuses",
@@ -2631,7 +2632,7 @@ def test_vm_ha_completed_owner_recovery_dry_run_resumes_after_compute_start(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: blocked,
+        lambda _path, **_kwargs: blocked,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._run_vm_ha_auto_healing_action",
@@ -2818,7 +2819,7 @@ def test_vm_ha_bare_policy_invalid_guidance_is_repeatable_and_mutation_free(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: blocked,
+        lambda _path, **_kwargs: blocked,
     )
     monkeypatch.setattr("nebius_vpngw.cli.VMHAApplyLock", lock)
     monkeypatch.setattr("nebius_vpngw.cli._prepare_vm_ha_planned_target", effect)
@@ -3479,7 +3480,7 @@ def test_vm_ha_terminal_enabled_policy_retries_completed_recovery_cleanup(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: healthy,
+        lambda _path, **_kwargs: healthy,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._run_vm_ha_auto_healing_statuses",
@@ -3540,7 +3541,7 @@ def test_vm_ha_committed_enabled_policy_clears_completed_recovery_before_fresh_p
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: healthy,
+        lambda _path, **_kwargs: healthy,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._run_vm_ha_auto_healing_statuses",
@@ -3596,7 +3597,7 @@ def test_vm_ha_completed_recovery_cleanup_failure_keeps_specific_maintenance_gui
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: healthy,
+        lambda _path, **_kwargs: healthy,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._run_vm_ha_auto_healing_statuses",
@@ -3659,7 +3660,7 @@ def test_vm_ha_completed_recovery_without_current_or_durable_agreement_stays_blo
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: healthy,
+        lambda _path, **_kwargs: healthy,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._run_vm_ha_auto_healing_statuses",
@@ -3712,7 +3713,7 @@ def test_vm_ha_terminal_enabled_dry_run_never_clears_completed_recovery(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: healthy,
+        lambda _path, **_kwargs: healthy,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._run_vm_ha_auto_healing_statuses",
@@ -3767,7 +3768,7 @@ def test_vm_ha_disable_dry_run_orders_cleanup_before_requested_transition(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: healthy,
+        lambda _path, **_kwargs: healthy,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._run_vm_ha_auto_healing_statuses",
@@ -3821,7 +3822,7 @@ def test_vm_ha_disable_cleanup_plan_has_a_distinct_approval_digest(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: healthy,
+        lambda _path, **_kwargs: healthy,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._run_vm_ha_auto_healing_statuses",
@@ -3885,7 +3886,7 @@ def test_vm_ha_stale_clean_plan_approval_cannot_clear_completed_recovery(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: healthy,
+        lambda _path, **_kwargs: healthy,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._run_vm_ha_auto_healing_statuses",
@@ -4049,7 +4050,7 @@ def test_vm_ha_healthy_requires_two_agreeing_fresh_samples(
     config_path.write_text("version: 1\n", encoding="utf-8")
     healthy = _inspection(_snapshot(overall="HEALTHY", action="none"))
 
-    def inspect_with_retry(_path: Path) -> _VMHACommandInspection:
+    def inspect_with_retry(_path: Path, **_kwargs) -> _VMHACommandInspection:
         try:
             raise RuntimeError("TRANSIENT_PROVIDER_DETAIL")
         except RuntimeError:
@@ -4102,6 +4103,7 @@ def test_vm_ha_region_override_reaches_every_health_observation(
         _path: Path,
         *,
         region: str | None = None,
+        **_kwargs,
     ) -> _VMHACommandInspection:
         observed_regions.append(region)
         return healthy
@@ -4198,7 +4200,7 @@ def test_vm_ha_dry_run_plans_rearm_without_lock_or_effect(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: degraded,
+        lambda _path, **_kwargs: degraded,
     )
     monkeypatch.setattr("nebius_vpngw.cli.VMHAApplyLock", lock)
     monkeypatch.setattr("nebius_vpngw.cli._prepare_vm_ha_planned_target", effect)
@@ -4474,7 +4476,7 @@ def test_vm_ha_removed_lifecycle_plans_fresh_provisioning(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: removed,
+        lambda _path, **_kwargs: removed,
     )
     monkeypatch.setattr("nebius_vpngw.cli._plan_vm_ha_apply_convergence", planner)
 
@@ -4623,7 +4625,7 @@ def test_vm_ha_missing_cloud_member_plans_exact_non_owner_replacement(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: _inspection(snapshot),
+        lambda _path, **_kwargs: _inspection(snapshot),
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._plan_vm_ha_apply_convergence",
@@ -4835,7 +4837,7 @@ def test_vm_ha_agent_artifact_prerequisite_is_actionable_and_zero_effect(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: drift,
+        lambda _path, **_kwargs: drift,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._plan_vm_ha_apply_convergence",
@@ -4899,7 +4901,7 @@ def test_vm_ha_replacement_ssh_identity_prerequisite_is_actionable_and_zero_effe
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: drift,
+        lambda _path, **_kwargs: drift,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._plan_vm_ha_apply_convergence",
@@ -5002,7 +5004,7 @@ def test_vm_ha_artifact_change_after_execution_starts_reports_partial_resume(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: drift,
+        lambda _path, **_kwargs: drift,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._plan_vm_ha_apply_convergence",
@@ -5134,7 +5136,7 @@ def test_vm_ha_apply_exit_reports_checkpoint_resume_not_authentication(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: drift,
+        lambda _path, **_kwargs: drift,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._plan_vm_ha_apply_convergence",
@@ -5310,7 +5312,7 @@ def test_ha_apply_preserves_package_reason_through_recovery_wrappers(
         "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config, ()),
     )
-    monkeypatch.setattr(cli_module, "_inspect_vm_ha_command_status", lambda _path: drift)
+    monkeypatch.setattr(cli_module, "_inspect_vm_ha_command_status", lambda _path, **_kwargs: drift)
     monkeypatch.setattr(cli_module, "_plan_vm_ha_apply_convergence", lambda *_a, **_k: report)
     monkeypatch.setattr(cli_module, "_apply_impl", fail)
 
@@ -5366,7 +5368,9 @@ def test_ha_apply_preserves_nested_engine_interrupt(
         "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **kwargs: _VMHAEffectiveConfig(config, ()),
     )
-    monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", lambda path: drift)
+    monkeypatch.setattr(
+        "nebius_vpngw.cli._inspect_vm_ha_command_status", lambda path, **_kwargs: drift
+    )
     planner = Mock(side_effect=(report, report))
     monkeypatch.setattr("nebius_vpngw.cli._plan_vm_ha_apply_convergence", planner)
     effect = Mock(side_effect=typer.Exit(exit_code))
@@ -5421,7 +5425,7 @@ def test_vm_ha_dry_run_emits_domain_bound_apply_plan_without_prompting(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: drift,
+        lambda _path, **_kwargs: drift,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._plan_vm_ha_apply_convergence",
@@ -5714,7 +5718,7 @@ def test_vm_ha_missing_non_owner_decline_hides_automation_digest(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: blocked,
+        lambda _path, **_kwargs: blocked,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._plan_vm_ha_apply_convergence",
@@ -5767,7 +5771,7 @@ def test_vm_ha_interactive_approval_defaults_no_and_performs_zero_effects(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: drift,
+        lambda _path, **_kwargs: drift,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._plan_vm_ha_apply_convergence",
@@ -5824,7 +5828,7 @@ def test_vm_ha_destructive_plan_reports_impact_and_never_auto_executes(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: drift,
+        lambda _path, **_kwargs: drift,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._plan_vm_ha_apply_convergence",
@@ -5889,7 +5893,7 @@ def test_vm_ha_interactive_approval_eof_returns_130_without_effects(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: drift,
+        lambda _path, **_kwargs: drift,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._plan_vm_ha_apply_convergence",
@@ -5940,7 +5944,7 @@ def test_vm_ha_json_approval_required_never_prompts_and_keeps_stdout_pure(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: drift,
+        lambda _path, **_kwargs: drift,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._plan_vm_ha_apply_convergence",
@@ -6082,7 +6086,7 @@ def test_vm_ha_stale_apply_approval_fails_before_lock_or_effect(
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._inspect_vm_ha_command_status",
-        lambda _path: drift,
+        lambda _path, **_kwargs: drift,
     )
     monkeypatch.setattr(
         "nebius_vpngw.cli._plan_vm_ha_apply_convergence",
@@ -6187,7 +6191,9 @@ def test_vm_ha_resumes_policy_after_completed_start_with_both_members_reachable(
         "nebius_vpngw.deploy.ha_convergence.resolve_conversion",
         lambda **_kwargs: _VMHAEffectiveConfig(config_path, ()),
     )
-    monkeypatch.setattr("nebius_vpngw.cli._inspect_vm_ha_command_status", lambda _path: healthy)
+    monkeypatch.setattr(
+        "nebius_vpngw.cli._inspect_vm_ha_command_status", lambda _path, **_kwargs: healthy
+    )
     monkeypatch.setattr(
         "nebius_vpngw.cli._run_vm_ha_auto_healing_statuses", lambda **_kwargs: statuses
     )

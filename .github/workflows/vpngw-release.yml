@@ -173,6 +173,21 @@ jobs:
           python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/publication.py" notes --tag "$RELEASE_TAG" --prefix "$TAG_PREFIX" --output release-notes.md
           echo 'path=release-notes.md' >> "$GITHUB_OUTPUT"
 
+      - name: Write public agent artifact manifest
+        if: steps.state.outputs.release_exists == 'false'
+        env:
+          RELEASE_WHEEL: ${{ steps.asset.outputs.path }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python - <<'PYMANIFEST'
+          import json
+          import os
+          from pathlib import Path
+          from nebius_vpngw.deploy.agent_artifact import release_manifest
+          payload = release_manifest(Path(os.environ["RELEASE_WHEEL"]), os.environ["RELEASE_VERSION"])
+          Path("dist/agent-artifact.json").write_text(json.dumps(payload, sort_keys=True) + "\n")
+          PYMANIFEST
+
       - name: Freeze asset hashes before publication
         if: steps.state.outputs.release_exists == 'false'
         env:
@@ -181,6 +196,7 @@ jobs:
         run: >-
           python3 "${GITHUB_WORKSPACE}/skills/github-workflows/scripts/publication.py" release-manifest --workflow vpngw-release.yml --tag "$RELEASE_TAG"
           --asset "${{ steps.asset.outputs.path }}"
+          --asset dist/agent-artifact.json
           --output publication.json
 
       - name: Preserve immutable pre-publication evidence
@@ -198,7 +214,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release create "${{ steps.version.outputs.tag }}" "${{ steps.asset.outputs.path }}" \
+          gh release create "${{ steps.version.outputs.tag }}" "${{ steps.asset.outputs.path }}" dist/agent-artifact.json \
             --title "${{ steps.version.outputs.tag }}" \
             --notes-file "${{ steps.notes.outputs.path }}"
 

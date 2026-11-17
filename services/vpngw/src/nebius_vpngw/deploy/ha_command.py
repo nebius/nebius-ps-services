@@ -8,6 +8,7 @@ current runtime/ownership before accepting the lifecycle's terminal receipt.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -29,6 +30,7 @@ class HACommand:
     plan: CommandPlan
     intent: dict
     resumed: bool
+    admission_check: Callable[[], dict | None] | None = None
 
     @property
     def approval(self) -> str:
@@ -47,6 +49,27 @@ class HACommand:
         return {"runtime": self.intent, **self.intent.get("prerequisites", {})}
 
     def begin(self) -> None:
+        if self.intent.get("admission") is not None:
+            from .upgrade_admission import validate
+
+            record = validate(self.intent["admission"])
+            if record["artifact"] != self.plan.artifact_sha256:
+                raise RuntimeError("Automatic upgrade admission artifact changed")
+            current = self.journal.state.get("transaction")
+            exact_resume = bool(
+                self.resumed
+                and current
+                and current["phase"] == "pending"
+                and CommandPlan.parse(current["plan"]) == self.plan
+                and self.journal.state["bindings"] == self.bindings
+            )
+            if not exact_resume:
+                if digest(self.journal.state if current else None) != record["predecessor"]:
+                    raise RuntimeError(
+                        "Automatic upgrade predecessor changed under the command lock"
+                    )
+                if self.admission_check is None or self.admission_check() != record:
+                    raise RuntimeError("Automatic upgrade authority changed under the command lock")
         successor = self.intent.get("successor")
         current = self.journal.state["transaction"]
         continuation = self.intent.get("continuation")
@@ -54,11 +77,19 @@ class HACommand:
             if digest(self.journal.state) != continuation["predecessor"]:
                 raise RuntimeError("Peer continuation lost its exact preparation command")
         if successor and current and current["approval"] != self.plan.approval:
-            self.journal.supersede(
-                self.plan,
-                intents=self.bindings,
-                predecessor=successor["predecessor"],
-            )
+            if current["phase"] == "complete":
+                if (
+                    not successor.get("prepared_predecessor")
+                    or digest(self.journal.state) != successor["predecessor"]
+                ):
+                    raise RuntimeError("Completed predecessor is not the admitted peer preparation")
+                self.journal.begin(self.plan, intents=self.bindings)
+            else:
+                self.journal.supersede(
+                    self.plan,
+                    intents=self.bindings,
+                    predecessor=successor["predecessor"],
+                )
         else:
             self.journal.begin(self.plan, intents=self.bindings)
         recovery = self.recovery()
@@ -291,7 +322,10 @@ class HACommand:
                     and recovered["artifact"] == self.plan.artifact_sha256
                     and recovered["prior_artifact"] == successor["prior_artifact"]
                     and recovered["prior_record"] == successor["prior_lifecycle"]
-                    and ("settlement" not in successor or digest(recovered.get("replan")) == successor["settlement"])
+                    and (
+                        "settlement" not in successor
+                        or digest(recovered.get("replan")) == successor["settlement"]
+                    )
                 )
             else:
                 from .ha_preparation import command_authority
@@ -506,6 +540,7 @@ def create(
     report: dict,
     attachment_plan: dict | None,
     successor: dict | None = None,
+    admission: dict | None = None,
     packages: dict | None = None,
     preparation: bool = False,
     continuation: dict | None = None,
@@ -524,6 +559,12 @@ def create(
         "packages": deepcopy(packages),
         "activation_recovery": deepcopy(RECOVERY_POLICY),
     }
+    if admission is not None:
+        from .upgrade_admission import validate
+
+        intent["admission"] = deepcopy(validate(admission))
+        if admission["artifact"] != artifact:
+            raise RuntimeError("Automatic upgrade admission has another artifact")
     if members is not None:
         intent["members"] = deepcopy(members)
         intent["artifact_key"] = artifact_key
@@ -676,6 +717,43 @@ def continuation_intent(journal: CommandJournal, state: VMHALifecycleState, reco
     }
 
 
+def prepared_predecessor(previous: dict, lifecycle: VMHALifecycleState) -> dict | None:
+    """Validate a terminal preparation, whose lifecycle is deliberately not active."""
+    from .ha_preparation import receipt
+
+    parent = previous.get("transaction")
+    runtime = previous.get("bindings", {}).get("runtime", {})
+    if not parent or parent["phase"] != "complete" or not runtime.get("preparation"):
+        return None
+    prepared = receipt(lifecycle)
+    transaction = lifecycle.transaction
+    resources = dict(transaction.resource_bindings) if transaction else {}
+    approval = json.loads(resources.get("runtime-command-approval", "null"))
+    validate_approval(approval)
+    old = CommandPlan.parse(parent["plan"])
+    if (
+        prepared is None
+        or transaction is None
+        or transaction.pending_effect is not None
+        or runtime.get("attachments") is not None
+        or resources.get("runtime-peer-continuation") is not None
+        or resources.get("runtime-command-execution") != parent["execution_id"]
+        or prepared["artifact"] != old.artifact_sha256
+        or prepared["preparation_scope"] != runtime["runtime_scope"]
+        or approval["approval"] != runtime["approval"]
+        or approval["scope"] != runtime["runtime_scope"]
+        or transaction.operation_id != (runtime.get("packages") or {}).get("parent")
+        or set(runtime_effect(old).targets) != {member.compute_id for member in lifecycle.members}
+        or parent["receipts"].get("runtime")
+        != {
+            "owner": "ha-lifecycle",
+            "sha256": digest({"prepared": digest(prepared), "lifecycle": lifecycle.record_sha256}),
+        }
+    ):
+        raise RuntimeError("Completed preparation has no exact lifecycle receipt")
+    return {"prepared": digest(prepared), "execution": parent["execution_id"]}
+
+
 def reviewed_successor(
     previous: dict,
     *,
@@ -686,10 +764,18 @@ def reviewed_successor(
     targets: tuple[str, ...],
     attachment_child: dict | None,
     settlement: dict | None = None,
+    preparation_action_scope: str | None = None,
 ) -> dict:
     """Called only after the existing guarded recovery owner admits its plan."""
     transaction = previous["transaction"]
     old = CommandPlan.parse(transaction["plan"])
+    prepared = prepared_predecessor(previous, lifecycle)
+    runtime = previous["bindings"]["runtime"]
+    action_matches = runtime["action_scope"] == action_scope or (
+        runtime.get("preparation") is True
+        and preparation_action_scope is not None
+        and runtime["action_scope"] == preparation_action_scope
+    )
     if settlement is not None:
         from .ha_replan import validate_record
 
@@ -697,10 +783,10 @@ def reviewed_successor(
         if proof["predecessor"] != digest(previous) or kind != "corrective-release":
             raise RuntimeError("HA successor has another settled command")
     if (
-        transaction["phase"] != "pending"
+        (transaction["phase"] != "pending" and prepared is None)
         or old.configuration_sha256 != old_scope
         or runtime_effect(old).targets != targets
-        or previous["bindings"]["runtime"]["action_scope"] != action_scope
+        or not action_matches
         or lifecycle.status is not VMHALifecycleStatus.ACTIVATING
         or lifecycle.transaction is None
         or lifecycle.transaction.accepted_cloud_operation_id is not None
@@ -719,9 +805,14 @@ def reviewed_successor(
         raise RuntimeError("Settle pending attachment effects before a corrective HA command")
     return {
         "predecessor": digest(previous),
-        "prior_artifact": old.artifact_sha256,
+        "prior_artifact": (
+            proof["recovery_frontier"]["lifecycle_artifact"]
+            if settlement is not None and "recovery_frontier" in proof
+            else old.artifact_sha256
+        ),
         "prior_lifecycle": lifecycle.record_sha256,
         "kind": kind,
         "attachment_predecessor": digest(attachment_child) if attachment_child else None,
+        **({"prepared_predecessor": prepared} if prepared is not None else {}),
         **({"settlement": digest(settlement)} if settlement is not None else {}),
     }

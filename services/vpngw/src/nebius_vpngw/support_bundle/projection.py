@@ -7,13 +7,17 @@ private operational information; this is not an anonymizer or a raw log backup.
 from __future__ import annotations
 
 import ipaddress
+import json
 import math
 import re
 from typing import Any
 
+from .redaction import redact_text
+
 MAX_BYTES = 2 * 1024 * 1024
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,191}\Z")
 HASH = re.compile(r"[a-fA-F0-9]{12,128}\Z")
+PACKAGE_WORKER_UNIT = re.compile(r"nebius-vpngw-(?:repair-)?package-[a-f0-9]{64}-[0-9]+\.service")
 TIME = re.compile(r"[0-9TtZz:+. -]{1,40}\Z")
 SECRET = re.compile(
     r"-----BEGIN [A-Z ]*(?:PRIVATE KEY|CERTIFICATE)-----|"
@@ -199,7 +203,10 @@ ENUMS = frozenset(
         "apply-lock-held",
         "apply-lock-unproven",
         "managed-mtls-transaction-conflict",
+        "managed-mtls-apply-interrupted",
         "standby-auto-healing-peer-policy-unavailable",
+        "peer-heartbeat-endpoint-unreachable",
+        "peer-heartbeat-tls-failure",
         "peer-heartbeat-stale",
         "independent-heartbeat-v6",
         "managed-mtls-v1",
@@ -818,7 +825,9 @@ ENUMS |= frozenset(
         "ownership-or-alias-drift",
         "peer-configured-role-mismatch",
         "peer-generation-unavailable",
+        "peer-heartbeat-endpoint-unreachable",
         "peer-heartbeat-stale",
+        "peer-heartbeat-tls-failure",
         "peer-heartbeat-unhealthy",
         "peer-identity-mismatch",
         "promotion-receipt-invalid",
@@ -986,6 +995,309 @@ ENUMS |= frozenset(
 )
 
 
+# Diagnostic strings are a closed vocabulary, not identifier-shaped free text.
+EXCEPTIONS = frozenset(
+    {
+        "ImportError",
+        "ModuleNotFoundError",
+        "PermissionError",
+        "FileNotFoundError",
+        "OSError",
+        "TimeoutError",
+        "ConnectionError",
+        "ConnectionRefusedError",
+        "ConnectionResetError",
+        "SSLError",
+        "SSLCertVerificationError",
+        "JSONDecodeError",
+        "ValueError",
+        "TypeError",
+        "KeyError",
+        "RuntimeError",
+        "MemoryError",
+    }
+)
+FRAMES = frozenset(
+    {
+        "agent/main.py",
+        "agent/vm_ha_controller.py",
+        "agent/vm_ha_rearm.py",
+        "agent/local_commands.py",
+        "agent/ordinary.py",
+        "vm_ha_tls.py",
+        "vm_ha_managed_credentials.py",
+        "vm_ha_command.py",
+    }
+)
+DIAGNOSTIC_STRINGS = {
+    "exception_class": EXCEPTIONS,
+    "frame": FRAMES,
+    "unit": frozenset(
+        {
+            "nebius-vpngw-agent",
+            "nebius-vpngw-vm-ha",
+            "nebius-vpngw-vm-ha-guard",
+            "nebius-vpngw-vm-ha-rearm",
+            "nebius-vpngw-ingress",
+            "nebius-vpngw-fix-routes",
+            "nebius-vpngw-ordinary-fix-routes",
+            "nebius-vpngw-health-monitor",
+            "nebius-vpngw-ordinary-agent",
+            "nebius-vpngw-ordinary-health-monitor",
+            "nebius-vpngw-esp4-preflight",
+            "strongswan",
+            "strongswan-starter",
+            "strongswan-swanctl",
+            "charon-systemd",
+            "frr",
+            "systemd-networkd",
+            "cloud-init-local",
+            "cloud-init",
+            "cloud-config",
+            "cloud-final",
+            "nebius-vpngw-fix-routes.timer",
+            "package-worker",
+            "unknown",
+        }
+    ),
+    "stage": frozenset({"init-local", "init", "modules-config", "modules-final", "unknown"}),
+    "location": frozenset({"root", "logs", "state", "temporary"}),
+}
+ENUMS |= (
+    EXCEPTIONS
+    | FRAMES
+    | frozenset().union(*DIAGNOSTIC_STRINGS.values())
+    | frozenset(
+        {
+            "exact",
+            "lower-bound",
+            "oldest",
+            "newest",
+            "none",
+            "unsupported",
+            "degraded",
+            "done",
+            "not-run",
+            "not-started",
+            "error-disabled",
+            "python-error",
+            "errno-error",
+            "bootstrap-error",
+            "package-error",
+            "certificate-error",
+            "wildcard",
+            "journal",
+            "current-snapshot",
+            "current-samples",
+            "historical-events",
+            "cpu",
+            "memory",
+            "io",
+            "some",
+            "full",
+            "tcp",
+            "udp",
+            "tcp6",
+            "udp6",
+        }
+    )
+)
+VALUE_KEYS |= frozenset(
+    {
+        "ExecMainStartTimestampMonotonic",
+        "ExecMainExitTimestampMonotonic",
+        "OOMKilled",
+        "coverage",
+        "events",
+        "scanned",
+        "invalid",
+        "unrecognized",
+        "recognized",
+        "exported",
+        "discarded",
+        "counts",
+        "retention",
+        "truncation",
+        "source_limited",
+        "exception_class",
+        "errno",
+        "frames",
+        "frame",
+        "line",
+        "unit",
+        "priority",
+        "pid",
+        "monotonic_usec",
+        "event_id",
+        "invocation_id",
+        "victim_pid",
+        "oom_score",
+        "rss_bytes",
+        "oom_kill",
+        "oom",
+        "high",
+        "max",
+        "low",
+        "degraded",
+        "stages",
+        "stage",
+        "error_count",
+        "recoverable_error_count",
+        "errors",
+        "start",
+        "finished",
+        "unknown_errors",
+        "samples",
+        "interval_seconds",
+        "sample_count",
+        "expected_samples",
+        "counter_reset",
+        "cpu_user",
+        "cpu_system",
+        "cpu_idle",
+        "cpu_iowait",
+        "cpu_steal",
+        "runnable",
+        "blocked",
+        "load_1",
+        "load_5",
+        "load_15",
+        "swap_total",
+        "swap_free",
+        "swap_in",
+        "swap_out",
+        "page_in",
+        "page_out",
+        "pressure",
+        "resource",
+        "some",
+        "full",
+        "avg10",
+        "avg60",
+        "avg300",
+        "total_usec",
+        "storage",
+        "location",
+        "inodes_total",
+        "inodes_free",
+        "service_cgroups",
+        "memory_current",
+        "memory_peak",
+        "memory_events",
+        "available",
+        "listeners",
+        "local_port",
+        "clock_realtime_usec",
+        "clock_monotonic_usec",
+        "collection_started_at",
+        "collection_finished_at",
+        "evidence_class",
+        "observed_start_usec",
+        "observed_end_usec",
+    }
+)
+TIME_KEYS |= frozenset({"requested_since", "requested_until"})
+HASH_KEYS |= frozenset({"event_id", "invocation_id"})
+VALUE_KEYS |= frozenset({"pids", "pid_membership_available"})
+VALUE_KEYS |= frozenset(
+    {
+        "peer_health_fresh",
+        "peer_process_id",
+        "peer_send_last_success_age_seconds",
+        "peer_send_last_error_age_seconds",
+        "peer_send_consecutive_failures",
+        "peer_send_error_kind",
+    }
+)
+DIAGNOSTIC_STRINGS["peer_send_error_kind"] = frozenset(
+    {"timeout", "refused", "unreachable", "tls", "protocol"}
+)
+
+
+def retention_priorities(events: list[dict[str, Any]]) -> list[int]:
+    """Shared retention rule: first/latest failure per boot, other failures, routine."""
+    priorities = [0] * len(events)
+    failures: dict[str, list[int]] = {}
+    for index, event in enumerate(events):
+        priority = event.get("priority")
+        reasons = event.get("reasons", [])
+        if not isinstance(reasons, (list, tuple)):
+            reasons = []
+        if (type(priority) is int and 0 <= priority <= 3) or any(
+            any(word in reason for word in ("failed", "error", "timeout", "mismatch", "oom"))
+            for reason in reasons
+            if isinstance(reason, str)
+        ):
+            priorities[index] = 1
+            failures.setdefault(str(event.get("boot_id", "")), []).append(index)
+    for indices in failures.values():
+        priorities[indices[0]] = priorities[indices[-1]] = 2
+    return priorities
+
+
+def project_journal(
+    value: dict[str, Any], omitted: list[int], limited: list[int], *, byte_limit: int | None = None
+) -> dict[str, Any]:
+    """Keep accounting outside per-event traversal and serialized byte budgets."""
+    coverage = project(value.get("coverage", {}), depth=1, omitted=omitted, limited=limited)
+    if not isinstance(coverage, dict):
+        coverage = {}
+    for key in ("scanned", "invalid", "unrecognized", "recognized", "exported", "discarded"):
+        if type(coverage.get(key)) is not int or not 0 <= coverage[key] <= 10**20:
+            coverage[key] = 0
+            limited[0] += 1
+            coverage["counts"] = "lower-bound"
+    events = value.get("events")
+    if not isinstance(events, list):
+        limited[0] += 1
+        events = []
+    cap = MAX_BYTES if byte_limit is None else min(MAX_BYTES, max(0, byte_limit))
+    retained: dict[int, dict[str, Any]] = {}
+    used = len(json.dumps({"coverage": coverage, "events": []}, indent=2).encode()) + 512
+    discarded = 0
+    candidates = []
+    for index, event in enumerate(events[:5000]):
+        clean = project(
+            {key: child for key, child in event.items() if key != "message"}
+            if isinstance(event, dict)
+            else event,
+            omitted=omitted,
+            limited=limited,
+            _budget=[512],
+            depth=1,
+        )
+        if not isinstance(clean, dict) or not clean:
+            discarded += 1
+            continue
+        if isinstance(event, dict) and isinstance(event.get("message"), str):
+            message = event["message"]
+            clean["message"] = redact_text(message[:65536], complete=len(message) <= 65536)[
+                "content"
+            ]
+            if len(message) > 65536:
+                limited[0] += 1
+        candidates.append((index, clean))
+    priorities = retention_priorities([event for _, event in candidates])
+    order = sorted(range(len(candidates)), key=lambda index: (-priorities[index], index))
+    for position in order:
+        index, clean = candidates[position]
+        encoded = json.dumps(clean, indent=2).encode()
+        # Objects nest two levels deeper in the final pretty-printed envelope.
+        size = len(encoded) + 4 * (encoded.count(b"\n") + 1) + 4
+        if used + size > cap:
+            discarded += 1
+            continue
+        retained[index] = clean
+        used += size
+    discarded += max(0, len(events) - 5000)
+    if discarded:
+        limited[0] += discarded
+        coverage["discarded"] = int(coverage.get("discarded", 0)) + discarded
+        coverage["truncation"] = "oldest"
+    coverage["exported"] = len(retained)
+    return {"coverage": coverage, "events": [retained[index] for index in sorted(retained)]}
+
+
 def safe_identifier(value: Any) -> bool:
     return isinstance(value, str) and bool(IDENTIFIER.fullmatch(value)) and not SECRET.search(value)
 
@@ -1005,6 +1317,8 @@ def project(
         omitted = [0]
     if limited is None:
         limited = [0]
+    if depth == 0 and isinstance(value, dict) and "events" in value and "coverage" in value:
+        return project_journal(value, omitted, limited)
     if _seen is None:
         _seen = set()
     if _budget is None:
@@ -1084,6 +1398,14 @@ def project(
         return value
     if not isinstance(value, str) or len(value) > 256 or SECRET.search(value):
         return drop()
+    if key == "identity":
+        # Scalar transport identities are exact digests; native identity objects
+        # have already passed through the recursive field projection above.
+        return value if re.fullmatch(r"[a-f0-9]{64}", value) else drop()
+    if key == "unit" and PACKAGE_WORKER_UNIT.fullmatch(value):
+        return value
+    if key in DIAGNOSTIC_STRINGS:
+        return value if value in DIAGNOSTIC_STRINGS[key] else drop()
     if key in HASH_KEYS:
         return value if HASH.fullmatch(value) else drop()
     if key in TIME_KEYS:
@@ -1097,3 +1419,18 @@ def project(
         return value
     except ValueError:
         return drop()
+
+
+VALUE_KEYS |= frozenset({"ssh_identity_source", "ssh_trust_source"})
+DIAGNOSTIC_STRINGS["ssh_identity_source"] = frozenset(
+    {
+        "operator-private-key",
+        "explicit-private-key",
+        "ssh-agent",
+        "default-private-key",
+        "library-default",
+    }
+)
+DIAGNOSTIC_STRINGS["ssh_trust_source"] = frozenset(
+    {"explicit-known-hosts", "managed-pins", "system-known-hosts"}
+)

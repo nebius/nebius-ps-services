@@ -6993,3 +6993,112 @@ def test_service_step_defers_invalid_planned_restoration_after_exact_completion(
         assert adapter.last_snapshot.data_plane_mode is DataPlaneMode.ACTIVE
         assert not effects
         assert {name: (tmp_path / name).read_bytes() for name in evidence} == evidence
+
+
+def test_controller_status_merges_injected_peer_send_health(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"vm_ha": _runtime_config()}), encoding="utf-8")
+    cloud = CloudObservation(
+        True,
+        "allocation-a",
+        "node-b",
+        "node-b",
+        ComputeState.RUNNING,
+        False,
+        False,
+        False,
+        "7",
+        former_attachment_exact=True,
+        candidate_attachment_absent=True,
+    )
+    (tmp_path / "guard.json").write_text(
+        json.dumps({"guard_boot_id": "boot-a", "data_plane_mode": "passive"}),
+        encoding="utf-8",
+    )
+    runtime = build_vm_ha_controller_runtime(
+        config_path=config_path,
+        providers=VMHASnapshotProviders(
+            peer=lambda: (None, None),
+            readiness=lambda: LocalReadiness(True, True, True, True, protection_ready=True),
+            cloud=lambda: cloud,
+            data_plane=lambda: DataPlaneMode.PASSIVE,
+            routes=lambda: None,
+        ),
+        handlers={kind: (lambda _action: None) for kind in ActionKind},
+        state_dir=tmp_path,
+        clock=lambda: 10.0,
+        boot_id=lambda: "boot-a",
+    )
+    runtime.heartbeat_send_status = lambda: {
+        "peer_send_last_success_age_seconds": None,
+        "peer_send_last_error_age_seconds": 2.0,
+        "peer_send_error_kind": "unreachable",
+        "peer_send_consecutive_failures": 12,
+    }
+
+    _run_vm_ha_controller(runtime, once=True, config_path=config_path)
+
+    heartbeat = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))["heartbeat"]
+    assert heartbeat["schema_version"] == 6
+    assert heartbeat["peer_v6_fresh"] is False
+    assert heartbeat["peer_send_error_kind"] == "unreachable"
+    assert heartbeat["peer_send_consecutive_failures"] == 12
+    assert heartbeat["peer_send_last_error_age_seconds"] == 2.0
+    assert heartbeat["peer_send_last_success_age_seconds"] is None
+
+
+def test_default_runtime_injects_publisher_send_health(tmp_path: Path) -> None:
+    class Peer:
+        def prepare(self, heartbeat):
+            return heartbeat
+
+        def send(self, _heartbeat: object, *, timeout_seconds=2.0) -> None:
+            return None
+
+        def poll(self, *, timeout_seconds: float) -> None:
+            raise PeerTransportError(f"fixture timeout {timeout_seconds}")
+
+    class Ports:
+        local = type("Local", (), {"role": type("Role", (), {"value": "passive"})()})()
+        peer_runtime = Peer()
+
+        def heartbeat(self, **_kwargs: object) -> object:
+            return object()
+
+        def install_shutdown_guard(self, *, boot_id: str) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        def sample_local_health(self, **kwargs):
+            raise RuntimeError("fixture local health unavailable")
+
+    class Controller:
+        controller = SimpleNamespace(effects=SimpleNamespace())
+        snapshots = SimpleNamespace(
+            observation_observer=lambda snapshot: None, clock=time.monotonic
+        )
+
+        def step(self) -> dict[str, object]:
+            return {}
+
+    runtime = DefaultVMHAControllerRuntime(  # type: ignore[arg-type]
+        Controller(),
+        Ports(),
+        boot_id="boot-a",
+        sequence_path=tmp_path / "sequence.json",
+        guard_path=tmp_path / "guard.json",
+        peer_retry_seconds=0.05,
+        sleeper=lambda _seconds: None,
+    )
+    try:
+        assert runtime.controller.heartbeat_send_status == runtime.publisher.send_status
+        assert runtime.publisher.send_status() == {
+            "peer_send_last_success_age_seconds": None,
+            "peer_send_last_error_age_seconds": None,
+            "peer_send_error_kind": None,
+            "peer_send_consecutive_failures": 0,
+        }
+    finally:
+        runtime.close(restore_guard=False)

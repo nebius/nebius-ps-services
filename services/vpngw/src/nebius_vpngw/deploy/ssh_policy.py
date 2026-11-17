@@ -15,7 +15,8 @@ import tempfile
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from contextvars import ContextVar
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,17 @@ class SSHTrustAuthority:
     kind: str
     compute_binding_sha256: str | None = None
     predecessor_receipt_sha256: str | None = None
+
+
+@dataclass(frozen=True)
+class SSHTrustBinding:
+    """An exact provider identity and its fresh authority check."""
+
+    compute_binding_sha256: str
+    assert_current: Callable[[], None] = field(repr=False, compare=False)
+
+    def __call__(self) -> None:
+        self.assert_current()
 
 
 @dataclass(frozen=True)
@@ -191,6 +203,8 @@ _SSH_TRUST_AUTHORITY_KINDS = frozenset(
         "legacy-ordinary-network-enrollment-v1",
         "managed-projection-v1",
         "ordinary-migration-v1",
+        "legacy-receipt-conversion-v1",
+        "provisioning-reconciliation-v1",
         "product-generated-v1",
         "product-provisioning-v1",
         "product-rotated-v1",
@@ -200,6 +214,8 @@ _COMPUTE_BOUND_AUTHORITY_KINDS = frozenset(
     {
         "legacy-ordinary-network-enrollment-v1",
         "ordinary-migration-v1",
+        "legacy-receipt-conversion-v1",
+        "provisioning-reconciliation-v1",
     }
 )
 
@@ -243,6 +259,7 @@ class _ManagedTrustUpdate:
     projection_content: bytes
     expected_receipt_sha256: str | None
     expected_projection_sha256: str | None
+    predecessor_content: bytes | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -737,11 +754,72 @@ def _validate_ssh_trust_authority(
         raise ValueError("VM-HA managed SSH trust authority lacks its Compute binding")
     if authority.kind not in _COMPUTE_BOUND_AUTHORITY_KINDS and compute_binding is not None:
         raise ValueError("VM-HA managed SSH trust authority has an unexpected Compute binding")
-    if authority.kind != "ordinary-migration-v1" and predecessor is not None:
+    if (
+        authority.kind
+        not in {
+            "ordinary-migration-v1",
+            "legacy-receipt-conversion-v1",
+            "provisioning-reconciliation-v1",
+        }
+        and predecessor is not None
+    ):
         raise ValueError("VM-HA managed SSH trust authority has an unexpected predecessor")
-    if authority.kind == "ordinary-migration-v1" and predecessor is None:
+    if (
+        authority.kind
+        in {
+            "ordinary-migration-v1",
+            "legacy-receipt-conversion-v1",
+            "provisioning-reconciliation-v1",
+        }
+        and predecessor is None
+    ):
         raise ValueError("VM-HA managed SSH trust migration authority lacks its predecessor")
     return authority
+
+
+def _receipt_keys(keys: object) -> dict[str, str]:
+    if not isinstance(keys, list) or not keys:
+        raise ValueError("VM-HA managed SSH trust receipt contains an invalid member")
+    host_pins: dict[str, str] = {}
+    for key in keys:
+        if not isinstance(key, dict):
+            raise ValueError("VM-HA managed SSH trust receipt contains an invalid key")
+        key_type = str(key.get("key_type") or "")
+        key_data = str(key.get("key_data") or "")
+        _validate_public_key(key_type, key_data)
+        if key.get("fingerprint") != _public_key_fingerprint(key_data):
+            raise ValueError("VM-HA managed SSH trust receipt fingerprint does not match")
+        previous = host_pins.get(key_type)
+        if previous is not None and not hmac.compare_digest(previous, key_data):
+            raise ValueError("VM-HA managed SSH trust receipt contains conflicting pins")
+        host_pins[key_type] = key_data
+    return host_pins
+
+
+def _retired_legacy_receipt(content: bytes, scope: VMHASSHTrustScope, hosts: set[str]) -> bool:
+    """Validate obsolete pins as destruction history, never as current trust."""
+    payload = json.loads(content)
+    if not isinstance(payload, dict) or payload.get("schema") != "nebius-vpngw/vm-ha-ssh-trust-v1":
+        return False
+    if (
+        set(payload) != {"schema", "scope", "scope_sha256", "members"}
+        or payload["scope"] != scope.as_dict()
+        or payload["scope_sha256"] != scope.digest
+        or not isinstance(payload["members"], list)
+    ):
+        raise ValueError("Destroyed SSH receipt has invalid deployment history")
+    observed: set[str] = set()
+    for row in payload["members"]:
+        if not isinstance(row, dict) or set(row) != {"hostname", "keys"}:
+            raise ValueError("Destroyed SSH receipt has invalid member history")
+        name = _safe_hostname(str(row["hostname"]))
+        if name in observed:
+            raise ValueError("Destroyed SSH receipt has duplicate members")
+        observed.add(name)
+        _receipt_keys(row["keys"])
+    if observed != hosts:
+        raise ValueError("Destroyed SSH receipt belongs to another deployment")
+    return True
 
 
 def _parse_receipt(
@@ -767,7 +845,6 @@ def _parse_receipt(
         hostname = _safe_hostname(str(row.get("hostname") or ""))
         if hostname in pins or not isinstance(row.get("keys"), list) or not row["keys"]:
             raise ValueError("VM-HA managed SSH trust receipt contains an invalid member")
-        host_pins: dict[str, str] = {}
         raw_authority = row.get("authority")
         if not isinstance(raw_authority, dict) or set(raw_authority) != {
             "compute_binding_sha256",
@@ -782,18 +859,7 @@ def _parse_receipt(
                 predecessor_receipt_sha256=raw_authority.get("predecessor_receipt_sha256"),
             )
         )
-        for key in row["keys"]:
-            if not isinstance(key, dict):
-                raise ValueError("VM-HA managed SSH trust receipt contains an invalid key")
-            key_type = str(key.get("key_type") or "")
-            key_data = str(key.get("key_data") or "")
-            _validate_public_key(key_type, key_data)
-            if key.get("fingerprint") != _public_key_fingerprint(key_data):
-                raise ValueError("VM-HA managed SSH trust receipt fingerprint does not match")
-            previous = host_pins.get(key_type)
-            if previous is not None and not hmac.compare_digest(previous, key_data):
-                raise ValueError("VM-HA managed SSH trust receipt contains conflicting pins")
-            host_pins[key_type] = key_data
+        host_pins = _receipt_keys(row["keys"])
         pins[hostname] = host_pins
         authorities[hostname] = authority
     return pins, authorities
@@ -1036,6 +1102,9 @@ class SSHTrustPolicy:
     _managed_update: _ManagedTrustUpdate | None = field(default=None, repr=False, compare=False)
     _host_keys_update: _HostKeysUpdate | None = field(default=None, repr=False, compare=False)
     _evidence_checks: tuple[Callable[[], None], ...] = field(default=(), repr=False, compare=False)
+    _publication_checks: tuple[Callable[[], None], ...] = field(
+        default=(), repr=False, compare=False
+    )
 
     def assert_current(self) -> None:
         from .ssh_commands import DEADLINE
@@ -1079,6 +1148,57 @@ class SSHTrustPolicy:
         return matching[0]
 
 
+APPLY_POLICIES: ContextVar[dict[str, SSHTrustPolicy] | None] = ContextVar(
+    "apply_ssh_policies", default=None
+)
+
+
+def retain_apply_policy(scope: VMHASSHTrustScope, policy: SSHTrustPolicy) -> None:
+    policies = APPLY_POLICIES.get()
+    if policies is not None:
+        policies[scope.digest] = policy
+
+
+def rebind_apply_policy(
+    scope: VMHASSHTrustScope,
+    *,
+    bindings: Mapping[str, Callable[[], None]],
+    verify: Callable[[str, SSHTrustPolicy], None],
+) -> SSHTrustPolicy | None:
+    """Rebind unchanged pins after the rearm owner verifies the exact Compute Start."""
+    policies = APPLY_POLICIES.get()
+    prior = policies.get(scope.digest) if policies is not None else None
+    if prior is None:
+        return None
+    update = prior._managed_update
+    if update is None or set(bindings) != {name for name, _ in prior.transport_targets}:
+        raise ValueError("Prepared SSH rearm authority is incomplete")
+    pins, authorities = _parse_receipt(update.receipt_content, scope)
+    for name, binding in bindings.items():
+        if not isinstance(binding, SSHTrustBinding):
+            raise ValueError("Prepared SSH rearm requires exact Compute bindings")
+        binding()
+        if authorities[name].kind in _COMPUTE_BOUND_AUTHORITY_KINDS:
+            authorities[name] = replace(
+                authorities[name], compute_binding_sha256=binding.compute_binding_sha256
+            )
+    receipt = _build_receipt(scope, pins, authorities)
+
+    def verify_all() -> None:
+        for name in pins:
+            verify(name, rebound)
+
+    rebound = replace(
+        prior,
+        managed_receipt_sha256=hashlib.sha256(receipt).hexdigest(),
+        _managed_update=replace(update, receipt_content=receipt),
+        _evidence_checks=tuple(bindings.values()),
+        _publication_checks=(verify_all,),
+    )
+    retain_apply_policy(scope, rebound)
+    return rebound
+
+
 def persist_planned_host_keys(policy: SSHTrustPolicy) -> bool:
     """Persist selected identities after approval, before publishing public trust."""
     host_keys_update = policy._host_keys_update
@@ -1109,6 +1229,8 @@ def publish_vm_ha_ssh_trust(policy: SSHTrustPolicy) -> bool:
     update = policy._managed_update
     if update is None and policy._host_keys_update is None:
         return False
+    for check in policy._publication_checks:
+        check()
     if not persist_planned_host_keys(policy):
         policy.assert_current()
     if update is None:
@@ -1132,6 +1254,15 @@ def publish_vm_ha_ssh_trust(policy: SSHTrustPolicy) -> bool:
             and current_projection != update.projection_content
         ):
             raise RuntimeError("VM-HA managed SSH trust changed after preflight")
+        if update.predecessor_content is not None:
+            predecessor = update.paths.scope_directory / (
+                "receipt-" + hashlib.sha256(update.predecessor_content).hexdigest() + ".json"
+            )
+            retained = _read_managed_file(predecessor, update.paths, "SSH trust predecessor")
+            if retained is not None and retained != update.predecessor_content:
+                raise RuntimeError("SSH trust predecessor conflicts with retained evidence")
+            if retained is None:
+                _write_atomic(predecessor, update.predecessor_content)
         if current_receipt != update.receipt_content:
             _write_atomic(update.paths.receipt, update.receipt_content)
         if current_projection != update.projection_content:
@@ -1705,6 +1836,7 @@ def require_vm_ha_ssh_policy(
     legacy_host_key_enrollments: Mapping[str, SSHHostKeyEnrollment] | None = None,
     trusted_member_imports: Mapping[str, TrustedSSHMemberImport] | None = None,
     rotate_identity_hosts: Iterable[str] = (),
+    destroyed_hosts: Iterable[str] = (),
 ) -> SSHTrustPolicy:
     """Resolve exact pins and prevalidate any authoritative managed-store update."""
 
@@ -1754,6 +1886,11 @@ def require_vm_ha_ssh_policy(
     retained = set(retained_hosts)
     if retained - set(hostnames):
         raise ValueError("VM-HA retained host is not present in the deployment plan")
+    destroyed = set(destroyed_hosts)
+    if destroyed and (
+        not allow_managed_repair or destroyed - (enrollment - retained) or destroyed & rotation
+    ):
+        raise ValueError("Destroyed SSH identity requires fresh managed enrollment")
     bindings = dict(default_known_hosts_bindings or {})
     if set(bindings) - set(hostnames):
         raise ValueError("VM-HA SSH migration binding is outside the deployment plan")
@@ -1768,6 +1905,20 @@ def require_vm_ha_ssh_policy(
     if KNOWN_HOSTS_ENV in source and not str(source.get(KNOWN_HOSTS_ENV) or "").strip():
         raise ValueError(f"{KNOWN_HOSTS_ENV} is set but empty")
     explicit = explicit_known_hosts_file(source)
+    scoped = APPLY_POLICIES.get()
+    if (
+        scoped is not None
+        and trust_scope is not None
+        and explicit is None
+        and not enrollment
+        and not rotation
+    ):
+        prepared = scoped.get(trust_scope.digest)
+        if prepared is not None:
+            if set(prepared.transport_targets) != set(host_pairs):
+                raise ValueError("Apply SSH candidate transport identity changed")
+            prepared.assert_current()
+            return prepared
     paths: _ManagedTrustPaths | None = None
     existing_receipt: bytes | None = None
     existing_projection: bytes | None = None
@@ -1800,10 +1951,18 @@ def require_vm_ha_ssh_policy(
             "VM-HA managed SSH trust projection",
         )
         if existing_receipt is not None:
-            receipt_pins, receipt_authorities = _parse_receipt(
-                existing_receipt,
-                trust_scope,
-            )
+            if (
+                destroyed == set(hostnames)
+                and HOST_KEYS_DIR_ENV not in source
+                and _retired_legacy_receipt(existing_receipt, trust_scope, destroyed)
+            ):
+                receipt_pins: dict[str, dict[str, str]] = {hostname: {} for hostname in hostnames}
+                receipt_authorities: dict[str, SSHTrustAuthority] = {}
+            else:
+                receipt_pins, receipt_authorities = _parse_receipt(
+                    existing_receipt,
+                    trust_scope,
+                )
             if set(receipt_pins) != set(hostnames):
                 raise ValueError(
                     "VM-HA managed SSH trust receipt member set does not match the deployment plan"
@@ -1831,6 +1990,26 @@ def require_vm_ha_ssh_policy(
             pins = {hostname: {} for hostname in hostnames}
             authorities = {}
             source_kind = "missing"
+
+    # The apply owner supplies this only after verified destruction and a fresh
+    # empty Compute observation. Keep predecessor bytes for CAS; retired guest
+    # keys must not become prerequisites for a newly created deployment.
+    if destroyed and explicit is None and HOST_KEYS_DIR_ENV not in source:
+        assert trust_scope is not None
+        old_directory = _default_vm_ha_ssh_host_keys_directory(trust_scope)
+        _validate_default_host_key_directories(old_directory, missing_ok=True)
+        for hostname in destroyed:
+            private_key = old_directory / f"{hostname}.key"
+            try:
+                private_key.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                _, key_type, key_data = _validated_private_host_key(private_key, hostname)
+                if pins.get(hostname, {}).get(key_type) == key_data:
+                    continue
+            pins[hostname] = {}
+            authorities.pop(hostname, None)
 
     evidence_checks: list[Callable[[], None]] = []
     member_imports = dict(trusted_member_imports or {})
@@ -2280,3 +2459,182 @@ def build_openssh_base_command(
         command.extend(["-o", f"HostKeyAlias={policy.pin_target_for(hostname)}"])
     command.extend(["-o", f"ConnectTimeout={connect_timeout}", "-o", "LogLevel=ERROR"])
     return command
+
+
+def prepare_retained_vm_ha_ssh_policy(
+    hosts: Mapping[str, str],
+    *,
+    scope: VMHASSHTrustScope,
+    bindings: Mapping[str, Callable[[], None]],
+    verify: Callable[[str, SSHTrustPolicy], None],
+    recover: Callable[[frozenset[str]], Mapping[str, SSHHostKeyRecovery]],
+    environment: Mapping[str, str] | None = None,
+    managed_root: Path | None = None,
+    available_hosts: frozenset[str] | None = None,
+    predecessor_policy: SSHTrustPolicy | None = None,
+) -> SSHTrustPolicy:
+    """Apply-only preparation. Publication is separate and follows all-member proof.
+
+    Schema conversion preserves keys. A changed key is eligible only through a
+    separate authenticated provisioning proof, never through a network observation.
+    """
+    from .recovery import SSHAccessFailure
+
+    source = os.environ if environment is None else environment
+    if set(hosts) != set(bindings) or not hosts:
+        raise ValueError("Retained SSH preparation requires complete Compute bindings")
+    for binding in bindings.values():
+        binding()
+    paths = _managed_trust_paths(scope, managed_root)
+    original = _read_managed_file(paths.receipt, paths, "VM-HA managed SSH trust receipt")
+    projection = _read_managed_file(paths.projection, paths, "VM-HA managed SSH trust projection")
+    if predecessor_policy is not None:
+        predecessor_update = predecessor_policy._managed_update
+        if (
+            predecessor_update is None
+            or predecessor_update.paths != paths
+            or predecessor_update.expected_receipt_sha256 != _content_sha256(original)
+            or predecessor_update.expected_projection_sha256 != _content_sha256(projection)
+        ):
+            raise RuntimeError("VM-HA SSH trust changed after preflight")
+    available = set(hosts) if available_hosts is None else set(available_hosts)
+    if available - set(hosts):
+        raise ValueError("SSH availability includes a foreign member")
+    legacy = False
+    if KNOWN_HOSTS_ENV not in source and original is not None:
+        try:
+            payload = json.loads(original)
+        except (UnicodeError, ValueError) as error:
+            raise SSHAccessFailure("ssh-trust-unavailable") from error
+        legacy = (
+            isinstance(payload, dict) and payload.get("schema") == "nebius-vpngw/vm-ha-ssh-trust-v1"
+        )
+        if legacy:
+            if set(payload) != {"schema", "scope", "scope_sha256", "members"}:
+                raise ValueError("Legacy SSH receipt has unexpected fields")
+            predecessor = hashlib.sha256(original).hexdigest()
+            rows = payload.get("members")
+            if not isinstance(rows, list):
+                raise ValueError("Legacy SSH receipt has invalid members")
+            for row in rows:
+                if not isinstance(row, dict) or set(row) != {"hostname", "keys"}:
+                    raise ValueError("Legacy SSH receipt has invalid member fields")
+                conversion_binding = bindings.get(row["hostname"])
+                if not isinstance(conversion_binding, SSHTrustBinding):
+                    raise ValueError("Legacy SSH conversion lacks an exact Compute binding")
+                row["authority"] = {
+                    "kind": "legacy-receipt-conversion-v1",
+                    "compute_binding_sha256": conversion_binding.compute_binding_sha256,
+                    "predecessor_receipt_sha256": predecessor,
+                }
+            payload["schema"] = VM_HA_SSH_TRUST_SCHEMA
+            pins, authorities = _parse_receipt(_canonical_json(payload), scope)
+        else:
+            pins, authorities = _parse_receipt(original, scope)
+        if set(pins) != set(hosts):
+            raise ValueError("Retained SSH receipt member set differs from current deployment")
+    else:
+        policy = require_vm_ha_ssh_policy(
+            tuple(hosts.items()),
+            source,
+            enrollment_hosts=set(),
+            trust_scope=scope,
+            retained_hosts=set(hosts),
+            allow_managed_repair=True,
+            allow_default_known_hosts_import=True,
+            default_known_hosts_bindings=bindings,
+            host_identity_recovery=recover,
+            managed_root=managed_root,
+        )
+        for hostname in sorted(available):
+            verify(hostname, policy)
+        policy.assert_current()
+        return policy
+
+    aliases = {name: {name, address} for name, address in hosts.items()}
+    evidence = list(bindings.values())
+
+    def verify_all() -> None:
+        for name in hosts:
+            verify(name, policy)
+
+    def candidate() -> SSHTrustPolicy:
+        content = _canonical_known_hosts(pins, aliases)
+        owner = tempfile.TemporaryDirectory(prefix="nebius-vpngw-known-hosts-")
+        path = Path(owner.name) / "known_hosts"
+        path.write_bytes(content)
+        path.chmod(0o400)
+        receipt = _build_receipt(scope, pins, authorities)
+        return SSHTrustPolicy(
+            known_hosts_file=path,
+            known_hosts_sha256=hashlib.sha256(content).hexdigest(),
+            pin_targets=tuple((name, name) for name in hosts),
+            transport_targets=tuple(hosts.items()),
+            managed_action="convert"
+            if legacy
+            else "reconcile"
+            if receipt != original or content != projection
+            else None,
+            managed_receipt_sha256=hashlib.sha256(receipt).hexdigest(),
+            _snapshot_owner=owner,
+            _evidence_checks=tuple(evidence),
+            _publication_checks=(verify_all,),
+            _managed_update=_ManagedTrustUpdate(
+                paths,
+                receipt,
+                content,
+                _content_sha256(original),
+                _content_sha256(projection),
+                predecessor_content=original if receipt != original else None,
+            ),
+        )
+
+    policy = candidate()
+    changed = False
+    for hostname in sorted(available):
+        try:
+            verify(hostname, policy)
+        except SSHAccessFailure as error:
+            if error.code not in {"ssh-host-key-changed", "ssh-host-key-unverified"}:
+                raise
+            if HOST_KEYS_DIR_ENV in source:
+                raise
+            binding = bindings[hostname]
+            if not isinstance(binding, SSHTrustBinding):
+                raise
+            try:
+                recovered = recover(frozenset({hostname}))
+                if set(recovered) != {hostname} or recovered[hostname].hostname != hostname:
+                    raise ValueError("Exact authenticated host identity is unavailable")
+                identity = recovered[hostname]
+                identity.assert_current()
+                _, key_type, key_data = _validated_private_host_key_content(
+                    identity.private_key, hostname
+                )
+            except (OSError, RuntimeError, ValueError) as recovery_error:
+                raise SSHAccessFailure("ssh-host-key-changed") from recovery_error
+            pins[hostname] = {key_type: key_data}
+            authorities[hostname] = SSHTrustAuthority(
+                "provisioning-reconciliation-v1",
+                binding.compute_binding_sha256,
+                hashlib.sha256(original).hexdigest(),
+            )
+            evidence.append(identity.assert_current)
+            policy = candidate()
+            verify(hostname, policy)
+            changed = True
+    # A replacement proof does not inherit earlier SSH observations: verify the
+    # entire final immutable policy again before allowing atomic publication.
+    if changed:
+        for hostname in sorted(available):
+            verify(hostname, policy)
+    policy.assert_current()
+    if policy.managed_action is None:
+        return require_vm_ha_ssh_policy(
+            tuple(hosts.items()),
+            source,
+            enrollment_hosts=(),
+            trust_scope=scope,
+            managed_root=managed_root,
+        )
+    return policy

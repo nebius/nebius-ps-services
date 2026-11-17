@@ -20,6 +20,7 @@ import tempfile
 import time
 import typing as t
 from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -252,8 +253,8 @@ _COMMAND_EXAMPLES: t.Mapping[tuple[str, ...], tuple[str, ...]] = MappingProxyTyp
             "nebius-vpngw apply -c gateway.vm-ha.config.yaml --standby-auto-healing disabled",
         ),
         ("status",): ("nebius-vpngw status --local-config-file nebius-vpngw.config.yaml",),
-        ("collect-logs",): (
-            "nebius-vpngw collect-logs --local-config-file nebius-vpngw.config.yaml",
+        ("support-bundle",): (
+            "nebius-vpngw support-bundle --local-config-file nebius-vpngw.config.yaml",
         ),
         **PAIR_EXAMPLES,
         ("access",): (
@@ -617,16 +618,12 @@ def _build_ssh_base_cmd(
 def _vm_spec_ssh_client_auth(vm_spec: t.Mapping[str, t.Any]) -> SSHClientAuth | None:
     """Resolve one VM spec's configured management identity without fallback."""
 
-    public_key = str(vm_spec.get("ssh_public_key") or "").strip()
-    if operator_identity() is not None:
-        return operator_identity()
-    if not public_key:
+    from .deploy.ssh_client_auth import configured_ssh_client_auth, normalize_ssh_access
+
+    resolved = normalize_ssh_access(vm_spec)
+    if not resolved.get("ssh_public_key") and operator_identity() is None:
         return None
-    raw_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
-    return resolve_ssh_client_auth(
-        public_key,
-        explicit_private_key=Path(str(raw_key)).expanduser() if raw_key else None,
-    )
+    return configured_ssh_client_auth(resolved)
 
 
 def _gateway_ssh_client_auth(
@@ -649,6 +646,7 @@ class _StatusSSHContext:
     policies: t.Mapping[str, SSHTrustPolicy | None]
     unavailable_members: frozenset[str]
     exact_trust_required: bool
+    failure_codes: t.Mapping[str, str] = dataclass_field(default_factory=dict)
 
 
 def _vm_ha_ssh_trust_scope(
@@ -753,6 +751,7 @@ def _build_status_ssh_context(
             client_auth = None
     policies: dict[str, SSHTrustPolicy | None] = {}
     unavailable: set[str] = set()
+    failure_codes: dict[str, str] = {}
     scope = _gateway_ssh_trust_scope(local_cfg, plan, project_id=project_id)
     exact_trust_required = bool(plan.vm_ha is not None)
     if not exact_trust_required and all(scope.values()):
@@ -783,10 +782,13 @@ def _build_status_ssh_context(
                 project_id=project_id,
                 additional_aliases=additional_aliases,
             )
-        except (OSError, RuntimeError, ValueError):
+        except (OSError, RuntimeError, ValueError) as error:
+            from .deploy.recovery import ssh_failure_code
+
             for hostname, _target in resolved_targets:
                 policies[hostname] = None
                 unavailable.add(hostname)
+                failure_codes[hostname] = ssh_failure_code(error)
         else:
             for hostname, _target in resolved_targets:
                 policies[hostname] = shared_policy
@@ -818,6 +820,7 @@ def _build_status_ssh_context(
         policies=MappingProxyType(policies),
         unavailable_members=frozenset(unavailable),
         exact_trust_required=exact_trust_required,
+        failure_codes=MappingProxyType(failure_codes),
     )
 
 
@@ -2657,13 +2660,18 @@ class _VMHAMTLSApplyTransaction:
         return self.operation_id is not None
 
 
-def _vm_ha_mtls_operation_id(runtime_binding: t.Any) -> str:
+def _vm_ha_mtls_apply_operation_id(apply_operation_id: str) -> str:
+    """Bind one managed-mTLS apply transaction to its exact apply operation."""
     return _canonical_digest(
         {
             "domain": "nebius-vpngw/vm-ha-mtls-apply-v1",
-            "apply_operation_id": _vm_ha_apply_operation_id(runtime_binding),
+            "apply_operation_id": apply_operation_id,
         }
     )
+
+
+def _vm_ha_mtls_operation_id(runtime_binding: t.Any) -> str:
+    return _vm_ha_mtls_apply_operation_id(_vm_ha_apply_operation_id(runtime_binding))
 
 
 def _vm_ha_mtls_action_result(response: object) -> object:
@@ -3841,7 +3849,9 @@ _VM_HA_SAFE_REASON_CODES = frozenset(
         "ownership-or-alias-drift",
         "peer-configured-role-mismatch",
         "peer-generation-unavailable",
+        "peer-heartbeat-endpoint-unreachable",
         "peer-heartbeat-stale",
+        "peer-heartbeat-tls-failure",
         "peer-heartbeat-unhealthy",
         "peer-identity-mismatch",
         "promotion-receipt-invalid",
@@ -4305,6 +4315,11 @@ def _fetch_vm_ha_agent_status(
             check=False,
         )
     if result.returncode != 0:
+        from .deploy.recovery import SSHAccessFailure, ssh_failure_code
+
+        code = ssh_failure_code(result.stderr)
+        if result.returncode == 255 and code != "ssh-trust-unavailable":
+            raise SSHAccessFailure(code)
         raise _VMHARemoteAgentUnavailable("VM-HA agent status command returned no usable evidence")
     try:
         payload = json.loads(result.stdout)
@@ -4413,7 +4428,7 @@ def _vm_ha_activation_failure(
     if not isinstance(heartbeat, dict) or heartbeat.get("schema_version") != 6:
         return "heartbeat-schema-mismatch"
     if heartbeat.get("peer_v6_fresh") is not True:
-        return "peer-heartbeat-not-fresh"
+        return _vm_ha_peer_channel_classified_failure(heartbeat) or "peer-heartbeat-not-fresh"
     if payload.get("promotion_ready") is not owner:
         return "promotion-readiness-mismatch"
     if owner:
@@ -4428,6 +4443,58 @@ def _vm_ha_activation_failure(
     ):
         return "managed-mtls-evidence-mismatch"
     return None
+
+
+# Fenced activation verification tolerates slow post-activation convergence:
+# on small or freshly repaired VMs the agent, strongSwan, FRR and heartbeat
+# re-establishment compete with package work for CPU, and an expired window
+# aborts the apply mid-transaction, leaving locked but resumable state behind.
+_VM_HA_FENCED_VERIFICATION_TIMEOUT_SECONDS = 300.0
+
+# Roughly ten seconds of classified send failures at the one-second heartbeat
+# cadence: past the staleness window, so the channel is down rather than slow.
+_VM_HA_PEER_SEND_FAILURE_THRESHOLD = 10
+
+# A send that succeeded within the peer staleness window proves the channel
+# even while the full round-trip echo freshness is still converging.
+_VM_HA_PEER_SEND_RECENT_SECONDS = 10.0
+
+_VM_HA_PEER_CHANNEL_GATE_TIMEOUT_SECONDS = 30.0
+_VM_HA_PEER_CHANNEL_BLOCKING_PREDICATES = frozenset(
+    {"peer-heartbeat-endpoint-unreachable", "peer-heartbeat-tls-failure"}
+)
+
+
+def _vm_ha_peer_channel_classified_failure(heartbeat: dict[str, t.Any]) -> str | None:
+    """A proven-down peer channel's reason; None while it may merely be slow."""
+    failures = heartbeat.get("peer_send_consecutive_failures")
+    if not isinstance(failures, int) or failures < _VM_HA_PEER_SEND_FAILURE_THRESHOLD:
+        return None
+    kind = heartbeat.get("peer_send_error_kind")
+    if kind in {"timeout", "unreachable", "refused"}:
+        return "peer-heartbeat-endpoint-unreachable"
+    if kind == "tls":
+        return "peer-heartbeat-tls-failure"
+    return None
+
+
+def _vm_ha_peer_channel_up(payload: dict[str, t.Any]) -> bool:
+    heartbeat = payload.get("heartbeat")
+    if not isinstance(heartbeat, dict):
+        return False
+    if heartbeat.get("peer_v6_fresh") is True:
+        return True
+    ok_age = heartbeat.get("peer_send_last_success_age_seconds")
+    return isinstance(ok_age, (int, float)) and 0 <= ok_age <= _VM_HA_PEER_SEND_RECENT_SECONDS
+
+
+def _vm_ha_peer_channel_failure(payload: dict[str, t.Any]) -> str:
+    heartbeat = payload.get("heartbeat")
+    if isinstance(heartbeat, dict):
+        classified = _vm_ha_peer_channel_classified_failure(heartbeat)
+        if classified is not None:
+            return classified
+    return "peer-heartbeat-stale"
 
 
 def _wait_for_vm_ha_agent_status(
@@ -5128,6 +5195,9 @@ def _serialize_explicit_vm_ha_apply(function: t.Callable[..., t.Any]):
                     context = CURRENT.get()
                     if context is not None:
                         context.config = config_path
+                        context.command_project = project_override
+                        context.command_region = arguments.arguments.get("region")
+                        context.selectors_resolved = True
                         context.project = canonical_project or context.project
                         context.region = (
                             context.region
@@ -5182,6 +5252,7 @@ class _VMHAApplyPlanReport:
     managed_ssh_action: str | None
     managed_credential_action: str | None = None
     authorization_persisted: bool = False
+    automatic_admission: dict[str, str] | None = None
     owner_refresh_required: bool = False
     attachment_retry_approval: str | None = None
     artifact_sha256: str | None = None
@@ -6332,12 +6403,12 @@ def _review_attachment_request_retry(
     return proposal, attachment_pending["approval"]
 
 
-def _admit_ha_settlement(approval, effects, *, passive, expected=None):
+def _admit_ha_settlement(approval, effects, *, passive, expected=None, automatic=False):
     """Expose settlement as its own plan; never borrow a deployment approval."""
     from .deploy.recovery import PredecessorSettlementRequired
 
     if passive:
-        raise PredecessorSettlementRequired(approval=approval, effects=effects)
+        raise PredecessorSettlementRequired(approval=approval, effects=effects, automatic=automatic)
     if expected is not None and (
         expected.kind != "predecessor-settlement" or expected.engine_digest != approval
     ):
@@ -7699,6 +7770,27 @@ def _apply_impl(
                 rotation_hosts: tuple[str, ...] = (),
                 allow_repair: bool = True,
             ) -> SSHTrustPolicy:
+                destroyed_hosts: set[str] = set()
+                if (
+                    allow_repair
+                    and lifecycle_state is not None
+                    and lifecycle_state.status is VMHALifecycleStatus.DESTROYED
+                    and not existing_members
+                ):
+                    # This resolver runs again under the publication owner lock.
+                    # Never retire pins based only on captured discovery results.
+                    assert discovery_manager is not None
+                    current = lifecycle_store.read_hardened(
+                        expected_project_id=proj_id,
+                        expected_gateway_name=gateway_name,
+                    )
+                    if (
+                        current is None
+                        or current.state != lifecycle_state
+                        or discovery_manager.discover_vm_ha_members(plan.gateway_group)
+                    ):
+                        raise RuntimeError("Destroyed VM-HA SSH enrollment authority changed")
+                    destroyed_hosts = enrollment_hosts
                 return require_vm_ha_ssh_policy(
                     tuple(sorted(original_ssh["targets"].items()))
                     if original_ssh is not None
@@ -7724,6 +7816,7 @@ def _apply_impl(
                     host_identity_recovery=recover_host_identities,
                     trusted_member_imports=trust_imports,
                     rotate_identity_hosts=rotation_hosts,
+                    destroyed_hosts=destroyed_hosts,
                 )
 
             rotation_intent = (
@@ -8410,13 +8503,23 @@ def _apply_impl(
                     "present": False,
                 },
             }
+        from .deploy.vm_ha_upgrade_recovery import unfinished_recovery
+
+        pending_upgrade = unfinished_recovery(lifecycle_state)
+        recovery_artifact_changed = bool(
+            pending_upgrade is not None
+            and _resolve_vm_ha_agent_artifact(ssh_policy).sha256 != pending_upgrade["artifact"]
+        )
         if (
             vm_ha_credentials is not None
             and lifecycle_state is not None
             and lifecycle_state.status is VMHALifecycleStatus.ACTIVATING
             and lifecycle_state.transaction is not None
-            and lifecycle_state.transaction.desired_state_digest
-            != _canonical_digest(_vm_ha_desired_approval_state(plan))
+            and (
+                recovery_artifact_changed
+                or lifecycle_state.transaction.desired_state_digest
+                != _canonical_digest(_vm_ha_desired_approval_state(plan))
+            )
         ):
             if (
                 recreate_gw
@@ -8455,6 +8558,36 @@ def _apply_impl(
                 )
 
             settlement, generations = inspect_changed_ha()
+            from .deploy.apply_plan import CommandPlan
+
+            prior_command = settlement.predecessor
+            prior_plan = CommandPlan.parse(prior_command["transaction"]["plan"])
+            prior_intent = prior_command["bindings"]["runtime"]
+            automatic_settlement = bool(
+                recovery_artifact_changed
+                and pending_upgrade is not None
+                and prior_plan.artifact_sha256 == pending_upgrade["artifact"]
+                and prior_plan.configuration_sha256
+                == _canonical_digest(
+                    {
+                        "desired": local_cfg,
+                        "artifact": prior_plan.artifact_sha256,
+                        "project": proj_id,
+                    }
+                )
+                and prior_intent.get("action_scope")
+                == _canonical_digest(
+                    {
+                        "recreate": False,
+                        "prepare_peer_rotation": False,
+                        "destructive": False,
+                        "managed_ssh": None,
+                        "managed_credentials": "reuse",
+                    }
+                )
+                and prior_intent.get("attachments") is None
+                and not prior_intent.get("preparation")
+            )
             saved_settlement = settlement.read()
             if saved_settlement is not None and saved_settlement["phase"] == "complete":
                 ha_settlement = saved_settlement
@@ -8474,8 +8607,12 @@ def _apply_impl(
                     ("settle-ha-predecessor",),
                     passive=stop_after_vm_ha_plan,
                     expected=expected_vm_ha_plan,
+                    automatic=automatic_settlement,
                 )
-                if saved_settlement is None or dry_run:
+                if automatic_settlement:
+                    if dry_run:
+                        return
+                elif saved_settlement is None or dry_run:
                     if (
                         not _approve_disruption(
                             settlement.approval, supplied=approve_disruption, dry_run=dry_run
@@ -8935,7 +9072,13 @@ def _apply_impl(
         pending_transaction = pending_command["transaction"] if pending_command else None
         if (
             pending_transaction
-            and pending_transaction["phase"] == "pending"
+            and (
+                pending_transaction["phase"] == "pending"
+                or pending_transaction["plan"]["artifact_sha256"] != artifact.sha256
+                and lifecycle_state is not None
+                and pending_command is not None
+                and ha_commands.prepared_predecessor(pending_command, lifecycle_state) is not None
+            )
             and any(
                 effect["key"] == "runtime" and effect["owner"] == "ha-lifecycle"
                 for effect in pending_transaction["plan"]["effects"]
@@ -9387,12 +9530,81 @@ def _apply_impl(
                 targets=ha_targets,
                 attachment_child=attachment_journal.read_transaction(),
                 settlement=ha_settlement,
+                preparation_action_scope=_canonical_digest(
+                    {**ha_intent, "prepare_peer_rotation": True}
+                ),
             )
+        from .deploy import upgrade_admission
+
+        admission_inputs: dict[str, t.Any] = dict(
+            previous=pending_command,
+            state=lifecycle_state,
+            local=local_cfg,
+            project=proj_id,
+            action=ha_intent,
+            kind=plan_kind,
+            artifact=artifact,
+            observation=vm_ha_approval_observation or {},
+            credentials=vm_ha_credential_plan,
+            ssh_policy=ssh_policy,
+            attachments_changed=sg_apply.changed(attachment_plan),
+            attachment_pending=attachment_pending is not None,
+            impact=impact,
+            desired=_vm_ha_desired_approval_state(plan),
+            settlement=ha_settlement,
+            resources_verified=bool(
+                lifecycle_state is not None
+                and lifecycle_state.transaction is not None
+                and vm_ha_credentials is not None
+                and _vm_ha_observation_matches_bindings(
+                    vm_ha_approval_observation or {},
+                    dict(lifecycle_state.transaction.resource_bindings),
+                    credential_bindings=vm_ha_credentials.resource_bindings(),
+                )
+            ),
+        )
+        automatic_admission = upgrade_admission.admit(**admission_inputs)
+        admission_config_sha = hashlib.sha256(local_config_file.read_bytes()).hexdigest()
+
+        def refresh_upgrade_admission() -> dict | None:
+            if hashlib.sha256(local_config_file.read_bytes()).hexdigest() != admission_config_sha:
+                raise RuntimeError("Configuration changed after automatic upgrade planning")
+            fresh_lifecycle = lifecycle_store.read_hardened(
+                expected_project_id=proj_id, expected_gateway_name=gateway_name
+            )
+            if fresh_lifecycle is None:
+                return None
+            fresh_credentials = inspect_managed_vm_ha_credentials(
+                project_id=proj_id,
+                gateway_name=gateway_name,
+                node_ids=vm_ha_node_ids,
+                tenant_id=tenant_id,
+                region_id=region_id,
+            )
+            fresh_cloud = discovery_manager.observe_vm_ha_migration_state(
+                plan.gateway_group, plan.gateway.get("local_prefixes")
+            )
+            for _name, package in artifact.dependency_plans:
+                package.assert_predecessor()
+            fresh_lifecycle.assert_current()
+            return upgrade_admission.admit(
+                **{
+                    **admission_inputs,
+                    "previous": command_journal.state
+                    if command_journal.state.get("transaction")
+                    else None,
+                    "state": fresh_lifecycle.state,
+                    "credentials": fresh_credentials,
+                    "observation": fresh_cloud,
+                }
+            )
+
         public_digest = _canonical_digest(
             {
                 "domain": "nebius-vpngw/vm-ha-command-approval-v3",
                 "activation_recovery": ha_commands.RECOVERY_POLICY,
                 "command_successor": ha_successor,
+                "automatic_admission": automatic_admission,
                 "attachments": attachment_plan,
                 "attachment_corrective": attachment_corrective,
                 "engine_digest": engine_digest,
@@ -9533,6 +9745,7 @@ def _apply_impl(
             has_destructive_changes=has_destructive,
             managed_ssh_action=managed_ssh_action,
             managed_credential_action=vm_ha_credential_plan.command_action,
+            automatic_admission=automatic_admission,
             authorization_persisted=bool(
                 runtime_approval_resumed
                 or attachment_pending is not None
@@ -9599,6 +9812,7 @@ def _apply_impl(
                 if sg_apply.changed(attachment_plan) or attachment_pending is not None
                 else None,
                 successor=ha_successor,
+                admission=automatic_admission,
                 packages=ha_commands.prehost_package_intent(
                     lifecycle_state,
                     migration_plan_digest,
@@ -9746,6 +9960,7 @@ def _apply_impl(
         if (
             expected_vm_ha_plan is None
             and not apply_report.authorization_persisted
+            and apply_report.automatic_admission is None
             and (
                 apply_report.impact.vpn_traffic_interruption is not False
                 or apply_report.managed_credential_action != "reuse"
@@ -9923,6 +10138,8 @@ def _apply_impl(
         lifetimes = _VM_MANAGER_LIFETIMES.get()
         assert lifetimes is not None
         lifetimes.enter_context(command_journal)
+        if ha_command.intent.get("admission") is not None and not ha_command.resumed:
+            ha_command.admission_check = refresh_upgrade_admission
         ha_command.begin()
         from .deploy.package_reservation import SCOPE as package_reservation_scope
 
@@ -12253,6 +12470,41 @@ def _activate_bound_vm_ha(
                     vm_ha_progress_sink,
                     _VMHAProgressPhase.VERIFY_FENCED,
                 )
+                from .deploy.apply_diagnostics import VerificationFailure
+
+                # Prove the peer heartbeat channel first: a blocked endpoint or
+                # failed peer TLS trust can never satisfy fenced verification,
+                # so it fails here in seconds with its classified cause. A
+                # channel that is merely slow falls through to the fenced wait,
+                # which owns slow convergence with its own window.
+                for inst_cfg, target, _receipt, _lock_receipt in activation_entries:
+                    node_id = inst_cfg.vm_ha_node.node_id
+                    owner_replacement_entry = bool(
+                        vm_ha_missing_standby_replacement is not None
+                        and node_id == current_owner_node_id
+                    )
+                    try:
+                        _wait_for_vm_ha_agent_status(
+                            predicate=_vm_ha_peer_channel_up,
+                            phase=f"verify-peer-channel-node-{inst_cfg.instance_index}",
+                            failed_predicate=_vm_ha_peer_channel_failure,
+                            timeout_seconds=_VM_HA_PEER_CHANNEL_GATE_TIMEOUT_SECONDS,
+                            target=target,
+                            hostname=inst_cfg.hostname,
+                            username=username,
+                            key_path=management_key_path,
+                            client_auth=ssh_client_auth,
+                            ssh_policy=t.cast(SSHTrustPolicy, ssh_policy),
+                            inst_cfg=inst_cfg,
+                            runtime_binding=vm_ha_runtime_binding,
+                            expected_apply_locked=not owner_replacement_entry,
+                            expected_operation_id=operation_id,
+                            progress_callback=wait_fenced_progress.update,
+                        )
+                    except VerificationFailure as error:
+                        if error.first.predicate in _VM_HA_PEER_CHANNEL_BLOCKING_PREDICATES:
+                            raise
+
                 for inst_cfg, target, _receipt, _lock_receipt in activation_entries:
                     node_id = inst_cfg.vm_ha_node.node_id
                     owner_replacement_entry = bool(
@@ -12284,6 +12536,7 @@ def _activate_bound_vm_ha(
                         predicate=activation_ready,
                         phase=f"verify-fenced-node-{inst_cfg.instance_index}",
                         failed_predicate=failed_activation_predicate,
+                        timeout_seconds=_VM_HA_FENCED_VERIFICATION_TIMEOUT_SECONDS,
                         target=target,
                         hostname=inst_cfg.hostname,
                         username=username,
@@ -12332,6 +12585,7 @@ def _activate_bound_vm_ha(
                                 payload,
                             )
                         ),
+                        timeout_seconds=_VM_HA_FENCED_VERIFICATION_TIMEOUT_SECONDS,
                         target=owner_target,
                         hostname=owner_cfg.hostname,
                         username=username,
@@ -15102,6 +15356,10 @@ def _vm_ha_unavailable_authority(lifecycle: str, reason: str) -> _VMHACloudAutho
 
 
 def _vm_ha_member_failure_condition(error: Exception) -> tuple[str, str]:
+    from .deploy.recovery import SSHAccessFailure
+
+    if isinstance(error, SSHAccessFailure):
+        return "unknown", error.code
     if isinstance(error, _VMHAStatusSSHUnavailable):
         return "unknown", "ssh-trust-unavailable"
     if isinstance(error, _VMHAAgentStatusStale):
@@ -15232,6 +15490,18 @@ def _vm_ha_status_view(
         mtls_inhibited = mtls.get("inhibited") is True
         mtls_operation = mtls.get("operation_id")
         mtls_inhibition_operation = mtls.get("inhibition_operation_id")
+        apply_operation_exact = bool(
+            authority.operation_id and apply_operation == authority.operation_id
+        )
+        mtls_apply_operation_exact = bool(
+            not mtls_inhibited
+            and mtls.get("operation_kind") in {"bootstrap", "replacement", "recovery"}
+            and isinstance(apply_operation, str)
+            and apply_operation
+            and apply_operation_exact
+            and record.get("apply_locked") is True
+            and mtls_operation == _vm_ha_mtls_apply_operation_id(apply_operation)
+        )
         mtls_operation_exact = bool(
             isinstance(mtls_inhibition_operation, str)
             and mtls_operation in {None, mtls_inhibition_operation}
@@ -15254,6 +15524,11 @@ def _vm_ha_status_view(
                 mtls_transitioning_members.add(member.node_id)
                 mtls_transition_operations.add(t.cast(str, mtls_inhibition_operation))
                 transitioning.append("managed-mtls-rotation")
+            elif mtls_apply_operation_exact:
+                # The pending transaction belongs to this member's own retained
+                # apply operation: an interrupted apply, resumable as-is, never
+                # a competing writer.
+                blocked.append("managed-mtls-apply-interrupted")
             else:
                 blocked.append("managed-mtls-transaction-conflict")
         pending_action = _vm_ha_pending_action_kind(
@@ -15275,9 +15550,6 @@ def _vm_ha_status_view(
         )
         if pending_operation_expected:
             expected_pending_members.add(member.node_id)
-        apply_operation_exact = bool(
-            authority.operation_id and apply_operation == authority.operation_id
-        )
         member_transitioning = bool(
             record_state in {"suspect", "fencing", "ownership-transfer", "promoting", "repairing"}
             or record.get("rearm_phase") == "starting"
@@ -15327,6 +15599,22 @@ def _vm_ha_status_view(
             transitioning.append(f"controller-{record_state}")
         if record_state in {"degraded-path", "repair-exhausted", "degraded"}:
             degraded.extend(_vm_ha_record_reasons(record) or (f"controller-{record_state}",))
+        heartbeat = record.get("heartbeat")
+        if isinstance(heartbeat, dict) and heartbeat.get("peer_v6_fresh") is not True:
+            send_kind = heartbeat.get("peer_send_error_kind")
+            send_failures = heartbeat.get("peer_send_consecutive_failures")
+            peer_send_persistently_failing = bool(
+                isinstance(send_failures, int)
+                and send_failures >= _VM_HA_PEER_SEND_FAILURE_THRESHOLD
+            )
+            if peer_send_persistently_failing and send_kind in {
+                "timeout",
+                "unreachable",
+                "refused",
+            }:
+                degraded.append("peer-heartbeat-endpoint-unreachable")
+            elif peer_send_persistently_failing and send_kind == "tls":
+                degraded.append("peer-heartbeat-tls-failure")
 
     if len(mtls_transition_operations) > 1:
         blocked.append("managed-mtls-transaction-conflict")
@@ -15503,6 +15791,12 @@ def _vm_ha_status_view(
     if mtls_transitioning_members:
         action = mtls_command
         action_detail = "resume the exact managed mTLS rotation transaction"
+    elif "managed-mtls-apply-interrupted" in overall_reasons:
+        action = rearm_command
+        action_detail = (
+            "resume the interrupted VM-HA apply with the same command and "
+            "options (including --repair when it was a repair), then rerun status"
+        )
     elif overall == "HEALTHY":
         action = "none"
         action_detail = "no operator action required"
@@ -15519,6 +15813,18 @@ def _vm_ha_status_view(
             "hygiene, then rerun status; if drift persists, redeploy through the "
             "supported apply workflow"
         )
+    elif "peer-heartbeat-endpoint-unreachable" in overall_reasons:
+        action = "repair-peer-heartbeat-path"
+        action_detail = (
+            "allow TCP 9443 between the gateway members in the customer-owned "
+            "security groups (VM-to-VM heartbeat endpoint), then rerun status"
+        )
+    elif "peer-heartbeat-tls-failure" in overall_reasons:
+        action = mtls_command
+        action_detail = (
+            "peer heartbeat TLS authentication is failing; repair the managed "
+            "mTLS trust through the supported rotation workflow, then rerun status"
+        )
     elif eligible_rearm:
         action = rearm_command
         action_detail = "retry standby redundancy restoration"
@@ -15534,9 +15840,14 @@ def _vm_ha_status_view(
             "inspect and reconcile the exact managed route targets through the supported "
             "apply workflow, then rerun status"
         )
-    elif "ssh-trust-unavailable" in overall_reasons:
+    elif any(reason.startswith("ssh-") for reason in overall_reasons):
+        from .deploy.recovery import SSH_CAUSES
+
         action = "configure-ssh-trust"
-        action_detail = "pin every VM-HA member exactly, then rerun status"
+        ssh_reason = next(
+            (reason for reason in overall_reasons if reason in SSH_CAUSES), "ssh-trust-unavailable"
+        )
+        action_detail = SSH_CAUSES[ssh_reason][1]
     elif "agent-status-stale" in overall_reasons:
         action = "reconcile-generation"
         action_detail = (
@@ -15821,14 +16132,14 @@ def _collect_vm_ha_status_snapshot(
             continue
         try:
             status_ssh_policy = ssh_context.policies.get(inst_cfg.hostname)
+            from .deploy.recovery import SSHAccessFailure
+
             if status_ssh_policy is None:
-                raise _VMHAStatusSSHUnavailable(
-                    "exact SSH trust is unavailable for this VM-HA member"
+                raise SSHAccessFailure(
+                    ssh_context.failure_codes.get(inst_cfg.hostname, "ssh-trust-unavailable")
                 )
             if ssh_context.client_auth_required and ssh_context.client_auth is None:
-                raise _VMHAStatusSSHUnavailable(
-                    "exact SSH client identity is unavailable for this VM-HA member"
-                )
+                raise SSHAccessFailure("ssh-client-authentication-failed")
             vm_ha = _fetch_vm_ha_agent_status(
                 target=target,
                 hostname=inst_cfg.hostname,
@@ -15910,6 +16221,8 @@ def _inspect_vm_ha_command_status(
     *,
     region: str | None = None,
     require_resolved_config: bool = False,
+    prepare_ssh: bool = False,
+    persist_ssh: bool = False,
 ) -> _VMHACommandInspection:
     """Build one strict, non-rendering VM-HA command observation."""
 
@@ -15923,6 +16236,8 @@ def _inspect_vm_ha_command_status(
     project_id = str(local_cfg.get("project_id") or "").strip()
     if not project_id:
         raise ValueError("project-id-unavailable")
+    vm_spec = (local_cfg.get("gateway_group") or {}).get("vm_spec") or {}
+    raw_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
     auth_token = _ensure_authentication(required=False, show_progress=False)
     manager = _own_vm_manager(
         VMManager(
@@ -15931,6 +16246,8 @@ def _inspect_vm_ha_command_status(
             auth_token=auth_token,
             tenant_id=str(local_cfg.get("tenant_id") or "").strip() or None,
             region_id=plan.gateway_group.region,
+            management_key_path=Path(raw_key).expanduser() if raw_key else None,
+            management_public_key=vm_spec.get("ssh_public_key"),
         )
     )
     vm_ips: dict[str, str] = {}
@@ -15940,12 +16257,98 @@ def _inspect_vm_ha_command_status(
         )
         if target:
             vm_ips[instance.hostname] = target
+    prepared_policy = None
+    if prepare_ssh:
+        from .deploy.ssh_policy import prepare_retained_vm_ha_ssh_policy, retain_apply_policy
+        from .deploy.vm_ha_cloud import instance_cloud_state
+
+        retained = manager.discover_vm_ha_members(plan.gateway_group)
+        expected = {instance.hostname for instance in plan.iter_instance_configs()}
+        # New members and conversions use the existing lower apply enrollment.
+        # Only an exact retained pair enters this pre-status trust transition.
+        store = VMHALifecycleStore(local_config_file)
+        baseline = store.read_hardened(
+            expected_project_id=project_id, expected_gateway_name=plan.gateway_group.name
+        )
+        if (
+            set(retained) == expected
+            and baseline is not None
+            and baseline.state.status
+            in {VMHALifecycleStatus.ACTIVE, VMHALifecycleStatus.ACTIVATING}
+            and baseline.state.transaction is not None
+            and baseline.state.transaction.accepted_cloud_operation_id is None
+            and {m.instance_name for m in baseline.state.members if m.compute_id and m.disk_id}
+            == expected
+        ):
+
+            def lifecycle_snapshot():
+                current = store.read_hardened(
+                    expected_project_id=project_id, expected_gateway_name=plan.gateway_group.name
+                )
+                if current is None:
+                    raise RuntimeError("Retained SSH preparation requires lifecycle authority")
+                return current
+
+            bindings = manager.vm_ha_ssh_trust_bindings(
+                plan.gateway_group,
+                retained_hosts=retained,
+                lifecycle_snapshot_loader=lifecycle_snapshot,
+                require_lifecycle_identity=True,
+            )
+            if baseline is None:
+                raise RuntimeError("Retained SSH preparation requires lifecycle authority")
+            available = frozenset(
+                member.instance_name
+                for member in baseline.state.members
+                if instance_cloud_state(manager.get_ha_instance(member.compute_id)) == "running"
+            )
+            prepared_policy = prepare_retained_vm_ha_ssh_policy(
+                retained,
+                scope=_vm_ha_ssh_trust_scope(local_cfg, plan, project_id=project_id),
+                bindings=bindings,
+                available_hosts=available,
+                verify=lambda name, policy: manager.verify_vm_ha_existing_identities(
+                    {name: retained[name]},
+                    policy=policy,
+                    username=vm_spec.get("ssh_username")
+                    or os.environ.get("VPNGW_SSH_USER", "ubuntu"),
+                ),
+                recover=lambda names: manager.recover_vm_ha_ssh_host_keys(
+                    names, spec=plan.gateway_group
+                ),
+            )
+            if persist_ssh and available == set(retained):
+                publish_vm_ha_ssh_trust(prepared_policy)
+                # Publication completes the temporary identity transition. Status
+                # uses the canonical receipt without replaying provisioning reads
+                # inside each bounded SSH observation.
+                from .deploy.ssh_policy import APPLY_POLICIES
+
+                policies = APPLY_POLICIES.get()
+                if policies is not None:
+                    policies.pop(
+                        _vm_ha_ssh_trust_scope(local_cfg, plan, project_id=project_id).digest,
+                        None,
+                    )
+                prepared_policy = None
+            elif prepared_policy.managed_action is not None:
+                retain_apply_policy(
+                    _vm_ha_ssh_trust_scope(local_cfg, plan, project_id=project_id), prepared_policy
+                )
+            vm_ips = retained
     ssh_context = _build_status_ssh_context(
         local_cfg,
         plan,
         vm_ips,
         project_id=project_id,
     )
+    if prepared_policy is not None:
+        ssh_context = replace(
+            ssh_context,
+            policies=MappingProxyType({name: prepared_policy for name in vm_ips}),
+            unavailable_members=frozenset(),
+            failure_codes={},
+        )
     snapshot = _collect_vm_ha_status_snapshot(
         local_config_file=local_config_file,
         local_cfg=local_cfg,
@@ -16333,8 +16736,8 @@ def _render_packet_health(
         )
 
 
-@app.command(epilog=_command_help_epilog("collect-logs"))
-def collect_logs(
+@app.command(epilog=_command_help_epilog("support-bundle"))
+def support_bundle(
     local_config_file: Path = typer.Option(
         ..., "--local-config-file", "-c", exists=True, readable=True
     ),
@@ -16349,10 +16752,38 @@ def collect_logs(
 ):
     """Collect private, read-only support evidence without applying gateway changes."""
     from .support_bundle.collector import collect
+    from .support_bundle.diagnostics import GUIDANCE
+
+    def show_progress(event: dict[str, t.Any]) -> None:
+        label = f"Gateway {event['node']}" if event.get("node") is not None else "Collector"
+        detail = event.get("failure")
+        if isinstance(detail, dict):
+            attempted = {True: "yes", False: "no", None: "unknown"}[detail["connection_attempted"]]
+            typer.echo(
+                f"{label}: {detail['stage']} failed ({detail['code']}); SSH attempted: {attempted}."
+            )
+            typer.echo("  " + GUIDANCE[detail["code"]])
+        elif "successful_probes" in event:
+            typer.echo(
+                f"{label}: {event['successful_probes']} successful guest probes, {event['text_files']} nonempty text files, {event['incomplete_probes']} incomplete probes."
+            )
+        elif event.get("stage") == "archive" and "guest_nodes" in event:
+            typer.echo(
+                f"Guest evidence collected from {event['guest_nodes']}/{event['expected_nodes']} gateways."
+            )
+            if event["guest_nodes"] == 0:
+                typer.echo("No guest evidence collected; this is a partial operator/cloud bundle.")
+        elif event.get("state") in {"started", "failed"}:
+            typer.echo(f"{label}: {event['stage']} {event['state']}.")
 
     try:
         path, code = collect(
-            local_config_file, project_id=project_id, region=region, output=output, since=since
+            local_config_file,
+            project_id=project_id,
+            region=region,
+            output=output,
+            since=since,
+            progress=show_progress,
         )
     except (OSError, ValueError, RuntimeError, yaml.YAMLError):
         print(
@@ -16367,6 +16798,7 @@ def collect_logs(
     # Avoid Rich markup interpretation of an operator-selected filename.
     typer.echo(str(path))
     print("Contains operational identifiers. Attach only to a private support ticket.")
+    print("Credential redaction is targeted. Review the bundle before sharing.")
     raise typer.Exit(code)
 
 
@@ -20444,9 +20876,64 @@ def _prepare_vm_ha_planned_target(
 
     _owner_observation, target_observation = members(observation)
 
+    def rebind_rearm_ssh(*, reconcile: bool = False) -> None:
+        nonlocal ssh_policy
+        from .deploy.ssh_policy import (
+            APPLY_POLICIES,
+            prepare_retained_vm_ha_ssh_policy,
+            rebind_apply_policy,
+            retain_apply_policy,
+        )
+
+        scope = _vm_ha_ssh_trust_scope(local_cfg, plan)
+        policies = APPLY_POLICIES.get()
+        if policies is None or (not reconcile and scope.digest not in policies):
+            return
+        retained = manager.discover_vm_ha_members(plan.gateway_group)
+        if retained != {m.instance_name: m.public_ip for m in state.members}:
+            raise RuntimeError("Rearm SSH member identity changed")
+        store = VMHALifecycleStore(local_config_file)
+        bindings = manager.vm_ha_ssh_trust_bindings(
+            plan.gateway_group,
+            retained_hosts=retained,
+            require_lifecycle_identity=True,
+            lifecycle_snapshot_loader=lambda: store.read_hardened(
+                expected_project_id=project_id,
+                expected_gateway_name=gateway_name,
+            ),
+        )
+
+        def verify(name, policy):
+            manager.verify_vm_ha_existing_identities(
+                {name: retained[name]},
+                policy=policy,
+                username=username,
+            )
+
+        rebound: SSHTrustPolicy | None
+        if reconcile:
+            rebound = prepare_retained_vm_ha_ssh_policy(
+                retained,
+                scope=scope,
+                bindings=bindings,
+                verify=verify,
+                recover=lambda names: manager.recover_vm_ha_ssh_host_keys(
+                    names, spec=plan.gateway_group
+                ),
+                predecessor_policy=policies.get(scope.digest),
+            )
+            if rebound.managed_action is not None:
+                retain_apply_policy(scope, rebound)
+        else:
+            rebound = rebind_apply_policy(scope, bindings=bindings, verify=verify)
+        if rebound is not None:
+            ssh_policy = rebound
+            manager.set_ssh_policy(rebound)
+
     def exact_rearm_progress() -> bool:
         if rearm_request_progress_is_exact is None or not rearm_request_progress_is_exact():
             return False
+        rebind_rearm_ssh()
         owner_records = _run_vm_ha_operator_command(
             local_config_file=local_config_file,
             agent_flag="--vm-ha-status",
@@ -20567,6 +21054,7 @@ def _prepare_vm_ha_planned_target(
             }:
                 raise RuntimeError("planned VM-HA target left its safe startup transition")
 
+    rebind_rearm_ssh()
     with _vm_ha_progress_step(
         progress_sink,
         _VMHAProgressPhase.WAIT_REARM_SSH,
@@ -20575,21 +21063,36 @@ def _prepare_vm_ha_planned_target(
             progress_sink,
             _VMHAProgressPhase.WAIT_REARM_SSH,
         )
-        if progress_sink is None:
+
+        def wait_ssh() -> None:
             manager.wait_for_vm_ha_member_ssh(
                 target_member.instance_name,
                 target_member.public_ip,
                 username=username,
                 timeout=remaining_timeout(),
+                **({"progress_callback": wait_ssh_progress.update} if progress_sink else {}),
             )
-        else:
-            manager.wait_for_vm_ha_member_ssh(
-                target_member.instance_name,
-                target_member.public_ip,
-                username=username,
-                timeout=remaining_timeout(),
-                progress_callback=wait_ssh_progress.update,
-            )
+
+        from .deploy.recovery import SSHAccessFailure
+        from .deploy.ssh_policy import APPLY_POLICIES
+
+        try:
+            wait_ssh()
+        except SSHAccessFailure as error:
+            if APPLY_POLICIES.get() is None or error.code not in {
+                "ssh-host-key-changed",
+                "ssh-host-key-unverified",
+            }:
+                raise
+            rebind_rearm_ssh(reconcile=True)
+            wait_ssh()
+
+    policies = APPLY_POLICIES.get()
+    if policies is not None:
+        scope_digest = _vm_ha_ssh_trust_scope(local_cfg, plan).digest
+        if scope_digest in policies:
+            publish_vm_ha_ssh_trust(policies[scope_digest])
+            policies.pop(scope_digest)
 
     if return_after_ssh:
         return _VMHAPlannedPreparation(
@@ -21491,6 +21994,7 @@ def _plan_vm_ha_apply_convergence(
             effects=error.effects,
             has_destructive_changes=False,
             managed_ssh_action=None,
+            automatic_admission={"settlement": error.approval} if error.automatic else None,
             impact=VMHACommandImpact(
                 "Settle prior requests and retire their evidence; VPN traffic may pause. The fresh deployment needs separate approval.",
                 False,
@@ -22259,13 +22763,16 @@ def _vm_ha_result_from_snapshot(
             next_action="run apply to plan creation of the missing non-owner VM",
             actions=actions,
         )
-    if any(reason in {"ssh-trust-unavailable", "member-address-unavailable"} for reason in reasons):
+    from .deploy.recovery import SSH_CAUSES
+
+    ssh_reason = next((reason for reason in reasons if reason in SSH_CAUSES), None)
+    if ssh_reason is not None:
         return _vm_ha_action_required(
             config_path=config_path,
             classification=VMHACommandClassification.EXTERNAL_PREREQUISITE,
             health=health,
-            reason="ssh-trust-or-address-unavailable",
-            next_action="pin both VM-HA SSH hosts exactly, then rerun apply",
+            reason=ssh_reason,
+            next_action=SSH_CAUSES[ssh_reason][1],
             actions=actions,
         )
     if any(reason.startswith("managed-mtls-") for reason in reasons):
@@ -22477,7 +22984,16 @@ def _inspect_vm_ha_status_with_region(
     config_path: Path,
     *,
     region: str | None,
+    prepare_ssh: bool = False,
+    persist_ssh: bool = False,
 ) -> _VMHACommandInspection:
+    if prepare_ssh:
+        return _inspect_vm_ha_command_status(
+            config_path,
+            region=region,
+            prepare_ssh=True,
+            persist_ssh=persist_ssh,
+        )
     if region is None:
         return _inspect_vm_ha_command_status(config_path)
     return _inspect_vm_ha_command_status(config_path, region=region)
@@ -23221,10 +23737,11 @@ def _plan_vm_ha_corrective(
                 release_started(state)
                 or corrective.activation_started(state)
                 or corrective.unused_prelude(state)
+                or corrective.prepared_recovery(state)
             )
         ):
             return None
-        corrective.validate_checkpoint(state)
+        corrective.validate_checkpoint(state, settlement=settlement)
     if credentials is None or ssh_policy is None or not ssh_policy.known_hosts_sha256:
         raise ValueError("corrective release requires exact retained credentials and SSH trust")
     if (
@@ -23350,6 +23867,15 @@ def _plan_vm_ha_corrective(
                 baseline = retained["children"][node]["runtime"]
                 corrective.completed_children(
                     observed["children"], parent=baseline["parent"], artifact=baseline["artifact"]
+                )
+            elif replanned is not None and "recovery_frontier" in replanned["proof"]:
+                expected_children = replanned["proof"]["guests"][node]["children"]
+                if observed["children"] != expected_children:
+                    raise ValueError("Settled recovery package owner changed")
+                corrective.completed_children(
+                    observed["children"],
+                    parent=tx.operation_id,
+                    artifact=expected_children["runtime"]["artifact"],
                 )
             else:
                 corrective.completed_children(
