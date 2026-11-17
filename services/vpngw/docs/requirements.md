@@ -3816,14 +3816,29 @@ REQ-033 where they conflict; their remaining safety obligations remain active.
   confirmation counting. Start the new operation's execution budget at admission,
   excluding time already spent observing and probing. The existing persisted exhausted episode
   is retained as evidence and never renewed. A late usable remote backup may
-  admit a new bounded 29-second connection-only operation after that episode,
-  including after a 180-second remote outage. Preserve exact suspension/kernel
-  scope, writer locks, ownership and route guards, durable effect resumption,
-  bounded cleanup and healthy unrelated forwarding. After terminal proven rollback,
+  admit a new bounded 29-second connection-only mutation operation after that
+  episode, including after a 180-second remote outage. Automatic Static promotion
+  preserves the proven backup SA instead of suspending the whole connection.
+  Under the routing writer, recheck selected-path loss and fresh candidate native
+  bindings and inside-peer reachability. Suspend and remove only paths with proven
+  DOWN evidence, preserving healthy and unknown alternatives and unrelated
+  connections. Recheck candidate health after cleanup and configuration loading
+  before the guarded route batch. A recovered selected path cancels promotion.
+  The subsequent two selected-path confirmations include fresh inner-peer probes
+  and have one separately persisted, nonrenewable 29-second observation window,
+  capped at admission plus 58 seconds. It grants no mutation extension. Preserve
+  exact kernel scope, writer locks, ownership and route guards, durable effect
+  resumption, bounded cleanup and healthy unrelated forwarding. After terminal proven rollback,
   require fresh restoration proof, a 30s/60s cooldown and two new path proofs for
   bounded re-admission, at most three attempts per candidate in a continuous
   observed loss window. Preserve terminal receipts and never replace pending
-  cleanup or retry scope rejection. Confirmation scheduling must support all
+  cleanup or retry scope rejection. Fresh read-only rollback-authority checks
+  receive a bounded observation allowance independent of the failed operation's
+  expired effect deadline. They still require exact configuration, loaded names,
+  routes and current authority, and grant no new mutation authority. A backup may
+  fail after a route write; subsequent observation must withhold success or enter
+  existing restoration on confirmed DOWN, without fencing the serving gateway.
+  Confirmation scheduling must support all
   supported path counts without topology-sized proof expiry.
   Ordinary gateways, manual tunnel requests and BGP retain the existing policy.
 - AC-006: At path-episode expiry, transfer only with fresh candidate coverage

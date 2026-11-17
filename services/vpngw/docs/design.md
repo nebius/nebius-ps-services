@@ -15133,13 +15133,31 @@ A stale confirmation restarts proof counting without restarting the loss window
 or discarding bounded-attempt history. A pause with no sampled health is not
 treated as evidence that the selected path recovered.
 
-The accepted operation uses its own bounded twenty-nine-second deadline instead
-of clipping to an expired episode. It persists selection intent before native
-activation and route changes. Its wall-clock admission time includes monotonic
-elapsed work since tick entry, so slow probing does not consume that new budget.
-Original exact IKE/kernel suspension scope,
-writer exclusion, ownership checks before route writes and durable cleanup
-remain unchanged. No VM/cloud transfer, global forwarding or service restart
+The accepted operation uses its own bounded twenty-nine-second mutation deadline
+instead of clipping to an expired episode. It persists selection intent before
+native activation and route changes. Its wall-clock admission time includes
+monotonic elapsed work since tick entry, so slow probing does not consume that
+new budget. Automatic Static recovery enters activation directly. It rechecks
+selected-path DOWN and fresh candidate native/inner-peer health under the routing
+writer. Only proven DOWN sibling paths enter exact IKE/kernel cleanup. Healthy
+and UNKNOWN alternatives stay outside that scope. Candidate checks repeat after
+cleanup and configuration loading, before the authority-guarded route batch.
+The selected backup SA is not explicitly unloaded or terminated. Configuration
+loading retains the established initiation/DPD/retry policy for the selected
+path. Native integration qualification checks preservation of the original
+IKE/CHILD identities, not an assumed fixed number of CHILDs after loading.
+
+After activation, the existing `attempt_deadline` records a fixed 29-second
+read-only verification window, capped at the original mutation deadline plus
+29 seconds. It is saved once on entry, survives controller restart, and is not
+renewed by later verification passes. The mutation deadline is unchanged. Two
+post-switch confirmations require fresh inner-peer probes. Confirmed DOWN enters
+existing restoration; UNKNOWN cannot commit success. Health can change after any
+probe or route write, so verification and normal later health sampling remain
+required. No atomic health guarantee or workload-forwarding proof is implied.
+Manual requests, ordinary Static switching and BGP keep their existing sequence.
+Writer exclusion, ownership checks before route writes and durable cleanup
+remain enforced. No VM/cloud transfer, global forwarding or service restart
 port is added. Native effect failure records the sanitized result
 `native-effect-failed-restoring`. Pending cleanup is never replaced or replayed.
 
@@ -15152,6 +15170,12 @@ are retained in their existing checksummed envelope under operation-ID-named
 `static-recovery-results` files before replacement with a new operation. Restart
 retains accepted-operation resume and conservatively starts a new observation
 delay. This is separate from renewing an exhausted episode or replaying a request.
+The restoration proof has its own bounded ten-second observation allowance under
+the current routing writer and revalidated authority. The terminal operation's
+expired mutation deadline cannot make this proof permanently unavailable.
+Configuration equality, loaded connection names and previous-path route coverage
+remain required. This allowance runs observations only and is not inherited by
+any later activation or route write.
 
 Thirty seconds begins after confirmed DOWN, including existing health hysteresis
 and native detection time. It is not a packet-loss detection SLA or recovery

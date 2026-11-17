@@ -5,6 +5,7 @@ import os
 import pytest
 from test_static_recovery_lifecycle import native_paths as native_paths
 from test_static_recovery_lifecycle import scenario as scenario
+from tests.systemd.static_recovery_evidence import child_signatures
 
 pytestmark = [
     pytest.mark.integration,
@@ -26,6 +27,8 @@ def test_slow_backup_proof_survives_the_next_controller_pass(scenario):
 
     first = scenario.wait(confirmed, seconds=80)
     first_record = first["static_recovery_observations"]["site"]
+    original_backup = child_signatures(first, "backup")
+    assert original_backup, "The successful pre-admission proof must identify a real CHILD SA"
     assert first["tick_seconds"] >= 11, "The intended slow controller pass was not exercised"
     scenario.mark("delayed-backup-proof", tick_seconds=first["tick_seconds"])
     following = scenario.wait(lambda sample: sample["at"] > first["at"], seconds=20)
@@ -43,15 +46,21 @@ def test_slow_backup_proof_survives_the_next_controller_pass(scenario):
         "The next pass discarded a fresh successful backup proof"
     )
     admitted = scenario.wait(
-        lambda sample: sample["operation"] is not None
-        and sample["operation"]["requested_verb"] == "automatic-recovery",
+        lambda sample: (
+            sample["operation"] is not None
+            and sample["operation"]["requested_verb"] == "automatic-recovery"
+        ),
         seconds=60,
     )
     assert 27 <= admitted["operation"]["deadline"] - admitted["at"] <= 30, (
         "Slow probe work consumed the newly admitted operation's execution budget"
     )
     scenario.mark("slow-proof-recovery-admitted")
-    scenario.select("backup")
+    selected = scenario.select("backup")
+    assert original_backup <= child_signatures(selected, "backup"), (
+        "Promotion tore down the backup SA that passed the admission probes"
+    )
+    assert selected["operation"]["phase"] == "succeeded"
     scenario.clean(5)
     scenario.assert_cold("preferred")
     scenario.mark("slow-proof-traffic-recovered")

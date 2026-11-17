@@ -26,6 +26,7 @@ from .store import CorruptStateError, _envelope, _unwrap, atomic_write_json
 CAPABILITY = "connection-tunnel-selection-v1"
 STATE_NAME = "tunnel-selection.json"
 SCHEMA = "nebius-vpngw/ha-tunnel-selection-v1"
+STATIC_VERIFICATION_SECONDS = 29
 
 
 class Health(str, Enum):
@@ -514,7 +515,7 @@ class TunnelController(Generic[AuthorityT]):
             "phase": "verify-unchanged"
             if unchanged
             else "suspend"
-            if policy.mode == "static"
+            if policy.mode == "static" and verb != "automatic-recovery"
             else "activate",
             "deadline": now + 29,
             "attempt_deadline": now + 10,
@@ -991,7 +992,11 @@ class TunnelController(Generic[AuthorityT]):
         if policy.mode == "static" and op["requested_verb"] != "automatic-recovery":
             episode = self._episode(now, authority)
             op["deadline"] = min(op["deadline"], episode["deadline"] - 1)
-        if current_time() >= op["deadline"]:
+        preserving = policy.mode == "static" and op["requested_verb"] == "automatic-recovery"
+        verification_deadline = (
+            op["attempt_deadline"] if preserving and op["phase"] == "verify" else op["deadline"]
+        )
+        if current_time() >= verification_deadline:
             self._expire_selection(policy)
         if policy.mode == "bgp" and op["verb"] == "failback":
             # A restart or delayed retry must not reuse old preferred-path proof.
@@ -1011,6 +1016,8 @@ class TunnelController(Generic[AuthorityT]):
             elif op["phase"] in {"activate", "restore"}:
                 restore = op["phase"] == "restore"
                 target = op["previous"] if restore else target
+                if preserving and not restore:
+                    op["effects_started"] = True
                 if target is None:
                     self.state["selected"].pop(policy.name, None)
                 else:
@@ -1018,6 +1025,13 @@ class TunnelController(Generic[AuthorityT]):
                 self._save()  # All render/repair paths see intent before activation.
                 self.effects.activate(policy, target, authority)
                 op["phase"] = "verify-restore" if restore else "verify"
+                if preserving and not restore:
+                    # Route mutation keeps its original deadline. Only the
+                    # subsequent observations receive a separate fixed window.
+                    # A replay cannot push this past admission + 58 seconds.
+                    op["attempt_deadline"] = (
+                        min(current_time(), op["deadline"]) + STATIC_VERIFICATION_SECONDS
+                    )
             else:
                 restoring = op["phase"] == "verify-restore"
                 if (
@@ -1037,7 +1051,11 @@ class TunnelController(Generic[AuthorityT]):
                     op["successes"] = 0
                     self._save()
                     return
-                if not restoring and op["verb"] != "release" and current_time() >= op["deadline"]:
+                if (
+                    not restoring
+                    and op["verb"] != "release"
+                    and current_time() >= verification_deadline
+                ):
                     self._expire_selection(policy)
                     return
                 op["successes"] = op["successes"] + 1 if observed is Health.HEALTHY else 0
@@ -1054,19 +1072,25 @@ class TunnelController(Generic[AuthorityT]):
                     if not restoring:
                         self.state["reasons"][policy.name] = op["verb"]
                 elif (
-                    current_time() >= op["attempt_deadline"]
-                    and not restoring
+                    not restoring
                     and observed is Health.DOWN
+                    and (preserving or current_time() >= op["attempt_deadline"])
                 ):
                     # Pending probe hysteresis or unavailable evidence cannot
                     # prove candidate failure. The original request deadline
                     # still bounds waiting and retains its expiry cleanup.
                     self._failed_attempt(policy, current_time())
         except TunnelScopeError:
-            if op["phase"] == "suspend":
+            if op["phase"] == "suspend" or (preserving and op["phase"] == "activate"):
                 # The initial scope check preceded every native mutation. Do
                 # not convert a rejected local request into gateway suspension.
                 op.update(phase="failed", result="suspension-scope-unproven")
+                if preserving:
+                    op["effects_started"] = False
+                    if op["previous"] == policy.preferred:
+                        self.state["selected"].pop(policy.name, None)
+                    else:
+                        self.state["selected"][policy.name] = op["previous"]
             else:
                 self._failed_attempt(policy, current_time())
         except RuntimeError:

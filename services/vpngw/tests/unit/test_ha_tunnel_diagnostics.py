@@ -84,7 +84,6 @@ def test_timing_confirmations_and_sink_failure_preserve_decisions(tmp_path, caps
     assert effects.calls == [
         ("probe", "backup"),
         ("probe", "backup"),
-        ("suspend", "site"),
         ("activate", "backup"),
     ]
 

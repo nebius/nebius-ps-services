@@ -45,7 +45,18 @@ synchronous work before a real backup proof. The test requires the following
 controller pass to retain the freshly successful proof and original loss window.
 It substitutes no health result or controller clock. This models slow work, not
 actual cloud snapshot performance. The seven ordinary lifecycle cases use no
-injected delay. Cloud authority remains frozen in both lanes.
+injected delay. Cloud authority remains frozen in both lanes. The timing case
+also captures the backup's installed IKE/CHILD identities before admission and
+requires those identities to survive successful promotion and traffic recovery.
+Additional native CHILDs are reported without confusing them with preservation
+of the originally proven SA.
+
+Offline coverage is in `tests/unit/test_static_backup_promotion.py`. Its composed
+native-effects model rejects any deletion or unload outside the failed path and
+checks fresh health, authority races, post-route failure, slow controller passes,
+bounded verification and terminal retry observation. It exercises command and
+state boundaries without Docker. It does not replace real StrongSwan/kernel
+qualification of configuration reload semantics.
 
 Run `python3 tests/systemd/run.py --static-start-action-only --report /tmp/start-action.json`
 for an exploratory native A/B comparison. Two interleaved trials per setting

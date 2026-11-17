@@ -730,6 +730,8 @@ class NativeTunnelEffects(Generic[AuthorityT]):
         _write_secret_file(SWANCTL_CONF, content)
 
     def _swan_config(self, cfg: dict[str, Any]) -> None:
+        if self.effect_deadline is not None and self.clock() >= self.effect_deadline:
+            raise RuntimeError("HA tunnel effect deadline exhausted")
         self._write_swan_config(cfg)
         # Upstream loads credentials before connections on the same VICI
         # session; a daemon restart cannot split those loads across processes.
@@ -737,21 +739,28 @@ class NativeTunnelEffects(Generic[AuthorityT]):
 
     def suspend(self, policy: ConnectionPolicy, authority: AuthorityT) -> None:
         with self.locked(authority):
-            names = {p.name for p in policy.paths}
-            # Prove the complete termination scope before unloading or terminating.
-            try:
-                scoped_ike_ids(self.run(ipsec_observation.command()), names)
-            except (ValueError, RuntimeError):
-                raise TunnelScopeError("HA connection suspension scope is unproven") from None
-            try:
-                self._kernel_deletions(policy)
-            except RuntimeError:
-                raise TunnelScopeError("HA kernel suspension scope is unproven") from None
-            cfg = self._effective(authority)
+            self._suspend_paths(policy, authority, connection_wide=True)
+
+    def _suspend_paths(
+        self, policy: ConnectionPolicy, authority: AuthorityT, *, connection_wide: bool
+    ) -> None:
+        """The caller holds the routing writer and supplies the complete scope."""
+        names = {path.name for path in policy.paths}
+        try:
+            scoped_ike_ids(self.run(ipsec_observation.command()), names)
+            self._kernel_deletions(policy)
+        except (ValueError, RuntimeError):
+            raise TunnelScopeError("HA connection suspension scope is unproven") from None
+        cfg = self._effective(authority)
+        if connection_wide:
             cfg["_ha_suspended_connections"] = [policy.name]
-            self._swan_config(cfg)
-            self._terminate_unloaded(policy, authority)
-            self._remove_orphan_kernel_objects(policy, authority)
+        else:
+            cfg["_ha_suspended_tunnels"] = sorted(names)
+        if not self.revalidate(authority):
+            raise TunnelScopeError("HA tunnel authority changed before suspension")
+        self._swan_config(cfg)
+        self._terminate_unloaded(policy, authority)
+        self._remove_orphan_kernel_objects(policy, authority)
 
     def _terminate_unloaded(self, policy: ConnectionPolicy, authority: AuthorityT) -> None:
         names = {path.name for path in policy.paths}
@@ -837,6 +846,10 @@ class NativeTunnelEffects(Generic[AuthorityT]):
         """Verify persisted policy and daemon/route authority without requiring an SA."""
         try:
             with self.locked(authority):
+                # This is a fresh read-only proof, not permission to repeat the
+                # failed mutation. A terminal operation's expired deadline must
+                # not make every subsequent retry proof fail before it runs.
+                self.effect_deadline = self.clock() + 10
                 rendered: dict[Path, str | None] = {}
                 with contextlib.redirect_stdout(io.StringIO()):
                     StrongSwanRenderer().render_and_apply(
@@ -863,6 +876,22 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             return False
 
     def activate(self, policy: ConnectionPolicy, target: str | None, authority: AuthorityT) -> None:
+        state = read_state(self.state_dir / STATE_NAME)
+        operation = state["operation"]
+        if (
+            policy.mode == "static"
+            and operation is not None
+            and operation["requested_verb"] == "automatic-recovery"
+            and operation["phase"] == "activate"
+        ):
+            if (
+                state["authority"] != asdict(authority)
+                or operation["connection"] != policy.name
+                or operation["target"] != target
+            ):
+                raise TunnelScopeError("HA preserved path does not match the accepted operation")
+            self._promote_static(policy, str(target), authority)
+            return
         if policy.mode == "static":
             if target is not None and self.authority_restored(policy, target, authority):
                 # A completed native effect can precede its state-machine save.
@@ -874,19 +903,7 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             cfg = self._effective(authority)
             if policy.mode == "static":
                 self._swan_config(cfg)
-                path = next(p for p in policy.paths if p.name == target)
-                # One bounded native effect under the routing writer. A full
-                # authority snapshot per prefix can exhaust restoration's 10s
-                # budget before even a small route set is installed.
-                with tempfile.NamedTemporaryFile(mode="w", dir=self.state_dir) as batch:
-                    for destination in sorted(policy.destinations):
-                        batch.write(f"route replace {destination} dev {path.interface}\n")
-                    batch.flush()
-                    if not self.revalidate(authority):
-                        raise RuntimeError("HA tunnel route authority changed")
-                    self.run(("ip", "-batch", batch.name))
-                if not self.revalidate(authority):
-                    raise RuntimeError("HA tunnel route authority changed after installation")
+                self._install_static_routes(policy, str(target), authority)
             else:
                 if not self.active(authority):
                     raise RuntimeError("BGP tunnel policy requires active forwarding authority")
@@ -917,9 +934,97 @@ class NativeTunnelEffects(Generic[AuthorityT]):
                         raise RuntimeError("BGP tunnel authority changed before route refresh")
                     self.run(("vtysh", "-c", f"clear bgp ipv4 unicast {path.peer} soft"))
 
+    def _require_healthy_static_path(self, policy: ConnectionPolicy, target: str) -> None:
+        """Refresh native and inside-peer evidence without initiating or replacing an SA."""
+        try:
+            self._check_healthy_static_path(policy, target)
+        except (OSError, ValueError, TypeError, KeyError, StopIteration):
+            raise RuntimeError("HA preserved backup observation is unavailable") from None
+
+    def _check_healthy_static_path(self, policy: ConnectionPolicy, target: str) -> None:
+        if self._path_health(policy, target, selected=False) is not Health.HEALTHY:
+            raise RuntimeError("HA preserved backup native health is unproven")
+        path = next(path for path in policy.paths if path.name == target)
+        probe = self.cfg.get("gateway", {}).get("tunnel_probes", {}).get(target)
+        tunnel = None
+        for connection in self.cfg["connections"]:
+            for configured_tunnel in connection["tunnels"]:
+                if configured_tunnel["name"] == target:
+                    tunnel = configured_tunnel
+                    break
+            if tunnel is not None:
+                break
+        if tunnel is None:
+            raise TunnelScopeError("HA preserved backup is outside the configuration")
+        source = probe["source_ip"] if probe else tunnel.get("inner_local_ip")
+        peer = probe["target_ip"] if probe else tunnel.get("inner_remote_ip")
+        if not source or not peer:
+            raise RuntimeError("HA preserved backup inner addresses are missing")
+        addresses = json.loads(self.run(("ip", "-j", "address", "show", "dev", path.interface)))
+        assigned = set()
+        for row in addresses:
+            for address in row.get("addr_info", []):
+                assigned.add(address.get("local"))
+        if source not in assigned:
+            raise RuntimeError("HA preserved backup inner source is not assigned")
+        timeout = str(probe.get("timeout_seconds", 1) if probe else 1)
+        self.run(("ping", "-n", "-c", "1", "-I", path.interface, "-I", source, "-W", timeout, peer))
+
+    def _promote_static(self, policy: ConnectionPolicy, target: str, authority: AuthorityT) -> None:
+        with self.locked(authority):
+            operation = read_state(self.state_dir / STATE_NAME)["operation"]
+            if self.observe(policy, operation["previous"], selected=True) is not Health.DOWN:
+                raise TunnelScopeError("HA selected path is no longer confirmed down")
+            self._require_healthy_static_path(policy, target)
+            unhealthy = []
+            for path in policy.paths:
+                if path.name == target:
+                    continue
+                if self.observe(policy, path.name, selected=False) is Health.DOWN:
+                    unhealthy.append(path)
+            if unhealthy:
+                self._suspend_paths(
+                    replace(policy, paths=tuple(unhealthy)), authority, connection_wide=False
+                )
+            # Cleanup may be slow. The admission proofs do not authorize a
+            # route write after the candidate or ownership has changed.
+            self._require_healthy_static_path(policy, target)
+            if not self.revalidate(authority):
+                raise RuntimeError("HA tunnel authority changed before promotion")
+            self._swan_config(self._effective(authority))
+            self._require_healthy_static_path(policy, target)
+            self._install_static_routes(policy, target, authority)
+
+    def _install_static_routes(
+        self, policy: ConnectionPolicy, target: str, authority: AuthorityT
+    ) -> None:
+        path = next(path for path in policy.paths if path.name == target)
+        with tempfile.NamedTemporaryFile(mode="w", dir=self.state_dir) as batch:
+            for destination in sorted(policy.destinations):
+                batch.write(f"route replace {destination} dev {path.interface}\n")
+            batch.flush()
+            if not self.revalidate(authority):
+                raise RuntimeError("HA tunnel route authority changed")
+            self.run(("ip", "-batch", batch.name))
+        if not self.revalidate(authority):
+            raise RuntimeError("HA tunnel route authority changed after installation")
+
     def verify(self, policy: ConnectionPolicy, target: str | None) -> Health:
         if policy.mode == "static":
-            return self.observe(policy, target or policy.preferred, selected=True)
+            static_target = target or policy.preferred
+            health = self.observe(policy, static_target, selected=True)
+            operation = read_state(self.state_dir / STATE_NAME)["operation"]
+            if (
+                health is Health.HEALTHY
+                and operation is not None
+                and operation["requested_verb"] == "automatic-recovery"
+                and operation["phase"] == "verify"
+            ):
+                try:
+                    self._require_healthy_static_path(policy, static_target)
+                except (RuntimeError, OSError, ValueError, KeyError, TypeError, StopIteration):
+                    return Health.UNKNOWN
+            return health
         try:
             policy = self._observed_policy(policy)
             summary = json.loads(self.run(("vtysh", "-c", "show bgp summary json")))

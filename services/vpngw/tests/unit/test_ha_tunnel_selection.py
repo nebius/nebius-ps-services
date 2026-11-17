@@ -1939,7 +1939,6 @@ def test_ha_static_backup_waits_thirty_seconds_then_requires_fresh_confirmations
     assert effects.calls == [
         ("probe", "backup"),
         ("probe", "backup"),
-        ("suspend", "site"),
         ("activate", "backup"),
     ]
 
@@ -2020,10 +2019,10 @@ def test_ha_static_recovery_preserves_native_scope_and_authority_gates(tmp_path,
         effects.health["backup"] = Health.UNKNOWN
     if fault == "scope":
 
-        def unproven(policy, authority):
+        def unproven(policy, target, authority):
             raise TunnelScopeError("scope is unproven")
 
-        effects.suspend = unproven
+        effects.activate = unproven
     selector = recovery_selector(tmp_path, effects, clock)
     for second in range(36):
         recovery_tick(selector, clock, second)
@@ -2058,10 +2057,10 @@ def test_ha_static_failed_native_effect_has_reason_and_does_not_renew_deadline(t
     effects, clock = Effects(), RecoveryClock()
     effects.health["preferred"] = Health.DOWN
     selector = recovery_selector(tmp_path, effects, clock)
-    for second in range(37):
+    for second in range(36):
         recovery_tick(selector, clock, second)
     effects.fail_activate = True
-    for second in range(37, 80):
+    for second in range(36, 80):
         recovery_tick(selector, clock, second)
     operation = selector.state["operation"]
     assert operation["result"] == "native-effect-failed-restoring"
@@ -2090,7 +2089,11 @@ def test_native_static_backup_route_uses_new_effect_deadline_after_old_episode_e
     selector.state["operation"]["phase"] = "activate"
     selector._save()
     calls, rendered, route_batches = [], [], []
-    effects.suspend = lambda policy, authority: calls.append(("scope", policy.name))
+    effects._suspend_paths = lambda policy, authority, connection_wide: calls.append(
+        ("scope", tuple(path.name for path in policy.paths), connection_wide)
+    )
+    effects._require_healthy_static_path = lambda *args: None
+    effects._path_health = lambda *args, **kwargs: Health.DOWN
     effects._swan_config = lambda cfg: rendered.append(cfg)
 
     def run(argv, timeout):
@@ -2102,7 +2105,7 @@ def test_native_static_backup_route_uses_new_effect_deadline_after_old_episode_e
 
     effects.command_runner = run
     selector._advance(AUTH, 1282)
-    assert calls[0] == ("scope", "site")
+    assert calls[0] == ("scope", ("preferred",), False)
     assert len(calls) == 2
     assert calls[1][:2] == ("ip", "-batch")
     assert route_batches == ["route replace 10.1.0.0/16 dev xfrm1\n"]
@@ -2160,16 +2163,18 @@ def test_static_transient_effect_failure_retries_only_after_completed_restore_an
 ):
     effects, clock = Effects(), RecoveryClock()
     effects.health["preferred"] = Health.DOWN
-    original_suspend = effects.suspend
+    original_activate = effects.activate
     submissions = []
 
-    def suspend(policy, authority):
+    def activate(policy, target, authority):
+        if target != "backup":
+            return original_activate(policy, target, authority)
         submissions.append(clock.now)
         if len(submissions) == 1:
             raise RuntimeError("routing writer busy")
-        original_suspend(policy, authority)
+        original_activate(policy, target, authority)
 
-    effects.suspend = suspend
+    effects.activate = activate
     selector = recovery_selector(tmp_path, effects, clock)
     failed_operation = None
     for second in range(301):
@@ -2190,13 +2195,16 @@ def test_static_transient_effect_failure_retries_only_after_completed_restore_an
 def test_static_repeated_transient_failures_have_finite_cooled_attempts(tmp_path):
     effects, clock = Effects(), RecoveryClock()
     effects.health["preferred"] = Health.DOWN
+    original_activate = effects.activate
     submissions = []
 
-    def suspend(policy, authority):
+    def activate(policy, target, authority):
+        if target != "backup":
+            return original_activate(policy, target, authority)
         submissions.append(clock.now)
         raise RuntimeError("routing writer busy")
 
-    effects.suspend = suspend
+    effects.activate = activate
     selector = recovery_selector(tmp_path, effects, clock)
     for second in range(601):
         recovery_tick(selector, clock, second)
@@ -2468,17 +2476,19 @@ def test_static_confirmation_can_expire_during_final_authority_check(tmp_path):
 def test_static_retry_requires_fresh_restoration_proof_after_terminal_cleanup(tmp_path):
     effects, clock = Effects(), RecoveryClock()
     effects.health["preferred"] = Health.DOWN
-    original_suspend = effects.suspend
+    original_activate = effects.activate
     first = True
 
-    def suspend(policy, authority):
+    def activate(policy, target, authority):
+        if target != "backup":
+            return original_activate(policy, target, authority)
         nonlocal first
         if first:
             first = False
             raise RuntimeError("routing writer busy")
-        original_suspend(policy, authority)
+        original_activate(policy, target, authority)
 
-    effects.suspend = suspend
+    effects.activate = activate
     selector = recovery_selector(tmp_path, effects, clock)
     for second in range(41):
         recovery_tick(selector, clock, second)
