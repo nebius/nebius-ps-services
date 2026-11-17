@@ -11806,7 +11806,7 @@ GitHub deployment and registry behavior remain unverified.
 <!-- /FEATURE: FEAT-040 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-041 reqs=REQ-041 status=ready delivery=implemented priority=P1 version=12 -->
+<!-- FEATURE: FEAT-041 reqs=REQ-041 status=ready delivery=implemented priority=P1 version=13 -->
 ### FEAT-041: Private read-only support bundle and exact activation diagnostics
 
 #### Requirements Covered
@@ -12003,7 +12003,27 @@ and collection continues. Captured SSH startup stderr survives exceptional
 completion with incomplete tails discarded. These repairs preserve public flags,
 archive schema and established SSH trust.
 
+Code review hardened the bounded text reader: an overlong line terminates that
+stream's text export because its discarded content can contain a credential
+opener. Journal structured facts remain, with explicit source-limit coverage.
+SSH upload failures drain only already-buffered stderr under fixed read and byte
+caps before closing. Missing Python is distinguished from sudo denial, and upload
+timeouts retain their original cause. Quoted command-line credentials retain
+multiline state across reads and journal entries, even after earlier credential
+fields on the same line. No access or trust policy changes.
+
 #### Verification Evidence
+
+Focused negative controls reproduced oversized-line credential continuation,
+early sudo/Python diagnostic loss and missing-interpreter misclassification.
+The repaired cases passed. An additional upload-timeout regression failed before
+its correction and passed afterward. The collector/CLI/heartbeat/transport suite
+passed 837 tests; all 44 collector v3 tests passed after the timeout correction.
+A further publication review reproduced quoted command-line credential
+continuation leaks in five cases before correction. All 50 collector v3 tests
+passed afterward, including split-read and same-stream journal coverage.
+These are local synthetic regressions; the earlier live and native evidence below
+predates these repairs and was not repeated for this review.
 
 After the aggregate-status budget repair, the combined collector/access,
 configuration/build/CLI, qualification-selection and release-build run passed
@@ -12048,7 +12068,7 @@ no unresolved customer HA cause is claimed fixed.
 <!-- /FEATURE: FEAT-041 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-042 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=2 -->
+<!-- FEATURE: FEAT-042 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=3 -->
 ### FEAT-042: Classified peer heartbeat channel diagnosis and pre-fence gate
 
 #### Requirements Covered
@@ -12184,7 +12204,20 @@ predicates; projection and safe-reason allowlists including the previously
 dropped peer freshness fields; the README security-group prerequisite and the
 0.6.6 changelog entries.
 
+The early peer gate now decides from the latest classified failure while
+preserving first/latest diagnostics. Status retains peer failure evidence even
+when another condition makes the pair blocked. Rendered guidance includes the
+connectivity prerequisite while preserving the selected exact apply or rotation
+resume action; a pending apply is never redirected into a competing rotation.
+
 #### Verification Evidence
+
+Four negative controls covered initially stale then persistently failed endpoint
+or TLS observations, plus both failures during interrupted apply. All failed
+before the respective fixes and passed afterward. Rendered terminal output is
+checked as well as the structured view. The focused 837-case collector, CLI,
+heartbeat and transport suite passed. No live peer-channel fault injection or
+customer HA recovery was performed for these review fixes.
 
 Local gates on the full tree: 7601 unit tests passed, including sixteen new
 transport-classification, publisher-recording, runtime-merge, status-view,

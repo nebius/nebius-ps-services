@@ -45,7 +45,6 @@ class TextRedactor:
     def __init__(self, literals: tuple[str, ...] = ()) -> None:
         self.pending = ""
         self.block: str | None = None
-        self.overflow = False
         self.limited = False
         self.redactions = 0
         self.discarded = 0
@@ -85,14 +84,22 @@ class TextRedactor:
             return line.rstrip("\r\n") + " " + REDACTED + "\n"
         # Multiline shell/JSON strings and YAML block scalars need state, not a
         # per-chunk replacement. Do not release the first fragment of the value.
-        start = re.search(r"(?i)[\"']?\b" + _CREDENTIAL + r"\b[\"']?\s*[:=]\s*([\"'|>])", line)
-        if start:
+        starts = re.finditer(
+            r"(?i)(?:[\"']?\b"
+            + _CREDENTIAL
+            + r"\b[\"']?\s*[:=]\s*|--"
+            + _CREDENTIAL
+            + r"[ \t]+)([\"'|>])",
+            line,
+        )
+        for start in starts:
             quote = start[1]
             tail = line[start.end() :]
             if quote in "|>" or not has_closing_quote(tail, quote):
                 self.block = "indent" if quote in "|>" else quote
                 self.redactions += 1
-                return line[: start.end() - 1] + REDACTED + "\n"
+                line = line[: start.end() - 1] + REDACTED + "\n"
+                break
         line, count = _ASSIGNMENT.subn(lambda m: m[1] + '"' + REDACTED + '"', line)
         self.redactions += count
         line, count = _CLI_SECRET.subn(lambda m: m[1] + " " + REDACTED, line)
@@ -112,27 +119,27 @@ class TextRedactor:
         return line
 
     def feed(self, text: str, *, final: bool = False, complete: bool = True) -> str:
+        if self.limited:
+            return ""
         result = []
         for part in text.splitlines(keepends=True):
             self.pending += part
             if len(self.pending) > LINE_LIMIT:
+                # The discarded line may open a multiline credential. Its
+                # continuation is unsafe even across later feed() calls.
                 self.pending = ""
-                self.overflow = True
                 self.limited = True
+                self.discarded += 1
+                break
             if part.endswith(("\n", "\r")):
-                if self.overflow:
-                    self.discarded += 1
-                else:
-                    result.append(self.line(self.pending))
-                self.pending = ""
-                self.overflow = False
-        if final:
-            if self.pending and complete and not self.overflow:
                 result.append(self.line(self.pending))
-            elif self.pending or self.overflow:
+                self.pending = ""
+        if final:
+            if self.pending and complete:
+                result.append(self.line(self.pending))
+            elif self.pending:
                 self.discarded += 1
             self.pending = ""
-            self.overflow = False
         return "".join(result)
 
 

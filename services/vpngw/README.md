@@ -4817,6 +4817,9 @@ creates or widens that rule. When the attached groups block it, `status`
 reports `peer-heartbeat-endpoint-unreachable` with the owning fix, and `apply`
 fails fast in `verify-peer-channel-node-N` instead of timing out in fenced
 verification.
+The gate uses the latest observed failure while retaining the first observation
+for diagnosis. An interrupted apply keeps its exact resume action; status also
+shows any persistent peer-channel failure and the connectivity prerequisite.
 
 The host uses a dedicated nftables `inet nebius_vpngw_ingress` INPUT table ahead of
 UFW's broad accepts. Updates replace only that table in a validated atomic transaction
@@ -5040,6 +5043,11 @@ build or download leaves a partial record and collection continues to the VMs.
 Captured SSH startup stderr is retained after interruption, with incomplete tails
 discarded. Multiline journal redaction follows journal entry order even when
 wall-clock timestamps repeat or move backwards.
+If a line exceeds the redactor's limit, subsequent text in that stream is omitted
+because the discarded line may have opened a multiline credential. Journal
+structured facts remain available and the text limit is reported explicitly.
+Early sudo or missing-Python failures retain buffered, redacted startup stderr
+even when the remote command closes stdin before script upload completes.
 
 Exit `0` means collection completed under policy, `1` means a usable partial ZIP,
 and `2` means no valid ZIP. A complete collection does not establish gateway

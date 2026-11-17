@@ -4995,6 +4995,8 @@ def test_vm_ha_post_compute_refresh_rebinds_exact_current_members() -> None:
     ("failing_stage_role", "final_transition_fault", "peer_shapes", "start_destroyed"),
     [
         (None, None, (("gcp", "static"),), False),
+        (None, "peer-channel-endpoint", (("gcp", "static"),), False),
+        (None, "peer-channel-tls", (("gcp", "static"),), False),
         *[
             (None, "pair-" + boundary, (("generic", mode),), False)
             for boundary in (
@@ -5619,7 +5621,10 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
         if state.status is VMHALifecycleStatus.ACTIVE and final_transition_fault == "after-write":
             raise RuntimeError("injected post-write verification failure")
 
+    waited_phases = []
+
     def wait_with_controller_shaped_status(*, predicate, inst_cfg, **_kwargs):
+        waited_phases.append(_kwargs.get("phase"))
         if (
             final_transition_fault == "pair-forwarding"
             and invocation[0] == 1
@@ -5659,6 +5664,18 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
         }
         role = inst_cfg.vm_ha_node.role.value
         if str(_kwargs.get("phase", "")).startswith("verify-peer-channel-"):
+            if (final_transition_fault or "").startswith("peer-channel-"):
+                from nebius_vpngw.deploy.apply_diagnostics import Failure, VerificationFailure
+
+                reason = (
+                    "peer-heartbeat-endpoint-unreachable"
+                    if final_transition_fault == "peer-channel-endpoint"
+                    else "peer-heartbeat-tls-failure"
+                )
+                raise VerificationFailure(
+                    Failure(_kwargs["phase"], "peer-heartbeat-stale"),
+                    Failure(_kwargs["phase"], reason),
+                )
             # The pre-fence gate proves only the peer heartbeat channel; it
             # must accept fresh peers and reject a silent channel outright.
             assert predicate(base)
@@ -6054,6 +6071,17 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             )
             final_transition_fault = None
         first_result = CliRunner().invoke(app, apply_args)
+        if (final_transition_fault or "").startswith("peer-channel-"):
+            assert first_result.exit_code != 0, first_result.stdout
+            assert not any(str(phase).startswith("verify-fenced-") for phase in waited_phases)
+            assert "peer-heartbeat-stale" in first_result.stdout
+            expected = (
+                "peer-heartbeat-endpoint-unreachable"
+                if final_transition_fault == "peer-channel-endpoint"
+                else "peer-heartbeat-tls-failure"
+            )
+            assert expected in first_result.stdout
+            return
         if final_transition_fault == "destroyed-new-compute":
             assert first_result.exit_code != 0
             assert not observed and ensure_calls == 0
@@ -10040,6 +10068,43 @@ def test_vm_ha_status_view_reports_interrupted_apply_mtls_as_resumable() -> None
     action = next(row for row in view.summary_rows if row[0] == "Action")
     assert action[1] == "nebius-vpngw apply --local-config-file fixture.yaml"
     assert "resume the interrupted VM-HA apply" in action[2]
+
+
+@pytest.mark.parametrize("kind", ["timeout", "tls"])
+def test_interrupted_apply_retains_peer_failure_and_compatible_recovery(kind) -> None:
+    operation = "a" * 64
+    members = list(
+        _vm_ha_interrupted_apply_view_members(operation, _vm_ha_mtls_apply_operation_id(operation))
+    )
+    for index, member in enumerate(members):
+        record = dict(member.record or {})
+        record["heartbeat"] = {
+            "peer_v6_fresh": False,
+            "peer_send_error_kind": kind,
+            "peer_send_consecutive_failures": 12,
+        }
+        members[index] = replace(member, record=record)
+    view = _vm_ha_status_view(
+        _VMHACloudAuthority("active", "exact", "nebius-vpn-gw-0", "node-active", operation, ()),
+        tuple(members),
+        rearm_command="nebius-vpngw apply -c fixture.yaml",
+        mtls_command="nebius-vpngw apply --rotate-mtls -c fixture.yaml",
+    )
+    assert view.overall == "BLOCKED"
+    expected = (
+        "peer-heartbeat-endpoint-unreachable" if kind == "timeout" else "peer-heartbeat-tls-failure"
+    )
+    assert expected in repr(view.summary_rows)
+    action = next(row for row in view.summary_rows if row[0] == "Action")
+    assert action[1] == "nebius-vpngw apply -c fixture.yaml"
+    assert "resume the interrupted VM-HA apply" in action[2]
+    assert "TCP 9443" in action[2] if kind == "timeout" else "TLS" in action[2]
+    assert "--rotate-mtls" not in repr(view.summary_rows)
+    output = io.StringIO()
+    _render_vm_ha_status(Console(file=output, width=180, color_system=None), view)
+    rendered = output.getvalue()
+    assert expected in rendered
+    assert "TCP 9443" in rendered if kind == "timeout" else "TLS" in rendered
 
 
 def test_vm_ha_status_view_keeps_conflict_for_foreign_apply_mtls_transaction() -> None:

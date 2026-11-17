@@ -33,6 +33,18 @@ def progress(stage: str, state: str = "started") -> None:
     print(json.dumps({"kind": "progress", "stage": stage, "state": state}), flush=True)
 
 
+def guest_failure_code(stderr: bytes, began: bool) -> str:
+    detail = stderr.decode("utf-8", errors="replace").lower()
+    if not began:
+        if "python3" in detail and any(
+            marker in detail for marker in ("not found", "no such file")
+        ):
+            return "python-unavailable"
+        if "sudo" in detail:
+            return "sudo-denied"
+    return "probe-failed"
+
+
 def scope(path: Path, project_id: str | None = None, region: str | None = None) -> dict[str, Any]:
     try:
         config = yaml.safe_load(read_regular(path))
@@ -507,8 +519,26 @@ def remote(config: dict[str, Any], request: dict[str, Any]) -> None:
         channel = transport.open_session(timeout=15)
         channel.settimeout(15)
         channel.exec_command("sudo -n /usr/bin/python3 -I -")
-        channel.sendall(script.encode())
-        channel.shutdown_write()
+        try:
+            channel.sendall(script.encode())
+            channel.shutdown_write()
+        except OSError as error:
+            # A rejected sudo/Python command can close stdin during upload.
+            # Preserve only already-buffered stderr, under fixed read/byte caps.
+            channel.settimeout(0.2)
+            with contextlib.suppress(OSError):
+                for _ in range(MAX_BYTES // 65536):
+                    if not channel.recv_stderr_ready():
+                        break
+                    chunk = channel.recv_stderr(65536)
+                    if not chunk:
+                        break
+                    stderr.extend(chunk[: max(0, MAX_BYTES - len(stderr))])
+            if isinstance(error, TimeoutError):
+                raise
+            if stderr:
+                raise CollectionFailure(guest_failure_code(bytes(stderr), False)) from None
+            raise
         deadline = time.monotonic() + 190
         buffer = bytearray()
         received = 0
@@ -557,17 +587,7 @@ def remote(config: dict[str, Any], request: dict[str, Any]) -> None:
             time.sleep(0.01)
         exit_code = channel.recv_exit_status()
         if exit_code != 0:
-            detail = stderr.decode("utf-8", errors="replace").lower()
-            code = (
-                "sudo-denied"
-                if not began and "sudo" in detail
-                else "python-unavailable"
-                if not began
-                and "python3" in detail
-                and ("not found" in detail or "no such file" in detail)
-                else "probe-failed"
-            )
-            raise CollectionFailure(code)
+            raise CollectionFailure(guest_failure_code(bytes(stderr), began))
         if not began:
             raise CollectionFailure("invalid-output")
         if buffer:

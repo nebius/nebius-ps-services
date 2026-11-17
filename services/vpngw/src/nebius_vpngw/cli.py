@@ -12502,7 +12502,7 @@ def _activate_bound_vm_ha(
                             progress_callback=wait_fenced_progress.update,
                         )
                     except VerificationFailure as error:
-                        if error.first.predicate in _VM_HA_PEER_CHANNEL_BLOCKING_PREDICATES:
+                        if error.latest.predicate in _VM_HA_PEER_CHANNEL_BLOCKING_PREDICATES:
                             raise
 
                 for inst_cfg, target, _receipt, _lock_receipt in activation_entries:
@@ -15858,6 +15858,30 @@ def _vm_ha_status_view(
         action = "inspect"
         action_detail = "review the safe reason above, then rerun status"
 
+    peer_reasons = tuple(
+        reason for reason in degraded_reasons if reason in _VM_HA_PEER_CHANNEL_BLOCKING_PREDICATES
+    )
+    overall_reasons = _dedupe_vm_ha_reasons((*overall_reasons, *peer_reasons))
+    if peer_reasons:
+        redundancy_detail = "; ".join(
+            (
+                *[reason for reason in peer_reasons if reason not in redundancy_detail],
+                redundancy_detail,
+            )
+        )
+    # Keep the exact-operation action selected above. Connectivity is a
+    # prerequisite; it must not redirect a pending apply into a new rotation.
+    if (
+        "peer-heartbeat-endpoint-unreachable" in peer_reasons
+        and action != "repair-peer-heartbeat-path"
+    ):
+        action_detail = (
+            "restore TCP 9443 connectivity between gateway members through the "
+            "customer-owned security groups; then " + action_detail
+        )
+    elif "peer-heartbeat-tls-failure" in peer_reasons and action != mtls_command:
+        action_detail = "peer heartbeat TLS authentication is failing; " + action_detail
+
     healthy_mtls = bool(
         len(mtls_states) == 2
         and all(state == "healthy" and not inhibited for state, _, _, _, inhibited in mtls_states)
@@ -16451,13 +16475,15 @@ def _render_vm_ha_status(console: t.Any, view: _VMHAStatusView) -> None:
         summary_table.add_row(Text(label), Text(value, style=value_style), Text(detail))
     console.print(summary_table)
 
-    action, _action_detail = public_summary["Action"]
+    action, action_detail = public_summary["Action"]
     if view.overall != "MAINTENANCE" and "--local-config-file" in action:
         action = _redact_vm_ha_local_config_path(action)
     console.print(
         Text.assemble(("Action", "bold cyan"), "  ", (action, "white")),
         soft_wrap=True,
     )
+    if any(reason in _VM_HA_PEER_CHANNEL_BLOCKING_PREDICATES for reason in view.reasons):
+        console.print(Text(action_detail), soft_wrap=True)
 
 
 def _render_security_group_status(console: t.Any, evidence: dict[str, dict]) -> None:

@@ -247,6 +247,8 @@ def journal_events(text: str) -> dict[str, Any]:
         identity = tuple(str(event.get(key, "")) for key in ("_BOOT_ID", "_SYSTEMD_UNIT", "_PID"))
         redactor = redactors.setdefault(identity, TextRedactor())
         messages[index] = redactor.feed(event["MESSAGE"] + "\n", final=True).rstrip("\n")
+        if redactor.limited:
+            coverage.update(source_limited=True, truncation="newest")
     for line_index, line in enumerate(lines):
         coverage["scanned"] += 1
         try:
@@ -894,6 +896,8 @@ def collect_probe(request: dict[str, Any], emit: Any = None) -> list[dict[str, A
                     )
                 elif value["coverage"]["invalid"]:
                     outcome = "partial"
+                elif value["coverage"]["source_limited"]:
+                    outcome = "source-limit"
             if (name.startswith("service-status/") and code in {0, 3, 4}) or (
                 name == "host/cloud-init-status" and code in {0, 1, 2}
             ):

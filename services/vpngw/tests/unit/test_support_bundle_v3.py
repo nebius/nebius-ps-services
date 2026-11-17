@@ -9,7 +9,31 @@ import pytest
 
 from nebius_vpngw.deploy import ssh_client_auth as auth
 from nebius_vpngw.support_bundle import collector, diagnostics, probe, worker
-from nebius_vpngw.support_bundle.redaction import TextRedactor, redact_text, unsafe_text
+from nebius_vpngw.support_bundle.redaction import LINE_LIMIT, TextRedactor, redact_text, unsafe_text
+
+
+@pytest.mark.parametrize("opener", ['password="', "-----BEGIN PRIVATE KEY-----"])
+def test_overlong_line_cannot_release_multiline_secret_continuation(opener):
+    source = "ordinary before\n" + "x" * LINE_LIMIT + opener + "\nsynthetic-continuation\n"
+    for split in (0, LINE_LIMIT // 2, LINE_LIMIT + 16, len(source)):
+        redactor = TextRedactor()
+        result = redactor.feed(source[:split]) + redactor.feed(source[split:], final=True)
+        assert "ordinary before" in result
+        assert "synthetic-continuation" not in result
+        assert redactor.limited and redactor.discarded
+
+
+def test_journal_overlong_line_retains_safe_facts_and_marks_source_limit():
+    messages = ["ordinary before", "x" * LINE_LIMIT + 'password="', "synthetic-continuation"]
+    raw = "\n".join(
+        json.dumps({"MESSAGE": message, "__REALTIME_TIMESTAMP": str(index), "_PID": "12"})
+        for index, message in reversed(list(enumerate(messages)))
+    )
+    result = probe.journal_events(raw)
+    assert "synthetic-continuation" not in json.dumps(result)
+    assert "ordinary before" in json.dumps(result)
+    assert result["coverage"]["source_limited"]
+    assert result["coverage"]["exported"] == len(messages)
 
 
 @pytest.mark.parametrize(
@@ -21,6 +45,10 @@ from nebius_vpngw.support_bundle.redaction import TextRedactor, redact_text, uns
         "-----BEGIN PRIVATE KEY-----\nsynthetic key body\n-----END PRIVATE KEY-----",
         "private_key: |\n  synthetic line one\n  synthetic line two",
         'token="synthetic\nvalue spanning lines"',
+        'tool --password "synthetic-first\nsynthetic-continuation"',
+        "tool --token 'synthetic-first\nsynthetic-continuation'",
+        'tool --password="synthetic-first\nsynthetic-continuation"',
+        'password="synthetic-one" --token "synthetic-two\nsynthetic-continuation"',
         "encryption key => 8 bytes\n  01 02 03 04 05 06 07 08 synthetic",
     ],
 )
@@ -69,11 +97,14 @@ def test_incomplete_secret_tail_is_never_flushed():
 
 
 @pytest.mark.parametrize("timestamps", [[1, 1, 1, 1, 1], [5, 4, 3, 2, 1]])
-def test_multiline_journal_redaction_survives_clock_ordering(tmp_path, monkeypatch, timestamps):
+@pytest.mark.parametrize("opener", ['password="', 'tool --password "'])
+def test_multiline_journal_redaction_survives_clock_ordering(
+    tmp_path, monkeypatch, timestamps, opener
+):
     monkeypatch.setenv("HOME", str(tmp_path))
     chronological = [
         "ordinary before",
-        'password="',
+        opener,
         "synthetic-continuation",
         '"',
         "ordinary after",
@@ -371,7 +402,10 @@ def test_public_key_path_is_retained_for_fresh_bootstrap_even_with_override(tmp_
         auth.OPERATOR_IDENTITY.reset(token)
 
 
-@pytest.mark.parametrize("completion", ["ok", "timeout", "invalid-output"])
+@pytest.mark.parametrize(
+    "completion",
+    ["ok", "timeout", "invalid-output", "send-sudo", "send-python", "exit-python", "send-timeout"],
+)
 def test_remote_drains_stdout_after_early_exit_status(monkeypatch, capsys, completion):
     from types import SimpleNamespace
 
@@ -400,7 +434,10 @@ def test_remote_drains_stdout_after_early_exit_status(monkeypatch, capsys, compl
             pass
 
         def sendall(self, script):
-            pass
+            if completion == "send-timeout":
+                raise TimeoutError("upload timeout")
+            if completion.startswith("send-"):
+                raise OSError("Socket is closed")
 
         def shutdown_write(self):
             pass
@@ -421,7 +458,7 @@ def test_remote_drains_stdout_after_early_exit_status(monkeypatch, capsys, compl
             return self.chunks.pop(0)
 
         def recv_exit_status(self):
-            return 0
+            return 1 if completion in {"send-sudo", "send-python", "exit-python"} else 0
 
     channel = Channel()
     if completion == "timeout":
@@ -429,6 +466,14 @@ def test_remote_drains_stdout_after_early_exit_status(monkeypatch, capsys, compl
         monkeypatch.setattr(worker.time, "monotonic", lambda: next(moments))
     elif completion == "invalid-output":
         channel.chunks = [b"invalid json\n"]
+    elif completion in {"send-sudo", "send-python", "exit-python"}:
+        channel.chunks = [b""]
+        diagnostic = (
+            b"sudo: a password is required\n"
+            if completion == "send-sudo"
+            else b"sudo: /usr/bin/python3: command not found\n"
+        )
+        channel.errors = [diagnostic + b'ordinary startup diagnostic\npassword="synthetic-secret']
     client = SimpleNamespace(
         connect=lambda **kwargs: None,
         close=lambda: None,
@@ -447,8 +492,15 @@ def test_remote_drains_stdout_after_early_exit_status(monkeypatch, capsys, compl
     }
     if completion == "ok":
         worker.remote(config, request)
+    elif completion in {"send-sudo", "send-python", "exit-python"}:
+        expected = "sudo-denied" if completion == "send-sudo" else "python-unavailable"
+        with pytest.raises(diagnostics.CollectionFailure) as caught:
+            worker.remote(config, request)
+        assert caught.value.code == expected
     else:
-        with pytest.raises(TimeoutError if completion == "timeout" else ValueError):
+        with pytest.raises(
+            TimeoutError if completion in {"timeout", "send-timeout"} else ValueError
+        ):
             worker.remote(config, request)
     rows = list(map(json.loads, capsys.readouterr().out.splitlines()))
     if completion == "ok":
@@ -456,7 +508,7 @@ def test_remote_drains_stdout_after_early_exit_status(monkeypatch, capsys, compl
     startup = next(row for row in rows if row.get("probe") == "startup")
     assert "ordinary startup diagnostic" in startup["text"]["stderr"]["content"]
     assert "synthetic-secret" not in json.dumps(rows)
-    if completion != "ok":
+    if completion in {"timeout", "send-timeout", "invalid-output"}:
         assert startup["outcome"] == "partial"
         assert startup["text"]["stderr"]["truncated"]
 

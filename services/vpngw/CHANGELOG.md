@@ -11,6 +11,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.6.6] - 2026-11-16
+
 ### Changed
 
 - Make ordinary and HA apply resolve the installed CLI's exact deployment artifact
@@ -31,6 +33,15 @@ All notable changes to this project are tracked here. This changelog follows
 
 ### Fixed
 
+- Redact quoted multiline command-line credentials across journal entries and
+  stream reads, including multiple credential fields on the same line.
+- Stop redacted text streams after an oversized line so discarded credential
+  openers cannot expose later multiline content; report journal text limits.
+- Preserve buffered startup stderr when sudo or Python exits during SSH upload,
+  distinguish missing Python from sudo denial, and retain upload timeout causes.
+- Use the latest classified peer-channel failure for the early activation gate.
+- Show persistent peer failures and connectivity guidance during interrupted
+  apply without replacing the exact operation's recovery action.
 - Allow aggregate public status up to 90 seconds of the remaining support-bundle
   budget; preserve the five-minute total, guest-probe limits and archive reserve.
 - Preserve multiline journal redaction across equal timestamps and clock rollback.
@@ -72,35 +83,6 @@ All notable changes to this project are tracked here. This changelog follows
 - Prioritize unfinished package workers over terminal history and report bounded
   worker-history coverage instead of silently omitting older active operations.
 - Include route-fix timer state and operating-system versions in support evidence.
-
-## [nebius-vpngw-v0.6.6] - 2026-11-16
-
-### Added
-
-- Add bounded `collect-logs` collection into a private ZIP with safe projections,
-  recognized log events, artifact provenance and per-source completeness evidence.
-  Existing gateways need no upgrade. Operational identifiers remain private;
-  credentials and raw configuration/log messages are excluded.
-- Include this diagnostic capability in the explicitly approved v0.6.6 patch
-  release exception to the usual minor-version policy for new capabilities.
-
-- Verify exact-commit CI qualification before release publication, retaining
-  final tagged package and artifact checks while excluding unrelated CI/Pages.
-
-- Classify failed VM-HA peer heartbeat sends (timeout, refused, unreachable,
-  tls, protocol) and publish peer send health additively in the agent status
-  heartbeat section; `status` reports a persistently blocked peer endpoint as
-  `peer-heartbeat-endpoint-unreachable` with the owning security-group fix
-  (VM-to-VM TCP 9443) and failed peer TLS trust as `peer-heartbeat-tls-failure`
-  with managed-mTLS guidance. Support bundles retain the new typed fields.
-- Prove the peer heartbeat channel in a bounded `verify-peer-channel-node-N`
-  gate before fenced activation verification, so a provably blocked endpoint
-  fails the apply in seconds with its classified cause; a merely slow channel
-  still falls through to the full fenced verification window. Document VM-to-VM
-  TCP 9443 as a customer-owned security-group prerequisite.
-
-### Fixed
-
 - Allow fenced VM-HA activation verification five minutes per member before
   reporting operation-timeout, so slow post-repair convergence on small VM
   presets no longer aborts the apply mid-transaction; expired verification still
@@ -124,6 +106,30 @@ All notable changes to this project are tracked here. This changelog follows
 - Batch static tunnel route activation under bounded ownership admission so
   repeated full authority observations per prefix cannot exhaust restoration.
   Retain native IKE recovery when replay proves policy and routes already restored.
+
+### Added
+
+- Add bounded `support-bundle` collection into a private ZIP with safe projections,
+  redacted logs, artifact provenance and per-source completeness evidence.
+  Existing gateways need no upgrade. Credentials and raw configuration are excluded;
+  operational identifiers and unrecognized log text remain private evidence.
+- Include this diagnostic capability in the explicitly approved v0.6.6 patch
+  release exception to the usual minor-version policy for new capabilities.
+
+- Verify exact-commit CI qualification before release publication, retaining
+  final tagged package and artifact checks while excluding unrelated CI/Pages.
+
+- Classify failed VM-HA peer heartbeat sends (timeout, refused, unreachable,
+  tls, protocol) and publish peer send health additively in the agent status
+  heartbeat section; `status` reports a persistently blocked peer endpoint as
+  `peer-heartbeat-endpoint-unreachable` with the owning security-group fix
+  (VM-to-VM TCP 9443) and failed peer TLS trust as `peer-heartbeat-tls-failure`
+  with managed-mTLS guidance. Support bundles retain the new typed fields.
+- Prove the peer heartbeat channel in a bounded `verify-peer-channel-node-N`
+  gate before fenced activation verification, so a provably blocked endpoint
+  fails the apply in seconds with its classified cause; a merely slow channel
+  still falls through to the full fenced verification window. Document VM-to-VM
+  TCP 9443 as a customer-owned security-group prerequisite.
 
 ## [nebius-vpngw-v0.6.5] - 2026-11-15
 
