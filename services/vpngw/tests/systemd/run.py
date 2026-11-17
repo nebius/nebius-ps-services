@@ -53,6 +53,11 @@ def main() -> None:
             args.modernization_only,
             args.package_migration_only,
             args.historical_package_upgrades,
+            args.static_recovery_only,
+            args.static_recovery_timing_only,
+            args.static_start_action_only,
+            args.static_recovery_traffic_only,
+            args.case_filter,
         )
     ):
         parser.error("support-bundle qualification is a separate fixture lane")
