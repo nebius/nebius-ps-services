@@ -200,6 +200,11 @@ ENUMS = frozenset(
         "required-state-not-observed",
         "operation-timeout",
         "artifact-changed",
+        "release-admission",
+        "gateway-release-newer",
+        "gateway-release-unknown",
+        "guest-asset-retirement-unproven",
+        "guest-asset-retirement-changed",
         "apply-lock-held",
         "apply-lock-unproven",
         "managed-mtls-transaction-conflict",
@@ -366,6 +371,18 @@ TIME_KEYS = frozenset(
         "ExecMainStartTimestamp",
         "ExecMainExitTimestamp",
     ]
+)
+HASH_KEYS |= frozenset(
+    {
+        "initial_artifact_sha256",
+        "upgrade_artifact_sha256",
+        "checkpoint_sha256",
+        "operation_sha256",
+        "approval_sha256",
+        "effect_sha256",
+        "request_sha256",
+        "observation_sha256",
+    }
 )
 VALUE_KEYS = frozenset(
     [
@@ -1298,6 +1315,39 @@ def project_journal(
     return {"coverage": coverage, "events": [retained[index] for index in sorted(retained)]}
 
 
+def project_firewall(
+    value: dict[str, Any], omitted: list[int], limited: list[int]
+) -> dict[str, Any]:
+    """Bound each nftables object independently, retaining the per-probe byte cap."""
+    objects = value["nftables"]
+    seen = {id(value), id(objects)}
+    clean = project(
+        {key: child for key, child in value.items() if key != "nftables"},
+        depth=1,
+        omitted=omitted,
+        limited=limited,
+        _seen=seen.copy(),
+    )
+    clean["nftables"] = []
+    used = len(json.dumps(clean, indent=2).encode()) + 512
+    for index, item in enumerate(objects[:4096]):
+        entry = project(item, depth=2, omitted=omitted, limited=limited, _seen=seen.copy())
+        if entry is None:
+            continue
+        encoded = json.dumps(entry, indent=2).encode()
+        size = len(encoded) + 4 * (encoded.count(b"\n") + 1) + 4
+        if used + size > MAX_BYTES:
+            omitted[0] += len(objects) - index
+            limited[0] += len(objects) - index
+            break
+        clean["nftables"].append(entry)
+        used += size
+    else:
+        omitted[0] += max(0, len(objects) - 4096)
+        limited[0] += max(0, len(objects) - 4096)
+    return clean
+
+
 def safe_identifier(value: Any) -> bool:
     return isinstance(value, str) and bool(IDENTIFIER.fullmatch(value)) and not SECRET.search(value)
 
@@ -1319,6 +1369,8 @@ def project(
         limited = [0]
     if depth == 0 and isinstance(value, dict) and "events" in value and "coverage" in value:
         return project_journal(value, omitted, limited)
+    if depth == 0 and isinstance(value, dict) and isinstance(value.get("nftables"), list):
+        return project_firewall(value, omitted, limited)
     if _seen is None:
         _seen = set()
     if _budget is None:
@@ -1433,4 +1485,77 @@ DIAGNOSTIC_STRINGS["ssh_identity_source"] = frozenset(
 )
 DIAGNOSTIC_STRINGS["ssh_trust_source"] = frozenset(
     {"explicit-known-hosts", "managed-pins", "system-known-hosts"}
+)
+
+# Fixed fields emitted by the typed local checkpoint projector. Arbitrary owner
+# identifiers remain hashed, even when their source schema accepts free text.
+VALUE_KEYS |= frozenset(
+    {
+        "origin",
+        "checkpoint_category",
+        "accepted_cloud_operation",
+        "observation_guard",
+        "replacement_pending",
+        "settlement_present",
+        "receipt_present",
+        "omitted_effects",
+        "unknown_effects",
+        "progress",
+        "category",
+        "source",
+    }
+)
+ENUMS |= frozenset(
+    {
+        "lifecycle",
+        "command",
+        "initial",
+        "upgrade",
+        "conflicting",
+        "release",
+        "activation",
+        "preparation",
+        "verification",
+        "provisioning",
+        "locking",
+        "stopping",
+        "fencing",
+        "ha-lifecycle",
+        "managed-credentials",
+        "ssh-bootstrap",
+        "security-groups",
+        "ordinary",
+        "ordinary-runtime",
+        "ordinary-provisioning",
+        "ordinary-routes",
+        "ordinary-route-reservation",
+        "ordinary-route-runtime",
+        "replacement",
+        "planned",
+        "started",
+        "verified",
+        "PROVISIONING",
+        "ACTIVATING",
+        "ACTIVE",
+        "REMOVAL_IN_PROGRESS",
+        "REMOVED",
+        "FAILED",
+    }
+)
+VALUE_KEYS |= frozenset({"direction", "assessment"})
+ENUMS |= frozenset(
+    {
+        "operator-to-gateway",
+        "gateway-to-peer",
+        "peer-to-gateway",
+        "authenticated",
+        "authenticated-receive",
+        "connection-refused",
+        "transport-timeout",
+        "network-unreachable",
+        "tls-failure",
+        "collector-ssh",
+        "ha-heartbeat-snapshot",
+        "stale",
+    }
 )

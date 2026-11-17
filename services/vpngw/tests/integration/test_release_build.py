@@ -114,6 +114,7 @@ def test_wheel_build_uses_package_local_version_file(tmp_path, monkeypatch) -> N
         names = set(wheel_zip.namelist())
 
     assert "nebius_vpngw/_version.py" in names
+    assert "nebius_vpngw/release_identity.py" in names
     assert "nebius_vpngw/tunnel_state.py" in names
     assert "nebius_vpngw/ordinary_routes.py" in names
     assert "nebius_vpngw/replay_window.py" in names
@@ -376,6 +377,7 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path, monkeypatch)
     extracted = tmp_path / "frozen-sources"
     for relative in (
         "ordinary_bootstrap.py",
+        "release_identity.py",
         "dependency_scope.py",
         "ingress_policy.py",
         "ordinary_operations.py",

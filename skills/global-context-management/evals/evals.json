@@ -1,0 +1,40 @@
+{
+  "skill_name": "global-context-management",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "During an authorized small task, an installed repo-owned skill helper fails. Canonical source and the supported installer are available. Explain the actions you will take to repair it and finish the original operation.",
+      "expected_output": "Source-first diagnosis, focused repair and validation, scoped supported installation, verified continuation under existing authority.",
+      "files": [],
+      "assertions": [
+        "Identifies canonical source and installed provenance before editing.",
+        "Repairs and validates canonical source before installing through the existing repository script.",
+        "Continues the original operation without requiring repeated approval for the in-scope repair.",
+        "Separates installed parity from activation and resumed-operation evidence."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Read-only review: a repository-owned hook appears to deny an edit incorrectly. The same operation may already have produced a partial effect, and the current repair budget remains active. Explain what can happen now and what must be preserved.",
+      "expected_output": "Read-only diagnosis and proposed owner-correct repair; no source, installation or guard changes, no blind retry or budget reset.",
+      "files": [],
+      "assertions": [
+        "Honors the explicit read-only request without source or installation writes.",
+        "Distinguishes a proven implementation defect from a legitimate external denial.",
+        "Requires reconciling uncertain prior effects before retrying the operation.",
+        "Preserves active repair budgets and does not disable a guard or invent an alternate writer."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "While completing an authorized task, you confirm a non-blocking defect in a repository-owned skill template. Explain how you handle it without expanding into unrelated catalog maintenance.",
+      "expected_output": "Narrow source correction, affected validation and supported scoped installation, followed by continuation of the original work.",
+      "files": [],
+      "assertions": [
+        "Includes the confirmed non-blocking defect in the repair procedure.",
+        "Preserves unrelated changes and avoids a catalog-wide audit or refresh.",
+        "Verifies the affected behavior and continues the original task."
+      ]
+    }
+  ]
+}

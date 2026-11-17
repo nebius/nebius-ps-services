@@ -25,6 +25,19 @@ STEPS = (
 )
 
 
+def test_worker_failure_survives_guarded_install_wrapper():
+    job = ordinary_handoff.PackageJob(None, "target", None, {})
+    job.identity = "exact"
+    with (
+        pytest.raises(ordinary_handoff.PackageUnresolved) as caught,
+        vm_ha_package.package_step("guarded-install"),
+    ):
+        job.wait(None, {"state": "READY_TO_CONTINUE", "identity": "exact",
+                        "result": {"generation": 1,
+                                   "failure": "package-predecessor-changed"}})
+    assert first_failure(caught.value).predicate == "package-predecessor-changed"
+
+
 @pytest.mark.parametrize("failed_step", STEPS)
 @pytest.mark.parametrize("kind", [RuntimeError, ValueError, TimeoutError])
 def test_real_package_path_preserves_first_step_and_stops_later_effects(

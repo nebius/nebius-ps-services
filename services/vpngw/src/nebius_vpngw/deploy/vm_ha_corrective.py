@@ -29,6 +29,16 @@ RESERVED_KEY = "corrective-release-reserved"
 OBSERVED_EFFECT = "verify-corrective-cloud"
 
 
+def predecessor_artifact(state: VMHALifecycleState) -> str:
+    if state.transaction is None:
+        raise ValueError("Release predecessor lacks a transaction")
+    bindings = dict(state.transaction.resource_bindings)
+    values = [bindings[key] for key in (ARTIFACT, "heartbeat-initial-artifact") if key in bindings]
+    if len(values) != 1 or re.fullmatch(r"[a-f0-9]{64}", values[0]) is None:
+        raise ValueError("Release predecessor has ambiguous artifact identity")
+    return values[0]
+
+
 def bind_cloud_observation(journal: VMHALifecycleJournal, observe: Callable[[], dict]) -> None:
     """Bind the approved snapshot through the existing zero-change cloud guard."""
     record = authority(journal.state)
@@ -179,12 +189,9 @@ def validate_checkpoint(state: VMHALifecycleState, *, settlement: dict | None = 
         )
     ):
         raise ValueError("corrective release requires a host-only failed release checkpoint")
-    bindings = dict(tx.resource_bindings)
-    if (
-        not re.fullmatch(r"[a-f0-9]{64}", bindings.get(ARTIFACT, ""))
-        or "heartbeat-initial-artifact" in bindings
-        or vm_ha_has_unsettled_replacement(state)
-        or not all(m.compute_id and m.disk_id for m in state.members)
+    predecessor_artifact(state)
+    if vm_ha_has_unsettled_replacement(state) or not all(
+        m.compute_id and m.disk_id for m in state.members
     ):
         raise ValueError("corrective release requires the exact retained pair")
 
@@ -222,6 +229,7 @@ def successor(
     resources = dict(tx.resource_bindings)
     for key in (
         ARTIFACT,
+        "heartbeat-initial-artifact",
         AUTHORITY,
         READY,
         AUTHORITY_KEY,
@@ -305,7 +313,7 @@ def validate_successor(previous: VMHALifecycleState, current: VMHALifecycleState
         and new.observation_guard is None
         and record["prior_record"] == previous.record_sha256
         and record["prior_parent"] == tx.operation_id
-        and record["prior_artifact"] == dict(tx.resource_bindings)[ARTIFACT]
+        and record["prior_artifact"] == predecessor_artifact(previous)
         and (
             record["artifact"] != record["prior_artifact"]
             or replan is not None

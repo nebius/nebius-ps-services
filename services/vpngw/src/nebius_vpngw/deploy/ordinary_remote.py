@@ -41,8 +41,9 @@ except ModuleNotFoundError:
 try:
     import _vpngw_dependency_scope as dependency_scope  # type: ignore[import-not-found]
     import _vpngw_python_package_recovery as python_packages  # type: ignore[import-not-found]
+    import _vpngw_release_identity as release_identity  # type: ignore[import-not-found]
 except ModuleNotFoundError:
-    from .. import dependency_scope
+    from .. import dependency_scope, release_identity
     from .. import python_package_recovery as python_packages
 
 
@@ -455,6 +456,9 @@ def _inspect_once(
         else migration.plan(manifest.get("ha_parent")),
         "runtime_pending": pending_runtime,
         "runtime_completion": completion,
+        "asset_retirement": migration.asset_retirement(
+            manifest, migration.completed_asset_predecessor()
+        ),
         "route_ownership": ownership,
         "boot_id": boot,
         "config_sha256": config_sha,
@@ -471,6 +475,7 @@ def _inspect_once(
         "python": platform.python_version(),
         "machine": platform.machine(),
         "package_version": dist.version if dist else None,
+        "release_identity": release_identity.observe(),
         "operation": operations.observation(operations.Manager(DEADLINE))
         if logical_config is None and runtime_admission
         else None,
@@ -831,6 +836,7 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
                 if current["config_sha256"] != manifest["config_sha256"]:
                     publish(CONFIG, config, 0o644)
                 OPERATION.reload_manager()
+                migration.retire_assets(manifest)
                 migration.enable_units(["nebius-vpngw-ingress.service"])
                 if not manager.management_admitted():
                     raise RuntimeError("ordinary_service_scope_unknown")
@@ -911,6 +917,8 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
             "route_predecessor_changed",
             "identity_drift",
             "package_quiescence_unproven",
+            "asset_retirement_unproven",
+            "asset_retirement_changed",
         }:
             code = "ordinary_transaction_failed"
         if isinstance(error, dependency_scope.DependencyFailure):
@@ -948,6 +956,44 @@ def release_runtime(request: dict) -> dict:
     return {"status": "released"}
 
 
+def release_resume(manifest: dict) -> dict:
+    pending = migration.pending(manifest.get("ha_parent"))
+    owner = operations.Journal().read()
+    return {
+        "owned_resume": bool(
+            pending
+            and owner
+            and pending["manifest"] == manifest
+            and pending["operation"] == owner["id"]
+            and owner["state"] != "complete"
+            and owner["config"] == manifest["config_sha256"]
+            and owner["artifact"] == manifest["package_identity"]
+        )
+    }
+
+
+def replacement_resume(request: dict) -> dict:
+    """Return only an exact replacement-owned pending package selection."""
+    guard = Path("/etc/nebius-vpngw/replacement-guard.json")
+    if (
+        not guard.is_file()
+        or guard.is_symlink()
+        or json.loads(guard.read_text()) != {"operation": request["operation"]}
+    ):
+        return {"manifest": None}
+    pending = migration.pending()
+    if pending is None:
+        return {"manifest": None}
+    manifest = pending["manifest"]
+    if (
+        manifest["wheel_sha256"] != request["artifact"]
+        or manifest["config_sha256"] != request["configuration"]
+        or not release_resume(manifest)["owned_resume"]
+    ):
+        return {"manifest": None}
+    return {"manifest": manifest}
+
+
 def main(*, deadline: float | None = None) -> None:
     global DEADLINE
     DEADLINE = time.monotonic() + 600 if deadline is None else deadline
@@ -973,7 +1019,11 @@ def main(*, deadline: float | None = None) -> None:
             contextlib.redirect_stderr(sink),
         ):
             result = (
-                {
+                replacement_resume(request)
+                if request["action"] == "replacement-resume"
+                else release_resume(request["manifest"])
+                if request["action"] == "release-resume"
+                else {
                     "status": "inspected",
                     **inspect_for_plan(
                         request["manifest"], runtime_admission=request["action"] == "inspect"
@@ -995,10 +1045,12 @@ def main(*, deadline: float | None = None) -> None:
             "stage": "inspect",
             "error_code": error.code
             if isinstance(error, dependency_scope.DependencyFailure)
+            else str(error)
+            if str(error) in {"asset_retirement_unproven", "asset_retirement_changed"}
             else "ordinary_transaction_failed",
         }
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
-    raise SystemExit(1 if result["status"] == "failed" else 0)
+    raise SystemExit(1 if result.get("status") == "failed" else 0)
 
 
 if __name__ == "__main__":

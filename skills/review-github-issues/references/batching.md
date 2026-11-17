@@ -5,7 +5,8 @@ for the existing host agent, not a separate executable scheduler.
 
 `--issue-batch` caps selection only in label mode; a remediation batch groups
 compatible selected issues. These are different concepts. In label mode freeze
-the bounded set across repositories before grouping or effects, then retain
+the bounded set across repositories after current/explicit project filtering
+and before final grouping or effects, then retain
 repository order. Project priorities cannot pull unselected issues into it.
 
 ## Project ownership and counts
@@ -18,12 +19,12 @@ keywords are evidence leads, not authoritative ownership or validity.
 Assign one primary owner per selected issue and record other affected projects
 as references. Count each distinct selected issue once, under its primary
 owner. Use the project that owns the remediation boundary; a verified shared
-component can itself be that project. Do not group by the startup subdirectory
-or treat a title path as proof. Repository-wide work with proven root ownership
+component can itself be that project. The invocation folder determines default
+selection scope, not every selected issue's owner. Do not treat a title path as proof. Repository-wide work with proven root ownership
 uses `.`; unclear ownership uses `Uncertain project`, never `.` by default.
 Uncertainty blocks owner-dependent planning, not independent groups.
 
-For explicit `--issue`, count only selected existing issues, including selected
+For explicit `--issues`, count only project-matching selected existing issues, including selected
 closed issues assessed without reopening. Do not count unselected related
 issues, PRs, missing numbers, or duplicate observations. Counts describe the
 frozen collection, not a live counter that shrinks after every closure.
@@ -32,7 +33,8 @@ frozen collection, not a live counter that shrinks after every closure.
 
 Use the priority paths already validated and normalized by the
 [local argument preflight](github-operations.md#validate-the-invocation-locally).
-This phase resolves project-group matches; it is not the first validation of
+Unlike whole-repository `--project .`, priority `.` orders only the group with
+verified root ownership. This phase resolves project-group matches; it is not the first validation of
 user arguments. `.` selects verified repository-root ownership.
 
 Apply the same `--priority` list independently in each repository:
@@ -91,7 +93,8 @@ split them instead of forcing one plan.
 
 Keep a compact issue registry in working context: full identity, observed state,
 primary/affected projects, evidence limits, batch, disposition, plan path and
-verified/pending effect status. Do not introduce a committed backlog ledger,
+verified/pending effect status. The project overview is a review/approval snapshot, not a live backlog ledger.
+Do not introduce a committed delivery ledger,
 private runtime or separate state machine. Existing permitted task-state support
 may hold sanitized progress, never sensitive issue contents or effect proof.
 

@@ -117,6 +117,7 @@ def valid_remote_name(name: Any) -> bool:
         "host/storage",
         "host/service-cgroups",
         "network/listeners",
+        "network/operator-ssh",
         "logs/kernel",
     }
     fixed.update("services/" + unit for unit in UNITS)
@@ -186,6 +187,15 @@ def error_context(message: str) -> dict[str, Any]:
     return result
 
 
+def journal_message(value: Any) -> str:
+    """journalctl JSON encodes non-printable MESSAGE bytes as unsigned arrays."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and all(type(item) is int and 0 <= item <= 255 for item in value):
+        return bytes(value).decode("utf-8", errors="replace")
+    raise ValueError("invalid-data")
+
+
 def journal_events(text: str) -> dict[str, Any]:
     events: list[dict[str, Any]] = []
     coverage: dict[str, Any] = {
@@ -240,13 +250,14 @@ def journal_events(text: str) -> dict[str, Any]:
     for index in reversed(range(len(lines))):
         try:
             event = json.loads(lines[index])
-            if not isinstance(event, dict) or not isinstance(event.get("MESSAGE"), str):
+            if not isinstance(event, dict):
                 continue
+            message = journal_message(event.get("MESSAGE", ""))
         except (ValueError, TypeError):
             continue
         identity = tuple(str(event.get(key, "")) for key in ("_BOOT_ID", "_SYSTEMD_UNIT", "_PID"))
         redactor = redactors.setdefault(identity, TextRedactor())
-        messages[index] = redactor.feed(event["MESSAGE"] + "\n", final=True).rstrip("\n")
+        messages[index] = redactor.feed(message + "\n", final=True).rstrip("\n")
         if redactor.limited:
             coverage.update(source_limited=True, truncation="newest")
     for line_index, line in enumerate(lines):
@@ -255,9 +266,7 @@ def journal_events(text: str) -> dict[str, Any]:
             event = json.loads(line)
             if not isinstance(event, dict):
                 raise ValueError("invalid-data")
-            message = event.get("MESSAGE", "")
-            if not isinstance(message, str):
-                raise ValueError("invalid-data")
+            message = journal_message(event.get("MESSAGE", ""))
             found = codes.intersection(re.findall(r"[a-z][a-z0-9-]{1,95}", message))
             found.update(code for pattern, code in templates if re.search(pattern, message))
             detail = error_context(message)

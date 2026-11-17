@@ -1,6 +1,6 @@
 interface:
   display_name: "Global Context Management"
-  short_description: "Keep long Codex tasks focused and recoverable"
-  default_prompt: "Use $global-context-management: read task state, keep parent concise, use targeted read-only subagents when useful and permitted, close spawned helpers before finalizing, validate, review risk."
+  short_description: "Manage context and repair skill or hook defects"
+  default_prompt: "Use $global-context-management: read task state, keep parent concise, use targeted read-only helpers when authorized, validate and review risk. Repair encountered repo-owned skill or hook defects at source, install the reviewed fix and continue within existing authority."
 policy:
   allow_implicit_invocation: true

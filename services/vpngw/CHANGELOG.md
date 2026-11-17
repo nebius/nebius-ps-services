@@ -11,6 +11,41 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Show animated repair progress immediately after confirmation, with the current
+  stage, member, elapsed time and bounded worker/access wait updates. Preserve
+  plain redirected output, one JSON result and interrupted-repair continuation.
+  Share the repair display with canonical HA activation progress.
+- Share the complete HA package predecessor contract between CLI approval and
+  guest admission, fixing false guarded-install failures from omitted asset
+  retirement evidence. Retain safe worker failure codes and prevent transport
+  generation changes from consuming repeated unchanged automatic repairs.
+- Reduce unit-test time by reusing real private-key parsing within individual
+  enrollment/recovery tests and advancing a virtual clock through route-read
+  retries. Preserve fresh keys, changed-input validation, production behavior,
+  test selection and failure/recovery assertions. Document the exact benchmark
+  selection and distinguish recorded snapshot evidence from later checks.
+- Confirm support-bundle creation without routine bounded-history warnings;
+  retain exact limits in the archive and warn for other collection gaps.
+  Decode journal byte-array messages before redaction and project firewall
+  rules independently within existing size limits to avoid false omissions.
+- Clarify HA peer failure persistence as ten failed send attempts, including
+  retries; distinguish healthy, failed and unknown activation peer checks while
+  retaining historical diagnostics and the existing 30/300-second member limits.
+- Show per-member activation wait conditions, elapsed/remaining allowance and
+  total verification time, preserving quiet noninteractive and JSON output.
+- Compare installed gateway releases before apply effects, including repair and
+  replacement, while preserving exact interrupted package recovery.
+- Admit settled initial-activation release successors and retire obsolete
+  wheel-owned assets using frozen ownership evidence and existing fencing.
+- Show release alignment and distinct operator SSH/peer mTLS observations in
+  status; render healthy labels consistently in green.
+- Retain typed safe checkpoint diagnostics in support bundles and clarify
+  incomplete evidence and automatic, non-exhaustive credential redaction.
+- Assess archived peer-channel freshness at gateway collection time, preserving
+  valid evidence across log-collection delays while rejecting stale snapshots.
+- Preserve fixed asset-retirement failure predicates in support bundles without
+  exporting arbitrary error details.
+
 - Keep installed wheel and frozen-binary help checks independent of terminal
   styling, with forced-color regression coverage.
 

@@ -14,6 +14,23 @@ the authorized task remain binding. When explicitly asked to repair global
 instructions, patch the identified obsolete clause even if it is human-owned
 and outside the managed block; preserve unrelated rules and ordering.
 
+## Selected Skill And Hook Repair Policy
+
+The Skill and Hook Repair section in the native instruction template supplies
+only the always-on trigger. Global-context-management owns the detailed
+source-first repair procedure. Keep public source generic; resolve the actual
+source catalog through installed provenance rather than embedding a personal
+path in the policy.
+
+For a policy-only request, inspect the current instruction file, prepare an
+exact scoped patch, back up only when it changes, and update the native managed
+block while preserving unrelated content. Recheck the preimage before writing.
+Keep a repeated application a no-op. Do not bootstrap unrelated configuration,
+hooks, roles or permissions. Run the native checker without repairing unrelated
+full-home findings. A selected-policy check and full-home convergence are
+separate results. Re-read changed guidance and verify native startup loading
+separately; the skill installer does not apply global instructions.
+
 ## Inputs
 
 Collect these values first:

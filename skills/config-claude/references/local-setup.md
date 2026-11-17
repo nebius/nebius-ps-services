@@ -4,6 +4,23 @@ Read this for configuration or reconciliation. The caller's request selects
 the scope; an inspection never applies changes. Existing session authority
 and script-execution rules remain applicable.
 
+## Selected Skill And Hook Repair Policy
+
+The Skill and Hook Repair section in the native instruction template supplies
+only the always-on trigger. Global-context-management owns the detailed
+source-first repair procedure. Keep public source generic; resolve the actual
+source catalog through installed provenance rather than embedding a personal
+path in the policy.
+
+For a policy-only request, inspect the current instruction file, prepare an
+exact scoped patch, back up only when it changes, and update the native managed
+block while preserving unrelated content. Recheck the preimage before writing.
+Keep a repeated application a no-op. Do not bootstrap unrelated configuration,
+hooks, roles or permissions. Run the native checker without repairing unrelated
+full-home findings. A selected-policy check and full-home convergence are
+separate results. Re-read changed guidance and verify native startup loading
+separately; the skill installer does not apply global instructions.
+
 ## Native Layout And Dependencies
 
 `CLAUDE_CONFIG_DIR` defaults to `~/.claude` and is independent of the invoking

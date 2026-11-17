@@ -93,13 +93,40 @@ the focused `skills-project-specs-ci.yml` contract suite. The workflow validates
 the single v2 parser/publisher contract, nonblocking intake hooks, worker
 intent/spec inheritance, typed spec-gap reporting, and safe hook retirement.
 
+Source checks, workflow adapters, native harness regressions and four Worktree
+test shards run independently after checkout identity validation. Shards keep
+whole test classes together and cover every discovered test exactly once;
+failures remain blocking. Candidate and post-merge evidence wait for all lanes.
+All skill resources still trigger the workflow because installed payload and
+catalog checks cross skill boundaries.
+
+Run the partition and workflow contracts locally with
+`python3 -B .github/scripts/test_ci_parallelism.py` (requires PyYAML). To run one
+Worktree shard from the repository root:
+
+```bash
+python3 -B .github/scripts/run_unittest_shard.py \
+  --start-directory skills/worktree/scripts --pattern 'test_workflow_*.py' \
+  --shard-index 0 --shard-count 4
+```
+
+Run indexes 0 through 3 for complete coverage. `--list` prints the selected
+test IDs without executing tests. Compare individual hosted attempts and job
+timings when measuring improvement; elapsed time between reruns is separate.
+
 ## Automation cadence and publication
 
-The protected merge broker reacts to PR and relevant CI events. The completion
-workflow runs one hourly recovery at minute 17 UTC and supports manual recovery;
-there is no per-minute or 15-minute merge polling. The registered CI workflow identities
+The CI status observer reacts to PR and relevant CI events; the protected merge
+broker requires explicit operator dispatch. The completion workflow runs one
+hourly recovery at minute 17 UTC and supports manual recovery;
+there is no per-minute or 15-minute merge polling. The registered CI identities
 and their exact-result evidence remain separate. See the
 [merge protocol](.github/merge-automation.md) for recovery and trust boundaries.
+
+Independent CI workflows already execute concurrently. VPN source builds also
+start after identity validation, while lint, unit and native qualification
+remain required. Release publication locks and exact-result checks remain in
+place. Larger native and coverage suites can still determine the total wait.
 
 Release and image publication retries require original immutable evidence and
 verify remote bytes or digests. Unverifiable existing artifacts block automatic

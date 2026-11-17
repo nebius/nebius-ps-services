@@ -80,6 +80,30 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(self.inspect()["status"], "NOT_ALIGNED")
             self.assertEqual(snapshot(self.home), before)
 
+    def test_repair_policy_missing_stale_or_example_only_is_read_only(self):
+        path = self.home / "CLAUDE.md"
+        original = path.read_text()
+        heading = "## Skill and Hook Repair"
+        section = heading + original.split(heading, 1)[1].split("\n## ", 1)[0]
+        for replacement in (
+            "",
+            "```markdown\n" + section + "\n```\n",
+            "<!--\n" + section + "\n-->\n",
+            section.replace("fix canonical\n  source", "patch installed files"),
+            section.replace("without requesting repeated\n  approval", "after repeated approval"),
+            section.replace("explicit\n  read-only scope", "ignore read-only scope"),
+            section.replace("Apply this to small tasks too", "Apply only to large tasks"),
+        ):
+            with self.subTest(replacement=replacement):
+                put(path, original.replace(section, replacement))
+                before = snapshot(self.home)
+                self.assertEqual(self.inspect()["status"], "NOT_ALIGNED")
+                self.assertEqual(snapshot(self.home), before)
+        put(path, original)
+        before = snapshot(self.home)
+        self.assertEqual(self.inspect()["status"], "STATIC_PASS")
+        self.assertEqual(snapshot(self.home), before)
+
     def test_missing_home_is_reported_without_creation(self):
         missing = self.base / "missing"
         self.assertEqual(config.inspect(missing, ROOT)["status"], "NOT_ALIGNED")

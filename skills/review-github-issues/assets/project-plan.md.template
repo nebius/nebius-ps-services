@@ -1,0 +1,41 @@
+# Project issue review: <repository-relative selected root>
+
+- Artifact kind: project-review-overview
+- Repository: <verified host and repository identity>
+- Selected project: <recognized root or . for whole repository>
+- Selection origin: <explicit --project or captured invocation-folder project>
+- Selectors: <normalized issue/label/limit/priority scope; no private paths>
+- Reviewed revision and interval: <source revision and collection start/end>
+- Coverage: <complete or exact gaps; selected/excluded/uncertain/unvisited counts>
+- Planning status: <incomplete until saved files and dependencies are verified>
+
+## Review dispositions
+
+| Issue identity | Primary owner | Why in scope | Disposition and evidence limits |
+| --- | --- | --- | --- |
+| <full identity> | <project root> | <owned or proven affected> | <individual outcome> |
+
+<State exclusions and uncertainty separately. A partial or bounded review is not
+the entire backlog. Keep confidential evidence out of this public-safe snapshot.>
+
+## Proposed implementation set
+
+| Order | Batch link | Repository-relative plan path | Primary project | SHA-256 | Proposed members | Prerequisites | Readiness |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| <order> | <verified document-relative Markdown link> | <canonical repo-relative path> | <root> | <exact saved digest> | <full identities> | <batch or verified evidence> | <ready or pending> |
+
+<Only ready batches with resolved dependencies are approval candidates. Batch
+files own design and individual criteria. Do not duplicate their detailed steps,
+include unselected members by implication or relocate shared-owner work.>
+
+## Operator handoff
+
+<Concise outcomes, exact candidate set, actual owning projects and any remaining
+scope choice. Resolve local checkout bindings before execution; the review
+working directory is not an implementation target.>
+
+Explicit `$implement` selects one existing run per approved batch. Natural
+approval of the identified set selects ordinary local implementation. Neither
+this snapshot nor issue acceptance grants execution or publication authority.
+Refresh exact batch bytes and material evidence before either route. Preserve
+host limits and obtain new agreement for material scope changes.

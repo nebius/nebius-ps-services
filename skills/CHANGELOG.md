@@ -4,6 +4,25 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Default `review-github-issues` to the current folder's owning project; add
+  explicit `--project` root/name override and `.` for whole-repository scope.
+  Replace `--issue` with canonical `--issues`, filter before label batch limits,
+  and retain evidence-based primary/shared ownership. Clarify that selected
+  closed issues are assessed without reopening.
+- Save project overviews with exact batch fingerprints and offer operator
+  approval. Explicit `$implement` uses existing per-batch runs; natural approval
+  uses ordinary local implementation. Verify actual checkout/project targets,
+  scoped paths and current evidence; preserve file-only detailed plans and
+  separate publication/closure authority.
+
+- Add an always-on source-first repair rule for encountered skill, hook and
+  helper defects, including small tasks and non-blocking failures. Keep the
+  shared procedure in global-context-management, align both native policy
+  templates and validators, and preserve activation and authorization boundaries.
+
+- Route protected merge completion by the broker workflow path, so descriptive
+  run titles do not suppress exact-result CI recovery.
+
 - Load repository-scoped merge operator IDs during local release qualification,
   preserving broker evidence validation and restoring the caller's environment.
 

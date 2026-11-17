@@ -12,7 +12,8 @@ from nebius_vpngw import runtime_migration as migration
 
 
 def test_package_inventory_uses_native_identity_without_adopting_foreign_arch(monkeypatch):
-    def run(args):
+    def run(args, *, timeout):
+        assert 0 < timeout <= 60
         if args == ["dpkg", "--print-architecture"]:
             return "arm64\n"
         return "libstrongswan:arm64\t5.9\tinstalled\nlibstrongswan:amd64\t5.8\tinstalled\n"

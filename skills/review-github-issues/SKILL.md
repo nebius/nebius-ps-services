@@ -1,6 +1,6 @@
 ---
 name: review-github-issues
-description: "Use only by explicit invocation to review GitHub issues: discover backlogs, select numbers or bounded exact-label batches, group shared remediation, apply justified labels/comments/closures, and save accepted plans. Never implements work or reviews PRs."
+description: "Use only by explicit invocation to review GitHub issues by numbers, project or exact-label batch; assess shared remediation, apply justified decisions, save plans and offer an implementation handoff. Never implements during triage or reviews PRs."
 disable-model-invocation: true
 ---
 
@@ -23,29 +23,38 @@ authorization.
 ## Public Usage
 
 ```text
-$review-github-issues [--repo <OWNER/REPO-or-URL,...>] [--issue <NUMBER,...>]
-                     [--priority <PROJECT/PATH,...>]
+$review-github-issues [--repo <OWNER/REPO-or-URL,...>] [--issues <NUMBER,...>]
+                     [--project <NAME-or-PROJECT/PATH>] [--priority <PROJECT/PATH,...>]
 $review-github-issues [--repo <OWNER/REPO-or-URL,...>] --label <exact-label>
-                     [--issue-batch <positive-integer>] [--priority <PROJECT/PATH,...>]
+                     [--issue-batch <positive-integer>] [--project <NAME-or-PROJECT/PATH>]
+                     [--priority <PROJECT/PATH,...>]
 $review-github-issues --help
 $review-github-issues -h
 ```
 
 - `--repo` selects comma-separated repositories; finish them in supplied order.
   Otherwise resolve the unambiguous repository for the current local Git root.
-- `--issue` selects comma-separated positive issue numbers. Check every number
-  in every selected repository and review every existing issue match.
-- Without `--issue` or `--label`, review all open issues across each selected repository,
-  including projects outside the current working subdirectory.
+- `--issues` selects comma-separated positive issue numbers. Check every number
+  in every selected repository; intersect with current/explicit project scope.
+- `--project` filters to one recognized project root or unique project name in
+  each repository. Include primary-owned and proven-affected issues; resolve
+  membership from repository evidence, not keywords. When omitted, use the
+  current folder's owning project; subfolders inherit its root. At the repository
+  root, or with `--project .`, use whole-repository scope. Explicit values override
+  current-folder scope in every mode; unresolved scope never widens silently.
+- Without `--issues` or `--label`, review all open issues across each selected repository,
+  filtered to the current or explicitly selected project scope.
 - `--label` selects oldest-created open issues with one exact existing label.
 - `--issue-batch` limits total selected issues across this invocation; default
-  five in label mode. Requires `--label`; label mode cannot combine with `--issue`.
+  five in label mode, after project filtering. Requires `--label`; label mode
+  cannot combine with `--issues`.
 - `--priority` orders exact repository-relative project roots, highest first,
   independently within each repository. Remaining projects follow by descending
   selected-issue count. This orders work; it does not filter issues or set severity.
 - `-h, --help` shows help without starting the workflow.
 
-No positional selectors or additional public flags. Trim comma-separated
+No positional selectors or additional public flags. Reject retired `--issue`
+with the supported `--issues` spelling; it is not an alias. Trim comma-separated
 entries, reject empty entries, invalid values and unknown flags before review,
 and deduplicate normalized values while preserving first occurrence. See the
 operations and grouping references for identity and ordering rules.
@@ -63,7 +72,7 @@ Explicit invocation required. Use only after explicit skill invocation.
 An ordinary invocation authorizes
 decision comments, justified closures and existing documented repository-label
 changes on the resolved, selected issues,
-and accepted plan files in their owning projects. Do not ask for repeated
+and accepted plan files in their owning projects plus project overviews. Do not ask for repeated
 approval of those effects. Invocation cannot bypass tool permissions,
 repository policy or host execution limits.
 
@@ -75,8 +84,8 @@ as a fallback. Report the pending artifact/action and the limiting instruction.
 
 Turn selected GitHub backlogs or numbered issues into evidence-backed
 dispositions and shared plans for accepted remediation batches. The maintainer
-owns implementation, commits, pushes, PRs and merges. Acceptance promises
-neither delivery nor a date.
+approves a separate implementation handoff after reviewing complete saved plans.
+Triage itself never implements; acceptance promises neither delivery nor a date.
 
 ## When To Use
 
@@ -96,7 +105,7 @@ neither delivery nor a date.
 
 ## Inputs
 
-Optional repository, issue-number and project-priority lists; the current checkout;
+Optional repository, issue-number and project-priority lists and project filter; the current checkout;
 repository instructions and policies; issue discussion and linked evidence;
 the maintainer's constraints and explicitly accepted project decisions.
 
@@ -115,14 +124,20 @@ the maintainer's constraints and explicitly accepted project decisions.
 - For accepted candidates, load the actual `research` and `design` skills and
   their applicable references. Use [plan files](references/plan-files.md) and
   the [plan template](assets/issue-plan.md.template) before saving.
+- Read [project selection](references/project-selection.md) before selecting
+  issues, including no-flags current-folder scope. For ready saved plans, read
+  [implementation handoff](references/implementation-handoff.md) before offering
+  approval; use the [overview template](assets/project-plan.md.template) for a
+  project-filtered review.
 
 ## Writes
 
 - GitHub: concise decision comments, evidence-backed issue closure and justified
   existing-label changes under the label policy. No separate confirmation for
   these ordinary invocation effects is needed.
-- Repository: accepted plans under the owning project's `docs/github-issues/`
-  only. These are intentionally repository-owned planning artifacts.
+- Repository: accepted batch plans under each primary owner's `docs/github-issues/`
+  and a project-filtered overview under the selected project's same directory.
+  These are intentionally repository-owned planning artifacts.
 - No product code, tests, configuration, canonical specs, label creation, assignments,
   milestones, issue-body edits, transfers, Git operations or PR actions.
 
@@ -139,8 +154,10 @@ apply only to accepted work; other dispositions proceed to step 7.
 1. **Validate, resolve and collect targets.** Validate all flags and entries
    locally using the operations reference before repository or GitHub discovery.
    Bind repository identities and process repos
-   in supplied order. Without selectors, exhaust open-issue pagination; with
-   `--issue`, check every repository/number pair. Label mode follows the bounded
+   in supplied order. Resolve current-folder or explicit project scope. Without
+   issue/label selectors, exhaust open-issue pagination; with
+   `--issues`, check every repository/number pair. Apply `--project` by the
+   project-selection reference, including before the label cap. Label mode follows the bounded
    selection algorithm in the operations reference. Exclude PRs and freeze full issue identities
    for the collection interval. Report missing/access gaps. Incomplete discovery
    leaves that repo's ordered review and effects pending in unbounded/number modes;
@@ -181,8 +198,9 @@ apply only to accepted work; other dispositions proceed to step 7.
 6. **Save and verify.** Write one shared batch plan to the verified owning
    project, following the plan-file reference. Read the saved file independently
    and verify its
-   member identities, per-issue acceptance criteria and preserved existing
-   content. A failed or prohibited save cannot produce an acceptance comment
+   member identities, per-issue acceptance criteria, primary project/change-path
+   binding and preserved existing content. A failed or prohibited batch save
+   cannot produce an acceptance comment
    or a chat-only plan.
 7. **Apply the decision.** Reread the issue and discussion for material drift.
    Before acceptance, also refresh sibling/dependency evidence supporting its
@@ -198,8 +216,14 @@ apply only to accepted work; other dispositions proceed to step 7.
    membership and each issue's disposition, brief rationale, verified local
    plan path when applicable, and separate verified label/comment/closure results.
    Distinguish reviewed, pending and unreviewed issues plus discovery/access gaps.
-   Never include plan content, claim implementation is complete, or promise
-   delivery.
+   Show concise scope, dependencies and readiness with file links, never detailed
+   plan content. Do not claim implementation is complete or promise delivery.
+9. **Offer a separate implementation handoff.** After triage, save and verify
+   the current-project or explicit-project overview with final coverage, then propose the exact
+   ready batch set and actual owning projects using the handoff reference.
+   Wait for direct operator approval. Only the root may then transition to
+   ordinary implementation or an explicitly invoked `$implement`, under current
+   host limits. No approval is needed again for already-authorized triage effects.
 
 ## PR lifecycle caller
 
@@ -270,7 +294,8 @@ Standalone triage retains its planning and effect ownership below.
   intended update is unclear.
 - Post implementation-plan content in comments, chat, progress updates or
   failure messages. Keep file-writing tool output bounded; do not echo plans.
-- Implement the plan or invoke implementation/commit/push/PR/merge owners.
+- Implement during triage or implicitly invoke implementation/commit/push/PR/merge
+  owners. A separately approved handoff follows the implementation-handoff reference.
 
 ## Completion Criteria
 
@@ -279,14 +304,18 @@ collection coverage is stated for every repository. Accepted batch members have
 one complete, verified shared plan before their acceptance is posted. GitHub
 effects have independent per-issue readback; pending effects are named.
 No unselected issue, product implementation or unrelated artifact was changed.
+Any implementation proposal names exact ready plans and verified owning project
+bindings; a proposal itself grants no execution authority.
 
 ## Output Contract
 
 Return repository/project groups in processing order, their counts and batches,
 then concise per-issue results: fully qualified issue identity, disposition,
 brief rationale, local plan-file link when applicable, verified label/comment/state
-outcome and limitations. Report unmatched priority paths and missing/inaccessible
-selectors separately. Never embed the plan or describe it as implemented.
+outcome and limitations. Report unmatched priority paths, project exclusions,
+uncertain membership and missing/inaccessible selectors separately. Link verified
+project overviews and offer the exact ready implementation set. Never embed
+detailed plans or describe them as implemented.
 
 ## Learning Loop
 

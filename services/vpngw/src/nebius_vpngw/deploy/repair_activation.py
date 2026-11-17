@@ -12,7 +12,9 @@ from typing import Any
 
 from .. import repair_guest
 from .. import repair_state as storage
+from . import repair_progress
 from .activation_recovery import Recovery
+from .repair_progress import Phase
 
 
 def ha_operation(coordinator: Any) -> str:
@@ -271,7 +273,8 @@ def activate_ha(owner: Any, result_report: Any) -> None:
     from .. import cli
 
     admission = owner.admission
-    binding, journal, credential_plan = bind_ha(owner)
+    with repair_progress.step(Phase.BIND):
+        binding, journal, credential_plan = bind_ha(owner)
     authority = Activation(owner)
     from .vm_ha_lifecycle import VMHALifecycleStatus
 
@@ -346,7 +349,7 @@ def activate_ha(owner: Any, result_report: Any) -> None:
         vm_ha_existing_members=admission.targets,
         vm_ha_migration_active_name=None,
         vm_ha_missing_standby_replacement=None,
-        vm_ha_progress_sink=None,
+        vm_ha_progress_sink=repair_progress.activation,
         vm_ha_runtime_binding=binding,
         vm_spec=admission.local["gateway_group"].get("vm_spec", {}),
         repair=authority,
@@ -395,18 +398,19 @@ def activate_ordinary(owner: Any) -> None:
                 # A pending ordinary transaction already owns that policy and
                 # must resume unchanged, including its temporary inhibition.
                 owner.remote(instance.hostname, "prepare-activation")
-            prepared = ordinary_apply.inspect_plan(
-                admission.ssh,
-                admission.targets[instance.hostname],
-                instance,
-                admission.local,
-                target_identity=admission.bindings[instance.hostname]["compute"],
-                **(
-                    {"resume_manifest": manifests[instance.hostname]}
-                    if instance.hostname in manifests
-                    else {}
-                ),
-            )
+            with repair_progress.step(Phase.PLAN, repair_progress.member_index(owner, instance.hostname)):
+                prepared = ordinary_apply.inspect_plan(
+                    admission.ssh,
+                    admission.targets[instance.hostname],
+                    instance,
+                    admission.local,
+                    target_identity=admission.bindings[instance.hostname]["compute"],
+                    **(
+                        {"resume_manifest": manifests[instance.hostname]}
+                        if instance.hostname in manifests
+                        else {}
+                    ),
+                )
             resources.callback(prepared.close)
             plans[instance.hostname] = prepared
         publication = inspect_publication(
@@ -451,12 +455,14 @@ def activate_ordinary(owner: Any) -> None:
             key = ordinary_command.guest_key(name)
             if key in keys and not prepared.noop:
                 journal.started(key)
-            ordinary_apply.stage_plan(admission.ssh, prepared, admission.local, approved=True)
+            with repair_progress.step(Phase.CONFIGURE, repair_progress.member_index(owner, name)):
+                ordinary_apply.stage_plan(admission.ssh, prepared, admission.local, approved=True)
         for name, prepared in sorted(plans.items()):
-            owner.remote(name, "grant", units=list(repair_guest.UNITS))
-            receipt = ordinary_apply.execute_plan(
-                admission.ssh, prepared, admission.local, approved=True
-            )
+            with repair_progress.step(Phase.ACTIVATE, repair_progress.member_index(owner, name)):
+                owner.remote(name, "grant", units=list(repair_guest.UNITS))
+                receipt = ordinary_apply.execute_plan(
+                    admission.ssh, prepared, admission.local, approved=True
+                )
             key = ordinary_command.guest_key(name)
             if key in keys:
                 journal.verified(key, receipt)

@@ -3,7 +3,7 @@
 ## Validate the invocation locally
 
 Before repository discovery or any GitHub call, parse the entire invocation:
-every flag, every comma-separated entry and every repository/issue/priority
+every flag, every comma-separated entry and every repository/issue/project/priority
 value. Reject unknown flags, missing values, empty entries and
 positional arguments; do not execute a valid prefix of an invalid invocation.
 Reject repeated flags (distinct from repeated entries within a CSV value).
@@ -12,9 +12,14 @@ Do not interpolate any argument into shell commands.
 
 - `--repo`: require `OWNER/REPO` names or repository URLs; reject issue/PR URLs
   and credential-bearing URLs. Live identity/access resolution happens later.
-- `--issue`: require positive decimal integers, not URLs, ranges or expressions.
+- `--issues`: require positive decimal integers, not URLs, ranges or expressions.
+  Reject retired `--issue` with a correction, never as an alias.
+- `--project`: one nonempty recognized-root path or project name, not CSV.
+  Reject absolute paths, traversal, backslashes, controls and globs locally;
+  normalize safe relative syntax. Resolve existence/uniqueness afterward using
+  [project selection](project-selection.md). Omission means current-folder scope.
 - `--label`: require one nonempty literal label, not CSV, glob or search syntax;
-  preserve its spelling. Reject combination with `--issue`.
+  preserve its spelling. Reject combination with `--issues`.
 - `--issue-batch`: require a positive decimal integer and `--label`; default
   five when omitted in label mode. It is a total invocation limit, not page size.
 - `--priority`: require repository-relative project paths. Reject absolute paths,
@@ -41,11 +46,13 @@ embedded in remotes, command output or error messages.
    effective repository context. `gh repo view --json
    id,nameWithOwner,url,defaultBranchRef,isFork,parent,viewerPermission` can read
    the effective target. Cross-check remotes; CLI/environment defaults must not
-   silently redirect the checkout or restrict discovery to the working folder.
+   silently redirect the checkout. Repository discovery is separate from the
+   required current-folder project filter.
 3. If there is no unique repository, ask for `OWNER/REPO` or its repository URL.
    Conflicting remotes or fork/upstream choices require clarification. Never
    change the default repository or infer the upstream from a fork.
-4. Bind the normalized `--issue` numbers to each resolved repository. Argument
+4. Resolve explicit or current-folder project scope using project selection;
+   then bind normalized `--issues` numbers to each repository. Argument
    validation must already have completed before these repository reads.
 5. Bind each issue to host, repository identity and number, plus API identity
    when exposed. Reconcile renames/transfers against the requested identity
@@ -58,16 +65,18 @@ host's repository identity. Keep non-public hostnames out of public queries.
 
 ## Collect the selected set
 
-Process repositories in first-occurrence `--repo` order. With no `--issue` or `--label`,
+Process repositories in first-occurrence `--repo` order. With no `--issues` or `--label`,
 request open issues explicitly and follow every continuation page, without a
 recent-date, author, label, project or fixed-count cutoff. Deduplicate full
-issue identities. Prove exhaustion; an empty page alone is not proof when a
+issue identities, then apply the resolved project membership filter. These are
+repository candidates, not permission to review unrelated projects. Prove exhaustion; an empty page alone is not proof when a
 continuation is present. Empty or PR-only exhausted results complete that repo
 without effects. Do not ask the user to enumerate a discovered backlog.
 
-With `--issue`, check every repository/number pair. For example,
-`--repo example-org/alpha,example-org/beta --issue 12,34` checks four pairs;
-review every returned issue, not only the first repo containing each number.
+With `--issues`, check every repository/number pair. For example,
+`--repo example-org/alpha,example-org/beta --issues 12,34` checks four pairs;
+apply project membership to every returned issue, not only the first repo
+containing each number. Review the intersection; report excluded numbers.
 Explicit numbers may select closed issues for assessment without reopening.
 Report confirmed missing numbers, excluded PRs and inaccessible pairs. An access
 error or ambiguous not-found response is not proof of absence. Do not silently
@@ -84,7 +93,9 @@ for that repo. This is an observed interval, not an atomic GitHub snapshot.
 New issues arriving after collection wait for another invocation. State changes
 among selected issues require reassessment before effects, not an unbounded
 rediscovery loop. Never claim exact point-in-time consistency from pagination.
-Follow [grouping and batches](batching.md) to map and order the frozen set.
+Freeze only admitted matching issues after project mapping, and report excluded
+and uncertain candidates separately. Follow [grouping and batches](batching.md)
+to order the frozen set.
 
 ### Bounded label mode
 
@@ -97,7 +108,9 @@ For `--label`, replace unbounded discovery with this algorithm:
    selection pending because it could change which oldest items fill the cap.
 2. Request open issues using a repository-scoped structured literal label
    filter and creation-time ascending pagination. Exclude PRs and deduplicate
-   full identities before counting. Break creation-time ties by issue number;
+   full identities. Apply current/explicit project membership before counting
+   slots, using project selection. An earlier uncertain match keeps the entire
+   bounded selection pending. Break creation-time ties by issue number;
    resolve a cutoff tie before selection. Semantic search and interpolated
    search/shell expressions cannot implement exact selection. If a transport
    cannot preserve filtering/order/pagination, report the capability gap.
@@ -108,7 +121,8 @@ For `--label`, replace unbounded discovery with this algorithm:
    and review them using `--priority` and remediation rules. Priority affects
    only the selected set, not admission or the cap. A failed/incomplete selection
    has no partial effects; it is not a smaller successful batch.
-5. Before each selected item, refresh identity, open state and selection label.
+5. Before each selected item, refresh identity, open state, selection label and
+   project membership.
    A transferred, closed or externally relabeled item is skipped/pending and
    still consumes its slot. No refills. This invocation's own changes do not
    remove items already being processed; recheck effect-specific preconditions.
@@ -224,11 +238,16 @@ reopen an issue or remove comments to simulate rollback.
 
 ## Verified vendor references
 
-Discovery and current-directory documentation rechecked 2026-11-04; closure
+Project filtering, pagination and issue/PR distinction rechecked 2026-11-17;
+current-directory documentation rechecked 2026-11-04; closure
 guidance reviewed 2026-10-30. Current tool schemas control callable parameters:
 
 - [GitHub issue REST API](https://docs.github.com/en/rest/issues/issues#update-an-issue):
   issue/PR object distinction, state reasons, duplicate identity and permissions.
+- [Repository issue selection](https://docs.github.com/en/rest/issues/issues#list-repository-issues):
+  repository candidates have no folder filter; membership uses local evidence.
+- [REST pagination](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api):
+  follow continuation links rather than infer completion from page size.
 - [Closing an issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/administering-issues/closing-an-issue):
   closure semantics and repository permissions.
 - [GitHub CLI repository view](https://cli.github.com/manual/gh_repo_view):

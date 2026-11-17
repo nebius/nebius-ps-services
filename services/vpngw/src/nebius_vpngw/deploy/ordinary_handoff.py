@@ -28,6 +28,7 @@ from .. import ingress_policy
 from ..handoff_bootstrap import streamed_source
 from ..ordinary_operations import digest
 from . import ingress_ssh
+from .apply_diagnostics import DiagnosticFailure, Failure
 from .ssh_policy import configure_paramiko_host_verification
 from .vm_ha_package import VMHAAgentPackageError
 
@@ -37,11 +38,19 @@ DETACH: ContextVar[threading.Event | None] = ContextVar("ha_package_observer_det
 REPAIR: ContextVar[bool] = ContextVar("ha_package_admitted_repair", default=False)
 
 
-class PackageUnresolved(RuntimeError):
+class PackageUnresolved(DiagnosticFailure):
     """A settled guest needs owner diagnosis; transport failures are not retries."""
 
-    def __init__(self, identity: str):
-        super().__init__("HA package owner settled before verified completion")
+    def __init__(self, identity: str, predicate: str | None = None):
+        from ..package_worker import FAILURE_CODES
+
+        if predicate is not None and predicate not in FAILURE_CODES:
+            raise ValueError("invalid package failure predicate")
+        message = "HA package owner settled before verified completion"
+        if predicate is not None:
+            self.first = Failure("prepare-packages", predicate)
+            message += ": " + predicate
+        super().__init__(message)
         self.identity = identity
 
 
@@ -166,7 +175,8 @@ class PackageJob:
             if result["state"] == "PREPARED" and isinstance(result["result"], dict):
                 return result["result"]
             if result["state"] == "READY_TO_CONTINUE":
-                raise PackageUnresolved(str(self.identity))
+                detail = result.get("result") or {}
+                raise PackageUnresolved(str(self.identity), detail.get("failure"))
             if result["state"] == "NOT_SUBMITTED" and admission is not None:
                 try:
                     result = self.control(admission)

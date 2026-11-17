@@ -308,7 +308,9 @@ recovery. A separate default-branch-only status-write job repairs Required CI
 for all open default-base PRs. Completion event discovery reads the producer
 run's artifacts. Completion listens only to the broker; the observer sends a
 paired source run/attempt callback for verified result CI. Targeted callbacks
-skip global recovery enumeration. GitHub can still show skipped observer rows.
+skip global recovery enumeration. The broker event filter matches its workflow
+path, independently of the dynamic run title; receipt validation remains with
+the completion helper. GitHub can still show skipped observer rows.
 
 Validated result inputs produce an immutable `merge-result-route/v1` receipt
 before tests. It binds repository, workflow/run/attempt, broker/PR/result and

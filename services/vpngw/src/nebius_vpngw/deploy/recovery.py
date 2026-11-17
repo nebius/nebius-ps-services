@@ -357,6 +357,16 @@ class Recovery:
 # Only product-owned predicates select human explanations. Exception messages
 # may contain credentials or provider response bodies and never enter this map.
 GUEST_FAILURES = {
+    "asset_retirement_unproven": (
+        "Obsolete service asset ownership is unproven.",
+        "Preserve the files and restore the completed predecessor manifest before retrying apply.",
+        "Repair cannot infer ownership of unknown service assets.",
+    ),
+    "asset_retirement_changed": (
+        "An obsolete product asset differs from its recorded bytes, mode or ownership.",
+        "Preserve the modified asset and reconcile its ownership before retrying apply.",
+        "Repair must not delete administrator-modified or symlinked assets.",
+    ),
     "replacement_guard_required": (
         "The replacement candidate lacks its required forwarding guard.",
         "Resume the retained replacement operation to establish and verify its candidate guard.",
@@ -548,6 +558,16 @@ SSH_CAUSES = {
 
 CAUSES = {
     **SSH_CAUSES,
+    "gateway-release-newer": (
+        "A gateway has a newer VPNGW release than the selected CLI release.",
+        "Upgrade the CLI to that release or newer and rerun apply.",
+        "Repair cannot downgrade a newer release; upgrade the CLI first.",
+    ),
+    "gateway-release-unknown": (
+        "The installed VPNGW release identity could not be verified.",
+        "Restore readable release metadata and rerun apply; unknown is not an absent installation.",
+        "Preserve installed evidence and resolve the identity before reconstruction.",
+    ),
     "candidate-path-unsafe": (
         "The HA output path aliases the source or is not a safe regular file.",
         "Choose a distinct unlinked output file and rerun apply --convert-to-ha.",

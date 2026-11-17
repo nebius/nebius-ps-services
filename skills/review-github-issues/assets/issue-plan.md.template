@@ -1,17 +1,27 @@
 # Batch <anchor-number>: <shared topic>
 
+- Artifact kind: remediation-batch-plan
 - Repository: <verified repository identity>
 - Batch identity: <stable initial anchor number and shared remediation identity>
 - Accepted members: <full repository/issue identities and permitted URLs>
 - Related nonmembers: <deferred, unresolved or other related issues; not accepted here>
 - Owning project: <repository-relative project path>
 - Affected projects: <repository-relative paths>
+- Change boundaries: <permitted repository-relative files/modules per owner>
+- Validation context: <project/repository-relative command working directories>
 - Reviewed revision: <commit or source revision and relevant local limitations>
 - Review date: <date>
 - Planning status: <incomplete until independently verified complete>
 - Implementation status: Not started by this skill
 - Project review order: <explicit priority or selected-issue count basis>
 - Batch severity: <highest supported member severity; rationale below>
+
+## Execution project binding
+
+<Resolve the verified repository to a matching local checkout before execution.
+Use the primary project above, load all applicable ancestor/project instructions,
+and verify affected shared-owner boundaries. Never infer the target from review
+cwd or store machine-specific absolute paths in this plan.>
 
 ## Member decisions and acceptance
 
@@ -62,14 +72,18 @@ nonmembers are not closure targets. Give each member explicit, individually
 checkable criteria. Implementation must evaluate every criterion and retain
 resolved/partial/unresolved outcomes. This plan grants no closure authority.>
 
-The maintainer may request implementation of this plan and closure of fully
-resolved members after merge. Implement records local evidence; authorized PR
+The operator may approve ordinary local implementation or explicitly invoke
+`$implement`. Only the latter produces the Implement evidence/receipt. Any
+closure request must be separate direct-user intent; authorized PR
 work adds closing references only after per-issue validation and a concise
 verified comment. GitHub closes those issues on default-branch merge when
 repository settings permit it. Partial or unverified issues remain open.
 
 ## Maintainer handoff
 
-The maintainer implements, validates, commits, pushes and submits a PR through
-the repository's workflow. This plan does not implement or publish the change,
+After triage, the root offers the exact ready plan/member set with its owning
+project and waits for direct approval unless already authorized. Natural approval
+uses ordinary local implementation; explicit `$implement` uses its existing
+workflow. Refresh exact plan bytes and evidence before either route. Commit and
+publication retain their owning authorization. This plan does not implement or publish the change,
 schedule delivery, or certify completion.

@@ -15,6 +15,19 @@ from .ordinary_handoff import REPAIR, observe_guarded
 COORDINATED: ContextVar[bool] = ContextVar("package_pair_coordinated", default=False)
 
 
+def diagnosis_fingerprint(observations: list[dict]) -> str:
+    """A restarted transport is not evidence that the failed package work changed."""
+    return digest([
+        {
+            **item,
+            "result": {key: value for key, value in (item["result"] or {}).items()
+                       if key != "generation"},
+        }
+        if item["state"] == "READY_TO_CONTINUE" else item
+        for item in observations
+    ])
+
+
 def lifecycle_root(state: Any) -> Path:
     from .apply_command import CommandJournal
 
@@ -111,7 +124,7 @@ def prepare(
                 and "NOT_SUBMITTED" in states
                 and all(state in {"PREPARED", "NOT_SUBMITTED"} for state in states)
             ),
-            "diagnosis": Diagnosis("packages", digest(observations))
+            "diagnosis": Diagnosis("packages", diagnosis_fingerprint(observations))
             # Absence of the exact phase also permits its approved submission.
             # Submission still revalidates authority and excludes pending work;
             # NOT_SUBMITTED does not establish global guest quiescence.
@@ -166,7 +179,7 @@ def reserve(job: Any, request: dict) -> dict:
         return {
             "complete": complete,
             "settled": value["state"] in {"READY_TO_CONTINUE", "BLOCKED"},
-            "diagnosis": Diagnosis("packages", digest(value))
+            "diagnosis": Diagnosis("packages", diagnosis_fingerprint([value]))
             if value["state"] == "READY_TO_CONTINUE"
             else None,
         }

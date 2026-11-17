@@ -91,7 +91,7 @@ CHECK = None
 PYTHON_PREPARE = None
 
 
-def run(args: list[str], *, timeout: int = 60, cwd: Path | None = None) -> str:
+def run(args: list[str], *, timeout: float = 60, cwd: Path | None = None) -> str:
     if COMMAND is not None and cwd is None:
         if CHECK is not None:
             CHECK()
@@ -337,11 +337,223 @@ def state() -> dict | None:
     return value
 
 
-def packages() -> dict[str, list[str]]:
-    architecture = run(["dpkg", "--print-architecture"]).strip()
+def record_asset_ownership(operation: str, wheel: str, assets: dict) -> None:
+    """Publish verified full-repair ownership through the runtime asset owner."""
+    if not re.fullmatch(r"[a-f0-9]{32}", operation) or not re.fullmatch(r"[a-f0-9]{64}", wheel):
+        raise RuntimeError("asset_retirement_unproven")
+    value = {
+        "phase": "complete",
+        "operation": operation,
+        "manifest": {"wheel_sha256": wheel, "assets": assets},
+    }
+    write(
+        ROOT / "asset-ownership.json",
+        json.dumps(
+            {"schema": "nebius-vpngw.asset-ownership.v1", "value": value, "sha256": digest(value)},
+            sort_keys=True,
+        ).encode(),
+    )
+
+
+def completed_asset_predecessor() -> dict | None:
+    value = state()
+    if value is not None:
+        return value if value["phase"] == "complete" else None
+    path = ROOT / "asset-ownership.json"
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) != 0o600
+        or any(parent.is_symlink() for parent in path.parents)
+    ):
+        raise RuntimeError("asset_retirement_unproven")
+    saved = json.loads(path.read_bytes())
+    value = saved["value"]
+    if (
+        saved["schema"] != "nebius-vpngw.asset-ownership.v1"
+        or saved["sha256"] != digest(value)
+        or value["phase"] != "complete"
+    ):
+        raise RuntimeError("asset_retirement_unproven")
+    return value
+
+
+def asset_retirement(manifest: dict, previous: dict | None) -> dict:
+    """Freeze completed ownership before the next runtime journal replaces it."""
+    if "asset_retirement" in manifest:
+        return manifest["asset_retirement"]
+    if previous is None or previous["phase"] != "complete":
+        return {"predecessor": None, "removals": {}}
+    owned = previous["manifest"]["assets"]
+    removals = json.loads(
+        json.dumps({path: item for path, item in owned.items() if path not in manifest["assets"]})
+    )
+    return {
+        "predecessor": {
+            "operation": previous["operation"],
+            "wheel_sha256": previous["manifest"]["wheel_sha256"],
+            "assets_sha256": digest(owned),
+        }
+        if removals
+        else None,
+        "removals": removals,
+    }
+
+
+def verify_asset_retirement(plan: dict) -> None:
+    if not isinstance(plan, dict) or set(plan) != {"predecessor", "removals"}:
+        raise RuntimeError("asset_retirement_unproven")
+    if plan["removals"] and not isinstance(plan["predecessor"], dict):
+        raise RuntimeError("asset_retirement_unproven")
+    for name, item in plan["removals"].items():
+        path = Path(name)
+        if (
+            not path.is_absolute()
+            or ".." in path.parts
+            or not item["member"].startswith("nebius_vpngw/")
+            or not re.fullmatch(r"[a-f0-9]{64}", item["sha256"])
+            or item["mode"] not in {0o644, 0o755}
+            or not re.fullmatch(
+                r"(?:/etc/systemd/system/nebius-vpngw-[a-z0-9-]+\.(?:service|timer)"
+                r"|/etc/systemd/system/(?:nebius-vpngw-[a-z0-9-]+|strongswan|frr|ufw)\.service\.d/[a-z0-9-]+\.conf"
+                r"|/usr/local/(?:bin|lib)/nebius-vpngw-[a-z0-9_.-]+"
+                r"|/usr/local/bin/setup-vpngw-firewall\.sh"
+                r"|/usr/lib/tmpfiles.d/nebius-vpngw-[a-z0-9-]+\.conf)",
+                name,
+            )
+            or any(parent.is_symlink() for parent in path.parents)
+        ):
+            raise RuntimeError("asset_retirement_unproven")
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != 0
+            or info.st_gid != 0
+            or stat.S_IMODE(info.st_mode) != item["mode"]
+            or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]
+        ):
+            raise RuntimeError("asset_retirement_changed")
+
+
+def retire_assets(manifest: dict) -> None:
+    """Run under the existing deployment locks after successor boot protection."""
+    plan = manifest.get("asset_retirement", {"predecessor": None, "removals": {}})
+    if not plan["removals"]:
+        return
+    value = state()
+    if value is None or value["manifest"] != manifest:
+        raise RuntimeError("asset_retirement_unproven")
+    retire_owned_assets(plan)
+
+
+def disable_missing_owned_unit(path: Path) -> None:
+    """systemctl disable cannot unlink enablement when the unit file is absent."""
+    links = []
+    for directory in (*path.parent.glob("*.wants"), *path.parent.glob("*.requires")):
+        link = directory / path.name
+        try:
+            info = link.lstat()
+        except FileNotFoundError:
+            continue
+        parent = directory.lstat()
+        if (
+            not stat.S_ISDIR(parent.st_mode)
+            or parent.st_uid != 0
+            or parent.st_gid != 0
+            or parent.st_mode & 0o022
+            or not stat.S_ISLNK(info.st_mode)
+            or info.st_uid != 0
+            or info.st_gid != 0
+            or os.path.normpath(str(link.parent / os.readlink(link))) != str(path)
+        ):
+            raise RuntimeError("asset_retirement_unproven")
+        links.append(link)
+    for link in links:
+        unlink(link)
+    run(["systemctl", "daemon-reload"])
+
+
+def retire_owned_assets(plan: dict) -> None:
+    """Caller owns a frozen journal and the deployment/boot fencing barrier."""
+    verify_asset_retirement(plan)
+    if not plan["removals"]:
+        return
+    units = [
+        Path(name) for name in plan["removals"] if Path(name).parent == Path("/etc/systemd/system")
+    ]
+    # Disable timer triggers before stopping their services; unlink only after
+    # the entire obsolete set is quiescent.
+    for path in sorted(units, key=lambda path: (path.suffix != ".timer", path.name)):
+        if not re.fullmatch(r"nebius-vpngw-[a-z0-9-]+\.(service|timer)", path.name):
+            raise RuntimeError("asset_retirement_unproven")
+        for action, property_name, allowed in (
+            ("stop", "ActiveState", {"inactive", "failed"}),
+            ("disable", "UnitFileState", {"disabled", "static", "masked", ""}),
+        ):
+            try:
+                run(["systemctl", action, path.name])
+            except RuntimeError:
+                if action == "disable" and not path.exists():
+                    disable_missing_owned_unit(path)
+                # A previously unlinked unit may no longer be loadable.
+                # Its authoritative state, not file absence, proves safety.
+                if (
+                    run(
+                        [
+                            "systemctl",
+                            "show",
+                            path.name,
+                            "--property=" + property_name,
+                            "--value",
+                        ]
+                    ).strip()
+                    not in allowed
+                ):
+                    raise
+            if (
+                run(
+                    ["systemctl", "show", path.name, "--property=" + property_name, "--value"]
+                ).strip()
+                not in allowed
+            ):
+                raise RuntimeError("asset_retirement_changed")
+    for name in sorted(plan["removals"]):
+        path = Path(name)
+        if not path.exists():
+            continue
+        verify_asset_retirement(plan)
+        unlink(path)
+    run(["systemctl", "daemon-reload"])
+    for path in units:
+        if run(
+            ["systemctl", "show", path.name, "--property=ActiveState", "--value"]
+        ).strip() not in {"inactive", "failed"}:
+            raise RuntimeError("asset_retirement_changed")
+    if any(Path(name).exists() or Path(name).is_symlink() for name in plan["removals"]):
+        raise RuntimeError("asset_retirement_changed")
+
+
+def packages(*, deadline: float | None = None) -> dict[str, list[str]]:
+    def remaining() -> float:
+        value = 60.0 if deadline is None else min(60.0, deadline - time.monotonic())
+        if value <= 0:
+            raise TimeoutError("runtime package observation deadline expired")
+        return value
+
+    architecture = run(["dpkg", "--print-architecture"], timeout=remaining()).strip()
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", architecture):
         raise RuntimeError("native package architecture is unavailable")
-    output = run(["dpkg-query", "-W", "-f=${binary:Package}\t${Version}\t${db:Status-Status}\\n"])
+    output = run(
+        ["dpkg-query", "-W", "-f=${binary:Package}\t${Version}\t${db:Status-Status}\\n"],
+        timeout=remaining(),
+    )
     result = {}
     for line in output.splitlines():
         name, version, status = line.split("\t")
@@ -713,6 +925,12 @@ def begin(
     approved: dict, operation: str, manifest: dict, *, superseded_sha256: str | None = None
 ) -> None:
     existing = state()
+    retirement = manifest.get("asset_retirement", {"predecessor": None, "removals": {}})
+    if retirement["removals"] and (existing is None or existing["operation"] != operation):
+        unbound = {key: value for key, value in manifest.items() if key != "asset_retirement"}
+        if retirement != asset_retirement(unbound, completed_asset_predecessor()):
+            raise RuntimeError("asset_retirement_unproven")
+        verify_asset_retirement(retirement)
     superseded = None
     if superseded_sha256 is not None and (existing is None or existing["operation"] != operation):
         # Only the guarded handoff owner supplies this after archiving the exact
@@ -870,20 +1088,8 @@ def verify_inhibited() -> None:
             raise RuntimeError("effective service startup inhibition is missing")
 
 
-def install() -> None:
-    value = state()
-    if value is None or not (ROOT / "inhibited").exists():
-        raise RuntimeError("runtime package replacement is not inhibited")
-    approved = value["plan"]
-    if COMMAND is None or CHECK is None:
-        raise RuntimeError("package effects require the canonical operation owner")
-    CHECK()
-    verify_inhibited()
-    directory = verify_staged(approved)
-    current = packages()
-    # The database, not the last stdout or a lost SSH reply, selects remaining
-    # work. A half-installed archive must be unpacked again; an unpacked exact
-    # version only needs configuration. Never resolve a new closure here.
+def verify_package_progress(approved: dict, current: dict) -> None:
+    """Admit only native predecessor/target versions and recoverable dpkg states."""
     for name in set(approved["desired"]) | set(approved["remove"]):
         observed = current.get(name)
         versions = {
@@ -906,6 +1112,23 @@ def install() -> None:
             }
         ):
             raise RuntimeError("runtime package changed outside the approved closure")
+
+
+def install() -> None:
+    value = state()
+    if value is None or not (ROOT / "inhibited").exists():
+        raise RuntimeError("runtime package replacement is not inhibited")
+    approved = value["plan"]
+    if COMMAND is None or CHECK is None:
+        raise RuntimeError("package effects require the canonical operation owner")
+    CHECK()
+    verify_inhibited()
+    directory = verify_staged(approved)
+    current = packages()
+    # The database, not the last stdout or a lost SSH reply, selects remaining
+    # work. A half-installed archive must be unpacked again; an unpacked exact
+    # version only needs configuration. Never resolve a new closure here.
+    verify_package_progress(approved, current)
 
     def phase(name: str) -> None:
         CHECK()

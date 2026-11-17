@@ -6,6 +6,12 @@ project folder.
 
 ## [Unreleased]
 
+- Run Skills source checks, adapter tests, native harness regressions and four
+  complete Worktree test partitions independently. Preserve class fixtures,
+  failure propagation, trusted checkout and all required evidence gates.
+  Run VPN source builds alongside unit tests;
+  keep the full validation and release qualification requirements.
+
 - Separate CI status observation from protected merge and targeted completion;
   retain strict review, required CI, recovery and disabled AI automation.
 - Reuse exact-commit release qualification, use eight-hour release phases, and

@@ -200,6 +200,18 @@ refreshing the recovery baseline from a live setup. It owns the allowlist,
 omissions, redacted inspection procedure, file-mode rule, and private-state
 recovery boundary.
 
+## Selected Skill And Hook Repair Policy
+
+For a requested always-on self-repair rule, reconcile only the template's
+Skill and Hook Repair guidance in the selected native global instructions.
+Preserve equivalent active user guidance without duplication; otherwise add
+the compact section inside the config-codex managed block. Preserve unrelated
+content and validate the exact patch. A policy-only request does not bootstrap
+settings, hooks, roles, permissions or the rest of the home. Global instructions
+load at native startup; installation alone does not refresh that instruction
+chain. The shared procedure belongs to global-context-management and covers
+small tasks, hooks and helpers as well as blocking skill defects.
+
 ## Selected Host Memory Policy
 
 For a requested memory guard, reconcile only the template's Host Memory Safety

@@ -3,6 +3,15 @@
 Execution supports Codex and Claude through the selected native host context.
 See `SKILL.md` for invocation, required setup and evidence boundaries.
 
+A compact native global rule also routes encountered repository-owned skill,
+hook and helper defects here, including small tasks and non-blocking defects.
+The shared [repair procedure](SKILL.md#repair-skill-and-hook-defects-and-continue)
+repairs canonical source, validates, installs through the existing repository
+script and resumes authorized work. Config Codex and Config Claude own their
+global-policy patches; installing a skill does not apply those patches.
+There is no additional repair hook or background loop. Explicit read-only modes,
+permissions, workflow ownership and existing repair budgets remain binding.
+
 Host-memory monitoring may be owned by a declared outer verifier with current
 physical-host visibility and active monitoring for its sandboxed children.
 Workers inherit that setup context. Immediate monitor completion has no session
@@ -342,10 +351,11 @@ For a complex task, the intended flow is:
 6. Inspect the diff and run focused validation.
 7. Use `risk_reviewer` near the end only for non-trivial or risky changes.
 8. Address serious findings or record why they are out of scope.
-   If an in-scope skill bug interrupts the task, fix its canonical source,
-   validate and install it with the repository script, then continue under the
-   existing authorization. Preserve checkpoints and actual security boundaries;
-   report source, installed and resumed-operation evidence separately.
+   For a confirmed encountered skill, hook or helper defect, follow the shared
+   source-first repair procedure, including for small tasks and non-blocking
+   defects. Reconcile uncertain prior effects before retrying, preserve
+   checkpoints and repair budgets, and verify required reload/trust separately
+   from installed parity before claiming resumed execution.
 9. Update task state and return the final summary.
 
 ## Your Mental Model

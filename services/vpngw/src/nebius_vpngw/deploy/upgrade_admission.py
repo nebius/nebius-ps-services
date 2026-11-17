@@ -48,6 +48,15 @@ def validate(record: dict) -> dict:
     return record
 
 
+def _settled_creation_action(previous: dict, state: Any, action: dict, settlement: dict) -> bool:
+    from .ha_replan import creation_action_matches, validate_record
+
+    proof = validate_record(settlement, previous=state)
+    return proof["predecessor"] == digest(previous) and creation_action_matches(
+        previous, state, action
+    )
+
+
 def admit(
     *,
     previous: dict | None,
@@ -113,7 +122,13 @@ def admit(
         if (
             old.configuration_sha256
             != digest({"desired": local, "artifact": old.artifact_sha256, "project": project})
-            or runtime.get("action_scope") != digest(action)
+            or (
+                runtime.get("action_scope") != digest(action)
+                and not (
+                    settlement is not None
+                    and _settled_creation_action(previous, state, action, settlement)
+                )
+            )
             or runtime.get("preparation")
             or old.project_id != project
             or old.gateway_name != state.gateway_name

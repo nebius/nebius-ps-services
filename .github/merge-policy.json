@@ -46,6 +46,8 @@
       "paths": [
         "skills/**",
         ".github/workflows/skills-project-specs-ci.yml",
+        ".github/scripts/run_unittest_shard.py",
+        ".github/scripts/test_ci_parallelism.py",
         ".agents/plugins/marketplace.json",
         ".claude-plugin/marketplace.json"
       ]

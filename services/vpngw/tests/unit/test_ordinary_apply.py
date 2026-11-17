@@ -29,6 +29,12 @@ pytestmark = pytest.mark.usefixtures("runtime_migration_guest")
 
 
 def planning_result(observed):
+    observed.setdefault(
+        "release_identity",
+        {"state": "present", "version": observed.get("package_version") or "0.6.0"},
+    )
+    if observed.get("asset_retirement") is None:
+        observed["asset_retirement"] = {"predecessor": None, "removals": {}}
     return {
         "observation": observed,
         "dependency_inventory": {
@@ -494,6 +500,13 @@ def test_ordinary_parent_resumes_before_guest_without_resolving_new_packages(
     saved = ordinary_command.package_manifests(
         journal, local={}, targets=args["targets"], artifact=args["artifact_sha256"]
     )["gateway"]
+    from nebius_vpngw.deploy import release_policy
+
+    with monkeypatch.context() as resume_probe:
+        resume_probe.setattr(ordinary_apply, "remote", lambda *_a, **_k: {"owned_resume": True})
+        assert release_policy.package_resume(
+            ssh, "host", instance, {}, release_wheel, journal, args["targets"]
+        )
 
     def download(url, **kwargs):
         if url == "https://pypi.org/pypi/example-dep/1.2/json":
@@ -1932,3 +1945,76 @@ def test_ordinary_durable_staging_requires_exact_approval_and_receipt(tmp_path, 
             == b"approved dependency"
         )
         assert "config" not in payload  # This phase cannot publish guest configuration.
+
+
+@pytest.mark.parametrize("owned", [True, False])
+def test_replacement_package_resume_requires_its_exact_owner(release_wheel, monkeypatch, owned):
+    configuration = "gateway: {}\nconnections: []\n"
+    instance = SimpleNamespace(hostname="gateway", config_yaml=configuration)
+    ssh = SimpleNamespace(_build_wheel=lambda **_: release_wheel, _find_project_root=lambda: None)
+    manifest = ordinary_apply.artifact(release_wheel, configuration)
+    manifest.update(
+        runtime_plan={"frozen": "closure"},
+        dependency_wheels={},
+        expected_dependencies={},
+        expected_requirements={},
+    )
+    observed = {
+        "release_identity": {"state": "unknown", "version": None},
+        "runtime_plan": manifest["runtime_plan"],
+        "runtime_pending": {"manifest": manifest},
+        "files": {},
+        "assets": {},
+        "asset_modes": {},
+        "boot_id": "boot",
+        "package_version": None,
+        "config_sha256": "old",
+        "verified": False,
+        "agent_state": "inactive",
+        "runtime": {"ready": True},
+        "dependencies": {},
+        "requirements": {},
+        "markers": {},
+        "route_ownership": empty_routes(),
+    }
+
+    def remote(_ssh, _target, _instance, _local, request):
+        if request["action"] == "replacement-resume":
+            assert request["operation"] == "a" * 64
+            return {"manifest": manifest if owned else None}
+        if request["action"] == "release-resume":
+            return {"owned_resume": True}
+        return planning_result(observed)
+
+    monkeypatch.setattr(ordinary_apply, "remote", remote)
+    monkeypatch.setattr(
+        ordinary_apply,
+        "resolve_dependencies",
+        lambda *_: pytest.fail("resolved frozen package again"),
+    )
+    if not owned:
+        with pytest.raises(RuntimeError, match="replacement package authority changed"):
+            ordinary_apply.inspect_plan(
+                ssh,
+                "host",
+                instance,
+                {},
+                target_identity="candidate",
+                resume_manifest=manifest,
+                replacement_operation="a" * 64,
+            )
+    else:
+        prepared = ordinary_apply.inspect_plan(
+            ssh,
+            "host",
+            instance,
+            {},
+            target_identity="candidate",
+            resume_manifest=manifest,
+            replacement_operation="a" * 64,
+        )
+        try:
+            assert prepared.manifest == manifest
+            assert "command_approval" not in prepared.manifest
+        finally:
+            prepared.close()

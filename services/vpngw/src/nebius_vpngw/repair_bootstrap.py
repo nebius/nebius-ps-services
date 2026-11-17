@@ -17,6 +17,7 @@ LOADER = (
 )
 COMMAND = "sudo -n PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -c " + shlex.quote(LOADER)
 SOURCES = (
+    ("_vpngw_release_identity", "release_identity.py"),
     ("_vpngw_deployment_assets", "deployment_assets.py"),
     ("_vpngw_repair_state", "repair_state.py"),
     ("_vpngw_runtime_migration", "runtime_migration.py"),

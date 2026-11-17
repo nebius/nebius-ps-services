@@ -77,6 +77,47 @@ For wheel-based installs, `apply` reuses the original release wheel URL or local
 by pip when it deploys the agent to gateway VMs. End users do not need a source checkout or
 `python -m build`.
 
+One immutable VPNGW wheel identifies the first-party agents, scripts and service
+assets in a release. `apply` checks the installed release on retained gateways:
+older releases upgrade, matching releases verify and reconcile supported drift,
+and a newer gateway release requires upgrading the CLI. Compatible third-party
+dependencies remain installed; each operation freezes its required wheel hashes.
+Unknown installed identity requires investigation, except when the existing owner
+proves an exact interrupted package operation that can resume.
+
+Changing release during a completed-package initial activation or upgrade uses
+a new operation after the original owners settle. Original pins and receipts are
+retained. Expanded effects still require review; `apply` does not silently invoke
+full repair. Obsolete service assets retire only with completed ownership evidence
+and matching bytes, permissions and ownership; modified files and symlinks stop
+retirement. A stopped repair target uses the confirmed guarded boot to read its
+release before reconstruction.
+Full repair retains verified asset ownership for subsequent upgrades. Obsolete
+timers and services must stop before removal, including units whose files were
+already deleted.
+
+`status` displays installed release alignment separately from runtime health.
+Metadata alignment does not prove installed file hashes or running-process
+identity. SSH 22 is operator-to-gateway access; gateway peers use mTLS on 9443.
+Peer SSH is not required. Peer-channel observations use fresh heartbeat evidence;
+a local listener alone does not establish reachability or authentication.
+
+During HA activation, each member gets a **30-second peer-channel check**, followed
+by a separate **300-second full fenced-verification window**. Both peer checks run
+before both full checks. For standard two-member activation they can total **660 seconds
+(11 minutes)**, excluding other work; this is not an overall command deadline.
+Interactive progress shows the member, check, unmet condition, elapsed time,
+remaining allowance for that window, and total verification time. Noninteractive
+output keeps one terminal summary per phase, including any unknown-evidence warning.
+
+A classified connection or TLS failure requires **10 consecutive failed send
+attempts**, including retries; it does not mean ten seconds. Each publication can
+attempt up to three sends, and a successful send resets the count. At the end of
+the peer check, a latest classified failure aborts activation. Missing, late or
+inconclusive evidence is reported as **unknown** and proceeds to full verification.
+Earlier failures remain labelled as previous observations, not current diagnoses.
+Only the existing full readiness checks can establish successful activation.
+
 ### 2. Create a starter config
 
 ```bash
@@ -222,7 +263,13 @@ nebius-vpngw apply --local-config-file my-vpn.config.yaml --repair
 ```
 
 Repair lists the existing VM and disk identities and asks for confirmation
-(default: No). It stops VPN traffic across the selected deployment, replaces the
+(default: No). After confirmation, an animated status shows the current stage,
+member and elapsed time, including dependency downloads, package installation,
+worker waits and activation checks. Progress stays on stderr; redirected output
+uses plain stage and wait messages, and JSON stdout remains one terminal result.
+An animated spinner indicates the current operation, not verified completion.
+Interrupting the CLI leaves durable work recoverable with the same repair command.
+It stops VPN traffic across the selected deployment, replaces the
 managed VPNGW, strongSwan and FRR packages even when their versions are unchanged,
 and reconstructs configuration, services and managed HA node certificates.
 Service units and helper scripts are recreated and verified before activation.
@@ -407,6 +454,9 @@ artifact, configuration, credentials and policy. Two minutes is a soft recovery
 target, not a cancellation deadline. Slow accepted package work remains supervised
 and reports progress; it is never killed or overlapped because time has elapsed.
 Bounded observations and native safety checks remain in place.
+The CLI and guest compare the same complete approved package snapshot, including
+obsolete asset retirement. Settled worker failures retain a safe diagnostic code;
+restarting a worker alone does not justify repeating an unchanged failed repair.
 
 Transient Compute timeouts and temporary unavailability trigger up to three
 fresh reads with bounded backoff. Dispatch, authentication, Compute, SSH and
@@ -4814,12 +4864,14 @@ private addresses** in both directions: the members exchange their mutually
 authenticated heartbeat on that port, and fenced activation verification,
 automatic failover and standby policy all depend on it. The product never
 creates or widens that rule. When the attached groups block it, `status`
-reports `peer-heartbeat-endpoint-unreachable` with the owning fix, and `apply`
-fails fast in `verify-peer-channel-node-N` instead of timing out in fenced
-verification.
-The gate uses the latest observed failure while retaining the first observation
-for diagnosis. An interrupted apply keeps its exact resume action; status also
-shows any persistent peer-channel failure and the connectivity prerequisite.
+reports `peer-heartbeat-endpoint-unreachable` with the owning fix. The 30-second
+`verify-peer-channel-node-N` gate in `apply` aborts at expiry only if the latest
+observation confirms a classified connection or TLS failure. If that observation
+is unavailable, late or inconclusive, the gate reports unknown evidence and
+continues into full fenced verification. Earlier classified failures remain
+historical diagnostics, not proof of the current channel state. An interrupted
+apply keeps its exact resume action; status also shows any persistent
+peer-channel failure and the connectivity prerequisite.
 
 The host uses a dedicated nftables `inet nebius_vpngw_ingress` INPUT table ahead of
 UFW's broad accepts. Updates replace only that table in a validated atomic transaction
@@ -4986,6 +5038,16 @@ Codex or Claude. It does not call an AI service or upload anything automatically
 
 Additional evidence includes:
 
+- Typed `operator/checkpoints/` views of the command and HA lifecycle owners,
+  preserving initial/upgrade artifact digests, effect categories and omissions
+  without exporting raw binding maps or arbitrary effect identifiers.
+- Fixed release-admission and asset-retirement failure codes, with unrecognized
+  diagnostic text still omitted.
+- Authenticated operator SSH collection evidence and directional peer-channel
+  observations derived from existing heartbeat snapshots. Heartbeat freshness is
+  evaluated at the gateway's recorded collection time, so archive assembly delays
+  do not discard valid historical evidence.
+
 - Journal severity, PID, boot/invocation identity, UTC/monotonic timestamps,
   recognized exception/errno facts and canonical product traceback frames.
 - Cloud-init JSON status and stage errors, plus all four cloud-init service units.
@@ -5065,6 +5127,14 @@ The archive includes:
   redaction and truncation metadata in the manifest.
 
 Reports are regenerated after trimming; references resolve to retained records.
+The terminal confirms “Support bundle created.” Routine journal and log-tail
+history limits remain in the archive without terminal warnings. Other collection
+gaps, including unavailable evidence, invalid records, timeouts and truncated
+current-state evidence, produce a warning. The summary lists affected sources.
+Manifest completeness and exit codes still describe actual coverage: a bundle
+with bounded history can exit 1 even when no terminal warning is needed.
+Known credential patterns are redacted automatically, but redaction is not
+exhaustive; review the archive before private sharing.
 The timeline orders within nodes/boots and does not assert cross-host causality.
 Review the guide and manifest before attaching the ZIP to a private ticket.
 
@@ -5494,6 +5564,20 @@ digest manifest. Standalone binaries include their wheel. `VPNGW_AGENT_WHEEL`
 remains a strict explicit override for both topologies.
 
 ### Testing Changes
+
+Run the local unit lane serially with the existing project environment:
+
+```bash
+.venv/bin/python -m pytest -m "not integration" tests/unit
+```
+
+Credential enrollment and recovery fixtures reuse successful parsing of identical
+private-key bytes within one test. Key generation still produces fresh RSA-4096
+material; changed bytes are parsed again, and the cache is cleared at teardown.
+Dedicated managed-credential tests use the uncached parser. Route-read deadline
+tests advance an injected clock while retaining retries and timeout assertions.
+These test-only optimizations preserve the complete selection and network guard;
+native integration, coverage and CI checks remain separate correctness gates.
 
 Release-build tests exercise installed wheel and frozen-binary help with forced
 color, comparing rendered option names after stripping terminal styling.

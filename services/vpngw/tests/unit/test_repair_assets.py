@@ -54,6 +54,7 @@ def reconstruction(request, monkeypatch, tmp_path):
             "native": {"archives": {}},
             "wheels": {wheel.name: checksum},
             "product": wheel.name,
+            "asset_retirement": {"predecessor": None, "removals": {}},
         }
     }
     monkeypatch.setattr(repair_remote, "admitted", lambda *_a, **_k: (journal, state, tmp_path))
@@ -75,6 +76,13 @@ def reconstruction(request, monkeypatch, tmp_path):
     monkeypatch.setattr(repair_remote.runtime, "install", lambda *_a, **_kw: None)
     monkeypatch.setattr(repair_remote.runtime, "verify_inventory", lambda *_a, **_kw: None)
     monkeypatch.setattr(repair_remote.runtime.migration, "verify_packages", lambda *_a: None)
+    monkeypatch.setattr(repair_remote.runtime.migration, "ROOT", tmp_path / "runtime")
+    monkeypatch.setattr(repair_remote.runtime.migration, "state", lambda: None)
+    monkeypatch.setattr(
+        repair_remote.runtime.migration,
+        "write",
+        lambda path, raw: repair_remote.guest.publish_file(path, raw, mode=0o600),
+    )
     monkeypatch.setattr(repair_remote.python, "prepare", lambda *_a, **_kw: None)
     monkeypatch.setattr(
         repair_remote.python, "load", lambda *_a: {"before": {}, "target": {}, "state": "complete"}
@@ -198,6 +206,11 @@ def test_worker_rebuilds_canonical_assets_before_installed(reconstruction):
     assert state["phase"] == "installed"
     assert commands == [["systemctl", "daemon-reload"]]
     assert ("service-assets", "complete") in effects
+    predecessor = repair_remote.runtime.migration.completed_asset_predecessor()
+    assert set(predecessor["manifest"]["assets"]) == {path for _, path, _ in entries}
+    assert set(
+        repair_remote.runtime.migration.asset_retirement({"assets": {}}, predecessor)["removals"]
+    ) == {path for _, path, _ in entries}
     repair_remote.verify_installation(payload)
     # An installed wheel alone cannot satisfy verification after asset damage.
     Path(entries[0][1]).unlink()

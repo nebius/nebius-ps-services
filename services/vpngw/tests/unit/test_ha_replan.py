@@ -5,6 +5,7 @@ import hashlib
 import json
 from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -326,7 +327,7 @@ def local_settlement(tmp_path, monkeypatch, request):
     from test_vm_ha_upgrade_recovery import evidence_fixture
 
     from nebius_vpngw.apply_approval import SCHEMA
-    from nebius_vpngw.deploy import ha_command
+    from nebius_vpngw.deploy import ha_command, ha_created_packages, ha_members
     from nebius_vpngw.deploy.apply_command import CommandJournal
     from nebius_vpngw.deploy.vm_ha_lifecycle import VMHALifecycleStore
 
@@ -343,6 +344,12 @@ def local_settlement(tmp_path, monkeypatch, request):
     desired["generation"]["generation_id"] = "9" * 64
     desired["generation"]["configuration_digest"] = "8" * 64
     journal = CommandJournal(state.project_id, state.gateway_name)
+    initial = getattr(request, "param", False) == "initial"
+    member_intent = ha_members.intent(
+        state.members, created={m.instance_name for m in state.members}
+    )
+    for item in member_intent.values():
+        item["compute_id"] = item["disk_id"] = None
     command = ha_command.create(
         journal,
         scope="1" * 64,
@@ -356,7 +363,11 @@ def local_settlement(tmp_path, monkeypatch, request):
                 "managed_credentials": "reuse",
             }
         ),
-        targets=tuple(sorted(member.compute_id for member in state.members)),
+        targets=ha_members.targets(member_intent)
+        if initial
+        else tuple(sorted(member.compute_id for member in state.members)),
+        members=member_intent if initial else None,
+        artifact_key="heartbeat-initial-artifact" if initial else "heartbeat-upgrade-artifact",
         approval="4" * 64,
         runtime_scope="5" * 64,
         report={"kind": "apply-convergence"},
@@ -395,13 +406,59 @@ def local_settlement(tmp_path, monkeypatch, request):
             ),
         ),
     )
-    if getattr(request, "param", False):
+    children = record(state)["children"]
+    if initial:
+        tx = state.transaction
+        raw = dict(tx.resource_bindings)
+        artifact = raw.pop("heartbeat-upgrade-artifact")
+        raw.update(
+            {
+                "heartbeat-initial-artifact": artifact,
+                "runtime-package-manifests": "{}",
+                ha_created_packages.PREFIX + tx.operation_id: json.dumps(
+                    {
+                        "authority": {
+                            "execution": command.execution_id,
+                            "operation": tx.operation_id,
+                            "artifact": artifact,
+                            "lineage": {
+                                m.instance_name: {
+                                    "compute": m.compute_id,
+                                    "disk": m.disk_id,
+                                    "node": m.node_id,
+                                    "creation": f"provision-{m.instance_name}-compute",
+                                    "configuration": "d" * 64,
+                                }
+                                for m in state.members
+                            },
+                        },
+                        "manifests": manifests,
+                    }
+                ),
+            }
+        )
+        state = replace(
+            state,
+            transaction=replace(
+                tx,
+                resource_bindings=tuple(sorted(raw.items())),
+                completed_effects=tuple(
+                    dict.fromkeys(
+                        (
+                            *tx.completed_effects,
+                            *(f"provision-{m.instance_name}-compute" for m in state.members),
+                            "select-created-package-manifests",
+                        )
+                    )
+                ),
+            ),
+        )
+    elif getattr(request, "param", False):
         from test_vm_ha_replacement_history_recovery import with_replacement_history
 
         state = with_replacement_history(state, (1, 2, 10))
     store = VMHALifecycleStore(tmp_path / "gateway.yaml")
     store.write_verified(state)
-    children = record(state)["children"]
     guests = {
         member.node_id: {
             "children": children[member.node_id],
@@ -442,6 +499,7 @@ def local_settlement(tmp_path, monkeypatch, request):
     )
 
 
+@pytest.mark.parametrize("local_settlement", [False, "initial"], indirect=True)
 def test_local_settlement_archives_all_evidence_without_completing_old_steps(local_settlement):
     ctx = local_settlement
     before = ctx.journal.path.read_bytes(), ctx.store.path.read_bytes()
@@ -469,6 +527,7 @@ def test_local_settlement_archives_all_evidence_without_completing_old_steps(loc
     assert ha_replan.validate_record(saved, previous=ctx.state) == settlement.proof
 
 
+@pytest.mark.parametrize("local_settlement", [False, "initial"], indirect=True)
 def test_local_settlement_resumes_first_receipt_without_replacing_approval(local_settlement):
     ctx = local_settlement
     settlement = ctx.inspect()
@@ -493,6 +552,7 @@ def test_local_settlement_resumes_first_receipt_without_replacing_approval(local
 
 
 @pytest.mark.parametrize("fault", ["package", "cloud-request", "identity", "source", "local-child"])
+@pytest.mark.parametrize("local_settlement", [False, "initial"], indirect=True)
 def test_unsettled_or_changed_ha_refuses_without_archival(local_settlement, fault):
     ctx = local_settlement
     before = ctx.journal.path.read_bytes(), ctx.store.path.read_bytes()
@@ -708,6 +768,7 @@ def _execute_settled_successor(ctx, monkeypatch, completed, interrupted_write):
         for member in reversed(ctx.state.members)
     )
     artifact = SimpleNamespace(
+        path=Path("fixture-release.whl"),
         sha256=ctx.options["artifact"],
         dependency_plans=tuple(
             (
@@ -832,7 +893,8 @@ def test_unsettled_checkpoint_has_typed_repair_guidance_without_effects(local_se
     assert (ctx.store.path.read_bytes(), ctx.journal.path.read_bytes()) == before
 
 
-@pytest.mark.parametrize("decision", ["dry-run", "decline", "settle"])
+@pytest.mark.parametrize("decision", ["dry-run", "decline", "settle", "newer"])
+@pytest.mark.parametrize("local_settlement", [False, "initial"], indirect=True)
 def test_real_apply_command_separates_settlement_and_successor_approval(
     local_settlement, monkeypatch, tmp_path, decision
 ):
@@ -927,7 +989,12 @@ def test_real_apply_command_separates_settlement_and_successor_approval(
         def check_changes(self, _):
             return []
 
-    artifact = SimpleNamespace(sha256=ctx.options["artifact"], dependency_plans=(), capabilities=())
+    artifact = SimpleNamespace(
+        path=Path("fixture-release.whl"),
+        sha256=ctx.options["artifact"],
+        dependency_plans=(),
+        capabilities=(),
+    )
     monkeypatch.setattr(cli, "load_local_config", lambda _: local)
     monkeypatch.setattr(cli, "merge_with_peer_configs", lambda *_: plan)
     monkeypatch.setattr(cli, "VMHALifecycleStore", lambda *_: ctx.store)
@@ -945,6 +1012,13 @@ def test_real_apply_command_separates_settlement_and_successor_approval(
         security_group_apply, "inspect_plan", lambda *_: {"desired_ids": [], "members": {}}
     )
     monkeypatch.setattr(cli, "_vm_ha_desired_approval_state", lambda _: ctx.options["desired"])
+    from nebius_vpngw.deploy import release_policy
+
+    def releases(*_a, **_k):
+        if decision == "newer":
+            raise release_policy.ReleaseBlocked("newer")
+
+    monkeypatch.setattr(release_policy, "require_targets", releases)
     monkeypatch.setattr(cli, "_resolve_vm_ha_agent_artifact", lambda _: artifact)
     monkeypatch.setattr(cli, "_plan_vm_ha_package_dependencies", lambda artifact, **_: artifact)
     monkeypatch.setattr(cli, "_vm_ha_observation_matches_bindings", lambda *_a, **_k: True)
@@ -1009,6 +1083,12 @@ def test_real_apply_command_separates_settlement_and_successor_approval(
     if decision == "dry-run":
         args.append("--dry-run")
     result = CliRunner().invoke(cli.app, args)
+    if decision == "newer":
+        assert result.exit_code == 1
+        assert "upgrade the CLI" in result.output
+        assert not approvals and not actions and not successors
+        assert (ctx.journal.path.read_bytes(), ctx.store.path.read_bytes()) == before
+        return
     assert result.exit_code == 0, failures
     assert (ctx.journal.path.read_bytes(), ctx.store.path.read_bytes()) == before
     if decision == "settle":

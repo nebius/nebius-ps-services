@@ -17,9 +17,10 @@ from packaging.tags import compatible_tags, cpython_tags
 
 from .. import repair_bootstrap, repair_guest
 from .. import repair_state as state
-from . import ordinary_apply, repair_ssh
+from . import ordinary_apply, repair_progress, repair_ssh
 from .recovery import RepairBlocked, RepairWorkerPending
 from .repair_cloud import CloudJournal, Quarantine, RetainedCloud, retained_binding
+from .repair_progress import Phase, Wait
 from .ssh_policy import require_vm_ha_ssh_policy
 from .ssh_push import SSHPush
 from .vm_ha_cloud import InstanceCloudState, instance_cloud_state
@@ -187,8 +188,57 @@ def inspect(
         intent,
         credential_plan,
     )
+    from . import release_policy
+
+    release_policy.require_targets(
+        ssh,
+        {
+            name: target
+            for name, target in targets.items()
+            if instance_cloud_state(snapshot[name][0]) is InstanceCloudState.RUNNING
+        },
+        instances,
+        local,
+        selected,
+        resume=lambda name: release_resume(admission, name),
+    )
     require_package_prerequisites(admission)
     return admission
+
+
+def release_resume(admission: Admission, name: str) -> bool:
+    """Read exact durable worker authority without creating a new coordinator."""
+    previous = state.Journal(admission.root).load()
+    if not previous or previous["phase"] == "complete" or previous["intent"] != admission.intent:
+        return False
+    raw = state.read(admission.root / "runs" / previous["id"] / "context.json")
+    context = json.loads(raw) if raw else None
+    if not context or context.get("intent") != state.digest(admission.intent):
+        return False
+    package = context.get("packages", {}).get(name)
+    if not isinstance(package, dict):
+        return False
+    request = {
+        "action": "repair-install",
+        "operation": previous["id"],
+        "intent": state.digest(admission.intent),
+        "package": package,
+    }
+    instance = next(item for item in admission.instances if item.hostname == name)
+    observed = ordinary_apply.remote(
+        admission.ssh,
+        admission.targets[name],
+        instance,
+        admission.local,
+        {"action": "worker-find", "request": request},
+        bootstrap=repair_bootstrap,
+    )
+    return observed["state"] in {
+        "READY_TO_CONTINUE",
+        "RUNNING_OWNED",
+        "WAIT_EXTERNAL_LOCK",
+        "PREPARED",
+    }
 
 
 def require_package_prerequisites(admission: Admission) -> None:
@@ -298,6 +348,24 @@ class Coordinator:
             "package": self.context["packages"][name],
         }
 
+    def require_release(self, name: str) -> None:
+        from . import release_policy
+
+        observed = release_policy.inspect(
+            self.admission.ssh,
+            self.admission.targets[name],
+            self.instances[name],
+            self.admission.local,
+        )
+        selected = release_policy.wheel_version(self.admission.wheel)
+        release_policy.require(
+            observed,
+            selected,
+            owned_resume=release_policy.classify(observed, selected) == "unknown"
+            and release_resume(self.admission, name),
+        )
+
+    @repair_progress.for_member(Phase.ACCESS)
     def wait_access(self, name: str, *, timeout: float = 300, writer_timeout: float = 1800) -> None:
         started = time.monotonic()
         deadline = started + timeout
@@ -306,10 +374,12 @@ class Coordinator:
         retirement_observed = False
         while True:
             try:
+                self.require_release(name)
                 self.remote(name, "admit", intent=self.admission.intent)
                 return
             except Exception as error:
                 if isinstance(error, ordinary_apply.RemoteGuestWriterBusy):
+                    repair_progress.waiting(Wait.WRITER, deadline=writer_deadline)
                     if time.monotonic() >= writer_deadline:
                         raise RuntimeError(
                             "Repair is waiting for the existing guest deployment writer; retained work remains intact. Rerun apply --repair to continue."
@@ -322,14 +392,17 @@ class Coordinator:
                         retirement_observed = True
                         continue
                     if not waiting_for_writer:
-                        typer.echo("Waiting for the active guest deployment to finish...")
+                        typer.echo("Waiting for the active guest deployment to finish...", err=True)
                         waiting_for_writer = True
                 elif not repair_ssh.retryable_transport(error):
                     raise
                 elif time.monotonic() >= deadline:
                     raise RepairBlocked(
-                        "repair-ssh-unavailable", ownership_established=True,
+                        "repair-ssh-unavailable",
+                        ownership_established=True,
                     ) from None
+                else:
+                    repair_progress.waiting(Wait.SSH, deadline=deadline)
                 time.sleep(2)
 
     def retire_idle_handoffs(self, name: str) -> bool:
@@ -339,13 +412,18 @@ class Coordinator:
 
         if self.phase != "confirmed" or self.admission.plan.vm_ha is None:
             return False
-        root = CommandJournal(self.admission.intent["project"], self.admission.intent["gateway"]).root
+        root = CommandJournal(
+            self.admission.intent["project"], self.admission.intent["gateway"]
+        ).root
         reservations = package_reservation.for_host(root, name)
         if not reservations:
             return False
-        result = self.remote(name, "retire-idle-handoffs", intent=self.admission.intent,
-                             reservations=reservations)
-        if result.get("operation") != self.operation or not isinstance(result.get("retirements"), list):
+        result = self.remote(
+            name, "retire-idle-handoffs", intent=self.admission.intent, reservations=reservations
+        )
+        if result.get("operation") != self.operation or not isinstance(
+            result.get("retirements"), list
+        ):
             raise RuntimeError("Prior handoff retirement returned invalid evidence")
         rows = result["retirements"]
         if len(rows) != len(reservations) or any(
@@ -358,6 +436,7 @@ class Coordinator:
             raise RuntimeError("Prior handoff retirement differs from confirmed scope")
         return any(row["state"] == "RETIRED" for row in rows)
 
+    @repair_progress.for_member(Phase.GUARD)
     def guard(self, name: str) -> None:
         self.remember_guard(name, self.remote(name, "guard"))
 
@@ -374,18 +453,28 @@ class Coordinator:
         }
         self.save()
 
+    @repair_progress.for_member(Phase.STAGE)
     def stage(self, name: str) -> None:
         directory = self.directory / "packages" / name
         state.directory(directory)
         package = self.context["packages"].get(name)
         if package is None:
-            observed = dependency_environment(self.remote(name, "inspect"))
+            with repair_progress.step(Phase.INSPECT, repair_progress.member_index(self, name)):
+                observed = dependency_environment(self.remote(name, "inspect"))
             manifest = ordinary_apply.artifact(
                 self.admission.wheel, self.instances[name].config_yaml
             )
-            dependencies = ordinary_apply.resolve_dependencies(
-                manifest, observed, directory, reinstall=True
-            )
+            from .. import runtime_migration
+            from . import vm_ha_package
+
+            if self.admission.plan.vm_ha is not None:
+                manifest = vm_ha_package.artifact(
+                    self.admission.wheel, self.instances[name].config_yaml
+                )
+            with repair_progress.step(Phase.RESOLVE, repair_progress.member_index(self, name)):
+                dependencies = ordinary_apply.resolve_dependencies(
+                    manifest, observed, directory, reinstall=True
+                )
             product = directory / self.admission.wheel.name
             if not product.exists():
                 shutil.copyfile(self.admission.wheel, product)
@@ -397,6 +486,9 @@ class Coordinator:
                     for path in [*dependencies, product]
                 },
                 "product": product.name,
+                "asset_retirement": runtime_migration.asset_retirement(
+                    manifest, observed["asset_predecessor"]
+                ),
             }
             self.context["packages"][name] = package
             self.save()
@@ -466,8 +558,8 @@ class Coordinator:
                         # stopped, unproven member takes the quarantine path.
         from . import repair_retirement
 
-        repair_retirement.retire(self)
-        self.cloud.stop_all()
+        with repair_progress.step(Phase.STOP):
+            self.cloud.stop_all()
         for name in sorted(self.instances):
             if name in self.context["guards"] and name in self.context["staged"]:
                 continue
@@ -486,12 +578,15 @@ class Coordinator:
             else:
                 self.wait_access(name)
             self.stage(name)
-            self.cloud.stop_all()
+            with repair_progress.step(Phase.STOP):
+                self.cloud.stop_all()
+        repair_retirement.retire(self)
         for name in sorted(self.instances):
             if name not in self.context["guards"]:
                 self.guard(name)
         self.journal.effect("cold-stop", self.admission.bindings)
-        self.cloud.stop_all()
+        with repair_progress.step(Phase.STOP):
+            self.cloud.stop_all()
         self.journal.effect(
             "cold-stop",
             self.admission.bindings,
@@ -532,47 +627,56 @@ class Coordinator:
         if phase == "isolated":
             self.journal.advance("staged")
         for name in sorted(self.instances):
-            self.cloud.start_guarded(name, boot_protection=self.context["guards"][name])
+            with repair_progress.step(Phase.START, repair_progress.member_index(self, name)):
+                self.cloud.start_guarded(name, boot_protection=self.context["guards"][name])
             self.wait_access(name)
             self.remote(name, "isolated")
         for name in sorted(self.instances):
-            request = self.package_request(name)
-            deadline = time.monotonic() + 1800
-            retries = 0
-            result = self.remote(
-                name,
-                "worker-start",
-                request=request,
-                source=repair_bootstrap.worker_source(),
-                retry=True,
-            )
-            while result.get("state") != "PREPARED":
-                if result.get("state") == "BLOCKED":
-                    raise RepairBlocked("repair-worker-blocked")
-                if time.monotonic() >= deadline:
-                    raise RepairWorkerPending()
-                if result.get("state") == "READY_TO_CONTINUE":
-                    retries += 1
-                    if retries > 3:
-                        raise RepairBlocked(
-                            "repair-package-stalled", ownership_established=True,
-                        )
-                    result = self.remote(
-                        name,
-                        "worker-start",
-                        request=request,
-                        source=repair_bootstrap.worker_source(),
-                        retry=True,
-                    )
-                else:
-                    time.sleep(1)
-                    result = self.remote(name, "worker-find", request=request)
-            installed = self.remote(name, "verify-installed", request=request)
-            self.context["installed"][name] = installed
-            self.save()
+            self.install_member(name)
         if self.phase == "staged":
             self.journal.advance("reset")
         self.journal.advance("installed")
+
+    @repair_progress.for_member(Phase.INSTALL)
+    def install_member(self, name: str) -> None:
+        request = self.package_request(name)
+        deadline = time.monotonic() + 1800
+        retries = 0
+        result = self.remote(
+            name,
+            "worker-start",
+            request=request,
+            source=repair_bootstrap.worker_source(),
+            retry=True,
+        )
+        while result.get("state") != "PREPARED":
+            if result.get("state") in Wait.__members__:
+                repair_progress.waiting(Wait[result["state"]], deadline=deadline)
+            if result.get("state") == "BLOCKED":
+                raise RepairBlocked("repair-worker-blocked")
+            if time.monotonic() >= deadline:
+                raise RepairWorkerPending()
+            if result.get("state") == "READY_TO_CONTINUE":
+                retries += 1
+                if retries > 3:
+                    raise RepairBlocked(
+                        "repair-package-stalled",
+                        ownership_established=True,
+                    )
+                result = self.remote(
+                    name,
+                    "worker-start",
+                    request=request,
+                    source=repair_bootstrap.worker_source(),
+                    retry=True,
+                )
+            else:
+                time.sleep(1)
+                result = self.remote(name, "worker-find", request=request)
+        with repair_progress.step(Phase.VERIFY, repair_progress.member_index(self, name)):
+            installed = self.remote(name, "verify-installed", request=request)
+            self.context["installed"][name] = installed
+            self.save()
 
     def finish(self) -> None:
         for phase in ("enrolled", "prepared", "originating", "verified"):
@@ -586,6 +690,7 @@ class Coordinator:
         self.journal.advance("complete")
 
 
+@repair_progress.reporting()
 def execute(admission: Admission, *, report: Any) -> None:
     """Enter only under the canonical gateway writer lock."""
     from . import pair_phases
@@ -599,50 +704,52 @@ def execute(admission: Admission, *, report: Any) -> None:
         report.cancelled = True
         typer.echo("Repair cancelled; no gateway state was changed.")
         return
-    journal = state.Journal(admission.root)
-    previous = journal.load()
+    with repair_progress.step(Phase.ADMIT):
+        journal = state.Journal(admission.root)
+        previous = journal.load()
     settled = False
     if previous and previous["phase"] != "complete" and previous["intent"] != admission.intent:
-        if previous["intent"]["targets"] != admission.intent["targets"]:
-            raise RuntimeError("Repair successor cannot change retained VM identities")
-        predecessor = Coordinator(
-            replace(admission, intent=previous["intent"]), journal, resumed=True
-        )
-        # Retire all reachable writers before booting any stopped peer. An old
-        # HA controller must not race the successor's quarantine or cold stop.
-        settled_members = set()
-        for name in sorted(predecessor.instances):
-            if instance_cloud_state(predecessor.cloud.require(name)) is InstanceCloudState.RUNNING:
+        with repair_progress.step(Phase.SETTLE):
+            if previous["intent"]["targets"] != admission.intent["targets"]:
+                raise RuntimeError("Repair successor cannot change retained VM identities")
+            predecessor = Coordinator(
+                replace(admission, intent=previous["intent"]), journal, resumed=True
+            )
+            # Retire all reachable writers before booting any stopped peer. An old
+            # HA controller must not race the successor's quarantine or cold stop.
+            settled_members = set()
+            for name in sorted(predecessor.instances):
+                if instance_cloud_state(predecessor.cloud.require(name)) is InstanceCloudState.RUNNING:
+                    predecessor.wait_access(name)
+                    predecessor.remember_guard(name, predecessor.remote(name, "settle"))
+                    quarantine = Quarantine(predecessor.cloud, name)
+                    if quarantine.path.exists():
+                        quarantine.restore(boot_protection=predecessor.context["guards"][name])
+                        quarantine.cleanup()
+                    settled_members.add(name)
+            predecessor.cloud.stop_all()
+            for name in sorted(predecessor.instances):
+                if name in settled_members:
+                    continue
+                if instance_cloud_state(predecessor.cloud.require(name)) is InstanceCloudState.STOPPED:
+                    proof = predecessor.context["guards"].get(name)
+                    if proof is None:
+                        quarantine = Quarantine(predecessor.cloud, name)
+                        quarantine.apply()
+                        quarantine.start()
+                    else:
+                        predecessor.cloud.start_guarded(name, boot_protection=proof)
                 predecessor.wait_access(name)
                 predecessor.remember_guard(name, predecessor.remote(name, "settle"))
                 quarantine = Quarantine(predecessor.cloud, name)
                 if quarantine.path.exists():
                     quarantine.restore(boot_protection=predecessor.context["guards"][name])
                     quarantine.cleanup()
-                settled_members.add(name)
-        predecessor.cloud.stop_all()
-        for name in sorted(predecessor.instances):
-            if name in settled_members:
-                continue
-            if instance_cloud_state(predecessor.cloud.require(name)) is InstanceCloudState.STOPPED:
-                proof = predecessor.context["guards"].get(name)
-                if proof is None:
-                    quarantine = Quarantine(predecessor.cloud, name)
-                    quarantine.apply()
-                    quarantine.start()
-                else:
-                    predecessor.cloud.start_guarded(name, boot_protection=proof)
-            predecessor.wait_access(name)
-            predecessor.remember_guard(name, predecessor.remote(name, "settle"))
-            quarantine = Quarantine(predecessor.cloud, name)
-            if quarantine.path.exists():
-                quarantine.restore(boot_protection=predecessor.context["guards"][name])
-                quarantine.cleanup()
-        predecessor.cloud.stop_all()
-        journal.settle_pending(
-            {"stopped": sorted(admission.bindings), "writer_settlement": previous["id"]}
-        )
-        settled = True
+            predecessor.cloud.stop_all()
+            journal.settle_pending(
+                {"stopped": sorted(admission.bindings), "writer_settlement": previous["id"]}
+            )
+            settled = True
     value = journal.begin(admission.intent, predecessor_settled=settled)
     resumed = previous is not None and previous["id"] == value["id"]
     owner = Coordinator(admission, journal, resumed=resumed)
@@ -652,17 +759,20 @@ def execute(admission: Admission, *, report: Any) -> None:
     try:
         phase = owner.phase
         if phase == "confirmed":
-            owner.prepare()
+            with repair_progress.step(Phase.PREPARE):
+                owner.prepare()
         if state.PHASES.index(owner.phase) < state.PHASES.index("installed"):
             owner.install()
         from . import repair_activation
 
         if state.PHASES.index(owner.phase) < state.PHASES.index("verified"):
-            if admission.plan.vm_ha is not None:
-                repair_activation.activate_ha(owner, report)
-            else:
-                repair_activation.activate_ordinary(owner)
-        owner.finish()
+            with repair_progress.step(Phase.ACTIVATE):
+                if admission.plan.vm_ha is not None:
+                    repair_activation.activate_ha(owner, report)
+                else:
+                    repair_activation.activate_ordinary(owner)
+        with repair_progress.step(Phase.FINISH):
+            owner.finish()
     except BaseException:
         # The shared command boundary publishes the blocker and exact resume
         # command once, before structured or pair-child results are serialized.

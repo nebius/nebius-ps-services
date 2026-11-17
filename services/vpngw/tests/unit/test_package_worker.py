@@ -2,7 +2,9 @@ import json
 import os
 import tempfile
 import threading
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -58,6 +60,92 @@ def test_receipt_survives_observer_loss_and_duplicate_submission(transport):
     assert value.pending.empty()
     _, saved = worker.record(value.key)
     assert saved["requests"][worker.digest(request)]["state"] == "complete"
+
+
+@pytest.mark.parametrize("message,expected", [
+    ("HA package predecessor changed", "package-predecessor-changed"),
+    ("secret-token private.example", "package-worker-failed"),
+])
+def test_failed_worker_retains_only_closed_diagnostic(transport, message, expected):
+    value, request = transport
+    assert value.receive() == request
+    value.close(True, failure=worker.failure_code(RuntimeError(message)))
+    _, saved = worker.record(value.key)
+    entry = saved["requests"][worker.digest(request)]
+    assert entry["state"] == "failed"
+    assert worker.settled_result(saved, entry) == {"generation": 1, "failure": expected}
+    assert message not in value.path.read_text()
+
+
+def test_failed_receipt_cannot_project_arbitrary_remote_text():
+    with pytest.raises(RuntimeError, match="failure evidence is invalid"):
+        worker.settled_result({"generation": 1}, {
+            "state": "failed", "result": {"failure": "secret-token private.example"},
+        })
+
+
+def test_final_unit_observation_uses_remaining_budget_and_rejects_late_reply(transport, monkeypatch):
+    value, _ = transport
+    saved = worker.record(value.key)[1]
+    times = iter([0.0, 2.0])
+    monkeypatch.setattr(worker.time, "monotonic", lambda: next(times))
+    observed = []
+
+    def run(_args, **kwargs):
+        observed.append(kwargs["timeout"])
+        return SimpleNamespace(stdout="", returncode=0)
+
+    monkeypatch.setattr(worker.subprocess, "run", run)
+    with pytest.raises(TimeoutError, match="deadline"):
+        worker.unit_running(saved, deadline=1.0)
+    assert observed == [1.0]
+
+
+def test_progress_tracks_native_and_python_work_without_transport_counters(tmp_path, monkeypatch):
+    from nebius_vpngw import python_package_recovery as python
+    from nebius_vpngw import runtime_migration
+
+    manifest = {"ordinary_assets": {}, "dependency_wheels": {},
+                "wheel_name": "product.whl", "wheel_sha256": "a" * 64}
+    runtime = {"manifest": manifest, "phase": "packages", "package_step": "configure",
+               "plan": {"before": {"package": ["1", "installed"]},
+                        "desired": {"package": ["1", "installed"]}, "remove": []}}
+    native = {"package": ["1", "unpacked"], "unrelated": ["1", "installed"]}
+    migration = SimpleNamespace(state=lambda: runtime, ROOT=tmp_path, digest=worker.digest,
+                                packages=lambda **_: native,
+                                verify_package_progress=runtime_migration.verify_package_progress)
+    checkpoint = {"state": "prepared", "before": {"/owned": {"sha256": "b" * 64}},
+                  "target": {"/owned": {"sha256": "c" * 64}}}
+    installed = {"sha256": "b" * 64}
+    monkeypatch.setattr(python, "load", lambda *_: checkpoint)
+    monkeypatch.setattr(python, "safe", lambda path, _: path)
+    monkeypatch.setattr(python, "content", lambda _: installed)
+    request = {"package": {"desired": manifest}}
+
+    def progress():
+        return worker.package_progress(request, migration, deadline=time.monotonic() + 5)
+
+    initial = progress()
+    native["unrelated"] = ["2", "installed"]
+    assert progress() == initial
+    native["package"] = ["1", "installed"]
+    native_complete = progress()
+    assert native_complete != initial
+    checkpoint["state"] = "installing"
+    python_started = progress()
+    assert python_started != native_complete
+    installed["sha256"] = "c" * 64
+    assert progress() != python_started
+    installed["sha256"] = "d" * 64
+    with pytest.raises(RuntimeError, match="foreign file"):
+        progress()
+    installed["sha256"] = "c" * 64
+    native["package"] = ["2", "installed"]
+    with pytest.raises(RuntimeError, match="outside the approved"):
+        progress()
+    native["package"] = ["1", "installed"]
+    with pytest.raises(TimeoutError, match="deadline"):
+        worker.package_progress(request, migration, deadline=0)
 
 
 @pytest.mark.parametrize("running,terminal", [(True, "complete"), (False, None), (False, "failed")])

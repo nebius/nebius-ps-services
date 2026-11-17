@@ -7,6 +7,8 @@ from pathlib import Path
 
 # Exact canonical readers, loaded in dependency order into a fresh guest process.
 SOURCES = (
+    ("nebius_vpngw.ha_package_contract", "ha_package_contract.py"),
+    ("_vpngw_release_identity", "release_identity.py"),
     ("_vpngw_dependency_scope", "dependency_scope.py"),
     ("_vpngw_ingress", "ingress_policy.py"),
     ("_vpngw_ordinary_operations", "ordinary_operations.py"),

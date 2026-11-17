@@ -173,6 +173,8 @@ jobs:
         run: python3 -B skills/merge-pr/scripts/test_publication_helpers.py
       - name: Install workflow parser
         run: python3 -m pip install PyYAML==6.0.3
+      - name: Test CI partition coverage and scheduling
+        run: python3 -B .github/scripts/test_ci_parallelism.py
       - name: Test publishing and workflow contracts
         run: |
           python3 -B -m unittest discover -s skills/publish-release/scripts -p 'test_release_*.py'

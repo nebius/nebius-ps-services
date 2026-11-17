@@ -8,6 +8,7 @@ SHARED = (
     "test_tunnel_host_packets.py",
     "test_ingress_packets.py",
     "test_runtime_modernization.py",
+    "test_release_asset_retirement_native.py",
 )
 ORDINARY = ("test_ordinary_systemd_jobs.py", "test_ordinary_transport.py")
 HA = (

@@ -64,6 +64,17 @@ Keep detailed workflow instructions in this skill instead of expanding the
 global file.
 
 ```markdown
+## Skill and Hook Repair
+
+- When you encounter a confirmed defect in a repository-owned skill, hook, or
+  supporting helper during an authorized task, follow
+  `global-context-management`'s source-first repair procedure: fix canonical
+  source, validate, install through the repository's existing script, verify
+  the repaired path, and continue the original task without requesting repeated
+  approval. Apply this to small tasks too. Preserve active mode, explicit
+  read-only scope, invocation restrictions, permissions, workflow ownership,
+  checkpoints, repair budgets, and deadlines.
+
 ## Host Memory Safety
 
 - Keep 2 GiB of available host memory as the hard operational floor. Check the

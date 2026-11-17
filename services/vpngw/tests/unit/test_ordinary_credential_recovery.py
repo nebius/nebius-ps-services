@@ -47,7 +47,7 @@ def test_completed_first_enrollment_recovers_same_key_without_expanding_iam(reco
 
 
 @pytest.fixture
-def recovery(tmp_path, monkeypatch):
+def recovery(tmp_path, monkeypatch, cached_managed_key_validation):
     secret = tmp_path / "guest-source.json"
     _write_credential(secret)
     payload = secret.read_bytes()

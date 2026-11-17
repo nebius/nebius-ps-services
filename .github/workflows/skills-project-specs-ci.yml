@@ -7,6 +7,8 @@ on:
     paths:
       - "skills/**" # Include resource-only changes in installed payload checks.
       - ".github/workflows/skills-project-specs-ci.yml"
+      - ".github/scripts/run_unittest_shard.py"
+      - ".github/scripts/test_ci_parallelism.py"
       - ".agents/plugins/marketplace.json"
       - ".claude-plugin/marketplace.json"
   push:
@@ -14,6 +16,8 @@ on:
     paths:
       - "skills/**" # Include resource-only changes in installed payload checks.
       - ".github/workflows/skills-project-specs-ci.yml"
+      - ".github/scripts/run_unittest_shard.py"
+      - ".github/scripts/test_ci_parallelism.py"
       - ".agents/plugins/marketplace.json"
       - ".claude-plugin/marketplace.json"
   workflow_dispatch:
@@ -386,6 +390,55 @@ jobs:
           python -B -m unittest discover -s troubleshoot/assets/hooks/tests -p 'test_*.py'
           python -B -m unittest discover -s troubleshoot/evals/diagnostic -p 'test_*.py'
 
+  workflow-adapters:
+    needs: [merge-inputs]
+    name: Skills workflow adapters
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: skills
+
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check out the admitted PR candidate
+        if: needs.merge-inputs.outputs.candidate == 'true'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py checkout --workflow skills-project-specs-ci.yml
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow skills-project-specs-ci.yml
+      - name: Verify exact checkout identity
+        shell: bash
+        working-directory: .
+        env:
+          EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install validation dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install ruff==0.14.11 pytest==8.4.2 -r align-skill/scripts/requirements.txt
+
       - name: Run workflow adapter tests
         run: |
           set -euo pipefail
@@ -400,7 +453,6 @@ jobs:
           python -B sdlc-start/scripts/test_sdlc_start_contract.py
           python -B -m unittest discover \
             -s sdlc-start/assets/hooks/tests -p 'test_*.py'
-          python -B -m unittest discover -s worktree/scripts -p 'test_workflow_*.py'
           python -B -m unittest discover -s implement-test/scripts -p 'test_*.py'
           python -B project-agent-instructions/scripts/test_project_agent_instructions.py
           python -B project-agent-instructions/scripts/test_project_specs_retention.py
@@ -409,6 +461,118 @@ jobs:
           python -B sdlc-classify-failure/scripts/test_repair_control.py
           python -B agent-nebius-auth-setup/scripts/test_agent_nebius_auth_setup.py
           python -B agent-nebius-auth-setup/scripts/test_agent_nebius_auth_contract.py
+
+  worktree-tests:
+    needs: [merge-inputs]
+    name: Worktree contracts (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [0, 1, 2, 3]
+    defaults:
+      run:
+        working-directory: skills
+
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check out the admitted PR candidate
+        if: needs.merge-inputs.outputs.candidate == 'true'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py checkout --workflow skills-project-specs-ci.yml
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow skills-project-specs-ci.yml
+      - name: Verify exact checkout identity
+        shell: bash
+        working-directory: .
+        env:
+          EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install validation dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install ruff==0.14.11 pytest==8.4.2 -r align-skill/scripts/requirements.txt
+
+      - name: Run complete Worktree test partition
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          python -B ../.github/scripts/run_unittest_shard.py \
+            --start-directory worktree/scripts --pattern 'test_workflow_*.py' \
+            --shard-index "$SHARD_INDEX" --shard-count 4
+
+  native-harness:
+    needs: [merge-inputs]
+    name: Skills native workflow harness
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: skills
+
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check out the admitted PR candidate
+        if: needs.merge-inputs.outputs.candidate == 'true'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B skills/merge-pr/scripts/candidate_ci.py checkout --workflow skills-project-specs-ci.yml
+      - name: Check out the authoritative merged result
+        if: needs.merge-inputs.outputs.post_merge == 'true'
+        shell: bash
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
+        run: python3 -B skills/merge-pr/scripts/merge_completion.py ci-checkout --workflow skills-project-specs-ci.yml
+      - name: Verify exact checkout identity
+        shell: bash
+        working-directory: .
+        env:
+          EXPECTED_SHA: ${{ needs.merge-inputs.outputs.checkout_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install validation dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install ruff==0.14.11 pytest==8.4.2 -r align-skill/scripts/requirements.txt
 
       - name: Run native workflow harness regressions
         env:
@@ -483,7 +647,7 @@ jobs:
 
   result-evidence:
     name: Post-merge result evidence
-    needs: [merge-inputs, python-testing-contracts, runtime-security, verify, npx-installation]
+    needs: [merge-inputs, python-testing-contracts, runtime-security, verify, workflow-adapters, worktree-tests, native-harness, npx-installation]
     if: always() && needs.merge-inputs.outputs.post_merge == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -503,7 +667,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MERGE_OPERATOR_IDS: ${{ vars.MERGE_OPERATOR_IDS }}
           CI_NEEDS: ${{ toJSON(needs) }}
-          CI_EXPECTED_JOBS: '["python-testing-contracts", "runtime-security", "verify", "npx-installation"]'
+          CI_EXPECTED_JOBS: '["python-testing-contracts", "runtime-security", "verify", "workflow-adapters", "worktree-tests", "native-harness", "npx-installation"]'
         run: python3 skills/merge-pr/scripts/merge_completion.py ci-evidence --workflow skills-project-specs-ci.yml --output "$RUNNER_TEMP/result.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -514,7 +678,7 @@ jobs:
 
   candidate-evidence:
     name: Exact candidate CI evidence
-    needs: [merge-inputs, python-testing-contracts, runtime-security, verify, npx-installation]
+    needs: [merge-inputs, python-testing-contracts, runtime-security, verify, workflow-adapters, worktree-tests, native-harness, npx-installation]
     if: always() && needs.merge-inputs.outputs.candidate == 'true'
     runs-on: ubuntu-latest
     permissions:

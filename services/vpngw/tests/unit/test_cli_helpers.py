@@ -172,6 +172,9 @@ from nebius_vpngw.vm_ha_credentials import VMHACredentialIdentityError
 
 
 class _ContextManagedFake:
+    _ordinary_ssh_preflight_snapshot = None
+    _vm_ha_ssh_preflight_snapshot = None
+
     def inspect_ordinary_targets(self, names):
         return {
             name: ("compute-" + name, "203.0.113." + str(10 + int(name.rsplit("-", 1)[-1])))
@@ -302,6 +305,10 @@ def _isolate_vm_ha_apply_identity_preflight(
 ) -> None:
     """Keep unrelated CLI orchestration tests below the online identity boundary."""
 
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.release_policy.require_targets", lambda *_a, **_k: None
+    )
+
     # These orchestration tests already replace all cloud/guest transports.
     # Desired attachment effects and real SDK requests have their own boundary tests.
     from nebius_vpngw.deploy.apply_command import CommandJournal
@@ -372,7 +379,9 @@ def _isolate_vm_ha_apply_identity_preflight(
         return real_package_recovery(recovery, effect=effect, members=members, **kwargs)
 
     monkeypatch.setattr(package_recovery, "prepare", selected_package_owner)
-    artifact = SimpleNamespace(sha256="f" * 64, dependency_plans=(), capabilities=())
+    artifact = SimpleNamespace(
+        path=Path("fixture-release.whl"), sha256="f" * 64, dependency_plans=(), capabilities=()
+    )
     monkeypatch.setattr("nebius_vpngw.cli._unchanged_vm_ha_apply", lambda *args, **kwargs: False)
     monkeypatch.setattr(
         "nebius_vpngw.cli._plan_vm_ha_package_dependencies", lambda artifact, **kwargs: artifact
@@ -951,6 +960,9 @@ def ordinary_deployment_boundary(monkeypatch, tmp_path):
     The real plan/approval/receipt path is exercised in test_ordinary_apply.py.
     These tests retain their original host-push spies after successful readiness.
     """
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.release_policy.require_targets", lambda *_a, **_k: None
+    )
     from nebius_vpngw import cli
     from nebius_vpngw.deploy import ordinary_apply
 
@@ -4997,6 +5009,9 @@ def test_vm_ha_post_compute_refresh_rebinds_exact_current_members() -> None:
         (None, None, (("gcp", "static"),), False),
         (None, "peer-channel-endpoint", (("gcp", "static"),), False),
         (None, "peer-channel-tls", (("gcp", "static"),), False),
+        (None, "peer-evidence-unavailable", (("gcp", "static"),), False),
+        (None, "peer-evidence-late", (("gcp", "static"),), False),
+        (None, "peer-evidence-unavailable-json", (("gcp", "static"),), False),
         *[
             (None, "pair-" + boundary, (("generic", mode),), False)
             for boundary in (
@@ -5622,9 +5637,11 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             raise RuntimeError("injected post-write verification failure")
 
     waited_phases = []
+    waited_budgets = []
 
     def wait_with_controller_shaped_status(*, predicate, inst_cfg, **_kwargs):
         waited_phases.append(_kwargs.get("phase"))
+        waited_budgets.append(_kwargs.get("timeout_seconds"))
         if (
             final_transition_fault == "pair-forwarding"
             and invocation[0] == 1
@@ -5664,6 +5681,24 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
         }
         role = inst_cfg.vm_ha_node.role.value
         if str(_kwargs.get("phase", "")).startswith("verify-peer-channel-"):
+            if (final_transition_fault or "").startswith("peer-evidence-"):
+                from nebius_vpngw import cli as owner
+                from nebius_vpngw.deploy.apply_diagnostics import Failure, VerificationFailure
+
+                _kwargs["observation_callback"](
+                    owner._VMHAWaitObservation(
+                        "peer-heartbeat-tls-failure", owner.time.monotonic(), 2.0, 28.0
+                    )
+                )
+                latest = (
+                    "status-observation-unavailable"
+                    if final_transition_fault.startswith("peer-evidence-unavailable")
+                    else "status-arrived-after-deadline"
+                )
+                raise VerificationFailure(
+                    Failure(_kwargs["phase"], "peer-heartbeat-tls-failure"),
+                    Failure(_kwargs["phase"], latest),
+                )
             if (final_transition_fault or "").startswith("peer-channel-"):
                 from nebius_vpngw.deploy.apply_diagnostics import Failure, VerificationFailure
 
@@ -6049,6 +6084,8 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
         ),
     ):
         apply_args = ["apply", "--local-config-file", str(config_path)]
+        if final_transition_fault == "peer-evidence-unavailable-json":
+            apply_args.extend(["--output-format", "json"])
         if final_transition_fault == "prepare":
             apply_args.append("--prepare-vm-ha-peer-rotation")
         fresh_execution = None
@@ -6071,6 +6108,23 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
             )
             final_transition_fault = None
         first_result = CliRunner().invoke(app, apply_args)
+        if (final_transition_fault or "").startswith("peer-evidence-"):
+            assert first_result.exit_code == 0, first_result.output
+            verification = [
+                (phase, budget)
+                for phase, budget in zip(waited_phases, waited_budgets, strict=True)
+                if str(phase).startswith(("verify-peer-channel-", "verify-fenced-"))
+            ]
+            assert [budget for _, budget in verification] == [30.0, 30.0, 300.0, 300.0]
+            assert all(phase.startswith("verify-peer-channel-") for phase, _ in verification[:2])
+            assert all(phase.startswith("verify-fenced-") for phase, _ in verification[2:])
+            assert "peer check was unknown" in first_result.output
+            assert "previous observation: peer-heartbeat-tls-failure" in first_result.output
+            if final_transition_fault == "peer-evidence-unavailable-json":
+                assert isinstance(json.loads(first_result.stdout), dict)
+                assert "peer check was unknown" not in first_result.stdout
+                assert "peer check was unknown" in first_result.stderr
+            return
         if (final_transition_fault or "").startswith("peer-channel-"):
             assert first_result.exit_code != 0, first_result.stdout
             assert not any(str(phase).startswith("verify-fenced-") for phase in waited_phases)
@@ -6228,7 +6282,10 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 patch(
                     "nebius_vpngw.cli._resolve_vm_ha_agent_artifact",
                     return_value=SimpleNamespace(
-                        sha256=proposed["artifact"], dependency_plans=(), capabilities=()
+                        path=Path("fixture-release.whl"),
+                        sha256=proposed["artifact"],
+                        dependency_plans=(),
+                        capabilities=(),
                     ),
                 ),
                 patch("nebius_vpngw.cli._plan_vm_ha_corrective", return_value=corrective),
@@ -6462,7 +6519,10 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                         patch(
                             "nebius_vpngw.cli._resolve_vm_ha_agent_artifact",
                             return_value=SimpleNamespace(
-                                sha256="c" * 64, dependency_plans=(), capabilities=()
+                                path=Path("fixture-release.whl"),
+                                sha256="c" * 64,
+                                dependency_plans=(),
+                                capabilities=(),
                             ),
                         ),
                         patch("nebius_vpngw.cli._plan_vm_ha_corrective", return_value=None),
@@ -6629,7 +6689,12 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 )
                 for instance in (passive, active)
             )
-            artifact = SimpleNamespace(sha256="f" * 64, dependency_plans=packages, capabilities=())
+            artifact = SimpleNamespace(
+                path=Path("fixture-release.whl"),
+                sha256="f" * 64,
+                dependency_plans=packages,
+                capabilities=(),
+            )
             checked_roles = []
 
             def verify_prepared(_ssh, package, _local, **kwargs):
@@ -6810,7 +6875,10 @@ def test_vm_ha_apply_delivers_nebius_credentials_passive_first_and_never_activat
                 with patch(
                     "nebius_vpngw.cli._resolve_vm_ha_agent_artifact",
                     return_value=SimpleNamespace(
-                        sha256="0" * 64, dependency_plans=(), capabilities=()
+                        path=Path("fixture-release.whl"),
+                        sha256="0" * 64,
+                        dependency_plans=(),
+                        capabilities=(),
                     ),
                 ):
                     rejected = CliRunner().invoke(app, apply_args)
@@ -7451,7 +7519,11 @@ def test_missing_standby_apply_resumes_pending_inhibition_release_crash_window(
             approval="2" * 64,
             runtime_scope=_canonical_digest(
                 _vm_ha_command_approval_scope(
-                    SimpleNamespace(sha256="f" * 64, dependency_plans=()), local_cfg, intent=intent
+                    SimpleNamespace(
+                        path=Path("fixture-release.whl"), sha256="f" * 64, dependency_plans=()
+                    ),
+                    local_cfg,
+                    intent=intent,
                 )
             ),
             report={
@@ -7724,7 +7796,10 @@ def test_missing_standby_apply_resumes_pending_inhibition_release_crash_window(
                 patch(
                     "nebius_vpngw.cli._resolve_vm_ha_agent_artifact",
                     return_value=SimpleNamespace(
-                        sha256="0" * 64, dependency_plans=(), capabilities=()
+                        path=Path("fixture-release.whl"),
+                        sha256="0" * 64,
+                        dependency_plans=(),
+                        capabilities=(),
                     ),
                 ),
                 pytest.raises(PreparationBlocked, match="artifact-changed"),
@@ -17252,7 +17327,7 @@ def test_pending_handoff_checks_peer_but_waits_for_credentials_before_repair(
         cli,
         "_plan_vm_ha_package_dependencies",
         lambda artifact, **kwargs: SimpleNamespace(
-            sha256=artifact.sha256, dependency_plans=packages
+            path=Path("fixture-release.whl"), sha256=artifact.sha256, dependency_plans=packages
         ),
     )
     monkeypatch.setattr(cli, "_confirm_vm_ha_apply_plan", lambda *args, **kwargs: True)
