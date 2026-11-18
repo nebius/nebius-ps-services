@@ -105,6 +105,8 @@ passive policy refresh before active forwarding. Namespace service dispatch, LAN
 setup, physical-underlay readiness, deployment admission, host firewall and cloud
 ownership are fixture boundaries. The static namespaces have no DHCP/networkd
 deployment; `test_underlay_native.py` independently exercises that prerequisite.
+Before declaring the active checkpoint, both BGP drivers run the real product
+table-220 cleanup for the rule created by native strongSwan startup.
 VPN routing policy, forwarding and operation results are not
 substituted. The composed lane separately covers failed and unknown selected
 paths, expired requests, failback, checkpointed activation retries, crashes before

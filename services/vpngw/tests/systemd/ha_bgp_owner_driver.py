@@ -24,7 +24,7 @@ from tests.unit.test_vm_ha_runtime_ports import (
     _runtime_config,
 )
 
-from nebius_vpngw.agent.routing_guard import require_vm_ha_current_boot_ready
+from nebius_vpngw.agent.routing_guard import _remove_table_220, require_vm_ha_current_boot_ready
 from nebius_vpngw.agent.vm_ha.models import DigestSet, PeerHeartbeat
 from nebius_vpngw.agent.vm_ha.runtime import (
     CommandResult,
@@ -130,6 +130,9 @@ ports = build_runtime_ports(
 )
 # The declared active checkpoint includes the product's persistent protection,
 # established from real BGP route provenance before the path-loss trial starts.
+# Charon startup creates a table-220 rule even with install_routes=no. Apply
+# the real product cleanup before declaring the healthy active checkpoint.
+_remove_table_220()
 ports.data_plane.destination_protection.admit(frozenset({"10.200.2.1/32"}))
 cloud = CloudObservation(
     authoritative=True,

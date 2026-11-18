@@ -13149,7 +13149,13 @@ failed or incomplete trials retain their original disposition.
   underlay as prerequisite inputs, retaining real SA/XFRM, FRR and forwarding
   assertions. Separate native underlay cases retain real DHCP/networkd coverage.
   The fixture correction passed 52 composed/qualification-selection checks in a
-  restricted local container; a complete fresh native CI replay is still required.
+  restricted local container. The first native replay again passed 81 cases and
+  failed baseline routing hygiene. An isolated native strongSwan reproduction
+  proved that startup creates a table-220 rule even with route installation
+  disabled, and that the real product cleanup restores hygiene. Both BGP drivers
+  now perform that cleanup before declaring their active fixture checkpoint;
+  readiness and transition assertions remain real. Complete native replay is
+  required to verify the corrected fixture beyond this focused reproduction.
 - The operator explicitly accepted the v0.6.8 live-validation waiver; unresolved
   loss and incomplete ordinary/static, failover/failback, reboot and sustained
   traffic qualification remain limitations. Delivery remains implemented.

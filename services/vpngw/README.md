@@ -4046,7 +4046,8 @@ underlay service and sanitized routing-admission evidence.
 
 Native BGP namespace tests supply their static physical links and deployment
 admission as fixture inputs. They exercise real IPsec/FRR restart and owner
-behavior; separate DHCP/networkd fixtures qualify persistent underlay routing.
+behavior, including real routing cleanup before the declared active checkpoint;
+separate DHCP/networkd fixtures qualify persistent underlay routing.
 
 ### Nebius Managed Kubernetes
 

@@ -13,6 +13,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [nebius-vpngw-v0.6.8] - 2026-11-18
 
+- Establish native BGP fixtures with the real startup table-220 cleanup before
+  asserting active readiness; retain the product's routing-hygiene checks.
+
 - Declare deployment admission and physical-underlay prerequisites in the native
   BGP namespace fixtures; retain separate real DHCP/networkd qualification.
 

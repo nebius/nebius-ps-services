@@ -28,6 +28,7 @@ from tests.unit.test_vm_ha_runtime_ports import (
 )
 
 from nebius_vpngw.agent import frr_renderer, main, strongswan_renderer
+from nebius_vpngw.agent.routing_guard import _remove_table_220
 from nebius_vpngw.agent.vm_ha.models import DigestSet
 from nebius_vpngw.agent.vm_ha.runtime import (
     CommandResult,
@@ -77,7 +78,7 @@ def run():
     # prerequisite before the trial, as with the fixture cloud owner below.
     main.underlay.verify = lambda _cfg: "namespace-underlay-fixture"
     main.underlay.preflight_reconfigure = lambda _cfg: None
-    main.underlay.reconcile_locked = lambda _cfg, *, reconfigure=False: None
+    main.underlay.reconcile_locked = lambda _cfg, *, reconfigure=False: 0
     # Kernel forwarding, VPN routing, XFRM and FRR transitions stay real.
     main.update_firewall_from_config = lambda *a, **kw: None
     original_run = frr_renderer.run
@@ -237,6 +238,10 @@ def run():
     subprocess.run(
         ["swanctl", "--load-all", "--noprompt"], check=True, capture_output=True, timeout=5
     )
+    # Charon creates a table-220 rule even with install_routes=no. Real boot
+    # removes it before serving; establish that same healthy fixture checkpoint
+    # with the product cleanup before the restart trial begins.
+    _remove_table_220()
     # Establish the same durable destination protection as a real active owner
     # before restart withdraws its learned BGP routes. Use actual kernel route
     # provenance; a synthetic cloud route alone cannot authorize forwarding.
