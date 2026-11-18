@@ -4044,6 +4044,10 @@ The product owns only its networkd drop-in and exact recorded kernel routes;
 periodic maintenance does not reload networking. Support bundles include the
 underlay service and sanitized routing-admission evidence.
 
+Native BGP namespace tests supply their static physical links and deployment
+admission as fixture inputs. They exercise real IPsec/FRR restart and owner
+behavior; separate DHCP/networkd fixtures qualify persistent underlay routing.
+
 ### Nebius Managed Kubernetes
 
 For a typical Nebius Managed Kubernetes cluster, treat the stable worker-subnet CIDR as `gateway.local_prefixes`, not the current per-node Pod `/24`s.

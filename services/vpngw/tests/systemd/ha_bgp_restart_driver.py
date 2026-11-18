@@ -1,7 +1,9 @@
-"""Native fenced restart replay; provider ownership and unit dispatch are fixtures.
+"""Native fenced restart replay with declared provider/deployment fixture inputs.
 
 SA/XFRM evidence, FRR rendering/imports/exports, Agent passive materialization,
-controller checkpoints, readiness and forwarding effects use production code.
+controller checkpoints, BGP readiness and forwarding effects use production code.
+Cloud ownership, deployment admission, physical underlay and unit dispatch are
+fixtures; DHCP/networkd persistence is covered by test_underlay_native.py.
 Executed only in the disposable native test namespace.
 """
 
@@ -70,8 +72,13 @@ def run():
     main.CONFIG_PATH = config_path
     original_reader = main._read_vm_ha_config
     main._read_vm_ha_config = lambda path=None: original_reader(path or config_path)
-    # Namespace LAN setup and host firewall are fixture boundaries. The relevant
-    # kernel forwarding, routing, XFRM and FRR transitions are never substituted.
+    # Namespace LAN setup and host firewall are fixture boundaries. These static
+    # namespaces have no DHCP/networkd deployment. Supply its already-admitted
+    # prerequisite before the trial, as with the fixture cloud owner below.
+    main.underlay.verify = lambda _cfg: "namespace-underlay-fixture"
+    main.underlay.preflight_reconfigure = lambda _cfg: None
+    main.underlay.reconcile_locked = lambda _cfg, *, reconfigure=False: None
+    # Kernel forwarding, VPN routing, XFRM and FRR transitions stay real.
     main.update_firewall_from_config = lambda *a, **kw: None
     original_run = frr_renderer.run
 
@@ -146,6 +153,7 @@ def run():
         sdk_factory=lambda **kw: FakeSDK(),
         credential_bundle_factory=lambda *a: FakeCredentialBundle(),
         route_backend_factory=lambda sdk: Backend(),
+        route_admission=lambda: "a" * 64,
         runner=runner,
         active_preparer=lambda: main._prepare_vm_ha_active_data_plane(config_path),
         origination_verifier=lambda: main._vm_ha_origination_policy_ready(config_path),
@@ -248,7 +256,8 @@ def run():
     subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], check=True, capture_output=True)
     selector = TunnelController(cfg, root / "tunnel-selection.json", tunnels.effects)
     selector.bind(authority)
-    assert ports.routes.readiness().promotion_ready, "fixture baseline is not healthy"
+    baseline = ports.routes.readiness()
+    assert baseline.promotion_ready, f"fixture baseline is not healthy: {baseline}"
     selector.request("failover", "backup", authority, time.time())
     if scenario == "late-readback":
         # Crash at durable admission, before the first selection effect. This

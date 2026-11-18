@@ -13,6 +13,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [nebius-vpngw-v0.6.8] - 2026-11-18
 
+- Declare deployment admission and physical-underlay prerequisites in the native
+  BGP namespace fixtures; retain separate real DHCP/networkd qualification.
+
 - Include the original operator YAML in support-bundle v4 with targeted secret
   and public-address replacements, preserving comments, formatting and unknown
   fields. Correlate public addresses through per-bundle aliases across evidence;

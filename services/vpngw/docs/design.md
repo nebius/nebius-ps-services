@@ -13143,6 +13143,13 @@ failed or incomplete trials retain their original disposition.
   collateral unmanaged state while preserving kernel and exact owned routes.
   Focused underlay and support-bundle regressions passed (95 tests). Native
   fixture coverage is committed for CI; this source check is not live proof.
+- Release CI passed 81 native cases before the BGP restart fixture failed its
+  baseline readiness check: static namespaces have no provider DHCP/networkd
+  deployment. Native BGP fixtures now declare deployment admission and physical
+  underlay as prerequisite inputs, retaining real SA/XFRM, FRR and forwarding
+  assertions. Separate native underlay cases retain real DHCP/networkd coverage.
+  The fixture correction passed 52 composed/qualification-selection checks in a
+  restricted local container; a complete fresh native CI replay is still required.
 - The operator explicitly accepted the v0.6.8 live-validation waiver; unresolved
   loss and incomplete ordinary/static, failover/failback, reboot and sustained
   traffic qualification remain limitations. Delivery remains implemented.
