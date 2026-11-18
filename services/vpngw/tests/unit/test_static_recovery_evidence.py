@@ -1,6 +1,8 @@
 """Evidence regressions: a running packet source must not hide the outage tail."""
 
 import json
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +13,32 @@ from tests.systemd.static_recovery_evidence import (
     packet_report,
 )
 from tests.systemd.static_recovery_peer import peer_config, peer_interfaces
+
+
+@pytest.mark.parametrize(
+    "lane",
+    [
+        "--static-recovery-only",
+        "--static-recovery-timing-only",
+        "--static-start-action-only",
+        "--static-recovery-traffic-only",
+    ],
+)
+def test_underlay_rejects_static_lane_before_fixture_launch(monkeypatch, tmp_path, lane):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "systemd"))
+    from tests.systemd import run as native_runner
+
+    monkeypatch.setattr(
+        sys, "argv", ["run.py", "--underlay-only", lane, "--report", str(tmp_path / "report.json")]
+    )
+
+    def unexpected_launch(*args, **kwargs):
+        pytest.fail("conflicting fixture lanes reached a subprocess")
+
+    monkeypatch.setattr(native_runner.subprocess, "run", unexpected_launch)
+    with pytest.raises(SystemExit) as result:
+        native_runner.main()
+    assert result.value.code == 2
 
 
 def test_final_packet_counters_include_leading_internal_and_trailing_loss():

@@ -1985,6 +1985,34 @@ def test_pending_other_connection_does_not_hide_static_loss_reset(tmp_path, inte
     assert "site" not in selector.state["selected"]
 
 
+@pytest.mark.parametrize("interruption", [Health.HEALTHY, Health.UNKNOWN])
+def test_static_admission_does_not_hide_later_connection_loss_reset(tmp_path, interruption):
+    cfg = config()
+    other = deepcopy(cfg["connections"][0])
+    other["name"] = "other"
+    other["remote_prefixes"] = ["10.2.0.0/16"]
+    for index, tunnel in enumerate(other["tunnels"], 1):
+        tunnel["name"] = f"other-{tunnel['name']}"
+        tunnel["remote_public_ip"] = f"198.51.100.{index}"
+    cfg["connections"].append(other)
+    effects, clock = Effects(), RecoveryClock()
+    effects.health.update(
+        {
+            "preferred": Health.DOWN,
+            "other-preferred": Health.DOWN,
+            "other-backup": Health.HEALTHY,
+        }
+    )
+    selector = recovery_selector(tmp_path, effects, clock, cfg=cfg)
+    for second in range(35):
+        recovery_tick(selector, clock, second)
+    effects.health["other-preferred"] = interruption
+    recovery_tick(selector, clock, 35)
+    assert selector.state["operation"]["connection"] == "site"
+    assert selector.state["health"]["other"] == interruption.value
+    assert "other" not in selector.static_recovery_observations
+
+
 def recovery_selector(tmp_path, effects, clock, records=None, cfg=None):
     return TunnelController(
         cfg or config(),

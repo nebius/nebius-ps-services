@@ -55,6 +55,10 @@ def main() -> None:
             args.modernization_only,
             args.package_migration_only,
             args.historical_package_upgrades,
+            args.static_recovery_only,
+            args.static_recovery_timing_only,
+            args.static_start_action_only,
+            args.static_recovery_traffic_only,
         )
     ):
         parser.error("underlay qualification is a separate fixture lane")
@@ -291,7 +295,9 @@ def main() -> None:
         with evidence.with_suffix(".log").open("x") as log:
             # Keep the entire diagnostic stream, including subprocess timeouts.
             run(
-                *command, stdout=log, stderr=subprocess.STDOUT,
+                *command,
+                stdout=log,
+                stderr=subprocess.STDOUT,
                 timeout=3600 if static_recovery_lane else 2400,
             )
     finally:
@@ -299,9 +305,19 @@ def main() -> None:
             if static_recovery_lane:
                 try:
                     packets = subprocess.run(
-                        ["docker", "exec", name, "tar", "-C", "/tmp", "-czf", "-",
-                         "static-recovery-evidence"],
-                        capture_output=True, timeout=60,
+                        [
+                            "docker",
+                            "exec",
+                            name,
+                            "tar",
+                            "-C",
+                            "/tmp",
+                            "-czf",
+                            "-",
+                            "static-recovery-evidence",
+                        ],
+                        capture_output=True,
+                        timeout=60,
                     )
                     if packets.returncode == 0:
                         with evidence.with_suffix(".packets.tar.gz").open("xb") as archive:

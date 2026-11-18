@@ -584,6 +584,14 @@ class TunnelController(Generic[AuthorityT]):
             else:
                 health[policy.name] = self.effects.observe(policy, target, selected=True).value
         self.state["health"] = health
+        if self.static_recovery_observations is not None:
+            # Reset sampled loss evidence before either effect/admission path
+            # can return early. Only a pending operation owns retry history
+            # that must survive its transient health observations.
+            pending_connection = self.state["operation"]["connection"] if self._pending() else None
+            for name, observed in health.items():
+                if name != pending_connection and observed != Health.DOWN.value:
+                    self.static_recovery_observations.pop(name, None)
         static = list(self.policies.values())
         loss = any(health[p.name] == Health.DOWN.value for p in static)
         healthy = bool(static) and all(health[p.name] == Health.HEALTHY.value for p in static)
@@ -631,16 +639,6 @@ class TunnelController(Generic[AuthorityT]):
                 self._save()
         self._save()
         if self._pending():
-            if self.static_recovery_observations is not None:
-                # Other connections must not retain loss evidence across a
-                # healthy/unknown sample while this operation owns the slot.
-                # Keep the active operation's attempt and cooldown history.
-                for name, observed in health.items():
-                    if (
-                        name != self.state["operation"]["connection"]
-                        and observed != Health.DOWN.value
-                    ):
-                        self.static_recovery_observations.pop(name, None)
             self.preferred_observations.clear()
             self._advance(authority, now, elapsed_seconds=monotonic() - started)
             return
