@@ -126,6 +126,11 @@ def xfrm_records(raw: str, *, policy: bool) -> list[dict[str, Any]]:
     return records
 
 
+def path_scope(policy: ConnectionPolicy, *, selected: bool) -> str:
+    """Name the evidence one observation requires; each keeps its own history."""
+    return "routed" if selected and policy.mode == "static" else "native"
+
+
 def route_destination(route: dict[str, Any]) -> str:
     destination = route["dst"]
     return str(ipaddress.IPv4Network("0.0.0.0/0" if destination == "default" else destination))
@@ -142,6 +147,7 @@ def path_health(
     routes: object,
     require_routes: bool,
 ) -> Health:
+    scope = "routed" if require_routes else "native"
     try:
         required = policy.destinations or frozenset({str(ipaddress.IPv4Network(path.peer + "/32"))})
         ike = parse_sas(sas)
@@ -152,6 +158,7 @@ def path_health(
                 "path-health",
                 connection=policy.name,
                 target=path.name,
+                scope=scope,
                 reason="incomplete-links-or-routes",
                 health=Health.UNKNOWN.value,
             )
@@ -162,6 +169,7 @@ def path_health(
                 "path-health",
                 connection=policy.name,
                 target=path.name,
+                scope=scope,
                 reason="xfrm-link-missing",
                 health=Health.DOWN.value,
             )
@@ -176,6 +184,7 @@ def path_health(
                 "path-health",
                 connection=policy.name,
                 target=path.name,
+                scope=scope,
                 reason="xfrm-link-kind-id-or-state",
                 health=Health.DOWN.value,
             )
@@ -208,9 +217,12 @@ def path_health(
                 "path-health",
                 connection=policy.name,
                 target=path.name,
+                scope=scope,
                 reason="no-exact-installed-child",
                 health=Health.DOWN.value,
             )
+            # One final result per observation keeps change-only records exact.
+            return Health.DOWN
         usable = False
         for child, local_host, remote_host in installed:
             reqid = _number(child["reqid"])
@@ -238,6 +250,7 @@ def path_health(
                     "path-health-candidate-rejected",
                     connection=policy.name,
                     target=path.name,
+                    scope=scope,
                     reason="missing-matching-esp-states",
                 )
                 continue
@@ -270,6 +283,7 @@ def path_health(
                     "path-health-candidate-rejected",
                     connection=policy.name,
                     target=path.name,
+                    scope=scope,
                     reason="missing-policy-coverage",
                 )
                 continue
@@ -279,6 +293,7 @@ def path_health(
                 "path-health",
                 connection=policy.name,
                 target=path.name,
+                scope=scope,
                 reason="no-usable-child",
                 health=Health.DOWN.value,
             )
@@ -299,6 +314,7 @@ def path_health(
                         "path-health",
                         connection=policy.name,
                         target=path.name,
+                        scope=scope,
                         reason="selected-route-mismatch",
                         health=Health.DOWN.value,
                     )
@@ -307,6 +323,7 @@ def path_health(
             "path-health",
             connection=policy.name,
             target=path.name,
+            scope=scope,
             reason="native-proof-complete",
             health=Health.HEALTHY.value,
         )
@@ -316,6 +333,7 @@ def path_health(
             "path-health",
             connection=policy.name,
             target=path.name,
+            scope=scope,
             reason="parse-or-evidence-error",
             health=Health.UNKNOWN.value,
             error_type=type(error).__name__,
@@ -338,7 +356,7 @@ class NativeTunnelObserver:
                 policies=self.run(("ip", "-j", "xfrm", "policy")),
                 links=json.loads(self.run(("ip", "-d", "-j", "link", "show", "type", "xfrm"))),
                 routes=json.loads(self.run(("ip", "-j", "-4", "route", "show", "table", "main"))),
-                require_routes=selected and policy.mode == "static",
+                require_routes=path_scope(policy, selected=selected) == "routed",
             )
             if health is not Health.HEALTHY or policy.mode == "static":
                 return health

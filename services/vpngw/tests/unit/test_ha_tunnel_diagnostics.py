@@ -29,6 +29,7 @@ from nebius_vpngw.agent.vm_ha.tunnel_runtime import ControllerTunnelRuntime, Nat
 from nebius_vpngw.agent.vm_ha.tunnels import Health
 from nebius_vpngw.agent.vm_ha_controller import DataPlaneMode
 from nebius_vpngw.ha_tunnel_policy import connection_policies
+from nebius_vpngw.ipsec_observation import Inventory
 
 
 def events(capsys):
@@ -39,6 +40,14 @@ def events(capsys):
         for line in output.err.splitlines()
         if line.startswith("VPNGW_TUNNEL_DIAGNOSTIC ")
     ]
+
+
+@pytest.fixture(autouse=True)
+def fresh_diagnostic_history(monkeypatch):
+    # Change-only records are process-local; isolate each case from earlier ones.
+    monkeypatch.setattr(diagnostics, "_last", {})
+    monkeypatch.setattr(diagnostics, "_held", {})
+    monkeypatch.setattr(diagnostics, "_scopes", [])
 
 
 def test_sink_redaction_sequence_stderr_and_failure(capsys, monkeypatch):
@@ -68,7 +77,9 @@ def test_timing_confirmations_and_sink_failure_preserve_decisions(tmp_path, caps
     assert effects.calls == [("probe", "backup")]
     recovery_tick(selector, clock, 35)
     records = events(capsys)
-    assert any(r.get("reason") == "continuous-loss-delay" and r["age"] == 29 for r in records)
+    # The delay is recorded once when it starts, not on every waiting pass.
+    delays = [r for r in records if r.get("reason") == "continuous-loss-delay"]
+    assert [(r["age"], r["wait_seconds"]) for r in delays] == [(0, 30)]
     assert [
         r["confirmations"] for r in records if r["event"] == "static-recovery-confirmation"
     ] == [1, 2]
@@ -238,13 +249,16 @@ def test_authority_gate_reason(tmp_path, capsys, fault, reason):
     assert any(reason in r.get("reasons", []) for r in events(capsys))
 
 
-def test_steps_always_emit_start_end_and_skip(capsys, monkeypatch):
+def test_steps_bracket_only_changed_skip_gates(capsys, monkeypatch):
     runtime = object.__new__(ControllerTunnelRuntime)
     runtime.cfg = {"connections": []}
     runtime.step()
     records = events(capsys)
     assert [r["event"] for r in records] == ["step-started", "step-skipped", "step-finished"]
     assert records[1]["reason"] == "no-policies"
+    assert records[0]["started_monotonic"] == records[2]["started_monotonic"]
+    runtime.step()
+    assert events(capsys) == []
     runtime.cfg = config()
     runtime.state_dir = Path("/unused")
     monkeypatch.setattr(vm_ha_rearm, "_acquire_rearm_lock", lambda *args, **kwargs: None)
@@ -284,3 +298,88 @@ def test_apply_lock_skip_is_recorded_without_snapshot(capsys, monkeypatch, tmp_p
     records = events(capsys)
     assert records[1]["reason"] == "apply-locked"
     assert records[-1]["event"] == "step-finished"
+
+
+def test_healthy_steady_state_writes_only_decision_changes(tmp_path, capsys):
+    effects, clock = Effects(), RecoveryClock()
+    selector = recovery_selector(tmp_path, effects, clock)
+    recovery_tick(selector, clock, 0)
+    assert [(r["event"], r["reason"]) for r in events(capsys)] == [
+        ("static-recovery-reset", "selected-not-down")
+    ]
+    for second in range(1, 61):
+        recovery_tick(selector, clock, second)
+    assert events(capsys) == []
+    effects.health["preferred"] = Health.DOWN
+    recovery_tick(selector, clock, 61)
+    assert [r["reason"] for r in events(capsys)] == ["first-observation", "continuous-loss-delay"]
+    effects.health["preferred"] = Health.HEALTHY
+    recovery_tick(selector, clock, 62)
+    assert [r["reason"] for r in events(capsys)] == ["selected-not-down"]
+
+
+def test_path_health_repeats_only_after_its_result_changes(capsys):
+    policy = connection_policies(config())[0]
+    path = policy.paths[0]
+    healthy = observation()
+    missing_state = {**healthy, "states": ""}
+
+    def reasons(evidence):
+        path_health(path, policy, **evidence)
+        return [(r["event"], r["reason"]) for r in events(capsys)]
+
+    assert reasons(healthy) == [("path-health", "native-proof-complete")]
+    assert reasons(healthy) == []
+    rejected = [
+        ("path-health-candidate-rejected", "missing-matching-esp-states"),
+        ("path-health", "no-usable-child"),
+    ]
+    assert reasons(missing_state) == rejected
+    assert reasons(missing_state) == []
+    assert reasons(healthy) == [("path-health", "native-proof-complete")]
+    # Rejections are written with their path result whenever that pair changes.
+    assert reasons(missing_state) == rejected
+    # Candidate and route-checked observations of one path keep separate history.
+    path_health(path, policy, **{**healthy, "require_routes": False})
+    assert [(r["scope"], r["reason"]) for r in events(capsys)] == [
+        ("native", "native-proof-complete")
+    ]
+
+
+def test_dead_remote_records_one_result_per_observation(capsys):
+    policy = connection_policies(config())[0]
+    evidence = {**observation(), "sas": Inventory.from_events([]).json()}
+    for _ in range(3):
+        assert path_health(policy.paths[0], policy, **evidence) is Health.DOWN
+    assert [r["reason"] for r in events(capsys)] == ["no-exact-installed-child"]
+
+
+def test_failed_write_is_retried_instead_of_remembered(capsys, monkeypatch):
+    fields = dict(connection="site", target="preferred", scope="routed", health="down")
+
+    sink = {"available": False}
+
+    def flaky(*args, **kwargs):
+        if not sink["available"]:
+            raise OSError("SYNTHETIC_SECRET")
+        print(*args, **kwargs)
+
+    monkeypatch.setattr(diagnostics, "print", flaky, raising=False)
+    diagnostics.diagnostic("path-health", reason="no-usable-child", **fields)
+    sink["available"] = True
+    diagnostics.diagnostic("path-health", reason="no-usable-child", **fields)
+    assert [r["reason"] for r in events(capsys)] == ["no-usable-child"]
+
+
+def test_slow_quiet_step_records_only_its_finish(capsys, monkeypatch):
+    from nebius_vpngw.agent.vm_ha import tunnel_runtime
+
+    runtime = object.__new__(ControllerTunnelRuntime)
+    runtime.cfg = {"connections": []}
+    runtime.step()
+    events(capsys)
+    monkeypatch.setattr(tunnel_runtime, "SLOW_STEP_SECONDS", 0.0)
+    runtime.step()
+    records = events(capsys)
+    assert [r["event"] for r in records] == ["step-finished"]
+    assert records[0]["elapsed_seconds"] >= 0

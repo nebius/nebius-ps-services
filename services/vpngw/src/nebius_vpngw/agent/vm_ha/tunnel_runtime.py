@@ -39,6 +39,7 @@ from ..vm_ha_checkpoint import controller_checkpoint_from_dict
 from ..vm_ha_controller import ActionKind, ControllerAction, DataPlaneMode
 from . import kernel_teardown
 from .diagnostics import diagnostic
+from .diagnostics import scope as diagnostic_scope
 from .runtime import (
     CommandRunner,
     _advertised_bgp_prefixes,
@@ -51,6 +52,7 @@ from .runtime import (
 from .store import atomic_write_json
 from .tunnel_observation import (
     NativeTunnelObserver,
+    path_scope,
     route_destination,
     scoped_ike_ids,
     xfrm_records,
@@ -65,6 +67,10 @@ from .tunnels import (
     effective_config,
     read_state,
 )
+
+# The controller polls about once per second. A pass at least this long is
+# recorded even when it changed no decision, because it delays recovery timing.
+SLOW_STEP_SECONDS = 2.0
 
 
 def _selection_context(
@@ -292,6 +298,7 @@ class NativeTunnelEffects(Generic[AuthorityT]):
                 "path-health",
                 connection=policy.name,
                 target=target,
+                scope=path_scope(policy, selected=selected),
                 reason="observer-unavailable",
                 health=Health.UNKNOWN.value,
                 error_type=type(error).__name__,
@@ -1412,6 +1419,8 @@ class ControllerTunnelRuntime:
         return self._authority(preparation=False)
 
     def _authority(self, *, preparation: bool) -> Authority | None:
+        # Owner and fenced-preparation checks keep separate change histories.
+        authority_scope = "preparation" if preparation else "owner"
         checkpoint = self.controller.controller.checkpoints.load()
         try:
             snapshot = self.controller.snapshots.observe()
@@ -1528,9 +1537,13 @@ class ControllerTunnelRuntime:
                 ):
                     if failed:
                         reasons.append(reason)
-                diagnostic("authority-refused", reasons=reasons)
+                diagnostic("authority-refused", scope=authority_scope, reasons=reasons)
             except Exception:
-                diagnostic("authority-refused", reason="diagnostic-flags-unavailable")
+                diagnostic(
+                    "authority-refused",
+                    scope=authority_scope,
+                    reason="diagnostic-flags-unavailable",
+                )
             return None
         peer = snapshot.peer_heartbeat
         if (
@@ -1552,7 +1565,7 @@ class ControllerTunnelRuntime:
                 reasons.append("peer-receipt-unavailable")
             elif not 0 <= snapshot.now - snapshot.peer_received_at < 10:
                 reasons.append("peer-receipt-stale")
-            diagnostic("authority-refused", reasons=reasons)
+            diagnostic("authority-refused", scope=authority_scope, reasons=reasons)
             return None
         authority = Authority(
             snapshot.cluster_id,
@@ -1563,9 +1576,13 @@ class ControllerTunnelRuntime:
             snapshot.local_generation_id,
         )
         if preparation and (not preparing or state["authority"] != asdict(authority)):
-            diagnostic("authority-refused", reason="preparation-authority-mismatch")
+            diagnostic(
+                "authority-refused",
+                scope=authority_scope,
+                reason="preparation-authority-mismatch",
+            )
             return None
-        diagnostic("authority-accepted")
+        diagnostic("authority-accepted", scope=authority_scope)
         return authority
 
     def revalidate(self, authority: Authority) -> bool:
@@ -1613,19 +1630,14 @@ class ControllerTunnelRuntime:
         return True
 
     def step(self) -> None:
-        started = time.monotonic()
-        diagnostic("step-started", started_monotonic=started)
-        try:
-            self._step()
-        except Exception as error:
-            diagnostic("step-failed", error_type=type(error).__name__)
-            raise
-        finally:
-            diagnostic(
-                "step-finished",
-                started_monotonic=started,
-                elapsed_seconds=time.monotonic() - started,
-            )
+        # A quiet pass writes nothing. A pass that changes a decision, fails or
+        # runs slowly is bracketed by step-started and step-finished.
+        with diagnostic_scope("step-started", "step-finished", slow_seconds=SLOW_STEP_SECONDS):
+            try:
+                self._step()
+            except Exception as error:
+                diagnostic("step-failed", error_type=type(error).__name__)
+                raise
 
     def _step(self) -> None:
         from ..vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
@@ -1703,9 +1715,9 @@ class ControllerTunnelRuntime:
                     selector.state["episode"]["healthy_since"] = None
                     selector._save()
                 self.restart_pending = False
-            diagnostic("selector-tick-started")
-            selector.tick(authority, self.clock())
-            diagnostic("selector-tick-finished")
+            diagnostic("step-admitted")
+            with diagnostic_scope("selector-tick-started", "selector-tick-finished"):
+                selector.tick(authority, self.clock())
             effective = effective_config(self.cfg, selector.state, authority)
             # Export expectations follow exactly the rendered operational policy.
             exports = dict(self.base_exports)

@@ -8850,15 +8850,32 @@ Installed-artifact and live gateway crash-replay qualification remain pending.
 
 The controller emits key-free `VPNGW_TUNNEL_DIAGNOSTIC` JSON lines to stderr,
 captured by systemd without changing CLI JSON stdout. Each line carries a process
-ID, process-local sequence and real monotonic timestamp. Every tunnel step records
-start, finish and skip gates. Static recovery records continuity resets, delay and
-retry waits, native backup proof, inner-peer ping return code or exception type,
-confirmations and admission. Authority refusals identify boolean gate failures.
-Per-CHILD kernel proof rejections are distinguished from the final path result so
-rekey overlap cannot be mistaken for an aggregate failure. Events contain no raw
-configuration, command output, key material or exception messages. The sink is
-best effort and never consumes injected decision clocks or changes recovery
-policy. Missing sequence numbers or an interrupted step expose observation gaps.
+ID, process-local sequence and real monotonic timestamp. Static recovery records
+continuity resets, delay and retry waits, native backup proof, inner-peer ping
+return code or exception type, confirmations and admission. Authority refusals
+identify boolean gate failures. Per-CHILD kernel proof rejections are
+distinguished from the final path result so rekey overlap cannot be mistaken for
+an aggregate failure. Events contain no raw configuration, command output, key
+material or exception messages. The sink is best effort and never consumes
+injected decision clocks or changes recovery policy.
+
+Decisions that every roughly one-second pass re-evaluates are recorded only when
+they change: authority acceptance or refusal (owner and preparation separately),
+step skip gates, each path's native or route-checked health result, per-CHILD
+rejections, and each connection's Static recovery reset, skip or wait decision.
+Ages, gaps and elapsed times do not count as change, so a delay is recorded when
+it starts with its remaining wait rather than on every waiting pass. Per-CHILD
+rejections are held until their observation's path result and written with it
+only when that combination changed. Probe, ping, confirmation, admission and
+failure events are recorded every time.
+A healthy steady state therefore writes nothing after its first decisions.
+Step and selector-tick start records are deferred until a record inside them is
+written, so only passes that changed a decision, failed, or ran for at least two
+seconds are bracketed by start and finish; the finish carries the original start
+time. Change history is process-local: a restart records current decisions
+afresh, and a failed write is retried rather than remembered. Suppressed records
+consume no sequence numbers, so sequence gaps still expose failed writes and an
+unmatched start still exposes an interrupted pass.
 
 A daemon can automatically restart before the recovery owner observes a failed
 unit. Detect lost loaded configuration using the shared complete VICI
