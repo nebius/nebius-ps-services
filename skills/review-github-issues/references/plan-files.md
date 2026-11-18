@@ -26,7 +26,9 @@ handoff; it is not permission to implement, publish or modify canonical specs.
   trailing hyphen again. Use `issue` if empty. Example: `batch-123-bgp-routes.md`.
   Keep the filename stable when titles, wording or membership later change.
 
-Before creating a file, inspect existing regular Markdown plans for full
+Before creating a batch file, distinguish overview/navigation artifacts from
+remediation plans by content; never feed an overview into batch-plan reuse.
+Inspect existing regular Markdown remediation plans for full
 repository, project, member and remediation identity. Never match on number,
 title, topic slug or filename alone. Reuse a matching artifact even when it has
 an earlier per-issue filename. This preserves existing work, not an alternate
@@ -54,13 +56,16 @@ replaced by an internal content handoff to this skill. Do not request host
 Plan Mode, invoke a user-visible plan tool, or return plan text to the user.
 This skill alone performs the authorized file save and GitHub decision after
 the advisers return. Any host Plan Mode already in force still prevents those
-writes; never switch out of it or bypass it. Do not invoke implementation owners.
+writes; never switch out of it or bypass it. Do not invoke implementation owners
+during triage; a separately approved root handoff follows
+[implementation handoff](implementation-handoff.md).
 Missing required skills or material unresolved decisions leave planning pending.
 
 Adapt [the template](../assets/issue-plan.md.template) with:
 
 - Repository identity, stable batch anchor/topic, every accepted member identity
-  and permitted issue URL, owning/affected projects, source revision, review
+  and permitted issue URL, verified primary/affected project roots, scoped
+  repository-relative change paths and validation working directories, source revision, review
   date and evidence limitations. Separate related nonaccepted issues from members.
 - Shared remediation boundary and why the members belong together; per-member
   problems, supported behavior, verified facts, disputed claims and confidence.
@@ -107,10 +112,17 @@ been saved and verified.
 If interrupted with a partial artifact, retain it as incomplete; do not describe
 it as ready. If saving is disallowed or unavailable, report the missing file
 operation, never paste the plan into chat or GitHub. After a successful save,
-report only the path and status in chat. GitHub receives a concise acceptance
+chat may report links, scope, dependencies and readiness, never detailed steps. GitHub receives a concise acceptance
 decision, not plan text, absolute local paths or a fabricated hosted-file link.
 A repository-relative plan path may be named explicitly as saved locally; follow
 [comment guidance](comments.md).
+
+For current-folder or explicit project scope with ready work, save the overview
+using implementation handoff and its template. Verify repository/project binding,
+all batch paths/digests, exact proposed members and dependency order. Preserve
+its existing human edits and compare predecessor bytes before replacement.
+Overview failure leaves the combined proposal pending, not an invalidation of
+independently saved batch plans or completed triage effects.
 
 Track acceptance publication independently for every member. A verified plan
 can cover several issues even if one comment fails. Preserve the file and

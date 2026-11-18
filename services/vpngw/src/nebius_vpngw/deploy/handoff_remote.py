@@ -18,6 +18,8 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
+from nebius_vpngw.ha_package_contract import package_predecessor
+
 try:
     import _vpngw_ha_repair as repair  # type: ignore[import-not-found]
     import _vpngw_ordinary_operations as ops  # type: ignore[import-not-found]
@@ -42,24 +44,6 @@ REPLAN_WRITERS = (
     "strongswan-swanctl.service",
     "strongswan.service",
 )
-PACKAGE_FIELDS = (
-    "boot_id",
-    "config_sha256",
-    "ha_config_digest",
-    "files",
-    "assets",
-    "asset_modes",
-    "dependencies",
-    "requirements",
-    "markers",
-    "wheel_tags",
-    "python",
-    "machine",
-    "package_version",
-    "runtime_plan",
-)
-
-
 def package_exclusion(function, *, always: bool = False):
     """Hold dpkg's native frontend lock for one prepared package phase only."""
 
@@ -219,7 +203,7 @@ def reply(value: dict[str, Any]) -> None:
 
 def package_observation(manifest: dict[str, Any]) -> dict[str, Any]:
     observed = remote.inspect(manifest, runtime_admission=False)
-    return {key: observed[key] for key in PACKAGE_FIELDS}
+    return package_predecessor(observed)
 
 
 def inspect(expected: dict[str, Any], *, inhibited: bool = False) -> dict[str, Any]:
@@ -651,6 +635,7 @@ class Holder:
                 )
                 repair.cold_guard(state_dir=repair.STATE, boot_id=ops.BOOT.read_text().strip())
                 remote.command([sys.executable, "-B", "-m", "nebius_vpngw.boot_policy"], limit=30)
+                remote.migration.retire_assets(manifest)
                 repair.initialize_unstarted_checkpoint(unstarted=not self.repairing)
                 repair.publish(MARKER, b"")
                 self.publish_assets(
@@ -784,6 +769,7 @@ def prepare_guarded(request: dict) -> dict:
                         raise RuntimeError("HA asset identity changed")
                     repair.publish(Path(path), raw, item["mode"])
             operation.reload_manager()
+            remote.migration.retire_assets(manifest)
             # Runtime inhibition remains durable until exact guarded activation.
             operation.complete()
             return receipt
@@ -1042,6 +1028,10 @@ def corrective_plan(request: dict) -> dict:
     remote.migration.corrective_policy(runtime, manifest["runtime_plan"])
     if manifest.get("ha_parent") != request["operation"]:
         raise RuntimeError("corrective package proposal parent differs")
+    manifest.pop("asset_retirement", None)
+    manifest["asset_retirement"] = remote.migration.asset_retirement(
+        manifest, runtime, superseded_sha256=children["runtime"]["digest"]
+    )
     inspection = remote.inspect_for_plan(manifest, runtime_admission=False)
     if corrective_inspect(request) != current:
         raise RuntimeError("corrective package proposal changed during observation")

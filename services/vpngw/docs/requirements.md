@@ -40,7 +40,7 @@ Evaluate the acceptance criteria using the recorded verification method.
 
 <!-- /REQUIREMENT: REQ-001 -->
 
-<!-- REQUIREMENT: REQ-002 status=satisfied priority=P1 type=feature -->
+<!-- REQUIREMENT: REQ-002 status=active priority=P1 type=feature -->
 ### REQ-002: Reduce pytest feedback time without weakening correctness
 
 #### User Story
@@ -225,6 +225,11 @@ Evaluate the acceptance criteria using the recorded verification method.
 Make `nebius-vpngw status` the only public status interface and render one concise, authoritative VM-HA section when explicit VM HA is configured. Constraints: Remove the unpublished `vm-ha-recover` command and its private duplicate agent flag without an alias, replacement command, deprecation shim, or focused-view flag. Preserve the private canonical `--vm-ha-status` agent read, public `apply`, `failover vm`, and `failback vm`, ordinary non-HA status output, VM-HA fencing and mutation boundaries, and existing fatal setup/configuration/authentication exits. Unresolved environment references used only as tunnel PSKs are not setup errors for this read-only command; all non-secret placeholders and secret requirements of mutating commands remain strict. After successful command setup, HA health and member-observation failures remain informational. Non-goals: Adding `vm-ha-status`, `vm-ha-state`, `--vm-ha-only`, a machine-readable status schema, new cloud or gateway mutations, a metrics exporter, or changing any ownership-transfer, route, forwarding, rearm, configuration, or lifecycle record.
 
 #### Acceptance Criteria
+
+- Show concise release alignment and runtime health separately. Render validated
+  healthy status labels consistently in green, including HA tunnel selection,
+  while preserving structured values and readable no-color output. Reuse observed
+  operator SSH and authenticated inter-gateway mTLS evidence without active probes.
 
 - Explicit VM HA renders exactly one table titled `VM-HA Status — <OVERALL>` with the columns `Gateway`, `Role`, `mTLS`, and `Ready`, plus exactly one row for each configured member; non-HA status performs no HA observation and renders no HA section.
 - `Role` reports only the current operational relationship to authoritative cloud ownership: the exact owner is `active`, the other member is `standby`, and every member is `unknown` when no owner is proven. Configured active/passive preference is not rendered in this column and never overrides current ownership.
@@ -424,6 +429,9 @@ Evaluate the acceptance criteria using the recorded verification method.
 Keep the primary `VPN Gateway Status` table compact and temporally truthful, display every configured tunnel name completely, and label its mode-aware tunnel/session duration as `Uptime` rather than `BGP Uptime`. Constraints: Preserve configured tunnel roles, IPsec/BGP/peer/encryption/uptime values and selection precedence, every success and error row, the separate `Traffic Override` warning, ECMP warnings, service/routing sections and displayed order, read-only behavior, and exit semantics. Keep the existing Rich-based responsive layout without assigning a brittle fixed tunnel width. Never infer recovery of one tunnel or service probe from a different VM-HA observation. Non-goals: Removing runtime override detection, changing tunnel selection or health classification, adding a replacement status flag, changing configuration or cloud state, or introducing a machine-readable status schema.
 
 #### Acceptance Criteria
+
+- Render validated healthy/Healthy table status labels in green through shared
+  presentation behavior; retain their semantics and readable no-color output.
 
 - The primary table has exactly `Tunnel`, `Configured Role`, `Gateway VM`, `IPsec`, `BGP`, `Peer IP`, `Encryption`, and `Uptime` in that order. BGP tunnels prefer current BGP-neighbor uptime and retain the existing IPsec-SA fallback when BGP uptime is unavailable; Static tunnels use IPsec-SA uptime. VM boot uptime is not reported.
 - Tunnel values use folded overflow: the complete value remains on one line when space permits and wraps without an ellipsis on narrower terminals, including schema-valid 64-character names.
@@ -4136,6 +4144,10 @@ prerequisite upgrades for rotation and standby-policy enablement.
   both members. Treat 120 seconds as a soft progress and interruption target,
   never an installation cancellation deadline. Persist reservations, effects and
   outcomes; elapsed time, reconnect and restart cannot replenish the allowance.
+- Use one canonical package predecessor projection in the CLI and streamed guest,
+  including approved obsolete-asset retirement. Preserve closed failure reasons
+  from settled workers without exception text. Worker restart counters alone are
+  not new evidence for repeating an unchanged automatic repair.
 - Admitted package work survives SSH loss and Ctrl-C under its existing guest
   owner. Finish the admitted package phase while retaining startup inhibition;
   a reconnected coordinator must reprove authority before admitting activation.
@@ -4253,6 +4265,14 @@ preserve explicit operator trust sources and exact publication recovery.
   confirmation before changes. No separate repair dry-run or user-supplied digest
   is required. Declined or missing confirmation makes no changes. Ordinary apply
   preview and confirmation contracts remain unchanged.
+- Immediately after confirmation, show animated repair progress on interactive
+  stderr with the current stage, member and elapsed time. Cover preparation,
+  dependency resolution, staging, isolation, package installation, activation
+  and final verification, including resumed work. Show bounded wait-state updates
+  for SSH, existing writers and package workers. Noninteractive stderr retains
+  useful stage transitions without terminal control sequences; JSON stdout stays
+  one terminal result. Stop the display on success, failure and interruption;
+  presentation failures never change repair authority, deadlines or outcomes.
 - Admit repair before old deployment resume validation. Missing or malformed
   journals, changed desired digests, broken package imports, altered product
   assets, failed services and broken managed node identities select reconstruction
@@ -4461,6 +4481,25 @@ an interrupted HA deployment, without upgrading gateways or disturbing recovery.
 
 #### Acceptance Criteria
 
+- Preserve an owner-defined diagnostic checkpoint projection: operation kind,
+  initial/upgrade classification, safe pending/completed effect identifiers,
+  selected/pinned digests, settlement and explicit omissions. Never widen arbitrary
+  maps or export raw journals to recover omitted metadata.
+- Distinguish operator-to-gateway SSH TCP22 evidence from inter-gateway mTLS TCP9443
+  evidence, with source/time and unknown outcomes. No peer SSH requirement or new
+  active connectivity probe; listener/rule presence is not reachability proof.
+- Confirm successful archive creation separately from evidence coverage. Routine
+  journal and fixed log-tail history limits stay in archive metadata and the summary,
+  without terminal warnings. Warn for other gaps, including unavailable or invalid
+  evidence, timeouts and current-state truncation. Preserve truthful manifest
+  completeness and exit codes; bounded history is not a gateway-health verdict.
+  State that known credential patterns were automatically redacted, that redaction
+  is not exhaustive and that sharing requires private support handling.
+- Decode journal text and byte-array messages before credential redaction. Preserve
+  malformed-record accounting. Project firewall objects independently within the
+  existing per-probe byte and object bounds so ordinary rule counts do not exhaust
+  an unrelated shared traversal budget.
+
 - Provide support-bundle as the only public diagnostic command; replace collect-logs
   without an alias. Require local config; accept optional project, region, output
   ZIP and RFC3339 since selectors. Support ordinary and HA groups, existing 0.6.5
@@ -4561,9 +4600,29 @@ activation verification timeout that leaves locks behind without a cause.
   pass the CLI and support-bundle safe-reason allowlists.
 - `apply` proves the peer channel inside the fenced verification step through a
   bounded per-node `verify-peer-channel-node-N` gate before the long per-node
-  fenced waits. A provably down channel fails fast with the classified reason
-  through the existing first/latest activation diagnostics, and a resume whose
-  transition already started skips the gate exactly like the fenced step.
+  fenced waits. At gate expiry a latest classified failure aborts through the
+  existing first/latest activation diagnostics. A resume whose transition
+  already started skips the gate exactly like the fenced step.
+- Failure persistence means at least ten consecutive failed send attempts,
+  including retries within a publication; it does not mean ten elapsed seconds.
+  A successful send resets the counter. Status and apply share this classifier.
+- The 30-second peer gate distinguishes healthy, failed and unknown evidence.
+  Healthy uses the existing accepted peer-channel success predicate. At expiry,
+  only the latest classified connection/TLS failure aborts. Missing, late or
+  otherwise inconclusive evidence remains unknown and continues into the
+  existing full fenced verification. Retain earlier classified observations as
+  historical diagnostics, never as proof of current failure or recovery.
+- Activation verification progress names the member index, current check and
+  unmet condition, current-window elapsed/remaining seconds, and total elapsed
+  verification time. Remaining time comes from the actual monotonic deadline;
+  presentation never extends it or changes verification authority. Interactive
+  progress uses the existing bounded cadence; noninteractive output retains one
+  terminal row per phase with timing and historical unknown-evidence warnings.
+  JSON stdout and existing result/status schemas remain unchanged.
+- Preserve sequential per-member 30-second peer gates and 300-second fenced
+  waits: two members can consume 660 seconds excluding other work. There is no
+  shared command deadline or completion estimate. No new configuration, probes,
+  runtime timers, ownership changes or dependencies are introduced.
 - VM-to-VM TCP 9443 is documented as a customer-owned security-group
   prerequisite beside the existing `security_group_ids` documentation.
 - Support bundles retain the new typed heartbeat send fields and the existing
@@ -4592,8 +4651,10 @@ publisher, runtime-status, status-view and projection tests for this feature.
 Inject each classified failure kind through the fake transport; prove publisher
 recording with the fake clock; assert the written agent status fields; render
 the new status reasons and Action including healthy and foreign negative cases;
-prove the pre-fence gate fails fast with mocked waits; prove projection retains
-the new fields.
+prove that a latest classified failure aborts at peer-gate expiry while unknown
+evidence continues into full verification with historical diagnostics. Check
+remaining budgets, terminal progress and JSON stdout isolation, and prove
+projection retains the typed heartbeat fields.
 
 #### Evaluation Method
 
@@ -4617,6 +4678,30 @@ alone never require explicit full repair. Preserve existing resources, credentia
 maintenance policy, strict host identity and independently verified ownership.
 
 #### Acceptance Criteria
+
+- Bind all first-party agents, scripts and managed service assets to one immutable
+  wheel version and digest; derive their file identities from that wheel. Retain
+  compatible third-party dependencies and freeze their exact resolved versions and
+  hashes per operation, without introducing independent component release numbers.
+- Before gateway mutations, every apply owner, including ordinary, HA, replacement
+  and explicit repair, rejects a verified installed VPNGW release newer than the
+  selected CLI-compatible release. Added components are normal upgrade work.
+  Existing confirmed repair may perform its guarded boot of a stopped VM to
+  observe identity, but must gate reconstruction before package/state effects.
+  Distinguish proven absence, unknown identity, same-version drift and a valid
+  distinct editable artifact; never infer parity from version text alone.
+- Retire obsolete managed scripts, units and drop-ins only from an exact verified
+  predecessor manifest bound into the successor before preparation replaces it.
+  Revalidate contents, ownership and paths under locks; preserve boot fencing,
+  journal stop/disable/remove/reload effects and verify absence. Unknown ownership
+  blocks required retirement, not an independently safe additive upgrade. Never
+  remove shared third-party packages merely because a dependency is retired.
+- Cover interrupted initial activation as well as retained upgrades through the
+  existing settlement and successor owners. Keep unknown writers pending, preserve
+  predecessor pins/history and require fresh review for expanded effects.
+- Report concise per-member release alignment separately from runtime health and
+  unknown running-process identity. Keep role, maintenance and inhibition rules
+  authoritative; do not start services merely because they are inactive.
 
 - Resolve the exact CLI-compatible deployable wheel automatically for release,
   editable and standalone installs. Verify content and provenance, retain referenced

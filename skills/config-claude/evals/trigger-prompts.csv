@@ -1,4 +1,6 @@
 id,should_trigger,prompt
+config-claude-repair-policy,true,"Update only my Claude global instructions with the shared skill and hook self-repair rule; preserve other settings."
+config-claude-runtime-repair,false,"Continue this small task after a repository-owned skill helper failed; repair its source and install the fix."
 explicit-help,true,$config-claude --help
 explicit-setup,true,Use $config-claude to inspect and configure my Claude Code home while preserving personal settings.
 explicit-recovery,true,$config-claude recover my missing Claude settings from the minimal public baseline.

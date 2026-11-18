@@ -378,6 +378,7 @@ def reservation_guest(monkeypatch, tmp_path, ordinary_operation_guest, runtime_m
         "runtime_plan": runtime_migration_guest,
         "ha_parent": "a" * 64,
         "wheel_sha256": "b" * 64,
+        "assets": {},
     }
     migration = guest.remote.migration
     migration.stage(runtime_migration_guest)
@@ -535,10 +536,67 @@ def test_corrective_proposal_is_read_only_and_uses_current_native_inventory(
         "dependency_inventory": {},
         "observation": {"runtime_plan": fresh}
     }
-    assert seen == [({**manifest, "runtime_plan": fresh}, {"runtime_admission": False, "dependency_inventory": {}})]
+    assert seen == [({**manifest, "runtime_plan": fresh,
+                     "asset_retirement": {"predecessor": None, "removals": {}}},
+                    {"runtime_admission": False, "dependency_inventory": {}})]
     assert guest.remote.migration.state() == state
     assert guest.corrective_children() == request["children"]
     assert not (guest.repair.STATE / "corrective").exists()
+
+
+@pytest.mark.parametrize("phase", ["installed", "activating"])
+def test_corrective_successor_preserves_exact_asset_retirement(
+    reservation_guest, monkeypatch, phase
+):
+    guest, request = reservation_guest
+    migration = guest.remote.migration
+    state = migration.state()
+    state["phase"] = phase
+    old = "/etc/systemd/system/nebius-vpngw-old.service"
+    pending = "/etc/systemd/system/nebius-vpngw-earlier.service"
+    retained = "/etc/systemd/system/nebius-vpngw-retained.service"
+
+    def asset(name):
+        return {"member": "nebius_vpngw/systemd/" + name.rsplit("/", 1)[-1],
+                "mode": 0o644, "sha256": "f" * 64}
+
+    state["manifest"]["assets"] = {old: asset(old), retained: asset(retained)}
+    state["manifest"]["asset_retirement"] = {
+        "predecessor": {"operation": "9" * 32}, "removals": {pending: asset(pending)},
+    }
+    migration.save(state)
+    request["children"] = guest.corrective_children()
+    manifest = {**request["package"]["desired"], "assets": {retained: asset(retained)}}
+    monkeypatch.setattr(migration, "plan_current", lambda: state["plan"])
+    monkeypatch.setattr(guest.remote, "inspect", lambda proposed, **_: {
+        "asset_retirement": migration.asset_retirement(
+            proposed, migration.completed_asset_predecessor()),
+    })
+    result = guest.corrective_plan({**request, "manifest": manifest})
+    retirement = result["observation"]["asset_retirement"]
+    assert retirement["removals"] == {old: asset(old), pending: asset(pending)}
+    assert migration.state() == state
+    selected = {**manifest, "asset_retirement": retirement}
+    operation = "8" * 32
+    # Filesystem ownership validation has its own real-file regression suite;
+    # this boundary verifies exact journal authority before that validator runs.
+    verified = []
+    monkeypatch.setattr(migration, "verify_asset_retirement", verified.append)
+    with pytest.raises(RuntimeError, match="corrective runtime predecessor differs"):
+        migration.begin(state["plan"], operation, selected, superseded_sha256="0" * 64)
+    assert migration.state() == state
+    for invalid in (manifest, {**selected, "asset_retirement": {
+        **retirement, "removals": {old: asset(old)}
+    }}):
+        with pytest.raises(RuntimeError, match="asset_retirement_unproven"):
+            migration.begin(state["plan"], operation, invalid,
+                            superseded_sha256=migration.digest(state))
+        assert migration.state() == state
+        assert verified == []
+    migration.begin(state["plan"], operation, selected, superseded_sha256=migration.digest(state))
+    assert verified == [retirement]
+    assert migration.state()["manifest"]["asset_retirement"] == retirement
+    assert migration.state()["operation"] == operation
 
 
 def test_corrective_native_package_exclusion_precedes_any_reservation(

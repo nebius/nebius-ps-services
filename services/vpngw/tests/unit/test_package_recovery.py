@@ -347,6 +347,57 @@ def test_unsubmitted_phase_cannot_replenish_shared_attempts(tmp_path, monkeypatc
     assert value.history()[0]["state"] == "failed" and value.history()[0]["cleaned"]
 
 
+def test_restarted_worker_is_not_new_evidence_for_same_failed_repair(tmp_path, monkeypatch):
+    value = ledger(tmp_path)
+    plan = NS(instance=NS(hostname="member"))
+    calls = []
+
+    def effect():
+        calls.append(REPAIR.get())
+        raise PackageUnresolved("exact", "package-predecessor-changed")
+
+    monkeypatch.setattr(recovery, "observe_guarded", lambda *_: {
+        "state": "READY_TO_CONTINUE", "identity": "exact",
+        "result": {"generation": len(calls), "failure": "package-predecessor-changed"},
+    })
+    with pytest.raises(RuntimeError, match="refuses unchanged repair"):
+        recovery.prepare(value, effect=effect, members=lambda: [(None, plan, {}, None)])
+    assert calls == [False, True]
+    assert len(value.history()) == 1
+    # Reopening the command cannot replenish that allowance or repeat the fault.
+    resumed = Recovery(tmp_path, execution=value.execution, authority=value.authority)
+    with pytest.raises(RuntimeError, match="refuses unchanged repair"):
+        recovery.prepare(resumed, effect=effect, members=lambda: [(None, plan, {}, None)])
+    assert calls == [False, True]
+
+
+def test_automatic_repair_continues_when_same_error_has_real_package_progress(tmp_path, monkeypatch):
+    from nebius_vpngw.deploy import vm_ha_package
+
+    value = ledger(tmp_path)
+    plan = NS(instance=NS(hostname="member"))
+    calls = []
+
+    def effect():
+        calls.append(REPAIR.get())
+        if len(calls) < 3:
+            raise PackageUnresolved("exact", "package-worker-failed")
+
+    def observe(*_args):
+        if len(calls) == 3:
+            return {"state": "PREPARED", "identity": "exact", "result": {"verified": True}}
+        return {"state": "READY_TO_CONTINUE", "identity": "exact", "result": {
+            "generation": len(calls), "failure": "package-worker-failed",
+            "progress": digest("native" if len(calls) == 1 else "python"),
+        }}
+
+    monkeypatch.setattr(recovery, "observe_guarded", observe)
+    monkeypatch.setattr(vm_ha_package, "verify_prepared", lambda *_a, **_kw: None)
+    recovery.prepare(value, effect=effect, members=lambda: [(None, plan, {}, None)])
+    assert calls == [False, True, True]
+    assert [item["state"] for item in value.history()] == ["failed", "verified"]
+
+
 def test_authority_outage_resume_continues_original_pair_without_repair(tmp_path, monkeypatch):
     from nebius_vpngw.deploy import vm_ha_package
     from nebius_vpngw.deploy.authority_observation import AuthorityUnavailable

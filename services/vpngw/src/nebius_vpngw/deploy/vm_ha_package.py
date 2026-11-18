@@ -14,6 +14,8 @@ from paramiko import AuthenticationException, SSHException  # type: ignore[impor
 
 from .. import dependency_scope
 from ..config_loader import InstanceResolvedConfig
+from ..ha_package_contract import PACKAGE_FIELDS as PACKAGE_FIELDS
+from ..ha_package_contract import package_predecessor
 from ..ordinary_operations import digest
 from . import ordinary_apply
 from .apply_diagnostics import DiagnosticFailure, Failure, first_failure
@@ -68,29 +70,6 @@ def package_step(step: str) -> Iterator[None]:
         failure = VMHAAgentPackageError(detail)
         failure.first = Failure("prepare-packages", step + "-failed", ("cause-" + cause,))
         raise failure from error
-
-
-# Deliberately owned here, rather than weakening the ordinary approval contract.
-PACKAGE_FIELDS = (
-    "boot_id",
-    "config_sha256",
-    "ha_config_digest",
-    "files",
-    "assets",
-    "asset_modes",
-    "dependencies",
-    "requirements",
-    "markers",
-    "wheel_tags",
-    "python",
-    "machine",
-    "package_version",
-    "runtime_plan",
-)
-
-
-def package_predecessor(observed: dict[str, Any]) -> dict[str, Any]:
-    return {key: observed[key] for key in PACKAGE_FIELDS}
 
 
 def artifact(wheel: Path, config: str) -> dict[str, Any]:
@@ -250,6 +229,8 @@ def inspect_plan(
     if wheel is None:
         raise RuntimeError("HA deployment requires a deployable agent wheel")
     manifest = artifact(wheel, instance.config_yaml)
+    from . import release_policy
+
     if resume_manifest is not None:
         if (resume_parent is None and reservation is None) or any(
             resume_manifest[key] != manifest[key]
@@ -261,6 +242,10 @@ def inspect_plan(
         manifest["ha_parent"] = resume_parent
     if reservation is not None:
         from .ordinary_handoff import inspect_reservation
+
+        release_observed = release_policy.inspect(ssh, target, instance, local)
+        if release_policy.classify(release_observed, manifest["version"]) == "newer":
+            release_policy.require(release_observed, manifest["version"])
 
         envelope = reservation["request"]["package"]
         if (
@@ -278,6 +263,12 @@ def inspect_plan(
         if observed["state"] == "BLOCKED":
             raise VMHAAgentPackageError("Saved package owner authority is blocked")
         if observed["state"] != "NOT_SUBMITTED":
+            release_policy.require(
+                release_observed,
+                manifest["version"],
+                owned_resume=observed["state"]
+                in {"READY_TO_CONTINUE", "RUNNING_OWNED", "WAIT_EXTERNAL_LOCK", "PREPARED"},
+            )
             return VMHAPackagePlan(
                 target,
                 instance,
@@ -326,12 +317,15 @@ def inspect_plan(
 
     inspection = inspect_packages()
     full_observation = inspection["observation"]
+    release_policy.require(full_observation["release_identity"], manifest["version"])
     inventory = inspection["dependency_inventory"]
     observed = package_predecessor(full_observation)
     if resume_manifest is not None and manifest["runtime_plan"] != observed["runtime_plan"]:
         raise VMHAAgentPackageError("Interrupted HA package authority changed native closure")
     manifest["runtime_plan"] = observed["runtime_plan"]
     pending = None if unreserved_corrective else full_observation.get("runtime_pending")
+    if pending is None and resume_manifest is None:
+        manifest["asset_retirement"] = observed["asset_retirement"]
     if pending is not None:
         saved = pending["manifest"]
         if resume_manifest is not None:
@@ -379,6 +373,8 @@ def inspect_plan(
             effects.append("install exact HA agent wheel")
         if dependencies:
             effects.append("install selected required dependencies")
+        if manifest.get("asset_retirement", {}).get("removals"):
+            effects.append("retire obsolete release-owned service assets")
         if observed["assets"] != {
             path: item["sha256"] for path, item in manifest["assets"].items()
         } or observed["asset_modes"] != {

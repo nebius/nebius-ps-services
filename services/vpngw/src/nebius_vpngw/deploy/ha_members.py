@@ -53,6 +53,14 @@ def verify_members(state: VMHALifecycleState, expected: dict) -> bool:
     tx = state.transaction
     if tx is None or tx.pending_effect or tx.accepted_cloud_operation_id or tx.observation_guard:
         return False
+    return verify_lineage(state, expected)
+
+
+def verify_lineage(state: VMHALifecycleState, expected: dict) -> bool:
+    """Prove completed creation separately from the current host-only frontier."""
+    tx = state.transaction
+    if tx is None or tx.accepted_cloud_operation_id or tx.observation_guard:
+        return False
     actual = {member.instance_name: member for member in state.members}
     if set(actual) != set(expected):
         return False

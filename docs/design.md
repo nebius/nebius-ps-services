@@ -303,5 +303,128 @@ pending, so the requirement is active and delivery is implemented, not verified.
 
 <!-- /FEATURE: FEAT-003 -->
 
+<!-- FEATURE: FEAT-004 reqs=REQ-004 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-004: Independent Skills validation lanes
+
+#### Requirements Covered
+
+- REQ-004: Bounded parallel CI without reduced coverage.
+
+#### Context Evidence
+
+Review covered all sixteen active workflows. Skills run 44114279062 spent
+71.2 minutes in one verify job: Worktree discovery alone took 36.8 minutes,
+followed later by a harness target suite taking 20.4 minutes. Independent
+cross-workflow dispatch already happens without waiting for prior CI results.
+VPN build consumes source rather than a unit-test artifact. cxcli wheel
+compatibility genuinely depends on the wheel produced by its verify job.
+
+#### Design Details
+
+Keep Skills source validation in verify. Move adapter commands and native
+harness commands into separate jobs with the same Python version and trusted
+checkout sequence. Partition Worktree discovery across four matrix jobs by
+complete test class, balancing deterministic test counts while preserving
+module/class fixture ordering within each shard. Run all shards even when
+one fails. Refuse invalid or empty selections and discovery errors.
+
+The root-owned helper emits selected test counts and duration. Both candidate
+and result evidence depend on all validation jobs. Keep the workflow identity,
+input protocol and result-routing artifacts unchanged. Include helper source
+and tests in both workflow path filters and merge policy. VPN build depends
+only on validated identity; terminal evidence retains all existing test gates.
+
+#### Selected Option
+
+Bounded independent jobs reduce the demonstrated serial critical path while
+retaining complete test execution. GitHub Actions and Python unittest remain
+the fixed deterministic stack; no AI, application or cloud stack change.
+
+#### Alternatives Considered
+
+Keeping one job is simpler but preserves the measured serial cost. Skipping
+skill families based on paths risks missing installed payload dependencies.
+Unbounded per-test jobs add setup cost and disrupt fixture boundaries. Keep
+cxcli coverage, native qualification and publication ordering pending a
+separate measured optimization of their actual executable work.
+
+#### Implementation Boundaries
+
+Root workflow YAML, root-owned CI helper/regressions, merge policy, README,
+root changelog and this paired specification. Preserve concurrent unrelated
+changes. No Git publication, workflow dispatch or repository settings effects.
+
+#### Test-First Success Criteria
+
+- TDD-001: A synthetic inventory proves complete, disjoint class partitions.
+- TDD-002: Import failures, failed tests and malformed shard inputs fail.
+- TDD-003: Evidence dependencies cover every new lane; old commands remain.
+
+#### Validation Plan
+
+Run targeted unit and workflow contracts, compare current discovery inventory,
+validate YAML and shell syntax, run actionlint and perform changed-scope align.
+Review security, fixture isolation, bounded concurrency and evidence gates.
+
+#### Test Plan
+
+Exercise synthetic success/failure and class/module fixture behavior. Run
+Worktree shards and retained adapter/harness suites under host-memory controls
+where practical; identify platform-only or unexecuted validation explicitly.
+
+#### Evaluation Plan
+
+Use hosted attempt timings, including runner queues and suite counts. Compare
+PR and post-merge independently; do not infer deployed speedup from topology.
+
+#### Rollout And Rollback
+
+Deliver local changes for normal reviewed publication. Observe the first PR
+and exact-result runs; revert the scheduling change if partition coverage,
+fixtures or evidence settlement diverge. Preserve all existing release locks.
+
+#### Done Definition
+
+Local source passes focused coverage/failure/dependency checks. Delivery stays
+implemented until comparable hosted runs verify preserved behavior and latency.
+
+#### Implementation Evidence
+
+Skills verification now has independent source, adapter, native harness and
+four Worktree shard lanes. The root-owned `run_unittest_shard.py` retains
+whole classes and original discovery order, rejects discovery errors and
+reports coverage and duration. All split jobs install the original pinned
+pytest dependency. Candidate and result evidence require every lane. The
+workflow and merge policy include both new helper paths. VPN source builds
+start after identity validation; existing terminal test gates remain required.
+
+README, changelog and the merge-automation regression job cover the new
+behavior. No commit, push, hosted dispatch or repository settings change was
+performed as part of local implementation.
+
+#### Verification Evidence
+
+Local checks passed ten new partition/workflow regressions, ten existing
+workflow contracts, 42 merge-completion tests, 74 merge-gate tests, 18 release
+qualification tests and seven candidate-CI tests. Independent inventory
+comparison proved that the four shards cover all 685 discovered tests exactly
+once (172/171/171/171). All four full shards and all 888 moved adapter tests
+passed. Worktree verification observed no changes to the skill-script source
+snapshot. All 361 moved native-harness tests passed.
+
+Changed-scope align covered code review, security, trigger/policy parity,
+trusted checkout, failure propagation and complete evidence dependencies.
+Ruff, Markdown, paired-spec validation, all sixteen YAML parses, affected
+shell syntax and changed-workflow actionlint passed. Whole-repository
+actionlint has four existing parser diagnostics for documented `queue: max`
+settings; all other checks pass and publication locks remain unchanged.
+
+Baseline timings came from hosted run metadata and bounded job log summaries.
+No modified hosted run has executed. Local timings are not comparable hosted
+performance evidence; deployment, queue behavior and latency gains remain
+unverified until representative PR and exact-result attempts complete.
+
+<!-- /FEATURE: FEAT-004 -->
+
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

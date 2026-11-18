@@ -1164,3 +1164,170 @@ def test_worker_identifiers_reject_unrecognized_text():
     assert projection.project({"identity": {"node_id": "gateway-0"}}) == {
         "identity": {"node_id": "gateway-0"}
     }
+
+
+@pytest.mark.parametrize("origin", ["initial", "upgrade"])
+def test_archive_typed_checkpoint_preserves_artifact_origin_without_raw_effect(
+    config, tmp_path, origin
+):
+    from dataclasses import replace
+
+    from test_vm_ha_corrective import failed_release
+
+    state = failed_release()
+    cfg = yaml.safe_load(config.read_text())
+    cfg["project_id"] = state.project_id
+    cfg["gateway_group"]["name"] = state.gateway_name
+    cfg["gateway_group"]["vm_ha"]["cluster_id"] = state.cluster_id
+    config.write_text(yaml.safe_dump(cfg))
+    bindings = dict(state.transaction.resource_bindings)
+    if origin == "initial":
+        bindings["heartbeat-initial-artifact"] = bindings.pop("heartbeat-upgrade-artifact")
+    state = replace(
+        state,
+        transaction=replace(
+            state.transaction,
+            resource_bindings=tuple(sorted(bindings.items())),
+            checkpoint="before-activate-PRIVATE_EFFECT_SENTINEL",
+            pending_effect="activate-PRIVATE_EFFECT_SENTINEL",
+        ),
+    )
+    lifecycle = config.with_name(config.name + ".vm-ha-lifecycle.json")
+    lifecycle.write_text(json.dumps(state.to_dict()))
+    lifecycle.chmod(0o600)
+    path, _ = collector.collect(config, output=tmp_path / "checkpoint.zip", runner=fake_runner)
+    with zipfile.ZipFile(path) as archive:
+        view = json.loads(archive.read("operator/checkpoints/0.json"))
+        assert view["origin"] == origin
+        assert view[origin + "_artifact_sha256"] == bindings["heartbeat-" + origin + "-artifact"]
+        assert view["checkpoint_category"] == "activation"
+        assert b"PRIVATE_EFFECT_SENTINEL" not in b"\n".join(
+            archive.read(name) for name in archive.namelist()
+        )
+
+
+def test_archive_command_checkpoint_uses_real_owner_and_safe_identifiers(config, tmp_path):
+    from nebius_vpngw.apply_approval import digest
+    from nebius_vpngw.deploy.apply_command import CommandJournal
+    from nebius_vpngw.deploy.apply_plan import CommandPlan, Effect
+
+    intent = {"configured": True}
+    effect = Effect(
+        "guest:PRIVATE_EFFECT_SENTINEL",
+        "ordinary-runtime",
+        "apply",
+        ("private-target",),
+        digest(intent),
+        "a" * 64,
+        False,
+    )
+    plan = CommandPlan("project-example", "gateway", "b" * 64, "c" * 64, (effect,))
+    journal = CommandJournal("project-example", "gateway")
+    with journal:
+        journal.begin(plan, intents={effect.key: intent})
+    path, _ = collector.collect(
+        config, output=tmp_path / "command-checkpoint.zip", runner=fake_runner
+    )
+    with zipfile.ZipFile(path) as archive:
+        views = [
+            json.loads(archive.read(name))
+            for name in archive.namelist()
+            if name.startswith("operator/checkpoints/")
+        ]
+        view = next(row for row in views if row["source"] == "command")
+        assert view["selected_artifact_sha256"] == "c" * 64
+        assert view["effects"][0]["category"] == "ordinary-runtime"
+        assert view["effects"][0]["progress"] == "planned"
+        assert view["unknown_effects"] == 0
+        assert "PRIVATE_EFFECT_SENTINEL" not in json.dumps(view)
+
+
+@pytest.mark.parametrize(
+    "failure,direction,assessment",
+    [(False, "peer-to-gateway", "authenticated-receive"), (True, "gateway-to-peer", "tls-failure")],
+)
+@pytest.mark.parametrize("archive_delay", [0, 60])
+def test_archive_peer_channel_preserves_observed_direction(
+    config, tmp_path, failure, direction, assessment, archive_delay
+):
+    captured_at = time.time() - archive_delay
+
+    def run(request, timeout):
+        rows, outcome = fake_runner(request, timeout)
+        if request["action"] == "remote":
+            rows = [
+                {
+                    "probe": "ha-1/native",
+                    "outcome": "ok",
+                    "observed_at": captured_at,
+                    "data": {
+                        "guard_boot_id": "boot",
+                        "apply_convergence": {"boot_id": "boot", "observed_at": captured_at - 1},
+                        "heartbeat": {
+                            "peer_v6_fresh": not failure,
+                            "peer_send_error_kind": "tls",
+                            "peer_send_consecutive_failures": int(failure),
+                        },
+                    },
+                }
+            ]
+        return rows, outcome
+
+    path, _ = collector.collect(config, output=tmp_path / "channels.zip", runner=run)
+    with zipfile.ZipFile(path) as archive:
+        view = json.loads(archive.read("nodes/0/network/peer-channel.json"))
+        assert view["direction"] == direction
+        assert view["assessment"] == assessment
+        manifest = json.loads(archive.read("manifest.json"))
+        sample = next(
+            row
+            for row in manifest["probes"]
+            if row["file"] == "nodes/0/network/peer-channel.json"
+        )
+        assert sample["observed_at"] == captured_at
+
+
+@pytest.mark.parametrize("captured_at", [None, "invalid", float("nan"), True, 100])
+def test_archive_peer_channel_keeps_unknown_capture_or_stale_evidence_unknown(
+    config, tmp_path, captured_at
+):
+    def run(request, timeout):
+        rows, outcome = fake_runner(request, timeout)
+        if request["action"] == "remote":
+            rows = [
+                {
+                    "probe": "ha-1/native",
+                    "outcome": "ok",
+                    "observed_at": captured_at,
+                    "data": {
+                        "guard_boot_id": "boot",
+                        "apply_convergence": {"boot_id": "boot", "observed_at": 80},
+                        "heartbeat": {"peer_v6_fresh": True},
+                    },
+                }
+            ]
+        return rows, outcome
+
+    path, _ = collector.collect(config, output=tmp_path / "unknown-channel.zip", runner=run)
+    with zipfile.ZipFile(path) as archive:
+        view = json.loads(archive.read("nodes/0/network/peer-channel.json"))
+        assert view["assessment"] == "unknown"
+        assert view["direction"] == "unknown"
+
+
+@pytest.mark.parametrize("code", ["asset_retirement_unproven", "asset_retirement_changed"])
+@pytest.mark.parametrize("stage", ["inspect", "stage", "publish"])
+def test_archive_retains_closed_asset_retirement_failure(config, tmp_path, code, stage):
+    from nebius_vpngw.deploy.recovery import GuestFailure
+
+    failure = GuestFailure(code, stage, "PRIVATE_ERROR_SENTINEL")
+    state = config.with_name(config.name + ".vm-ha-lifecycle.json")
+    state.write_text(json.dumps({"first": failure.first.mapping(), "message": str(failure)}))
+    path, _ = collector.collect(config, output=tmp_path / "retirement.zip", runner=fake_runner)
+    with zipfile.ZipFile(path) as archive:
+        view = json.loads(archive.read("operator/state/0.json"))
+        assert view["first"]["phase"] == "guest-" + stage
+        assert view["first"]["predicate"] == "guest-" + code.replace("_", "-")
+        assert b"PRIVATE_ERROR_SENTINEL" not in b"\n".join(
+            archive.read(name) for name in archive.namelist()
+        )

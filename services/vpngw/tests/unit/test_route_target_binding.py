@@ -174,11 +174,42 @@ def test_default_attachment_requires_exact_network_authority(binding, field):
         binding.backend.verify_target(binding.target)
 
 
-def test_unknown_network_read_cannot_authorize_default_attachment(binding):
+def test_unknown_network_read_cannot_authorize_default_attachment(binding, monkeypatch):
+    from nebius_vpngw.deploy import route_manager, vm_ha_cloud
+
+    now, sleeps = [0.0], []
+
+    def sleep(delay):
+        sleeps.append(delay)
+        now[0] += delay
+
+    # Exercise the complete production retry budget without wall-clock waiting.
+    monkeypatch.setattr(
+        route_manager,
+        "vm_ha_observation_budget",
+        lambda: vm_ha_cloud.vm_ha_observation_budget(clock=lambda: now[0]),
+    )
+    monkeypatch.setattr(
+        route_manager,
+        "read_vm_ha_cloud",
+        lambda read: vm_ha_cloud.read_vm_ha_cloud(
+            read, clock=lambda: now[0], sleep=sleep, jitter=lambda: 1.0
+        ),
+    )
     inherited(binding)
-    binding.clients["Network"].get.side_effect = TimeoutError("network read unavailable")
-    with pytest.raises(TimeoutError):
+    network = binding.clients["Network"]
+    network.get.side_effect = TimeoutError("network read unavailable")
+    with pytest.raises(TimeoutError, match="cloud read deadline exceeded"):
         binding.backend.verify_target(binding.target)
+    assert binding.clients["Subnet"].get.call_count == 1
+    assert binding.clients["RouteTable"].get.call_count == 1
+    assert network.get.call_count == len(sleeps) > 1
+    assert all(call.args[0].id == "network-a" for call in network.get.call_args_list)
+    assert all(call.kwargs["retries"] == 1 for call in network.get.call_args_list)
+    assert all(0 < delay <= 1 for delay in sleeps)
+    assert now[0] == pytest.approx(vm_ha_cloud.VM_HA_REQUEST_TIMEOUT_SECONDS - 0.2)
+    allowances = [call.kwargs["timeout"] for call in network.get.call_args_list]
+    assert allowances[-1] < allowances[0]
 
 
 @pytest.mark.parametrize("default", [False, True])

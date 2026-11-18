@@ -93,7 +93,7 @@ class Service:
 
 
 @pytest.fixture
-def graph(tmp_path, monkeypatch):
+def graph(tmp_path, monkeypatch, cached_managed_key_validation):
     graph = NS(fail=None, calls=[], requests={}, operations={}, sync_close=lambda: None)
     graph.services = {label: Service(graph, label) for label in REQUESTS}
     for label, request in REQUESTS.items():

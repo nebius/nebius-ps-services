@@ -71,7 +71,11 @@ from .config_wizard import (
     run_config_wizard,
 )
 from .deploy.apply_context import load_local_config
-from .deploy.apply_diagnostics import PreparationBlocked, observation_pending
+from .deploy.apply_diagnostics import (
+    PreparationBlocked,
+    VerificationFailure,
+    observation_pending,
+)
 from .deploy.apply_result import ApplyReport
 from .deploy.apply_result import OutputFormat as ApplyOutputFormat
 from .deploy.destroy import DestroyFailure, execute_destroy
@@ -161,6 +165,7 @@ from .deploy.vm_manager import PublicAllocationCandidate, VMManager
 from .ingress_policy import IngressCapabilityError, IngressPolicyError
 from .nebius_auth import error_chain_has_cli_authentication_failure
 from .nebius_pagination import collect_nebius_pages, nebius_resource_id
+from .operational_diagnostics import health_text
 from .pair_cli import EXAMPLES as PAIR_EXAMPLES
 from .pair_cli import app as pair_app
 from .replay_window import (
@@ -4451,8 +4456,8 @@ def _vm_ha_activation_failure(
 # aborts the apply mid-transaction, leaving locked but resumable state behind.
 _VM_HA_FENCED_VERIFICATION_TIMEOUT_SECONDS = 300.0
 
-# Roughly ten seconds of classified send failures at the one-second heartbeat
-# cadence: past the staleness window, so the channel is down rather than slow.
+# Count individual consecutive failed sends, including retries (up to three per
+# publication). This threshold is not a ten-second persistence timer.
 _VM_HA_PEER_SEND_FAILURE_THRESHOLD = 10
 
 # A send that succeeded within the peer staleness window proves the channel
@@ -4466,7 +4471,7 @@ _VM_HA_PEER_CHANNEL_BLOCKING_PREDICATES = frozenset(
 
 
 def _vm_ha_peer_channel_classified_failure(heartbeat: dict[str, t.Any]) -> str | None:
-    """A proven-down peer channel's reason; None while it may merely be slow."""
+    """Classify ten or more consecutive failed send attempts, including retries."""
     failures = heartbeat.get("peer_send_consecutive_failures")
     if not isinstance(failures, int) or failures < _VM_HA_PEER_SEND_FAILURE_THRESHOLD:
         return None
@@ -4497,6 +4502,61 @@ def _vm_ha_peer_channel_failure(payload: dict[str, t.Any]) -> str:
     return "peer-heartbeat-stale"
 
 
+@dataclass(frozen=True)
+class _VMHAWaitObservation:
+    predicate: str | None
+    observed_at: float | None
+    elapsed_seconds: float
+    remaining_seconds: float
+    complete: bool = False
+
+
+class _VMHAPeerChannelOutcome(str, Enum):
+    HEALTHY = "healthy"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class _VMHAPeerChannelResult:
+    outcome: _VMHAPeerChannelOutcome
+    failure: VerificationFailure | None = None
+    last_classified: _VMHAWaitObservation | None = None
+
+
+def _wait_for_vm_ha_peer_channel(
+    *,
+    observation_callback: t.Callable[[_VMHAWaitObservation], None] | None = None,
+    **kwargs: t.Any,
+) -> _VMHAPeerChannelResult:
+    """Keep historical diagnosis separate from the terminal gate decision."""
+    last_classified: _VMHAWaitObservation | None = None
+
+    def observe(observation: _VMHAWaitObservation) -> None:
+        nonlocal last_classified
+        if observation.predicate in _VM_HA_PEER_CHANNEL_BLOCKING_PREDICATES:
+            last_classified = observation
+        if observation_callback is not None:
+            observation_callback(observation)
+
+    try:
+        _wait_for_vm_ha_agent_status(
+            predicate=_vm_ha_peer_channel_up,
+            failed_predicate=_vm_ha_peer_channel_failure,
+            timeout_seconds=_VM_HA_PEER_CHANNEL_GATE_TIMEOUT_SECONDS,
+            observation_callback=observe,
+            **kwargs,
+        )
+    except VerificationFailure as error:
+        outcome = (
+            _VMHAPeerChannelOutcome.FAILED
+            if error.latest.predicate in _VM_HA_PEER_CHANNEL_BLOCKING_PREDICATES
+            else _VMHAPeerChannelOutcome.UNKNOWN
+        )
+        return _VMHAPeerChannelResult(outcome, error, last_classified)
+    return _VMHAPeerChannelResult(_VMHAPeerChannelOutcome.HEALTHY, None, last_classified)
+
+
 def _wait_for_vm_ha_agent_status(
     *,
     predicate: t.Callable[[dict[str, t.Any]], bool],
@@ -4506,17 +4566,40 @@ def _wait_for_vm_ha_agent_status(
     deadline: float | None = None,
     poll_seconds: float = 2.0,
     progress_callback: t.Callable[[], None] | None = None,
+    observation_callback: t.Callable[[_VMHAWaitObservation], None] | None = None,
     **fetch_kwargs: t.Any,
 ) -> dict[str, t.Any]:
     from .deploy.apply_diagnostics import Failure, VerificationFailure
 
     first: Failure | None = None
     latest = Failure(phase, "status-observation-unavailable")
+    started = time.monotonic()
     deadline = (
-        min(time.monotonic() + timeout_seconds, deadline)
+        min(started + timeout_seconds, deadline)
         if deadline is not None
-        else time.monotonic() + timeout_seconds
+        else started + timeout_seconds
     )
+    observed_at: float | None = None
+
+    def observe(condition: str | None, *, complete: bool = False) -> None:
+        if observation_callback is None:
+            return
+        try:
+            now = time.monotonic()
+            observation_callback(
+                _VMHAWaitObservation(
+                    condition,
+                    observed_at,
+                    max(0.0, now - started),
+                    max(0.0, deadline - now),
+                    complete,
+                )
+            )
+        except Exception:
+            # Observations are diagnostic only; they cannot decide the outcome.
+            pass
+
+    observe("status-observation-pending")
     last_error: Exception | None = None
     # This is one read-only evidence window, not the command recovery budget.
     while (remaining := deadline - time.monotonic()) > 0:
@@ -4524,12 +4607,14 @@ def _wait_for_vm_ha_agent_status(
             payload = _fetch_vm_ha_agent_status(
                 timeout_seconds=min(15.0, remaining), **fetch_kwargs
             )
-            if time.monotonic() >= deadline:
+            observed_at = time.monotonic()
+            if observed_at >= deadline:
                 latest = Failure(phase, "status-arrived-after-deadline")
                 first = first or latest
                 last_error = _VMHAAgentStatusStale("VM-HA status arrived after the deadline")
                 break
             if predicate(payload):
+                observe(None, complete=True)
                 return payload
             latest = Failure(
                 phase,
@@ -4553,6 +4638,8 @@ def _wait_for_vm_ha_agent_status(
             subprocess.TimeoutExpired,
             _VMHAAgentStatusStale,
         ) as error:
+            if observation_callback is not None:
+                observed_at = time.monotonic()
             latest = Failure(
                 phase,
                 error.predicate
@@ -4561,12 +4648,15 @@ def _wait_for_vm_ha_agent_status(
             )
             first = first or latest
             last_error = error
+        observe(latest.predicate)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
         time.sleep(min(poll_seconds, remaining))
         if progress_callback is not None:
             progress_callback()
+        observe(latest.predicate)
+    observe(latest.predicate, complete=True)
     raise VerificationFailure(first or latest, latest) from last_error
 
 
@@ -5684,10 +5774,19 @@ class _VMHAProgressPhase(str, Enum):
 
 
 @dataclass(frozen=True)
+class _VMHAWaitProgress:
+    member_index: int
+    check: str
+    observation: _VMHAWaitObservation
+
+
+@dataclass(frozen=True)
 class _VMHAProgressEvent:
     phase: _VMHAProgressPhase
     state: _VMHAProgressState
     elapsed_seconds: float | None = None
+    wait: _VMHAWaitProgress | None = None
+    warnings: tuple[str, ...] = ()
 
 
 _VMHAProgressSink = t.Callable[[_VMHAProgressEvent], None]
@@ -5836,10 +5935,12 @@ def _emit_vm_ha_progress(
     state: _VMHAProgressState,
     *,
     elapsed_seconds: float | None = None,
+    wait: _VMHAWaitProgress | None = None,
+    warnings: tuple[str, ...] = (),
 ) -> None:
     if sink is not None:
         try:
-            sink(_VMHAProgressEvent(phase, state, elapsed_seconds))
+            sink(_VMHAProgressEvent(phase, state, elapsed_seconds, wait, warnings))
         except Exception:
             # Presentation must never become mutation or verification authority.
             pass
@@ -5889,6 +5990,54 @@ class _VMHAProgressWait:
         )
         while self._next_update <= elapsed:
             self._next_update += self._interval_seconds
+
+
+class _VMHAActivationProgress:
+    """Decorate one verification phase without owning its waits or decisions."""
+
+    def __init__(self, sink: _VMHAProgressSink | None) -> None:
+        # Ordinary apply also reaches this phase without a managed reporter.
+        self._sink = sink if sink is not None else _VMHAProgressReporter(sys.stderr)
+        self._started = time.monotonic()
+        self._next_update = 0.0
+        self._wait: _VMHAWaitProgress | None = None
+        self._warnings: dict[int, str] = {}
+
+    def __call__(self, event: _VMHAProgressEvent) -> None:
+        if self._sink is not None:
+            self._sink(
+                replace(
+                    event,
+                    elapsed_seconds=max(0.0, time.monotonic() - self._started),
+                    wait=self._wait,
+                    warnings=tuple(self._warnings.values()),
+                )
+            )
+
+    def observe(self, member_index: int, check: str, observation: _VMHAWaitObservation) -> None:
+        previous = self._wait
+        self._wait = _VMHAWaitProgress(member_index, check, observation)
+        now = time.monotonic()
+        new_window = previous is None or (previous.member_index, previous.check) != (
+            member_index,
+            check,
+        )
+        if new_window or observation.complete or now >= self._next_update:
+            self._next_update = now + 5.0
+            _emit_vm_ha_progress(self, _VMHAProgressPhase.VERIFY_FENCED, _VMHAProgressState.WAITING)
+
+    def peer_result(self, member_index: int, result: _VMHAPeerChannelResult) -> None:
+        if result.outcome is not _VMHAPeerChannelOutcome.UNKNOWN:
+            return
+        warning = f"member {member_index} peer check was unknown at gate expiry"
+        previous = result.last_classified
+        if previous is not None and previous.observed_at is not None:
+            age = max(0.0, time.monotonic() - previous.observed_at)
+            warning += (
+                f" (previous observation: {previous.predicate}, {age:.0f}s before gate ended)"
+            )
+        self._warnings[member_index] = warning
+        _emit_vm_ha_progress(self, _VMHAProgressPhase.VERIFY_FENCED, _VMHAProgressState.WAITING)
 
 
 class _VMHAProgressReporter:
@@ -5960,10 +6109,27 @@ class _VMHAProgressReporter:
     def _render(self, event: _VMHAProgressEvent) -> None:
         if self._disabled:
             return
-        suffix = (
-            f" ({event.elapsed_seconds:.0f}s elapsed)" if event.elapsed_seconds is not None else ""
-        )
         try:
+            suffix = (
+                f" ({event.elapsed_seconds:.0f}s elapsed)"
+                if event.elapsed_seconds is not None
+                else ""
+            )
+            if event.wait is not None:
+                wait = event.wait
+                observation = wait.observation
+                total = event.elapsed_seconds or 0.0
+                suffix = (
+                    f" — member {wait.member_index}: {wait.check}; "
+                    f"{observation.predicate or 'required state observed'}; "
+                    f"{observation.elapsed_seconds:.0f}s elapsed, "
+                    f"{observation.remaining_seconds:.0f}s remaining in this window; "
+                    f"verification total {total:.0f}s"
+                )
+                if event.state is _VMHAProgressState.COMPLETED:
+                    suffix = f" (verification total {total:.0f}s; full verification passed)"
+            if event.warnings:
+                suffix += "; warning: " + "; ".join(event.warnings)
             if event.state in {
                 _VMHAProgressState.STARTED,
                 _VMHAProgressState.WAITING,
@@ -5985,7 +6151,7 @@ class _VMHAProgressReporter:
                 else _VMHA_PROGRESS_LABELS[event.phase]
             )
             typer.secho(
-                f"{'✓' if succeeded else '✗'} {label}.",
+                f"{'✓' if succeeded else '✗'} {label}{suffix if event.wait is not None or event.warnings else ''}.",
                 fg=typer.colors.GREEN if succeeded else typer.colors.RED,
                 file=self._stream,
                 color=self._interactive,
@@ -7051,6 +7217,7 @@ def _execute_gateway_replacement(
         manager._ssh_policy = policy
         ssh._ssh_policy = policy
         ports = replacement_ports()
+        ports.require_release(journal)
         if journal.state["transaction"]["plan"].get("route_runtime") is not None:
             from .deploy.replacement_runtime_routes import enroll
 
@@ -8004,24 +8171,6 @@ def _apply_impl(
         from .deploy import provisioning_command
         from .deploy.apply_command import CommandJournal
 
-        if proj_id and not recreate_gw:
-            _review_provisioning_prefix(
-                CommandJournal(proj_id, plan.gateway_group.name),
-                manager=discovery_manager,
-                deployment=plan,
-                local=local_cfg,
-                lifecycle_store=lifecycle_store,
-                supplied=approve_disruption,
-                dry_run=dry_run,
-                report=result_report,
-                passive=stop_after_vm_ha_plan,
-                expected_plan=expected_vm_ha_plan,
-                artifact=hashlib.sha256(ordinary_agent_wheel.read_bytes()).hexdigest()
-                if ordinary_agent_wheel
-                else None,
-                tenant_id=tenant_id,
-                region_id=region_id,
-            )
         try:
             provisioning_resume = (
                 provisioning_command.pending(
@@ -8067,6 +8216,70 @@ def _apply_impl(
                 "gateway requires its exact original private host identity.[/yellow]"
             )
             raise typer.Exit(code=1) from error
+
+    from .deploy import release_policy
+    from .deploy.apply_command import CommandJournal
+    from .deploy.replacement_cloud import resource_id
+
+    assert discovery_manager is not None
+    release_artifact = _resolve_vm_ha_agent_artifact(ssh_policy) if plan.vm_ha is not None else None
+    release_targets = (
+        vm_ha_existing_members
+        if plan.vm_ha is not None
+        else former_vm_ha_members
+        or {
+            name: value[1]
+            for name, value in (discovery_manager._ordinary_ssh_preflight_snapshot or {}).items()
+        }
+    )
+    if release_targets:
+        release_wheel = (
+            release_artifact.path if release_artifact is not None else ordinary_agent_wheel
+        )
+        if release_wheel is None:
+            raise RuntimeError("Release admission requires the selected CLI wheel")
+        release_policy.require_targets(
+            SSHPush(ssh_policy=ssh_policy),
+            release_targets,
+            planned_instances,
+            local_cfg,
+            release_wheel,
+            resume=lambda name: release_policy.package_resume(
+                SSHPush(ssh_policy=ssh_policy),
+                release_targets[name],
+                next(item for item in planned_instances if item.hostname == name),
+                local_cfg,
+                release_wheel,
+                CommandJournal(str(proj_id), plan.gateway_group.name),
+                release_targets
+                if plan.vm_ha is not None
+                else {
+                    host: (resource_id(vm), address)
+                    for host, (vm, address) in (
+                        discovery_manager._ordinary_ssh_preflight_snapshot or {}
+                    ).items()
+                },
+            ),
+        )
+    if plan.vm_ha is None and not former_vm_ha_members:
+        if proj_id and not recreate_gw:
+            _review_provisioning_prefix(
+                CommandJournal(proj_id, plan.gateway_group.name),
+                manager=discovery_manager,
+                deployment=plan,
+                local=local_cfg,
+                lifecycle_store=lifecycle_store,
+                supplied=approve_disruption,
+                dry_run=dry_run,
+                report=result_report,
+                passive=stop_after_vm_ha_plan,
+                expected_plan=expected_vm_ha_plan,
+                artifact=hashlib.sha256(ordinary_agent_wheel.read_bytes()).hexdigest()
+                if ordinary_agent_wheel
+                else None,
+                tenant_id=tenant_id,
+                region_id=region_id,
+            )
 
     # Analyze the desired infrastructure and obtain any destructive-change approval while
     # every current HA member is still untouched. The discovery manager performs read-only
@@ -8508,15 +8721,31 @@ def _apply_impl(
         pending_upgrade = unfinished_recovery(lifecycle_state)
         recovery_artifact_changed = bool(
             pending_upgrade is not None
-            and _resolve_vm_ha_agent_artifact(ssh_policy).sha256 != pending_upgrade["artifact"]
+            and release_artifact is not None
+            and release_artifact.sha256 != pending_upgrade["artifact"]
+        )
+        from .deploy import vm_ha_corrective
+
+        initial_artifact_changed = bool(
+            lifecycle_state is not None
+            and lifecycle_state.transaction is not None
+            and "heartbeat-initial-artifact" in dict(lifecycle_state.transaction.resource_bindings)
+            and release_artifact is not None
+            and vm_ha_corrective.predecessor_artifact(lifecycle_state) != release_artifact.sha256
+            and (
+                vm_ha_corrective.activation_started(lifecycle_state)
+                or vm_ha_corrective.release_started(lifecycle_state)
+            )
         )
         if (
             vm_ha_credentials is not None
             and lifecycle_state is not None
             and lifecycle_state.status is VMHALifecycleStatus.ACTIVATING
             and lifecycle_state.transaction is not None
+            and not vm_ha_has_unsettled_replacement(lifecycle_state)
             and (
                 recovery_artifact_changed
+                or initial_artifact_changed
                 or lifecycle_state.transaction.desired_state_digest
                 != _canonical_digest(_vm_ha_desired_approval_state(plan))
             )
@@ -8528,7 +8757,8 @@ def _apply_impl(
                 or not callable(observer)
             ):
                 raise PreparationBlocked("desired-state-changed")
-            selected_artifact = _resolve_vm_ha_agent_artifact(ssh_policy)
+            selected_artifact = release_artifact
+            assert selected_artifact is not None
 
             def inspect_changed_ha():
                 current_state = lifecycle_store.read(
@@ -8558,15 +8788,20 @@ def _apply_impl(
                 )
 
             settlement, generations = inspect_changed_ha()
+            from .deploy import ha_replan
             from .deploy.apply_plan import CommandPlan
 
             prior_command = settlement.predecessor
             prior_plan = CommandPlan.parse(prior_command["transaction"]["plan"])
             prior_intent = prior_command["bindings"]["runtime"]
             automatic_settlement = bool(
-                recovery_artifact_changed
-                and pending_upgrade is not None
-                and prior_plan.artifact_sha256 == pending_upgrade["artifact"]
+                (recovery_artifact_changed or initial_artifact_changed)
+                and prior_plan.artifact_sha256
+                == (
+                    pending_upgrade["artifact"]
+                    if pending_upgrade
+                    else vm_ha_corrective.predecessor_artifact(lifecycle_state)
+                )
                 and prior_plan.configuration_sha256
                 == _canonical_digest(
                     {
@@ -8575,15 +8810,28 @@ def _apply_impl(
                         "project": proj_id,
                     }
                 )
-                and prior_intent.get("action_scope")
-                == _canonical_digest(
-                    {
-                        "recreate": False,
-                        "prepare_peer_rotation": False,
-                        "destructive": False,
-                        "managed_ssh": None,
-                        "managed_credentials": "reuse",
-                    }
+                and (
+                    prior_intent.get("action_scope")
+                    == _canonical_digest(
+                        {
+                            "recreate": False,
+                            "prepare_peer_rotation": False,
+                            "destructive": False,
+                            "managed_ssh": None,
+                            "managed_credentials": "reuse",
+                        }
+                    )
+                    or ha_replan.creation_action_matches(
+                        prior_command,
+                        lifecycle_state,
+                        {
+                            "recreate": False,
+                            "prepare_peer_rotation": False,
+                            "destructive": False,
+                            "managed_ssh": None,
+                            "managed_credentials": "reuse",
+                        },
+                    )
                 )
                 and prior_intent.get("attachments") is None
                 and not prior_intent.get("preparation")
@@ -8962,7 +9210,8 @@ def _apply_impl(
             *plan_effects,
             f"{vm_ha_credential_plan.command_action}-managed-vm-ha-runtime-credential",
         )
-        artifact = _resolve_vm_ha_agent_artifact(ssh_policy)
+        artifact = release_artifact
+        assert artifact is not None
         attachment_scope = _canonical_digest(
             {"desired": local_cfg, "artifact": artifact.sha256, "project": proj_id}
         )
@@ -9530,6 +9779,7 @@ def _apply_impl(
                 targets=ha_targets,
                 attachment_child=attachment_journal.read_transaction(),
                 settlement=ha_settlement,
+                action=ha_intent,
                 preparation_action_scope=_canonical_digest(
                     {**ha_intent, "prepare_peer_rotation": True}
                 ),
@@ -12462,48 +12712,40 @@ def _activate_bound_vm_ha(
                 "[bold]Verifying both activated nodes remain fenced on the exact operation...[/bold]"
             )
             activated_agent_statuses = {}
+            activation_progress = _VMHAActivationProgress(vm_ha_progress_sink)
             with _vm_ha_progress_step(
-                vm_ha_progress_sink,
+                activation_progress,
                 _VMHAProgressPhase.VERIFY_FENCED,
             ):
-                wait_fenced_progress = _VMHAProgressWait(
-                    vm_ha_progress_sink,
-                    _VMHAProgressPhase.VERIFY_FENCED,
-                )
-                from .deploy.apply_diagnostics import VerificationFailure
-
-                # Prove the peer heartbeat channel first: a blocked endpoint or
-                # failed peer TLS trust can never satisfy fenced verification,
-                # so it fails here in seconds with its classified cause. A
-                # channel that is merely slow falls through to the fenced wait,
-                # which owns slow convergence with its own window.
+                # Keep the per-member peer gates before full fenced verification.
+                # Only a latest classified failure aborts; unknown evidence keeps
+                # its historical diagnosis and continues through the full checks.
                 for inst_cfg, target, _receipt, _lock_receipt in activation_entries:
                     node_id = inst_cfg.vm_ha_node.node_id
                     owner_replacement_entry = bool(
                         vm_ha_missing_standby_replacement is not None
                         and node_id == current_owner_node_id
                     )
-                    try:
-                        _wait_for_vm_ha_agent_status(
-                            predicate=_vm_ha_peer_channel_up,
-                            phase=f"verify-peer-channel-node-{inst_cfg.instance_index}",
-                            failed_predicate=_vm_ha_peer_channel_failure,
-                            timeout_seconds=_VM_HA_PEER_CHANNEL_GATE_TIMEOUT_SECONDS,
-                            target=target,
-                            hostname=inst_cfg.hostname,
-                            username=username,
-                            key_path=management_key_path,
-                            client_auth=ssh_client_auth,
-                            ssh_policy=t.cast(SSHTrustPolicy, ssh_policy),
-                            inst_cfg=inst_cfg,
-                            runtime_binding=vm_ha_runtime_binding,
-                            expected_apply_locked=not owner_replacement_entry,
-                            expected_operation_id=operation_id,
-                            progress_callback=wait_fenced_progress.update,
-                        )
-                    except VerificationFailure as error:
-                        if error.latest.predicate in _VM_HA_PEER_CHANNEL_BLOCKING_PREDICATES:
-                            raise
+                    peer_result = _wait_for_vm_ha_peer_channel(
+                        phase=f"verify-peer-channel-node-{inst_cfg.instance_index}",
+                        target=target,
+                        hostname=inst_cfg.hostname,
+                        username=username,
+                        key_path=management_key_path,
+                        client_auth=ssh_client_auth,
+                        ssh_policy=t.cast(SSHTrustPolicy, ssh_policy),
+                        inst_cfg=inst_cfg,
+                        runtime_binding=vm_ha_runtime_binding,
+                        expected_apply_locked=not owner_replacement_entry,
+                        expected_operation_id=operation_id,
+                        observation_callback=functools.partial(
+                            activation_progress.observe, inst_cfg.instance_index, "peer check"
+                        ),
+                    )
+                    activation_progress.peer_result(inst_cfg.instance_index, peer_result)
+                    if peer_result.outcome is _VMHAPeerChannelOutcome.FAILED:
+                        assert peer_result.failure is not None
+                        raise peer_result.failure
 
                 for inst_cfg, target, _receipt, _lock_receipt in activation_entries:
                     node_id = inst_cfg.vm_ha_node.node_id
@@ -12547,7 +12789,11 @@ def _activate_bound_vm_ha(
                         runtime_binding=vm_ha_runtime_binding,
                         expected_apply_locked=not owner_replacement_entry,
                         expected_operation_id=operation_id,
-                        progress_callback=wait_fenced_progress.update,
+                        observation_callback=functools.partial(
+                            activation_progress.observe,
+                            inst_cfg.instance_index,
+                            "fenced verification",
+                        ),
                     )
                     from .deploy.ordinary_apply import remote as runtime_remote
 
@@ -12596,7 +12842,11 @@ def _activate_bound_vm_ha(
                         runtime_binding=vm_ha_runtime_binding,
                         expected_apply_locked=False,
                         expected_operation_id=operation_id,
-                        progress_callback=wait_fenced_progress.update,
+                        observation_callback=functools.partial(
+                            activation_progress.observe,
+                            owner_cfg.instance_index,
+                            "owner verification",
+                        ),
                     )
 
             with _vm_ha_progress_step(
@@ -15601,20 +15851,9 @@ def _vm_ha_status_view(
             degraded.extend(_vm_ha_record_reasons(record) or (f"controller-{record_state}",))
         heartbeat = record.get("heartbeat")
         if isinstance(heartbeat, dict) and heartbeat.get("peer_v6_fresh") is not True:
-            send_kind = heartbeat.get("peer_send_error_kind")
-            send_failures = heartbeat.get("peer_send_consecutive_failures")
-            peer_send_persistently_failing = bool(
-                isinstance(send_failures, int)
-                and send_failures >= _VM_HA_PEER_SEND_FAILURE_THRESHOLD
-            )
-            if peer_send_persistently_failing and send_kind in {
-                "timeout",
-                "unreachable",
-                "refused",
-            }:
-                degraded.append("peer-heartbeat-endpoint-unreachable")
-            elif peer_send_persistently_failing and send_kind == "tls":
-                degraded.append("peer-heartbeat-tls-failure")
+            classified = _vm_ha_peer_channel_classified_failure(heartbeat)
+            if classified is not None:
+                degraded.append(classified)
 
     if len(mtls_transition_operations) > 1:
         blocked.append("managed-mtls-transaction-conflict")
@@ -16437,12 +16676,7 @@ def _render_vm_ha_status(console: t.Any, view: _VMHAStatusView) -> None:
         member_table.add_row(
             gateway,
             role,
-            Text(
-                mtls,
-                style=(
-                    "green" if mtls == "healthy" else "yellow" if mtls == "transitioning" else "red"
-                ),
-            ),
+            health_text(mtls, fallback="yellow" if mtls == "transitioning" else "red"),
             Text(
                 ready,
                 style="green" if ready == "yes" else "yellow" if ready == "unknown" else "red",
@@ -16472,7 +16706,7 @@ def _render_vm_ha_status(console: t.Any, view: _VMHAStatusView) -> None:
             }
             else "white"
         )
-        summary_table.add_row(Text(label), Text(value, style=value_style), Text(detail))
+        summary_table.add_row(Text(label), health_text(value, fallback=value_style), Text(detail))
     console.print(summary_table)
 
     action, action_detail = public_summary["Action"]
@@ -16749,7 +16983,7 @@ def _render_packet_health(
         for name, window in expected.items():
             row = packet_health.summarize(observation, name, window, cold_standby=cold)
             label = f"{name}\n{hostname}" if len(expected_by_host) > 1 else name
-            table.add_row(Text(label), Text(row["window"]), Text(row["health"]))
+            table.add_row(Text(label), Text(row["window"]), health_text(row["health"]))
             if details:
                 detail_lines.extend([f"{name} ({hostname})", *row["details"]])
     console.print(table)
@@ -16780,7 +17014,10 @@ def support_bundle(
     from .support_bundle.collector import collect
     from .support_bundle.diagnostics import GUIDANCE
 
+    collection_gaps: int | None = None
+
     def show_progress(event: dict[str, t.Any]) -> None:
+        nonlocal collection_gaps
         label = f"Gateway {event['node']}" if event.get("node") is not None else "Collector"
         detail = event.get("failure")
         if isinstance(detail, dict):
@@ -16790,10 +17027,13 @@ def support_bundle(
             )
             typer.echo("  " + GUIDANCE[detail["code"]])
         elif "successful_probes" in event:
+            gaps = event["collection_gaps"]
+            note = f", {gaps} collection gaps" if gaps else ""
             typer.echo(
-                f"{label}: {event['successful_probes']} successful guest probes, {event['text_files']} nonempty text files, {event['incomplete_probes']} incomplete probes."
+                f"{label}: {event['successful_probes']} successful guest probes, {event['text_files']} nonempty text files{note}."
             )
         elif event.get("stage") == "archive" and "guest_nodes" in event:
+            collection_gaps = event["collection_gaps"]
             typer.echo(
                 f"Guest evidence collected from {event['guest_nodes']}/{event['expected_nodes']} gateways."
             )
@@ -16816,15 +17056,17 @@ def support_bundle(
             "[red]No support bundle created. Check configuration, time window and a new writable .zip output path.[/red]"
         )
         raise typer.Exit(2) from None
-    print(
-        "[yellow]Partial support bundle; inspect manifest.json.[/yellow]"
-        if code
-        else "[green]Support bundle collected.[/green]"
-    )
+    print("[green]Support bundle created.[/green]")
+    if code and collection_gaps != 0:
+        print(
+            "[yellow]Some evidence could not be fully collected. See summary.md and manifest.json for details.[/yellow]"
+        )
     # Avoid Rich markup interpretation of an operator-selected filename.
     typer.echo(str(path))
     print("Contains operational identifiers. Attach only to a private support ticket.")
-    print("Credential redaction is targeted. Review the bundle before sharing.")
+    print(
+        "Known credential patterns were redacted automatically. Redaction is not exhaustive; review the bundle before sharing through a private support channel."
+    )
     raise typer.Exit(code)
 
 
@@ -17741,7 +17983,7 @@ print(json.dumps(health))
                     # Overall status
                     status = health.get("status", "unknown")
                     if status == "healthy":
-                        overall_display = "[green]Healthy[/green]"
+                        overall_display = health_text("Healthy")
                     elif status == "warning":
                         overall_display = "[yellow]Warning[/yellow]"
                     else:
@@ -17963,6 +18205,77 @@ print(json.dumps(health))
     else:
         _render_ordinary_tunnel_selection(console, plan, status_ssh_context, vm_ips)
         _render_ordinary_route_status(console, plan, status_ssh_context, vm_ips)
+    _render_release_access(console, plan, status_ssh_context, vm_ips, vm_ha_snapshot)
+
+
+def _render_release_access(console, plan, ssh_context, targets, snapshot=None) -> None:
+    from rich.text import Text
+
+    from . import release_identity
+    from .deploy.release_policy import classify
+    from .operational_diagnostics import peer_channel
+
+    table = Table(title=f"Release and access (CLI {__version__})")
+    for column in (
+        "Gateway",
+        "Installed release",
+        "Alignment",
+        "SSH 22: operator → gateway",
+        "mTLS 9443: peer channel",
+    ):
+        table.add_column(column, overflow="fold")
+    records = {member.name: member.record for member in snapshot.members} if snapshot else {}
+    source = (
+        Path(release_identity.__file__).read_text()
+        + "\nimport json\nprint(json.dumps(observe()))\n"
+    )
+    observed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    for instance in plan.iter_instance_configs():
+        release, access = {"state": "unknown", "version": None}, "unknown"
+        try:
+            prefix = _status_ssh_target_command(
+                ssh_context, hostname=instance.hostname, target=targets[instance.hostname]
+            )
+            result = subprocess.run(
+                prefix + ["sudo -n /usr/bin/python3 -B -c " + shlex.quote(source)],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            if result.returncode == 0:
+                access = "authenticated"
+            if result.returncode == 0 and len(result.stdout) <= 4096:
+                release = json.loads(result.stdout)
+                if not isinstance(release, dict):
+                    release = {"state": "unknown", "version": None}
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            subprocess.TimeoutExpired,
+            _VMHAStatusSSHUnavailable,
+        ):
+            pass
+        assessment = classify(release, __version__)
+        version = release.get("version") if assessment != "unknown" else None
+        table.add_row(
+            Text(instance.hostname),
+            Text(str(version or "unknown")),
+            Text(assessment, style="green" if assessment == "matched" else "yellow"),
+            Text(access),
+            Text(peer_channel(records.get(instance.hostname)) if snapshot else "not-applicable"),
+        )
+    console.print(table)
+    console.print(
+        Text(
+            f"Observed {observed_at}: installed metadata over authenticated SSH; peer channel from the HA heartbeat snapshot. "
+            "Release alignment does not verify installed file hashes or the identity loaded by running services. "
+            "Peer SSH is not required; listener presence alone does not prove reachability or mTLS authentication.",
+            style="dim",
+        )
+    )
 
 
 def _render_ordinary_route_status(
@@ -18040,7 +18353,7 @@ def _render_tunnel_selection_table(console: Console, table: Table, cfg: dict, st
             target
             or (policy.preferred if policy.mode == "static" and policy.eligible else "native"),
             policy.unavailable_reason or state.get("reasons", {}).get(policy.name, "configured"),
-            state.get("health", {}).get(policy.name, "unknown"),
+            health_text(state.get("health", {}).get(policy.name, "unknown")),
             "yes"
             if target
             and (policy.mode == "bgp" or state.get("reasons", {}).get(policy.name) == "failover")
@@ -23720,7 +24033,6 @@ def _plan_vm_ha_corrective(
     from .deploy import ordinary_handoff
     from .deploy import vm_ha_corrective as corrective
     from .deploy.vm_ha_upgrade_recovery import (
-        ARTIFACT,
         host_digest,
         release_started,
         validate_host_evidence,
@@ -23736,11 +24048,10 @@ def _plan_vm_ha_corrective(
     bindings = dict(tx.resource_bindings)
     if (
         state.record_version != 4
-        or ARTIFACT not in bindings
-        or "heartbeat-initial-artifact" in bindings
+        or not ({"heartbeat-initial-artifact", "heartbeat-upgrade-artifact"} & bindings.keys())
         or vm_ha_has_unsettled_replacement(state)
     ):
-        # Fresh activation and passive replacement keep their existing owners.
+        # Only a proven host-only activation frontier may succeed its owner.
         return None
     retained = corrective.authority(state)
     replanned = settlement or (retained.get("replan") if retained else None)
@@ -23758,7 +24069,7 @@ def _plan_vm_ha_corrective(
         return None
     if not resumed:
         if settlement is None and (
-            bindings.get(ARTIFACT) == artifact.sha256
+            corrective.predecessor_artifact(state) == artifact.sha256
             or not (
                 release_started(state)
                 or corrective.activation_started(state)
@@ -23905,7 +24216,9 @@ def _plan_vm_ha_corrective(
                 )
             else:
                 corrective.completed_children(
-                    observed["children"], parent=tx.operation_id, artifact=bindings[ARTIFACT]
+                    observed["children"],
+                    parent=tx.operation_id,
+                    artifact=corrective.predecessor_artifact(state),
                 )
             if observed["reservation"] is not None:
                 raise ValueError("unpublished corrective reservation exists")
@@ -23941,7 +24254,7 @@ def _plan_vm_ha_corrective(
         record = {
             "prior_record": state.record_sha256,
             "prior_parent": tx.operation_id,
-            "prior_artifact": bindings[ARTIFACT],
+            "prior_artifact": corrective.predecessor_artifact(state),
             "artifact": artifact.sha256,
             "owner": owner,
             "hosts": host_digest(evidence),

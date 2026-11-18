@@ -713,9 +713,15 @@ def test_command_publishes_mode_0600_and_rerun_is_noop(
         patch("nebius_vpngw.cli._ensure_authentication", return_value="token"),
         patch("nebius_vpngw.cli._vm_ha_activation_blockers", return_value=()),
         patch("nebius_vpngw.cli.require_vm_ha_ssh_policy", return_value=object()),
+        patch("nebius_vpngw.deploy.release_policy.require_targets"),
         patch(
             "nebius_vpngw.cli._resolve_vm_ha_agent_artifact",
-            return_value=SimpleNamespace(sha256="f" * 64, dependency_plans=(), capabilities=()),
+            return_value=SimpleNamespace(
+                path=Path("fixture-release.whl"),
+                sha256="f" * 64,
+                dependency_plans=(),
+                capabilities=(),
+            ),
         ),
         patch(
             "nebius_vpngw.cli._plan_vm_ha_package_dependencies",

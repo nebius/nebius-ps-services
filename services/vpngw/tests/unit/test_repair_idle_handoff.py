@@ -14,6 +14,7 @@ def test_confirmed_repair_retires_idle_handoff_before_waiting_again(monkeypatch)
     """An idle owner cannot finish while its failed controller never submits activation."""
     owner = repair_apply.Coordinator.__new__(repair_apply.Coordinator)
     owner.admission = SimpleNamespace(intent={})
+    monkeypatch.setattr(repair_apply.Coordinator, "require_release", lambda *_: None)
     retired = []
 
     def retire(_self, name):
@@ -38,6 +39,7 @@ def test_confirmed_repair_retires_idle_handoff_before_waiting_again(monkeypatch)
 def test_repeated_retirement_receipt_does_not_extend_writer_deadline(monkeypatch):
     owner = repair_apply.Coordinator.__new__(repair_apply.Coordinator)
     owner.admission = SimpleNamespace(intent={})
+    monkeypatch.setattr(repair_apply.Coordinator, "require_release", lambda *_: None)
     owner.remote = lambda *_a, **_k: (_ for _ in ()).throw(
         ordinary_apply.RemoteGuestWriterBusy("a different writer")
     )

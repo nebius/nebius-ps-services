@@ -1121,112 +1121,149 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-005 -->
 
-<!-- FEATURE: FEAT-006 reqs=REQ-007 status=ready delivery=implemented priority=P0 version=2 -->
-### FEAT-006: Source-first recovery from skill and config defects
+<!-- FEATURE: FEAT-006 reqs=REQ-007 status=ready delivery=implemented priority=P0 version=3 -->
+### FEAT-006: Always-on source-first skill and hook recovery
 
 #### Requirements Covered
 
-- REQ-007: Distinguish repo-owned guard defects from external policy and repair the causal owner without evasion.
+- REQ-007: Repair repo-owned skill and guard defects without evasion.
 
 #### Context Evidence
 
-`config-codex/SKILL.md`, its README, and `references/local-setup.md` currently
-turn every blocking guard into a mandatory manual edit. The same workflow
-already owns reviewed hook-source installation, provenance checks, backups,
-restart guidance, and source-installed-runtime separation.
+Before this change, global context management described source-first repair of
+blocking skill implementation defects. Config Codex distinguished proven
+repo-owned false denials from external policy. The source and installed shared
+skill matched during that inspection. Native global templates lacked an explicit
+repair trigger, and the shared procedure did not explicitly cover hooks,
+supporting helpers, small tasks or non-blocking defects.
 
 #### Design Details
 
-Split denial handling into two branches. For a proven repo-owned guard whose
-documented boundary contradicts the denial, and when the request authorizes
-source plus local installation changes, reproduce the false block, repair the
-canonical repository source and docs, validate, sync through the documented
-installer, report restart/trust status, and retry the identical target edit.
-This sequence does not change writer or target and therefore repairs policy
-rather than evading it.
+Keep one compact always-on repair rule in each native global instruction
+surface, maintained by config-codex or config-claude. The rule routes confirmed
+encountered defects to global-context-management, which owns diagnosis, narrow
+source repair, review, validation, installation and continuation. No new hook,
+background repair engine, automatic catalog audit or retry-budget owner is added.
 
-For OS, sandbox, enterprise, external, unknown-provenance, conflicting, or
-out-of-authority controls, stop and report the exact blocker plus smallest
-manual action. Prohibit redirection, alternate tools, direct installed-hook
-edits, disabling or unregistering the guard, cwd tricks, or pre-repair target
-mutation in both branches.
+The shared procedure resolves canonical source and installed provenance,
+reproduces the defect and repairs instructions, scripts, templates, hooks or
+supporting helpers at the causal owner. Preserve unrelated changes. Reuse
+existing task authority for the necessary repair and scoped installation;
+active mode, explicit read-only scope and skill invocation restrictions remain
+binding. Unsupported controls and unknown ownership are reported rather than
+bypassed. Never weaken a guard or edit only its installed copy.
 
-Global context management applies the same source-first recovery sequence to
-proven repository-owned skill implementation defects encountered during an
-authorized task. Locate the canonical source and installed provenance, reproduce
-the failure, make the narrow repair, review and validate it, install it using the
-existing repository script, verify installed parity and retry the original
-operation. Continue toward the original objective; installation failures are
-diagnosed at their owner. Do not re-request authority already supplied, invent
-new grants, discard checkpoints, reset budgets or bypass an actual external
-control. Preserve uncertain effects and reconcile them before another mutation.
-This adds workflow guidance, not a background daemon or automatic privileged loop.
+Install selected skill sources through the existing installer after inspecting
+bundled-hook and shared-runtime effects. Hook repairs use their source owner's
+bundle and change registrations only when required. Re-read updated skill
+instructions, verify installed parity, and complete any required native reload
+or hook trust before claiming resumed execution. Global instruction updates
+are separate setup-owner patches; the installer does not apply them.
+
+Reconcile ambiguous prior effects before retrying the same operation. Preserve
+workflow grants, checkpoints, immutable execution boundaries, deadlines and
+existing remediation budgets. A repeat failure returns to the causal owner;
+repair does not reset budgets, invent authority or authorize unrelated cleanup.
 
 #### Selected Option
 
-Use provenance- and authority-gated source-first repair, with manual fallback
-only when the policy owner cannot be repaired in scope.
+Use global instructions for the trigger and the existing shared skill for the
+procedure. Keep both native source policies aligned; this rollout updates only
+the selected Codex installation and its managed global instructions.
 
 #### Alternatives Considered
 
-Universal manual fallback is safe but leaves repo-owned defects unfixed.
-Alternate writers and hook disabling bypass policy. Editing only installed
-payloads loses provenance and will drift on the next installation.
+Skill-only routing misses small tasks where it is not selected. A full global
+procedure adds persistent context. A repair hook creates another potentially
+broken and reentrant path. Installed-only patches lose source ownership.
 
 #### Implementation Boundaries
 
-Owned surfaces are config-codex and global-context-management skill contracts,
-setup documentation,
-cross-surface tests, root changelog, and the canonical source/install workflow.
+Change the shared skill, discovery metadata and evals; native setup contracts,
+templates, instruction validators and tests; relevant READMEs/setup references;
+root changelog and canonical specs. Existing command interfaces, hook payloads
+and registrations remain unchanged by this policy rollout.
 
 #### Test-First Success Criteria
 
-- TDD-001: Static contract tests require no-evasion wording, owner/provenance
-  gates, source-first repair, separate install/restart, identical retry, and
-  external-policy manual fallback across all config-codex surfaces.
-- TDD-002: The repo-owned guard false-block regression proves the unchanged
-  config write passes after source repair while owner-private state remains
-  protected and the project-spec observer remains neutral.
+- TDD-001: Native checks reject missing, stale or example-only repair guidance
+  without modifying inspected homes, while preserving unrelated user rules.
+- TDD-002: Scoped installation retains ownership and sibling skills and remains
+  idempotent; source, installed and fresh-runtime evidence remain separate.
+- TDD-003: A disposable fresh Codex trial encounters a harmless broken helper,
+  repairs canonical fixture source, installs the correction and completes the
+  original task without installed-only edits or repeated approval.
 
 #### Validation Plan
 
-Run config-codex contract tests, advisory project-spec hook tests, installer
-checks, source-to-installed parity, and a fresh-runtime review boundary.
+Run focused native instruction checks, template validation, trigger evaluation
+structure checks, changed-scope lint, code/security review and spec validation.
+Apply align to the complete changed surface before final delivery.
 
 #### Test Plan
 
-Cover repo-owned authorized, external, unknown-provenance, source-drift,
-out-of-scope, and conflicting-policy denials.
+Cover blocking and non-blocking skill defects, hook false denials, source and
+installed drift, uncertain effects, read-only tasks, genuine external denials
+and preserved repair budgets. Use disposable homes for fixture installation.
 
 #### Evaluation Plan
 
-Apply the original Playwright config patch through the repaired installed hook
-and report fresh-session activation separately.
+Freeze the harmless native trial's workflow and oracle before launch. Observe
+repair and continuation without satisfying its product-owned steps from the
+harness. Report unavailable activation separately from passing static checks.
 
 #### Rollout And Rollback
 
-Install with the existing recoverable backup path. Restore the exact previous
-hook if regression checks fail before a fresh runtime is trusted.
+Patch only the selected native managed instruction block with preimage checks
+and a private backup; install affected skills through the existing script.
+Preserve unrelated local files. A required native reload or hook trust remains
+an explicit boundary. Restore only task-owned changes after rechecking current
+bytes if rollback is needed; never restore a stale whole-home snapshot.
 
 #### Done Definition
 
-Config-codex repairs a proven in-scope owner defect and retries the original
-operation without teaching or using a bypass.
+The always-on trigger, shared procedure, native setup contracts and validators
+agree; Codex installation and local policy converge. Report observed runtime
+coverage and any remaining activation limitation explicitly.
 
 #### Implementation Evidence
 
-Global context management now documents source-first skill repair, reviewed
-installation and continuation under existing authority. Its README and canonical
-requirements preserve genuine external controls and uncertain-effect recovery.
-Historical config-denial implementation evidence remains unassessed.
+Expanded the shared repair procedure and its discovery metadata to cover
+encountered skill, hook and helper defects, including small tasks and
+non-blocking defects. Both native policy templates and selected setup paths
+carry the compact global trigger. Codex validates active Markdown guidance;
+Claude retains its complete managed-block comparison. Native fixture tests,
+trigger cases, quality assertions, setup references and README guidance align.
+
+Applied the selected Codex global-rule patch while preserving all unrelated
+instruction bytes and mode, with a private backup. Installed the three changed
+skills through the existing scoped installer. No hook payload or registration
+changed. The updated global instructions were observed in the current session.
 
 #### Verification Evidence
 
-Changed Markdown and source review pass. The repository installer updated the
-selected global-context-management, github-workflows and publish-release skills
-without removing unrelated skills; repaired source/installed bytes match. The
-installed publication helper successfully reads repository metadata after the
-endpoint repair. Native guidance compliance beyond this operation is unverified.
+All 102 Codex and 33 Claude policy tests and three focused cross-host installer
+tests pass. The new Codex regression first reproduced eight false acceptances,
+then passed after the validator repair. Global-context template checks, nine
+portable/Codex/Claude structure checks, Ruff, Markdown and diff checks pass.
+Actual pinned npx discovery, copied payload parity, repeat installation and
+isolation pass for all three skills on both target layouts. Independent scoped
+code and security review found no blocker. Personal Codex installation matches
+88 substantive source files and executable modes; repeat installs converge,
+and the selected global-policy check passes. A separate full-home audit reports
+an existing nested task-state permission/type finding outside this scope.
+
+A fresh native Codex trial loaded the shared procedure, encountered the decimal
+helper defect, repaired canonical fixture source and attempted the supported
+installer. Workspace-write protection denied writes to the installed .agents
+tree; the agent retained the original installed helper, preserved invoice input
+and the unrelated sibling, and reported the blocked continuation without bypass.
+The report was not created. The agent also updated fixture README documentation,
+so the trial's frozen whole-README byte-preservation assertion did not hold.
+This trial is not a clean end-to-end PASS: source repair and refusal to bypass
+were observed; installed repair and resumed execution remain unverified.
+No hook-repair runtime or clean isolated comparative-quality qualification is
+claimed. Delivery remains implemented rather than verified.
 
 <!-- /FEATURE: FEAT-006 -->
 
@@ -10919,7 +10956,7 @@ restricted runner. FEAT-068 separately verifies unused LFS configuration with
 sentinel executables; actual LFS content remains unsupported.
 
 <!-- /FEATURE: FEAT-052 -->
-<!-- FEATURE: FEAT-053 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=3 -->
+<!-- FEATURE: FEAT-053 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=4 -->
 ### FEAT-053: Project-grouped GitHub issue review and batch plans
 
 #### Requirements Covered
@@ -10941,11 +10978,13 @@ only as a disclosed fallback. No new models, runtime, hooks, parser service,
 database or scheduler are introduced. Counting and ordering are algorithmic
 instructions; prose does not establish deterministic code enforcement.
 
-Accept --repo CSV repository names/URLs, --issue CSV positive numbers, and
+Accept --repo CSV repository names/URLs, --issues CSV positive numbers, and
 --priority CSV project roots; help is side-effect-free. Validate every flag and
 entry locally before repository discovery or GitHub calls, including priority
 path normalization and traversal/absolute-path rejection. Remove positional
-selectors. With neither issue nor label flag, collect all open issues in each selected repo;
+selectors. With neither issues nor label flag, collect open candidates in each
+selected repo
+then retain only the resolved current or explicit project scope;
 without --repo, resolve the unambiguous repository for the current Git root.
 Check every explicit issue number in every selected repo. Preserve supplied
 repo order, deduplicate identities, exclude PRs, and distinguish inaccessible
@@ -10981,7 +11020,8 @@ A matching local checkout is required for saving; do not clone silently.
 
 research and design remain internal read-only advisers in the current host
 mode. The outer skill saves and reads back plans, then publishes concise
-individual decisions. Plan content never appears in comments or chat. Retain
+individual decisions. Detailed plan content never appears in comments or chat; concise scope,
+dependency and readiness summaries with file links are permitted. Retain
 pre-write drift checks, acting-identity comment deduplication, separate comment
 and closure readbacks, and bounded uncertain-write reconciliation. Before each
 acceptance, refresh that member and all sibling/dependency evidence supporting
@@ -10993,8 +11033,8 @@ partial effects per member; do not reverse verified effects as compensation.
 
 Label-filtered review is an opt-in bounded mode: --label accepts one literal
 existing label, --issue-batch defaults to five and requires a positive integer.
-Reject repeated singleton flags and combinations with --issue before discovery.
-Select oldest-created open issues (number ties), consuming one total across
+Reject repeated singleton flags and combinations with --issues before discovery.
+Select oldest-created project-matching open issues (number ties), consuming one total across
 repositories in supplied order. Stop at the limit or exhaustion, then freeze
 identities before effects; never refill changed/failed slots. Project priorities
 order only selected members. Unbounded discovery retains complete pagination.
@@ -11006,6 +11046,57 @@ mutually exclusive workflow statuses. Missing or ambiguous meanings remain
 recommendations, not invented labels. Comments, labels and closure have separate
 preconditions, readbacks and pending outcomes; human reopening prevents stale
 closure. PR-caller mode remains read-only and never inherits standalone effects.
+
+Project selection and implementation handoff (version 4):
+
+Use canonical --issues only; reject --issue with a correction. --project accepts
+one exact recognized root or unique basename per repository, never fuzzy names,
+arbitrary subfolders or GitHub Projects boards. When omitted, infer the owning
+project from the invocation folder; descendants use the nearest recognized
+project root. At the repository root, use whole-repository scope, also explicitly
+selectable with `--project .`. An ambiguous/non-project container folder requires
+clarification instead of silently widening to repository scope. With --repo and
+no --project, map that inferred repository-relative root exactly in each selected
+repo; missing/ambiguous mappings remain pending. Normalize safe relative syntax
+before discovery; resolve roots from repository manifests, catalogs, instructions
+and source. Preserve explicit path intent before normalization: ./api and api/
+select exact top-level api even when bare api is ambiguous. Include primary-owned or proven-affected issues, retaining primary
+ownership and per-issue evidence. Numbers intersect project scope. Apply project
+filtering while scanning ordered label candidates, before the invocation cap;
+unresolved earlier membership blocks bounded selection, and no slot is refilled.
+Unbounded project discovery exhausts the repository candidate set. Report known
+exclusions separately from uncertain coverage; no project match is not access
+failure. Existing repo-first ordering and per-repository failure isolation remain.
+
+Save complete remediation plans under their primary owners. For explicit or current-folder project scope with
+ready plans, save docs/github-issues/project-plan.md under the resolved selected
+project. It records the latest review scope, coverage and all dispositions plus
+ready batch paths, repository/project identities, exact SHA-256 fingerprints and
+dependencies. Render document-relative links and verify their destinations
+against canonical repository-relative plan identities. This is an approval/navigation snapshot, not a second normative
+plan or durable backlog ledger. Preserve human edits and compare predecessor
+bytes before replacement. Only ready dependency-complete batches enter an
+implementation proposal; uncertain/deferred work remains separately visible.
+
+Every batch plan states its primary project root, affected components, scoped
+change paths and project-local validation context. Before execution the root
+resolves the actual matching checkout, verifies repo and project identities,
+loads every applicable ancestor/project instruction and compares plan/evidence
+state. Never use review cwd as execution scope or store absolute private paths
+in reusable artifacts. Cross-owner work keeps its own plan and execution root.
+
+After triage, the root offers the exact plan set and waits for direct operator
+authorization. Explicit $implement uses one existing run per approved batch,
+sequentially in dependency order, with the individual plan path/digest and
+criteria snapshotted by existing intake. It does not pass a link-only overview
+as the singular issue plan, invent a multi-plan runtime schema or nest owners.
+Natural approval such as implement it or proceed, when unambiguously answering
+the current proposal, permits ordinary local implementation without invoking
+Implement or fabricating its state/receipt. Both routes retain host-mode limits,
+refresh plan/evidence state and require new agreement for material scope changes.
+Implementation approval grants no publication, merge or issue closure; triage's
+existing independent effect authority is unchanged. Read-only PR callers never
+offer this standalone continuation.
 
 #### Selected Option
 
@@ -11027,7 +11118,9 @@ workflow. Issue counts set project order but cannot substitute for severity.
 Modify review-github-issues and its catalog README/Unreleased references plus
 REQ-054 and FEAT-053 through paired publication. Preserve unrelated changes.
 No shared validator, plugin membership, installed-home or live issue changes.
-Shared PR lifecycle and label-policy references are updated together; mock
+Update selection/grouping/plan/handoff references, overview template, native
+metadata and the shared issue-resolution handoff; retain its runtime schema.
+Shared PR lifecycle and label-policy references remain consistent; mock
 composition evaluations must load both actual sibling instructions.
 
 #### Test-First Success Criteria
@@ -11047,6 +11140,15 @@ composition evaluations must load both actual sibling instructions.
 - TDD-007: Invalid priority input causes no GitHub calls; sibling evidence
   refresh precedes dependent acceptance; frozen target changes never expand
   effects; selecting one existing plan member preserves unselected members.
+
+- TDD-008: Project roots/unique names, ambiguity, invalid paths, proven shared
+  impact, keyword false positives and number intersections preserve selection.
+- TDD-009: Project filtering precedes label caps; unresolved earlier membership
+  blocks selection; multi-repo identities, PR exclusion and pagination remain.
+- TDD-010: Overview reuse, exact fingerprints, human edits, dependencies, save
+  failures and approvals never create stale or unselected implementation scope.
+- TDD-011: Both approval routes bind the actual owning checkout/project, preserve
+  host limits and avoid implicit Implement, fake receipts or remote authority.
 
 #### Validation Plan
 
@@ -11081,6 +11183,19 @@ remains explicit.
 
 #### Implementation Evidence
 
+Version 4 is implemented in skill instructions, project-selection and
+implementation-handoff references, overview and batch templates, native metadata,
+README/catalog and Unreleased notes. Current-folder scope replaces the former
+no-flags whole-repository default; explicit project/name/. overrides and --issues
+intersection are aligned. Plans bind actual checkout/project ownership and
+scoped change/validation paths before execution. The shared issue-resolution
+reference preserves the existing singular metadata and per-batch runtime.
+Added 23 quality and seven trigger definitions: totals 77 and 29. Independent
+review findings RGI-CR-001 through RGI-CR-003 corrected explicit path intent,
+numbered-selection scope and cross-owner document links. Final overview
+verification occurs after triage; natural approval never invokes Implement.
+Earlier evidence below describes prior revisions.
+
 The current label-batch revision is implemented in both skill instructions,
 help, READMEs, native metadata and focused references. Shared lifecycle and
 issue-label policies preserve existing effects, per-item owners and caller
@@ -11102,6 +11217,18 @@ removed. No live issue effects, real-home installation or shared-runner changes
 were performed; unrelated working edits are preserved.
 
 #### Verification Evidence
+
+Version 4: standard/core and both repository host structure checks pass with
+canonical eval definitions. Claude explicit-only frontmatter remains a recognized
+host extension. Relative-resource checks and scoped whitespace pass. Disposable
+pinned skills CLI 1.5.26 discovery, Codex/Claude copy parity, repeat installation
+and isolation pass; real-home installation and runtime activation were not run.
+Fresh Codex quality comparison and Claude trigger attempts both returned
+UNAVAILABLE because isolated native authentication is absent. No credentials
+were copied and no live GitHub effects were used. Mock sibling composition
+remains unavailable; definitions and static review are not behavioral execution
+proof. Canonical pair and final Markdown checks are rerun after this evidence
+publication. Delivery remains implemented, not runtime-verified.
 
 Current label-batch revision: STATIC_PASS for standard fields and repository
 Codex/Claude validation, canonical pair validation, scoped Markdown/whitespace,

@@ -32,7 +32,7 @@ from ..replay_window import (
     require_replay_window_capability,
     wheel_supports_replay_window,
 )
-from . import ingress_ssh
+from . import ingress_ssh, release_policy
 from .recovery import GUEST_FAILURES, GuestFailure, WriterBusy
 from .ssh_policy import configure_paramiko_host_verification
 
@@ -551,6 +551,7 @@ def inspect_plan(
     *,
     target_identity: str,
     resume_manifest: dict | None = None,
+    replacement_operation: str | None = None,
 ) -> OrdinaryPlan:
     wheel = ssh._build_wheel(allow_installed_fallback=ssh._find_project_root() is None)
     if wheel is None:
@@ -559,7 +560,24 @@ def inspect_plan(
     if resume_manifest is not None:
         from ..apply_approval import validate
 
-        validate(resume_manifest.get("command_approval", {}))
+        if replacement_operation is None:
+            validate(resume_manifest.get("command_approval", {}))
+        elif (
+            remote(
+                ssh,
+                target,
+                instance,
+                local,
+                {
+                    "action": "replacement-resume",
+                    "operation": replacement_operation,
+                    "artifact": manifest["wheel_sha256"],
+                    "configuration": manifest["config_sha256"],
+                },
+            ).get("manifest")
+            != resume_manifest
+        ):
+            raise RuntimeError("Interrupted replacement package authority changed")
         if any(
             resume_manifest[key] != manifest[key]
             for key in ("wheel_sha256", "config_sha256", "files", "assets")
@@ -568,20 +586,38 @@ def inspect_plan(
         manifest = json.loads(json.dumps(resume_manifest))
     result = remote(ssh, target, instance, local, {"action": "inspect", "manifest": manifest})
     observed = result["observation"]
+    release_policy.require(
+        observed["release_identity"],
+        manifest["version"],
+        owned_resume=bool(
+            resume_manifest is not None
+            and remote(
+                ssh,
+                target,
+                instance,
+                local,
+                {"action": "release-resume", "manifest": manifest},
+            ).get("owned_resume")
+            is True
+        )
+        if release_policy.classify(observed["release_identity"], manifest["version"]) == "unknown"
+        else False,
+    )
     inventory = result["dependency_inventory"]
     if resume_manifest is not None and manifest["runtime_plan"] != observed["runtime_plan"]:
         raise RuntimeError("Interrupted ordinary package authority changed native closure")
     manifest["runtime_plan"] = observed["runtime_plan"]
     pending_runtime = observed.get("runtime_pending")
+    if pending_runtime is None and resume_manifest is None:
+        manifest["asset_retirement"] = observed["asset_retirement"]
     if pending_runtime is not None:
         saved = pending_runtime["manifest"]
         if resume_manifest is not None:
             from ..apply_approval import manifest_identity
 
-            if (
-                manifest_identity(saved) != manifest_identity(manifest)
-                or saved.get("command_approval") != manifest["command_approval"]
-            ):
+            if manifest_identity(saved) != manifest_identity(manifest) or saved.get(
+                "command_approval"
+            ) != manifest.get("command_approval"):
                 raise RuntimeError("Interrupted ordinary package authority changed")
         if any(
             saved[key] != manifest[key]
@@ -619,6 +655,8 @@ def inspect_plan(
             f"remove obsolete static route {item['route']['dst']} via {item['link']['name']}"
             for item in route_plan.payload["deletions"]
         ]
+        if manifest.get("asset_retirement", {}).get("removals"):
+            effects.append("retire obsolete release-owned service assets")
         verify_asset_predecessors(manifest, observed)
         pending = observed.get("operation")
         if pending:

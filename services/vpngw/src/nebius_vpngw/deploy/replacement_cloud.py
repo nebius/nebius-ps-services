@@ -155,6 +155,81 @@ class Cloud:
     def records(self) -> dict[str, Any]:
         return self.journal.state["transaction"]["operations"]
 
+    def observe_compute_completion(self, label: str, *, request: Any = None) -> str | None:
+        """Read an accepted receipt without settlement, replay or journal writes."""
+        from nebius.api.nebius.common.v1 import GetOperationRequest
+        from nebius.api.nebius.compute.v1 import InstanceServiceClient
+
+        tx = self.journal.state["transaction"]
+        record = self.records.get(
+            effect_key(tx["approval"], self.member_index, label, self.operation_scope)
+        )
+        if record is None:
+            return None
+        if label not in {"create-candidate", "retire-compute"} or record["label"] != label:
+            raise RuntimeError("Replacement release observation has another effect")
+        if request is not None and (
+            record.get("request_type") != type(request).__name__
+            or record["request_sha256"] != message_digest(request)
+        ):
+            raise RuntimeError("Replacement release observation has another request")
+        if record["status"] == "settled":
+            return record["resource_id"]
+        if record["status"] == "intent":
+            return None
+        if record["status"] != "accepted":
+            raise RuntimeError("Replacement cloud receipt remains uncertain")
+        operation = (
+            InstanceServiceClient(self.sdk)
+            .operation_service()
+            .get(
+                GetOperationRequest(id=record["cloud_operation_id"]),
+                **vm_ha_request_kwargs(),
+            )
+            .wait()
+        )
+        if (
+            str(operation.id) != record["cloud_operation_id"]
+            or operation.done()
+            and not operation.successful()
+        ):
+            raise RuntimeError("Replacement cloud receipt is not confirmed successful")
+        if not operation.done():
+            return None
+        return resource_id(getattr(getattr(operation, "result", None), "resource", None)) or str(
+            getattr(operation, "resource_id", "") or ""
+        )
+
+    def pending_compute(self, label: str, request: Any) -> bool:
+        tx = self.journal.state["transaction"]
+        record = self.records.get(
+            effect_key(tx["approval"], self.member_index, label, self.operation_scope)
+        )
+        return bool(
+            record
+            and record["label"] == label
+            and record["status"] in {"intent", "accepted"}
+            and record["request_type"] == type(request).__name__
+            and record["request_sha256"] == message_digest(request)
+        )
+
+    def candidate_boot_receipt(self) -> str | None:
+        """Read completed boot ownership without calling the settlement owner."""
+        tx = self.journal.state["transaction"]
+        record = self.records.get(
+            effect_key(
+                tx["approval"], self.member_index, "create-candidate-boot", self.operation_scope
+            )
+        )
+        if record is None or record["status"] != "settled":
+            return None
+        if (
+            record["label"] != "create-candidate-boot"
+            or record["request_type"] != "CreateDiskRequest"
+        ):
+            raise RuntimeError("Candidate disk receipt differs from its owner")
+        return record["resource_id"]
+
     def _finish(self, record: dict, operation: Any) -> str:
         if str(getattr(operation, "id", "") or "") != record["cloud_operation_id"]:
             raise RuntimeError("Replacement operation identity changed")

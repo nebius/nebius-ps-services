@@ -1,4 +1,6 @@
 id,should_trigger,prompt
+config-codex-repair-policy,true,"Update only my Codex global instructions with the shared skill and hook self-repair rule; preserve other settings."
+config-codex-runtime-repair,false,"Continue this small task after a repository-owned skill helper failed; repair its source and install the fix."
 config-codex-positive-01,true,Configure a public-safe Codex home with hooks task state and read-only agents.
 config-codex-positive-02,true,Repair my missing Codex config and validate the local setup.
 config-codex-positive-03,true,Set up Codex like this repository without copying private paths or secrets.

@@ -146,5 +146,53 @@ fresh runs exist; settings readback alone proves configuration only.
 
 <!-- /REQUIREMENT: REQ-003 -->
 
+<!-- REQUIREMENT: REQ-004 status=active priority=P1 type=feature -->
+### REQ-004: Bounded parallel CI without reduced coverage
+
+#### User Story
+
+Contributors need shorter PR and post-merge CI waits while retaining complete
+validation, exact checkout identity and protected publication evidence.
+
+#### Acceptance Criteria
+
+- AC-001: Independent expensive Skills suites execute concurrently with a
+  bounded matrix; every existing command and discovered test remains covered.
+- AC-002: Shards are deterministic, disjoint and complete. Discovery errors,
+  invalid selections and test failures fail the job; no cached test verdicts.
+- AC-003: Candidate and result evidence wait for every required lane and reject
+  failed, cancelled or missing required results.
+- AC-004: VPN builds may start after identity validation because they consume
+  no unit-test artifact; unit, lint and native checks remain mandatory gates.
+- AC-005: Workflow paths and merge policy remain aligned. Retain conservative
+  cross-skill coverage, exact-result revalidation and publication serialization.
+- AC-006: Report measured historical timings separately from projected gains;
+  establish deployed improvement only from comparable hosted attempts.
+
+#### Negative Criteria
+
+- NC-001: Do not skip tests, relax thresholds, remove interpreter coverage,
+  weaken trusted checkout, grant permissions or cancel publication for speed.
+- NC-002: Do not interpret time between rerun attempts as continuous runtime.
+
+#### Validation Method
+
+Inspect every workflow and the affected dependency graph; validate YAML,
+trigger/policy parity, exact command coverage and evidence dependencies.
+
+#### Test Method
+
+Exercise shard inventory, fixture boundaries, discovery errors and failing
+suites. Compare the unsharded test inventory with the disjoint shard union.
+Run existing protected merge and workflow contract regressions.
+
+#### Evaluation Method
+
+Compare job, step and queue timings on representative PR and result attempts
+with equivalent tests and runner capacity after publication. Keep live gains
+pending until those runs exist.
+
+<!-- /REQUIREMENT: REQ-004 -->
+
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

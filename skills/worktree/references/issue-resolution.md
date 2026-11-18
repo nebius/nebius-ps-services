@@ -3,7 +3,27 @@
 This contract connects saved issue plans, local Implement delivery, ordinary PR
 publication and native GitHub closure. It grants no push, PR, merge or worker
 remote authority. Review GitHub Issues stops after triage and saved plans; the
-root sequences separately requested delivery skills. Agentic SDLC is excluded.
+root sequences separately requested delivery skills or ordinary local
+implementation after direct operator approval. Agentic SDLC is excluded.
+
+## Project overview intake
+
+A project review overview is an approval/navigation manifest, not the singular
+issue plan in metadata below. For an explicit Implement request covering an
+approved overview set, the root sequences one existing run per batch in
+dependency order after the prior owner completes required delivery/cleanup.
+Resolve each batch's actual repository and primary project root, load its
+applicable instructions, and compare its exact bytes with the proposed digest.
+Do not inherit review cwd, relocate shared-component ownership or pass a link-only
+overview as the plan. Normalize only directly approved members and criteria,
+including when a reused plan also contains unselected members. No new runtime
+schema, nested coordinator or scheduler is introduced.
+
+Natural approval uses ordinary local implementation without implicitly invoking
+Implement or fabricating its state/receipt. Both routes verify project bindings,
+source dependencies and material drift before changes. Approval alone never
+authorizes publication or closure; the existing source/dirty-state rules apply.
+See [operator handoff](../../review-github-issues/references/implementation-handoff.md).
 
 ## Accepted objective
 

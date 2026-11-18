@@ -1,5 +1,12 @@
 # Config Codex
 
+The native global template includes a compact always-on skill and hook repair
+rule. It routes confirmed encountered defects, including small tasks and
+non-blocking defects, to global-context-management's source-first procedure.
+A selected policy update patches only native global instructions; it does not
+bootstrap the rest of the home. The installer refreshes selected payloads but
+does not apply global instructions or prove fresh-session activation.
+
 Optional Tavily setup uses a pinned OAuth bridge and preserves unrelated configuration.
 Its strict checks validate executable paths and native wiring; the macOS OAuth
 fixture is a manual qualification step documented in [the bridge guide](references/tavily-bridge.md).

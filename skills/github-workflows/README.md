@@ -67,7 +67,9 @@ merge-pr helper for local review and explicitly dispatched completion of ordinar
 and Dependabot PRs, including Docker updates. The built-in token never bypasses protection. Explicit result CI and optional
 Pages builds compensate for suppressed token-generated push events. AI agents remain
 local; privileged Actions runs trusted-default deterministic code only. Agentic
-SDLC remains separate.
+SDLC remains separate. Completion filters identify the broker by its workflow
+path; descriptive run titles do not determine source identity. The completion
+helper still validates the original merge receipt before any effect.
 
 ## Publication contracts
 

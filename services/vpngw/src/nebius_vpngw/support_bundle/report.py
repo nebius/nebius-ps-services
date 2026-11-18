@@ -26,8 +26,10 @@ discarded by worker units with StandardOutput/StandardError=null cannot be recov
 Use operator/status.txt for the actual bounded public status command output.
 
 Use the evidence index to locate these investigations:
-- Artifact mismatch: operator/selected-artifact, operator/state and node worker
+- Artifact mismatch: operator/selected-artifact, operator/checkpoints, operator/state and node worker
   records. Compare actual digests; CLI version alone is not deployment identity.
+  Typed checkpoints retain initial/upgrade origin, pinned hashes, effect categories,
+  settlement and omission counts; arbitrary operation/effect names are hashed.
 - Activation: correlate generation and operation across both native HA snapshots,
   apply fences, mTLS transactions, heartbeat/replay state and worker progress.
   A held apply fence may be expected or a consequence; it is not a root cause.
@@ -39,6 +41,11 @@ Use the evidence index to locate these investigations:
 - Traffic: compare IPsec, BGP, ownership, routes, forwarding, listener and paired
   counters. Established sessions or active services do not prove forwarding owner
   correctness, end-to-end traffic, redundancy or failover readiness.
+  network/operator-ssh records authenticated collector-to-gateway access on 22;
+  network/peer-channel records the direction and assessment of mTLS heartbeat
+  evidence on 9443. Peer SSH is not required. Unknown evidence is not a closed-port verdict.
+  Peer-channel freshness uses the gateway's recorded collection time; archive
+  assembly delays do not change that historical observation.
 
 Timeline ordering is per node and boot. Wall clocks may differ between hosts;
 NTP synchronization alone does not establish their exact offset. Do not order
@@ -119,6 +126,28 @@ def key_facts(value: Any) -> list[dict[str, Any]]:
     return result
 
 
+def collection_issues(manifest: list[dict[str, Any]]) -> dict[str, set[str]]:
+    """Group a probe and its text views without concealing text-only omissions."""
+    issues: dict[str, set[str]] = {}
+    for row in manifest:
+        if row["outcome"] not in {"ok", "not-applicable"}:
+            source = row.get("source_file", row["file"])
+            issues.setdefault(source, set()).add(row["outcome"])
+    return issues
+
+
+def collection_counts(manifest: list[dict[str, Any]]) -> dict[str, int]:
+    issues = collection_issues(manifest)
+    return {
+        "limited_probes": sum("source-limit" in outcomes for outcomes in issues.values()),
+        "collection_gaps": sum(
+            outcomes != {"source-limit"}
+            or not any(part in source for part in ("/logs/", "/file-logs/"))
+            for source, outcomes in issues.items()
+        ),
+    }
+
+
 def build_reports(
     entries: dict[str, bytes], manifest: list[dict[str, Any]], complete: bool
 ) -> dict[str, bytes]:
@@ -133,6 +162,23 @@ def build_reports(
         + ". Diagnostic sufficiency: unassessed.",
         "",
         "This is private operational evidence. Read analysis-guide.md before drawing conclusions.",
+        "",
+        "## Collection limits and gaps",
+        "",
+    ]
+    issues = collection_issues(manifest)
+    if issues:
+        summary.append(
+            "History limits are expected for busy sources; all omissions remain recorded."
+        )
+        summary.append("")
+        for name, outcomes in sorted(issues.items())[:64]:
+            summary.append(f"- `{name}`: {', '.join(sorted(outcomes))}.")
+        if len(issues) > 64:
+            summary.append("See evidence-index.json for the remaining affected sources.")
+    else:
+        summary.append("No collection limits or gaps recorded.")
+    summary += [
         "",
         "## Evidence coverage",
         "",

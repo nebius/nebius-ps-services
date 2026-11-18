@@ -286,6 +286,100 @@ class OrdinaryReplacement:
         )
         cloud.settle()
 
+    def require_release(self, journal: Journal) -> None:
+        """Check every running retained source/candidate before resumed effects."""
+        from nebius.api.nebius.compute.v1 import DeleteInstanceRequest
+
+        from . import release_policy
+
+        cloud = Cloud(self.sdk, journal)
+        transaction = journal.state["transaction"]
+        selected = release_policy.wheel_version(self.wheel)
+        observations = []
+        for index, member in enumerate(transaction["plan"]["members"]):
+            cloud = Cloud(self.sdk, journal, member_index=index)
+            candidate = self.result(journal, "prepare", index).get("compute_id")
+            if candidate is None:
+                candidate = cloud.observe_compute_completion("create-candidate")
+                if not candidate:
+                    found = self.manager._get_vm_by_name(self.sdk, member["candidate_name"])
+                    if found is not None:
+                        if (
+                            found.metadata.parent_id != journal.project
+                            or dict(found.metadata.labels)
+                            != cloud.labels(member["logical_name"], "candidate")
+                            or found.spec.boot_disk.existing_disk.id
+                            != cloud.candidate_boot_receipt()
+                        ):
+                            raise RuntimeError("Replacement candidate ownership changed")
+                        candidate = resource_id(found)
+                if candidate:
+                    created = cloud.get_instance(candidate)
+                    if dict(created.metadata.labels) != cloud.labels(
+                        member["logical_name"], "candidate"
+                    ):
+                        raise RuntimeError("Replacement candidate ownership changed")
+            for identifier in (member["compute_id"], candidate):
+                if not identifier:
+                    continue
+                current = cloud.get_instance(identifier, absent_ok=True)
+                if current is None:
+                    if identifier == member["compute_id"] and (
+                        self.result(journal, "retire", index)
+                        or index == transaction["member"]
+                        and transaction["pending"] == "retire"
+                    ):
+                        if cloud.observe_compute_completion(
+                            "retire-compute",
+                            request=DeleteInstanceRequest(id=identifier),
+                        ) is not None or cloud.pending_compute(
+                            "retire-compute", DeleteInstanceRequest(id=identifier)
+                        ):
+                            continue
+                    raise RuntimeError("Replacement release target is unexpectedly absent")
+                if instance_cloud_state(current) is InstanceCloudState.STOPPED:
+                    continue  # Frozen replacement authority already gates package reconstruction.
+                _, target = self.access(identifier, member["logical_name"], cloud=cloud)
+                observed = release_policy.inspect(
+                    self.ssh,
+                    target.address,
+                    self.instances[member["logical_name"]],
+                    self.local,
+                )
+                observations.append((observed, target, identifier == candidate))
+        if any(
+            release_policy.classify(observed, selected) == "newer"
+            for observed, _, _ in observations
+        ):
+            raise release_policy.ReleaseBlocked("newer")
+        for observed, target, is_candidate in observations:
+            release_policy.require(
+                observed,
+                selected,
+                owned_resume=bool(
+                    is_candidate
+                    and release_policy.classify(observed, selected) == "unknown"
+                    and self.package_resume(journal, target)
+                ),
+            )
+
+    def package_resume(self, journal: Journal, target: OperatorTarget) -> dict | None:
+        plan = journal.state["transaction"]["plan"]
+        return ordinary_apply.remote(
+            self.ssh,
+            target.address,
+            self.instances[target.hostname],
+            self.local,
+            {
+                "action": "replacement-resume",
+                "operation": plan["operation_id"],
+                "artifact": plan["artifact_sha256"],
+                "configuration": ordinary_apply.sha(
+                    self.instances[target.hostname].config_yaml.encode()
+                ),
+            },
+        )["manifest"]
+
     @staticmethod
     def member(journal: Journal, index: int | None = None) -> dict:
         transaction = journal.state["transaction"]
@@ -413,7 +507,13 @@ class OrdinaryReplacement:
         access, target, snapshot = self._verify_access(journal)
         configuration = self.instances[target.hostname]
         prepared = ordinary_apply.inspect_plan(
-            self.ssh, target.address, configuration, self.local, target_identity=target.compute_id
+            self.ssh,
+            target.address,
+            configuration,
+            self.local,
+            target_identity=target.compute_id,
+            resume_manifest=self.package_resume(journal, target),
+            replacement_operation=journal.state["transaction"]["plan"]["operation_id"],
         )
         try:
             receipt = ordinary_apply.execute_plan(

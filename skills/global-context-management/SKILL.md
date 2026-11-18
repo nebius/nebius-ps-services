@@ -1,6 +1,6 @@
 ---
 name: global-context-management
-description: "Manage complex agent planning, implementation, debugging, refactoring, migration, review, testing, CI, or multi-file work with concise parent context, durable task state, bounded read-only helpers, focused validation, and risk review."
+description: "Manage complex work with concise context, durable task state, bounded read-only helpers and focused validation. Repair encountered repository-owned skill, hook or helper defects at source, install and continue authorized work, including small tasks."
 ---
 
 # Global Context Management
@@ -44,6 +44,8 @@ when it is useful, focused validation, and final risk review.
 - CI failures, long logs, test failures, or unclear root-cause investigations.
 - Code review or risk review where many files or contracts may be relevant.
 - Tasks likely to run long enough to hit compaction or lose earlier decisions.
+- Confirmed repository-owned skill, hook or supporting-helper defects encountered
+  during any task, including small tasks and non-blocking defects.
 
 ## When Not To Use
 
@@ -103,8 +105,9 @@ when it is useful, focused validation, and final risk review.
   or validators in the current task scope.
 - May update this skill's public-safe local source materials under the Learning
   Loop when the task contract allows source edits.
-- Must not write repo-local task-state files, SDLC run state, hook runtime
-  files, credentials, raw logs, or unrelated `<agent-home>` files.
+- Must not write repo-local task-state files, SDLC run state, credentials,
+  raw logs, or unrelated `<agent-home>` files. Do not directly patch hook runtime
+  files; source-first repairs use the owning setup workflow's reviewed installer.
 
 ## Runtime Boundaries
 
@@ -139,20 +142,46 @@ Hooks own only non-SDLC global-context events:
 Hooks must not call subagent tools directly, route `sdlc-start`, select SDLC
 phase skills, modify SDLC run state, or inject large documents.
 
-## Repair Skill Defects And Continue
+## Repair Skill And Hook Defects And Continue
 
-When a repository-owned skill implementation bug blocks an already authorized
-task, repair the canonical skill source before its installed copy. Reproduce the
-failure, make the narrow correction, review and validate it, install through the
-repository's existing script, verify installed parity, and continue the original
-task. Reuse existing authorization; do not stop solely to request another approval
-for an in-scope skill repair and its necessary installation.
+When a confirmed repository-owned skill, hook or supporting-helper defect is
+encountered during an authorized task, repair its canonical source and continue
+the original task. This includes small tasks and non-blocking defects in
+instructions, scripts, templates and installation helpers; it does not start an
+unrelated catalog-wide audit. Reuse existing task authority for an in-scope
+repair and its necessary installation without requesting repeated approval.
 
-Keep grants, checkpoints, deadlines and uncertain effects intact. Reconcile an
-ambiguous effect before retrying it. A genuine external policy, missing authority
-or unsupported security boundary remains a blocker; do not weaken controls, invent
-authority, patch only installed files or use another path to bypass the failure.
-Report source, installation and actual resumed-operation evidence separately.
+1. Identify the causal source owner and verify installed provenance. Distinguish
+   an implementation defect from a legitimate denial or requested policy change.
+   Reproduce the failure or establish a concrete regression oracle before editing.
+2. Make the narrow source correction, preserve unrelated work, review it and run
+   focused validation. Align affected docs, tests and templates. If this skill
+   or the installer is defective, repair that same canonical owner first; do not
+   create a second repair procedure or alternate installation path.
+3. Inspect installation effects, including bundled hooks and shared runtime
+   helpers. Use the repository's existing script for the selected skill or owning
+   hook bundle. Refresh registration only when required by the repair. Do not
+   overwrite unmanaged destinations, patch only installed copies or refresh the
+   entire catalog merely to install one fix. Native global instructions are a
+   separate patch owned by config-codex or config-claude, not the installer.
+4. Verify source/installed parity and re-read changed skill instructions.
+   Complete required native reload and hook trust before claiming activation.
+   Preserve task state when activation requires a new session; installation
+   success alone does not prove that an already-running session loaded the fix.
+5. Reconcile uncertain prior effects before retrying the interrupted operation;
+   observe the corrected path and continue toward the original objective. For a
+   non-blocking defect, verify the affected behavior and continue remaining work.
+   A repeat failure returns to its causal owner without resetting repair budgets.
+
+Preserve active mode, explicit read-only scope, invocation restrictions,
+permissions, workflow ownership, frozen execution boundaries, checkpoints,
+repair budgets and deadlines. Read-only or Plan Mode work diagnoses and proposes
+the repair without source or installation writes. A genuine external policy,
+missing authority or unsupported security boundary remains a blocker for that
+operation; continue independent authorized work when possible. Do not weaken or
+disable controls, invent authority, forge state or bypass a denying guard.
+Report source checks, installation, registration/trust and actual resumed
+execution separately. Hooks do not execute this repair workflow themselves.
 
 ## Host Memory Headroom
 

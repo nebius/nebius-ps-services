@@ -765,6 +765,7 @@ def reviewed_successor(
     attachment_child: dict | None,
     settlement: dict | None = None,
     preparation_action_scope: str | None = None,
+    action: dict | None = None,
 ) -> dict:
     """Called only after the existing guarded recovery owner admits its plan."""
     transaction = previous["transaction"]
@@ -777,15 +778,20 @@ def reviewed_successor(
         and runtime["action_scope"] == preparation_action_scope
     )
     if settlement is not None:
-        from .ha_replan import validate_record
+        from .ha_replan import creation_action_matches, retained_targets, validate_record
 
         proof = validate_record(settlement, previous=lifecycle)
         if proof["predecessor"] != digest(previous) or kind != "corrective-release":
             raise RuntimeError("HA successor has another settled command")
+        if action is not None and creation_action_matches(previous, lifecycle, action):
+            action_matches = True
+    targets_match = runtime_effect(old).targets == targets
+    if settlement is not None and targets == tuple(sorted(m.compute_id for m in lifecycle.members)):
+        targets_match = retained_targets(previous, lifecycle)
     if (
         (transaction["phase"] != "pending" and prepared is None)
         or old.configuration_sha256 != old_scope
-        or runtime_effect(old).targets != targets
+        or not targets_match
         or not action_matches
         or lifecycle.status is not VMHALifecycleStatus.ACTIVATING
         or lifecycle.transaction is None

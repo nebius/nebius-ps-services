@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 import yaml
@@ -24,6 +25,51 @@ def step(value, name):
 
 
 class WorkflowContracts(unittest.TestCase):
+    def test_completion_routes_broker_events_independently_of_run_titles(self):
+        paths = [
+            WORKFLOWS / "merge-completion.yml",
+            ROOT / "skills/github-workflows/assets/protected-merge/merge-completion.yml.template",
+            ROOT / "skills/github-workflows/assets/protected-merge/merge-completion-automation.yml.template",
+            ROOT / "github-ai-automation/deployment/workflows/merge-completion.yml.template",
+        ]
+        broker_path = ".github/workflows/skills-merge-pr.yml"
+        cases = [
+            ({}, True),
+            ({"name": "Another operator-visible title"}, True),
+            ({"path": ".github/workflows/other.yml", "name": "Protected merge"}, False),
+            ({"path": ".github/workflows/other.yml", "display_title": "post-merge-forged"}, False),
+            ({"path": None}, False),
+            ({"event": "pull_request"}, False),
+            ({"ref": "refs/heads/feature"}, False),
+            ({"event_name": "workflow_dispatch"}, True),
+            ({"event_name": "schedule"}, True),
+        ]
+        for path in paths:
+            value = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
+            condition = value["jobs"]["candidates"]["if"]
+            expression = condition.replace("&&", "and").replace("||", "or")
+            for overrides, expected in cases:
+                with self.subTest(workflow=path.name, overrides=overrides):
+                    fixture = {
+                        "event_name": "workflow_run", "ref": "refs/heads/main",
+                        "event": "workflow_dispatch", "path": broker_path,
+                        "name": "Merge PR 123 at reviewed-head (squash)",
+                        "display_title": "Merge PR 123 at reviewed-head (squash)",
+                    } | overrides
+                    github = SimpleNamespace(
+                        event_name=fixture.pop("event_name"), ref=fixture.pop("ref"),
+                        event=SimpleNamespace(
+                            repository=SimpleNamespace(default_branch="main"),
+                            workflow_run=SimpleNamespace(**fixture),
+                        ),
+                    )
+                    # Exercise the deployed logical predicate with event fixtures.
+                    actual = eval(expression, {"__builtins__": {}}, {
+                        "github": github, "format": str.format,
+                        "startsWith": str.startswith,
+                    })
+                    self.assertEqual(actual, expected)
+
     def test_generic_release_passes_operator_identity_to_qualification(self):
         path = ROOT / "skills/github-workflows/assets/project-name-release-publish.yml.template"
         value = yaml.load(path.read_text(), Loader=yaml.BaseLoader)

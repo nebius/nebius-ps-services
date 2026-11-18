@@ -1,6 +1,7 @@
 """Exercise prehost retirement through the public command and real child owners."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace as NS
 
 import pytest
@@ -102,7 +103,9 @@ def test_real_apply_retires_prehost_with_completed_iam_and_ssh(
         reads.append(name)
         return options["hosts"][name]
 
-    artifact = NS(sha256="2" * 64, dependency_plans=(), capabilities=())
+    artifact = NS(
+        path=Path("fixture-release.whl"), sha256="2" * 64, dependency_plans=(), capabilities=()
+    )
     monkeypatch.setattr(cli, "load_local_config", lambda _: local)
     monkeypatch.setattr(cli, "merge_with_peer_configs", lambda *_: plan)
     monkeypatch.setattr(cli, "VMHALifecycleStore", lambda *_: store)
@@ -118,6 +121,9 @@ def test_real_apply_retires_prehost_with_completed_iam_and_ssh(
         security_group_apply, "inspect_plan", lambda *_: {"desired_ids": [], "members": {}}
     )
     monkeypatch.setattr(cli, "_vm_ha_desired_approval_state", lambda _: {"desired": "changed"})
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.release_policy.require_targets", lambda *_a, **_k: None
+    )
     monkeypatch.setattr(cli, "_resolve_vm_ha_agent_artifact", lambda _: artifact)
     monkeypatch.setattr(cli, "_plan_vm_ha_package_dependencies", lambda artifact, **_: artifact)
     monkeypatch.setattr(cli, "_vm_ha_observation_matches_bindings", lambda *_a, **_k: True)

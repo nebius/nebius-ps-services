@@ -50,6 +50,8 @@ list of verified operator numeric IDs. Every new merge, including Dependabot
 and Docker updates, requires explicit operator dispatch and a positive exact
 head/base COMMENT review. Automatic PR/CI events and schedules only report CI;
 completion recovery accepts previously authorized positive-review intents.
+Broker completion filters use the workflow path, independently of dynamic run
+titles; the helper validates the original receipt before dispatching result CI.
 Keep the default token read-only and
 allow Actions PR approvals. Only effect jobs request write permissions. There
 are no App credentials or PAT fallbacks, and all write-enabled workflows share

@@ -57,7 +57,7 @@ def packages(monkeypatch, tmp_path):
         "config_sha256": "a" * 64,
         "files": {},
         "assets": {},
-        "version": "test",
+        "version": "0.6.6",
         "requirements": [],
         "runtime_plan": {"approved": "exact apt closure"},
         "dependency_wheels": {filename: ordinary_apply.sha(raw)},
@@ -65,6 +65,8 @@ def packages(monkeypatch, tmp_path):
         "expected_requirements": {"example-dep": []},
     }
     observed = {
+        "release_identity": {"state": "present", "version": "0.6.5"},
+        "asset_retirement": {"predecessor": None, "removals": {}},
         "runtime_plan": manifest["runtime_plan"],
         "runtime_pending": None,
         "files": {},

@@ -66,6 +66,12 @@ the always-visible description.
 
 Global instruction templates reuse task authorization for necessary skill
 scripts after their effects are inspected, without a separate command approval.
+Their compact self-repair rule routes confirmed encountered skill, hook and
+helper defects to global-context-management, including small tasks and
+non-blocking defects. Repair canonical source, validate, install the selected
+fix and continue within existing authority. Setup owners patch native global
+instructions separately; installation does not apply that policy or prove
+fresh-session activation.
 Global instruction templates allow necessary credential and secret creation
 within an authorized task, with secure operational storage and no disclosure.
 Explicit restrictive-instruction repair routes through `project-agent-instructions`;
@@ -174,7 +180,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `brainstorm` | Implicit allowed | Explore ideas in chat with relevant source-ranked project, repo, skill, internal, vendor, bounded research for unresolved source conflicts, and advisory design-skill context before implementation. |
 | `code-review` | Implicit allowed | Neutral findings-first review of local code; direct `$code-review` runs fix safe scoped findings and validate them with focused repository-native proof, while implicit and nested runs remain report-only. |
 | `create-learning-course` | Explicit only | Create complete, public-safe HTML textbooks with definition-first lessons, a light side-TOC layout, contextual diagrams and practical guides. |
-| `global-context-management` | Implicit allowed | Keep complex agent tasks focused with durable task state, concise parent-thread context, targeted read-only subagents when the prompt or local hook policy request authorizes delegation, focused validation, and final risk review. |
+| `global-context-management` | Implicit allowed | Keep complex tasks focused with durable state, concise context, authorized read-only helpers, validation and risk review. Repair encountered repository-owned skill, hook or helper defects at source, install and continue authorized work, including small tasks. |
 | `research` | Implicit allowed | Senior-engineer due diligence on one focal subject or disputed claim, with relevant internal context first, vendor verification, alternatives, and bounded findings for an owning decision. |
 
 ### Local Setup and Information
@@ -204,7 +210,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
 | `publish-release` | Explicit only | Publish a GitHub Release in one resumable invocation: commit current work, locally review/fix its PR, use protected Actions merge, tag and verify assets. |
-| `review-github-issues` | Explicit only | Review open backlogs or selected issues by project and shared remediation; apply justified decisions and save batch plans without implementation. |
+| `review-github-issues` | Explicit only | Review current-project or selected issues, save remediation plans and offer a separate implementation approval handoff. |
 | `review-pr` | Explicit only | Review a GitHub pull request, fixing safe issues in generic mode or preserving the exact promoted head in active Agentic SDLC findings-only mode. |
 | `update-branch` | Explicit only | Merge origin’s live default into the clean current feature branch without switching or pushing; block linked registrations for this branch, not unrelated worktrees or container folders. |
 | `worktree` | Explicit only | Create full-repository children from the exact clean local feature branch, integrate committed child work through a recoverable validated merge, and remove only with exact local proof. |
@@ -364,7 +370,7 @@ $worktree integrate project-fix-trigger-validation-a7c2f9 from the primary check
 
 $worktree remove project-fix-trigger-validation-a7c2f9 after verifying its exact local integration proof.
 
-$review-github-issues --issue 123,124 --repo example-org/example-repo
+$review-github-issues --issues 123,124 --repo example-org/example-repo
 
 $review-pr Review PR #110 against the base branch, fix safe issues on the branch, and tell me whether it is ready to merge.
 
@@ -1514,6 +1520,12 @@ monorepo-friendly workflow structure.
 
 ### `global-context-management`
 
+For confirmed repository-owned skill, hook or helper defects encountered during
+any authorized task, including small tasks, `global-context-management` owns
+the [source-first repair procedure](global-context-management/SKILL.md#repair-skill-and-hook-defects-and-continue).
+It covers blocking and non-blocking defects, scoped installation and verified
+continuation while preserving permissions, read-only limits and repair budgets.
+
 `global-context-management` keeps complex agent sessions focused and
 recoverable by using durable task-state files, limiting noisy parent-thread
 exploration, delegating bounded read-only investigation when the current prompt
@@ -1720,28 +1732,30 @@ read-only and does not configure connectors or save reports automatically. See
 
 ### `review-github-issues`
 
-Both review skills support opt-in exact-label batches:
-`$review-pr --label being-fixed --pr-batch 10` and
-`$review-github-issues --label being-fixed --issue-batch 10`.
-Omitting the batch flag defaults to five total selected items; limits never
-repeat automatically. Existing no-flags selection remains unchanged. Issue
-review may reuse documented existing labels, preserving unrelated labels;
-linked issues retain independent closure evidence and authority.
+Run `$review-github-issues` from a project such as `services/vpngw` to review
+only its owned and proven-affected issues. Subfolders inherit their owning
+project. `--project vpngw` or `--project services/vpngw` overrides that scope;
+`--project .` or invocation at the repository root selects the whole repository.
+`--issues 123,124` selects numbers within that scope; retired `--issue` is rejected.
+`--repo` accepts comma-separated repository identities in processing order.
+`--priority` only orders admitted project groups; it never widens selection.
 
-`review-github-issues` reviews all open issues in the current GitHub repository
-by default. Optional `--repo` accepts comma-separated repository names or URLs;
-`--issue` checks comma-separated numbers in every selected repo. Finish repos
-in supplied order. Within each repo, `--priority` orders comma-separated project
-roots first, then remaining projects follow by issue count. Related issues form
-shared remediation batches ordered by severity, then size; each issue retains
-its own assessment and disposition.
+Exact-label batches use `--label being-fixed --issue-batch 10`, defaulting to
+five matching issues after project filtering. No automatic refill or next batch
+is introduced. Shared-remediation batches retain individual criteria and their
+actual primary project owners, including shared components affecting the filter.
 
-Explicit invocation applies justified existing labels, comments and closures; valid low-priority
-issues stay open. Accepted batches use internal `research` and `design` advisers,
-save one verified plan under the owning project's `docs/github-issues/` using
-`batch-<anchor-number>-<topic-slug>.md`, then publish individual acceptance.
-Plans never appear in chat or comments. Existing artifact edits, unrelated work,
-read-only modes and maintainer implementation/Git ownership remain protected.
+Explicit invocation applies justified existing labels, comments and closures;
+valid low-priority issues stay open. Accepted batches use internal `research`
+and `design`, save verified batch plans under their primary projects, and save
+`docs/github-issues/project-plan.md` under the selected project as an overview.
+Chat shows links, scope, dependencies and readiness; detailed plans stay in files.
+
+After triage, the root offers an exact ready set for approval. Explicit
+`$implement` uses existing per-batch runs; natural approval uses ordinary local
+implementation without invoking that skill. Both verify actual checkout/project
+bindings and plan fingerprints before execution. Publication, closure authority,
+read-only limits and unrelated work remain protected.
 See [usage and boundaries](review-github-issues/README.md).
 
 ### `review-pr`

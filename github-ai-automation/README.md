@@ -6,7 +6,9 @@ package releases. After enrollment, laptop skills dispatch to the same effect
 owners as runners. The source ships **unactivated**: enrollment and effect
 workflows are retained in [deployment templates](deployment/README.md), outside
 installed Actions workflows. Ordinary protected merge and `$publish-release`
-remain available. Local checks are not live qualification.
+remain available. Local checks are not live qualification. The prepared merge
+completion listener matches the broker workflow path independently of its run
+title, then validates the original merge receipt before effects.
 
 Use the [hosted rollout guide](docs/hosted-rollout.md) for image updates,
 same-repository qualification, protected environment setup, canary permits and

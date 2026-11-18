@@ -63,6 +63,7 @@ def test_public_replacement_retains_coordinator_lock_without_reacquiring(
         lambda *args: SimpleNamespace(pending=lambda: None),
     )
     ports = Ports(fail="prepare" if fail else None)
+    ports.require_release = Mock()
     ports.inspect = Mock(return_value=desired)
     ports.terminal_receipt = Mock(return_value={"independently_verified": True})
     monkeypatch.setattr(replacement_ordinary, "OrdinaryReplacement", Mock(return_value=ports))

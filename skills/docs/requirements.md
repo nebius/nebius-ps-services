@@ -537,9 +537,11 @@ plan and open transition. Keep installed and live connector proof separate.
 
 #### User Story
 
-Codex users need `config-codex` to distinguish an external policy denial from
-a defective repo-owned guard so authorized configuration work can be repaired
-at its causal owner and retried.
+Users of either supported agent need confirmed repository-owned skill, hook
+or helper defects repaired at their canonical source so authorized work can
+continue, including small tasks and non-blocking failures. Configuration
+workflows must distinguish defective repo-owned guards from legitimate external
+policy denials before attempting repair.
 
 #### Acceptance Criteria
 
@@ -555,13 +557,22 @@ at its causal owner and retried.
   outside current authority, the workflow reports the exact blocker and the
   smallest out-of-band action instead of attempting evasion.
 
-- AC-004: When a repo-owned skill implementation defect blocks an already
-  authorized task, diagnose and repair its canonical skill source, validate it,
-  install the reviewed fix with the repository's installer and continue the
-  interrupted task. Reuse existing authorization instead of requesting another
-  approval solely for an in-scope skill repair. Preserve grants, checkpoints,
-  uncertain effects and deadlines; genuine external policy or authority limits
-  remain boundaries. Never patch only installed copies or weaken a guard to pass.
+- AC-004: A confirmed repository-owned skill, hook or supporting-helper defect
+  encountered during an authorized task triggers source-first repair, including
+  small tasks and non-blocking defects. Reproduce the defect, narrowly repair
+  canonical source, review and validate it, install through the repository's
+  existing script, verify the repaired path and continue the original task
+  without repeating approval for the in-scope repair and installation.
+- AC-005: Compact native global guidance routes both supported hosts to the
+  shared global-context-management procedure. Setup owners patch only the
+  selected native instruction surface and detect missing or stale policy.
+  No additional repair hook, background loop or retry-budget owner is created.
+- AC-006: Preserve active mode, explicit read-only scope, invocation restrictions,
+  permissions, workflow ownership, checkpoints, repair budgets and deadlines.
+  Reconcile uncertain effects before retry; distinguish source checks, installed
+  parity, hook registration/trust and observed resumed execution. A reload or
+  external trust requirement remains explicit; no installed-only repair,
+  guard weakening, blanket catalog refresh or unrelated cleanup is implied.
 
 #### Negative Criteria
 
@@ -574,19 +585,24 @@ at its causal owner and retried.
 
 #### Validation Method
 
-Trace source, installation, registration, and active-runtime boundaries and
-verify the repaired rule is owner-correct rather than an alternate write path.
+Trace the compact global trigger through the shared repair procedure and
+source, installation, registration and active-runtime boundaries. Verify repairs
+at their causal owner while preserving authority, workflow state and budgets.
 
 #### Test Method
 
-Add cross-surface skill contract tests plus an end-to-end false-block case that
-fails before source repair and admits the same operation after reviewed install.
+Test active native policy detection, small-task and non-blocking repair scope,
+scoped installer ownership and idempotency, and read-only and denial boundaries.
+Use disposable end-to-end skill-helper and false-block hook cases that fail
+before source repair and complete the original operation after reviewed install.
 
 #### Evaluation Method
 
-Re-run the originally denied config patch unchanged, independently confirm
-that owner-private state remains protected by its owning controls, and confirm
-the project-spec observer remains neutral.
+Observe source repair, supported installation and successful continuation of
+the original operation as separate claims. Include a denied config patch that
+retries unchanged, confirm owner-private state remains protected and the
+project-spec observer remains neutral, and retain failed or unavailable trial
+results without treating static checks as runtime proof.
 
 <!-- /REQUIREMENT: REQ-007 -->
 
@@ -4139,19 +4155,23 @@ Use behavioral review fixtures and offline Git/API tests. Distinguish source, in
 #### User Story
 
 Maintainers need an explicitly invoked issue-review skill that discovers the
-current open backlog, groups work by project and shared remediation, applies
+current project's open issues, groups work by primary owner and shared remediation, applies
 evidence-backed decisions, and saves batch plans for later implementation.
 
 #### Acceptance Criteria
 
-- AC-001: Without flags, review all open issues across the unambiguous current
-  checkout's GitHub repository. Support only optional --repo comma-separated
-  repository names or URLs, --issue comma-separated positive numbers, and
-  --priority comma-separated project roots, optional exact --label with
+- AC-001: Without --project, resolve the current folder's owning project and
+  review only its related issues. A subfolder inherits the nearest recognized
+  project root; a repository-root invocation selects the whole repository.
+  Support optional --repo comma-separated
+  repository names or URLs, --issues comma-separated positive numbers, and
+  --priority comma-separated project roots, one optional --project root/name,
+  optional exact --label with
   --issue-batch (default five), plus side-effect-free help.
   Validate all arguments before repository discovery or GitHub calls.
   Check each supplied issue number in every selected repository and review
-  every existing issue match; exclude PRs. Do not retain positional aliases.
+  only matches in the resolved current-or-explicit project scope; exclude PRs.
+  Do not retain positional aliases.
 - AC-002: In unbounded mode, complete pagination and deduplicate full identities before ordering
   each repository. Freeze observed targets for the collection interval, report
   incomplete coverage, and revalidate before effects. Process repositories in
@@ -4180,7 +4200,7 @@ evidence-backed decisions, and saves batch plans for later implementation.
   `batch-123-topic.md` with the lowest initial issue number and safe topic slug. Record full member
   identities and per-issue acceptance criteria. Reuse matching plans, preserve
   maintainer edits, and reconcile overlaps before creating competing artifacts.
-- AC-007: Keep issue implementation-plan content out of chat and comments.
+- AC-007: Keep detailed issue implementation-plan content out of chat and comments.
   Report repository/project order, batch membership, individual dispositions,
   verified local plan paths and action/coverage limitations. Respect read-only
   modes, missing matching checkouts and sensitive reporting boundaries.
@@ -4191,13 +4211,43 @@ evidence-backed decisions, and saves batch plans for later implementation.
   skipped or changed slots. Batch requires label and excludes explicit numbers.
   Preserve unrelated labels; ambiguous mappings remain recommendations.
 
+- AC-009: --project accepts one recognized repository-relative project root or
+  unique project basename per selected repository. Its explicit value overrides
+  current-folder scope in every selector mode. With --repo alone, map the inferred
+  repository-relative project root exactly in each target; unresolved roots stay
+  pending rather than widening scope. Explicit . selects the whole repository.
+  Preserve explicit path intent before normalization: ./api selects top-level
+  api even when bare api is ambiguous. Include primary-owned and proven-affected
+  issues; keywords alone are insufficient. Resolve ambiguous
+  names and unsafe/unknown paths before project review effects. Intersect explicit
+  numbers with project membership; filter before label limits. Report excluded,
+  uncertain and inaccessible targets separately; never claim complete coverage
+  from partial discovery. Reject retired --issue without an alias.
+- AC-010: For explicitly or implicitly project-filtered accepted work, save a verified project-plan.md
+  overview alongside project plans. Record scope, coverage, ordered batch links,
+  owners, dependencies, readiness and exact batch digests. Verify document-relative
+  Markdown links separately from repository-relative path identities. Preserve separate
+  primary-owner plans and maintainer edits; the overview is a snapshot, not a
+  scheduler or implementation receipt. Chat may show scope/dependencies/readiness
+  and links, never detailed plan excerpts.
+- AC-011: After triage, offer an exact ready batch set for implementation. Direct
+  $implement invocation selects existing per-batch runs; unambiguous natural
+  approval selects ordinary local implementation without invoking that skill.
+  Refresh plan digests, criteria and material evidence before handoff; no stale
+  approval, implicit workflow, publication or closure authority. Host mode wins.
+- AC-012: Each batch binds the repository identity, primary owning project root,
+  affected components and permitted change paths. Resolve a matching local
+  checkout and load applicable instructions through the actual project before
+  implementation. Never infer the execution project from review cwd, move shared
+  owner work into the filtered project, or ask for a discoverable project path.
+
 #### Negative Criteria
 
 - NC-001: No wrong-repository effects, keyword-only duplicate decisions,
   double-counted primary ownership, hidden partial coverage, automatic reopen,
   untrusted command execution, repeated equivalent comments, overwrite of
   unrelated work, or disclosure of implementation-plan contents.
-- NC-002: No implementation, canonical-spec rewrite during triage, Git/PR
+- NC-002: No implementation or canonical-spec rewrite during triage, Git/PR
   actions, label creation or undefined label mappings, assignee/milestone changes,
   authentication repair, silent clone,
   new scheduler infrastructure, or live issue mutation to test the skill.

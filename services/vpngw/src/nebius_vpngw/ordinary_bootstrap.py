@@ -26,6 +26,7 @@ def source_frame() -> bytes:
     ).decode()
     recovery_sources = "import types\n"
     for name, relative in (
+        ("_vpngw_release_identity", "release_identity.py"),
         ("_vpngw_dependency_scope", "dependency_scope.py"),
         ("_vpngw_package_worker", "package_worker.py"),
         ("_vpngw_python_package_recovery", "python_package_recovery.py"),

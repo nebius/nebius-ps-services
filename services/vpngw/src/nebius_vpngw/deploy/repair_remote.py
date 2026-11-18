@@ -21,6 +21,7 @@ try:
     import _vpngw_package_worker as worker  # type: ignore[import-not-found]
     import _vpngw_prior_package_worker as prior_worker  # type: ignore[import-not-found]
     import _vpngw_python_package_recovery as python  # type: ignore[import-not-found]
+    import _vpngw_release_identity as release_identity  # type: ignore[import-not-found]
     import _vpngw_repair_guest as guest  # type: ignore[import-not-found]
     import _vpngw_repair_runtime as runtime  # type: ignore[import-not-found]
     import _vpngw_repair_state as state  # type: ignore[import-not-found]
@@ -29,6 +30,7 @@ except ModuleNotFoundError:
     from .. import package_worker as prior_worker
     from .. import package_worker as worker
     from .. import python_package_recovery as python
+    from .. import release_identity
     from .. import repair_guest as guest
     from .. import repair_runtime as runtime
     from .. import repair_state as state
@@ -49,7 +51,7 @@ def admitted(request: dict, *, verification: bool = False) -> tuple[state.Journa
         or not isinstance(request["operation"], str)
         or not re.fullmatch(r"[a-f0-9]{32}", request["operation"])
         or not isinstance(request["package"], dict)
-        or set(request["package"]) != {"native", "wheels", "product"}
+        or set(request["package"]) != {"native", "wheels", "product", "asset_retirement"}
     ):
         raise RuntimeError("Repair package request is incomplete")
     journal = state.Journal(guest.ROOT)
@@ -348,9 +350,37 @@ def execute(request: dict) -> dict:
         for path, raw, mode in payloads:
             check()
             guest.publish_file(path, raw, mode=mode)
+        # Full repair's independent boot guard is already verified by check().
+        retirement = request["package"]["asset_retirement"]
+        journal.effect("retire-service-assets", retirement)
+        prior_command, prior_check = runtime.migration.COMMAND, runtime.migration.CHECK
+        runtime.migration.COMMAND, runtime.migration.CHECK = guest.command, check
+        try:
+            runtime.migration.retire_owned_assets(retirement)
+        finally:
+            runtime.migration.COMMAND, runtime.migration.CHECK = prior_command, prior_check
+        journal.effect(
+            "retire-service-assets",
+            retirement,
+            state="complete",
+            receipt={"retired": sorted(retirement["removals"])},
+        )
         guest.command(["systemctl", "daemon-reload"])
         check()
         verify_assets(request, value, directory)
+        members = {path: member for member, path, _mode in assets.entries(ha=value["intent"]["ha"])}
+        runtime.migration.record_asset_ownership(
+            operation,
+            asset_request["artifact"],
+            {
+                str(path): {
+                    "member": members[str(path)],
+                    "mode": mode,
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                }
+                for path, raw, mode in payloads
+            },
+        )
         journal.effect("service-assets", asset_request, state="complete", receipt=asset_request)
         check()
         if value["phase"] != "installed":
@@ -385,7 +415,7 @@ def main(*, durable: bool = False) -> None:
 
 
 def inspect() -> dict:
-    """No imports of installed product/dependency code and no old journal reads."""
+    """No installed code imports; unreadable old ownership never authorizes removal."""
     dependencies, requirements = {}, {}
     for distribution in importlib.metadata.distributions():
         try:
@@ -401,7 +431,14 @@ def inspect() -> dict:
         normalized = re.sub(r"[-_.]+", "-", name).lower()
         dependencies[normalized] = version
         requirements[normalized] = required
+    try:
+        predecessor = runtime.migration.completed_asset_predecessor()
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+        predecessor = None
     return {
+        "asset_predecessor": predecessor
+        if predecessor and predecessor["phase"] == "complete"
+        else None,
         "boot": guest.BOOT.read_text().strip(),
         "machine": platform.machine(),
         "python": platform.python_version(),
@@ -409,6 +446,7 @@ def inspect() -> dict:
         "soabi": sysconfig.get_config_var("SOABI"),
         "libc": list(platform.libc_ver()),
         "dependencies": dependencies,
+        "release_identity": release_identity.observe(),
         "requirements": requirements,
         "runtime_plan": runtime.migration.plan_current(reinstall=True),
     }
@@ -485,13 +523,25 @@ def stage(request: dict) -> dict:
         raise RuntimeError("Repair staging has no confirmed operation")
     package = request["package"]
     if (
-        set(package) != {"native", "wheels", "product"}
+        set(package) != {"native", "wheels", "product", "asset_retirement"}
         or package["wheels"].get(package["product"]) != value["intent"]["artifact"]
     ):
         raise RuntimeError("Repair staging differs from confirmed artifact")
     journal.effect("stage-payload", package)
     directory = guest.ROOT / "payload" / value["id"]
     state.directory(directory)
+    saved_package = state.read(directory / "package.json")
+    if saved_package is not None:
+        if json.loads(saved_package) != package:
+            raise RuntimeError("Frozen repair asset retirement changed")
+    elif package["asset_retirement"]["removals"]:
+        expected = runtime.migration.asset_retirement(
+            {"assets": {path: {} for _, path, _ in assets.entries(ha=value["intent"]["ha"])}},
+            runtime.migration.completed_asset_predecessor(),
+        )
+        if package["asset_retirement"] != expected:
+            raise RuntimeError("asset_retirement_unproven")
+        runtime.migration.verify_asset_retirement(expected)
     for name, expected in package["wheels"].items():
         if (
             Path(name).name != name

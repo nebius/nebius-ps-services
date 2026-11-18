@@ -107,7 +107,7 @@ The mapped requirements, validation, and evaluation all pass.
 <!-- /FEATURE: FEAT-001 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=verified priority=P1 version=3 -->
+<!-- FEATURE: FEAT-002 reqs=REQ-002 status=ready delivery=implemented priority=P1 version=4 -->
 ### FEAT-002: Evidence-driven pytest feedback optimization
 
 #### Requirements Covered
@@ -116,13 +116,38 @@ The mapped requirements, validation, and evaluation all pass.
 
 #### Context Evidence
 
+The initial diagnostic snapshot with 7,860 tests collected in a 1.47-second wall-time median
+(three samples) and passed a complete serial duration diagnostic in 415.12
+seconds. Its top 100 phase timings attribute at least 81.91 seconds of call
+time to credential enrollment and 29.80 seconds to the unknown-network route
+read. A separate three-test profile attributes 7.84 seconds to 27 real private
+key parses and 1.93 seconds to three fresh RSA key generations. Concurrent source work
+invalidated one preliminary sample; that interrupted series was discarded.
+The accepted comparison used a separate frozen source snapshot. Its full
+selection contained 7,885 tests; this count describes that recorded snapshot.
+
 Migrated from a validated Task Implementer design record.
 
 #### Design Details
 
+The optimization adds an explicit function-scoped test fixture that
+memoizes successful real private-key parsing by exact immutable PEM bytes and
+password, with a bounded cache cleared at teardown. Patch only the managed
+credential module's serialization dependency. The enrollment graph and ordinary
+recovery fixtures opt in; their dependent replan and replacement tests inherit
+it. Keep filesystem reads, permissions, content hashing, JSON parsing, IAM
+binding, key generation, publication and recovery paths real. Different bytes
+must invoke the real parser; exceptions are not cached. Dedicated managed-key
+tests retain the uncached dependency.
+
+Give the unknown-network route test an advancing virtual clock through existing
+observation-budget and cloud-read injection points. Preserve the default budget,
+retry loop and final timeout, and assert retries, decreasing request allowances,
+and elapsed virtual time. Never replace the retry operation with a canned error.
+
 Freeze the current dirty non-candidate source identity, measure the isolated unit lane with task-owned cold caches and hard timeouts, and use pytest duration reporting to identify cumulative call cost. The seven-case VM-HA crash-replay test replaces its injected runtime sleeper with a no-op because the fixture's peer sends do not fail and listener-startup pacing is outside its contract; the existing dedicated retry test continues to assert the production delay schedule exactly. A later current-suite diagnostic identified a separate SDK-operation unit test that spent two seconds in real polling only while verifying bounded SDK keyword routing; that test now sets the injected production poll-interval constant to a minimal positive value locally, as required by the current SDK, while retaining the real SDK wait path and all assertions.
 
-For the current 2,256-test suite, retain the same test-local pattern for four
+For the earlier 2,256-test suite, retain the same test-local pattern for four
 newly measured cases: record rather than wait through SSH retry pacing in two
 asset-selection tests while asserting the exact delay schedule; record rather
 than wait through allocation-release pacing while preserving the second read,
@@ -131,10 +156,14 @@ the private-allocation identity test while asserting that lookup still occurs.
 
 #### Selected Option
 
+The current candidate is test-only parser-result reuse and virtual retry time.
+It does not share credentials, mutable fixtures or caches between tests, skip
+RSA validation, reduce RSA key size, or cache product filesystem observations.
+
 Freeze the current dirty non-candidate source identity, measure the isolated unit lane with task-owned cold caches and hard timeouts, and use pytest duration reporting to identify cumulative call cost. The seven-case VM-HA crash-replay test replaces its injected runtime sleeper with a no-op because the fixture's peer sends do not fail and listener-startup pacing is outside its contract; the existing dedicated retry test continues to assert the production delay schedule exactly. A later current-suite diagnostic identified a separate SDK-operation unit test that spent two seconds in real polling only while verifying bounded SDK keyword routing; that test now sets the injected production poll-interval constant to a minimal positive value locally, as required by the current SDK, while retaining the real SDK wait path and all assertions.
 
-Apply only those four test-local substitutions. Preserve the production SSH,
-allocation-release, and SDK behavior, every remote command and cloud-read
+The earlier four-test optimization preserved production SSH,
+allocation-release and SDK behavior, every remote command and cloud-read
 attempt, the exact retry schedule as an assertion, and all existing behavioral
 assertions.
 
@@ -144,6 +173,15 @@ assertions.
 - New affected-test, sharding, or build-system dependencies are deferred unless the measured serial suite and existing xdist execution cannot meet the feedback objective.
 
 #### Implementation Boundaries
+
+Current edits are limited to `tests/conftest.py`, the explicit fixture
+dependencies in `test_credential_enrollment.py` and
+`test_ordinary_credential_recovery.py`, and the single route test in
+`test_route_target_binding.py`, plus aligned documentation. Production source,
+pytest selection, CI, dependencies, marker classification and network blocking
+are unchanged. Historical optimizations below remain in place.
+
+Historical scope:
 
 Only `tests/unit/test_vm_ha_agent_runtime.py`,
 `tests/unit/test_vm_manager_allocations.py`, and
@@ -157,7 +195,20 @@ or unrelated SDK initialization and assert those interactions explicitly.
 
 #### Test-First Success Criteria
 
-- The exact four-test selection preserves four passes across at least five
+- Run five before and five after samples of the same five-test selection,
+  spanning IAM lost replies, publication recovery, ordinary recovery, credential
+  replanning and route-read deadline exhaustion. Preserve exact collected node
+  identities and five passing outcomes in every sample.
+- Prove changed/invalid credential content still fails, fresh generation remains
+  real, and the dedicated managed-credential tests remain uncached.
+- Rerun the complete serial unit lane, compare collection identities, and report
+  the broader diagnostic separately from the repeated focused benchmark.
+- Keep all full correctness gates authoritative; report any unexecuted native,
+  integration, coverage or CI lane explicitly.
+
+Historical completed criteria:
+
+- The exact four-test selection preserved four passes across at least five
   baseline and five candidate samples with the same interpreter, pytest
   plugins, configuration, cold-cache policy, and process timing method.
 - The candidate asserts the SSH and allocation-release sleeper calls and the
@@ -167,9 +218,19 @@ or unrelated SDK initialization and assert those interactions explicitly.
 
 #### Validation Plan
 
+Current validation starts from frozen source/test hashes, isolated pytest
+caches and temporary directories, the installed Python 3.12 environment and
+90-second deadlines per focused sample. Use a separate bounded complete serial
+unit duration run, source-hash checks, Ruff, mypy, canonical spec validation and
+diff review. Timing acceptance and the complete unit lane passed for the
+recorded benchmark snapshot; later alignment checks have their own scope.
+Integration, native systemd, coverage and CI lanes have not been rerun for this
+revision; their existing gates remain authoritative. Delivery remains
+`implemented` until the full recorded validation method is complete.
+
 The original five cold-cache collection samples retained 682 unit tests with a 0.48-second median. Five like-for-like serial samples improved from a 4.07-second median (3.90-4.54 seconds) to 2.80 seconds (2.68-2.85 seconds), while every sample passed the same 682 tests; the focused seven-case median improved from 1.91 to 0.58 seconds. On the later 1,284-test suite, five process-level serial samples improved from a median of 8.98 seconds (8.89-9.24 seconds) to 7.03 seconds (6.83-7.30 seconds), and the focused SDK-operation test improved from 2.42 seconds (2.37-2.42 seconds) to 0.38 seconds (0.37-0.40 seconds).
 
-On the current 2,256-test suite, startup and collection took 0.89 seconds of
+On the earlier 2,256-test suite, startup and collection took 0.89 seconds of
 wall time and were not the bottleneck. Five like-for-like samples of the exact
 four-test lane improved from a 28.59-second median (28.42-29.23 seconds) to
 0.46 seconds (0.45-0.48 seconds), with all four tests passing in every sample.
@@ -180,9 +241,18 @@ Ruff, mypy, full project gates, and diff checks pass.
 
 #### Test Plan
 
+The five benchmark cases are the accepted-permit case of
+`test_each_uncertain_iam_creation_resumes_exact_request_and_receipt`, the
+published case of `test_local_publication_boundaries_resume_selected_key`,
+`test_completed_first_enrollment_recovers_same_key_without_expanding_iam`, the
+HA case of
+`test_settlement_preserves_partial_iam_graph_and_key_for_fresh_approval`, and
+`test_unknown_network_read_cannot_authorize_default_attachment`. Their exact
+node IDs appear in the command under Verification Evidence.
+
 The original five cold-cache collection samples retained 682 unit tests with a 0.48-second median. Five like-for-like serial samples improved from a 4.07-second median (3.90-4.54 seconds) to 2.80 seconds (2.68-2.85 seconds), while every sample passed the same 682 tests; the focused seven-case median improved from 1.91 to 0.58 seconds. On the later 1,284-test suite, five process-level serial samples improved from a median of 8.98 seconds (8.89-9.24 seconds) to 7.03 seconds (6.83-7.30 seconds), and the focused SDK-operation test improved from 2.42 seconds (2.37-2.42 seconds) to 0.38 seconds (0.37-0.40 seconds).
 
-For the current 2,256-test suite, collect the exact four node IDs from the two
+For the earlier 2,256-test suite, collect the exact four node IDs from the two
 changed files and run five baseline and five candidate process-level samples
 with fresh task-owned caches. Then run duration diagnostics, the complete unit
 and integration selections, Ruff, mypy, lock integrity, canonical spec
@@ -203,12 +273,39 @@ The mapped requirements, validation, and evaluation all pass.
 
 #### Implementation Evidence
 
+The explicit `cached_managed_key_validation` fixture uses a bounded four-entry
+cache of successful real cryptography parsing, keyed by the exact bytes and
+password. It patches only the managed-credential module's serialization
+namespace, clears the cache at teardown, and is requested only by enrollment
+and ordinary-recovery fixtures. Their dependent replan/replacement tests retain
+isolated mutable state. Generation, filesystem reads, permissions, content
+hashing, key binding and publication remain real. The dedicated managed-key
+suite retains the uncached parser.
+
+The route test injects an advancing clock into the existing observation-budget
+and cloud-read paths. It retains the full default budget and asserts unchanged
+successful reads, repeated failed network reads, bounded sleeps, shrinking
+request allowances and the final deadline error.
+
+Frozen Python source aggregate SHA-256:
+`b3215d05002195f9bdc3ec632ca32de3c7a3bf6f8e773624cb4aa483c82d3ea6`.
+The aggregate includes sorted repository-relative `.py` paths and file bytes.
+
+| Test file | Before SHA-256 | After SHA-256 |
+| --- | --- | --- |
+| `tests/conftest.py` | `4c2e6b160af62bc3546d0955c1b9158450c1e2fa591e3fe285bbde13e545ea38` | `dbb814c6231f259ef28763e210a35f4c503915b597f8e0407821dfb60e4e76a3` |
+| `tests/unit/test_credential_enrollment.py` | `7681b1887001aea31bb55824583713235796c7f0489afd5cef746e55a7556503` | `3d1118933feecd57ff8de13fa0b41fd40b41c3a0ab66b56a9ed1ff193d9bfc5e` |
+| `tests/unit/test_ordinary_credential_recovery.py` | `0ccb31ac3b22274a16e854546b1e07a4c207aca6164614f8af622ed5d3f2f834` | `9eab74763a00df59c8d9c91c1ab4ddabafa65d83dfbd7914126ef2039b7f2ef8` |
+| `tests/unit/test_route_target_binding.py` | `245524ee54c63bdde889ec77b79d5892e94ca3a5fac4dfcea92ef9eb8f89adf5` | `ce67c6caad6d811c9a576d6cb618b26e44974241673c93dc09f4ad00f8c2e28a` |
+
+The following evidence records earlier completed optimizations.
+
 - The frozen non-candidate `test_vm_ha_agent_runtime.py` state was SHA-256 `9dd243b60fea4af7b8744715507eb1e67af5f5c4065500d9f47ff25ba718bbdc`; the measured candidate state, differing only by the focused sleeper patch and its explanatory comments, was SHA-256 `5ae0723ada32500fe41a17bdcd1cb0101daa1af9334357fa7c089e124400ff83`.
 - The crash-replay test still constructs production-composed runtimes, starts and stops the peer listener, crashes after each effect, reconstructs runtime state, and proves ordered convergence; it skips only the real listener-startup pacing delay through the runtime's existing sleeper injection point.
 - `test_default_service_runtime_retries_bounded_peer_send` remains the focused contract for three bounded send attempts and the exact `0.05`-second retry schedule.
 - The frozen non-candidate `test_vm_manager_allocations.py` state was SHA-256 `5cc21ce1d32789cc55b296ce3476bf57dd80f9db82bb0645e390453c179c012c`; the current candidate state is SHA-256 `094a290b30d74491f1ef5e1165f294126f32b99953ef18ca6b46345b94332cf8`, with `vm_ha_cloud.py` unchanged at SHA-256 `f19f3b02c135bff8c6e56683a99060009cbd564f059db9fe68bbae2b2f66d66c`.
 - The SDK-operation test still constructs a valid generated SDK operation wrapper, runs its real synchronous waiter, intercepts only the bounded internal update request, and asserts the exact request-keyword set; only its local poll interval is reduced to one microsecond.
-- For the current optimization, the frozen non-candidate `test_ssh_push.py`
+- For the earlier four-test optimization, the frozen non-candidate `test_ssh_push.py`
   state was SHA-256
   `8976815defb6d79de4e88b7ea6fbf2f83c2b8fb08db0144eebbca92e8497643b`;
   the candidate state is
@@ -227,6 +324,66 @@ The mapped requirements, validation, and evaluation all pass.
 - No pytest configuration, fixture scope, marker, dependency, Makefile, CI, coverage, or production-code change was required.
 
 #### Verification Evidence
+
+The accepted five-case serial benchmark used Python 3.12.16, pytest 9.0.3,
+pytest-xdist 3.8.0 and pytest-cov 6.3.0 on macOS arm64. Parallelism and coverage
+were not enabled. Both arms used the same existing interpreter, frozen source,
+pytest configuration, node IDs, `PYTHONPATH`, empty pytest caches, fresh temporary
+roots and 90-second process deadlines. No dependency installation was needed.
+Only the four intended test-file edits differed. Every sample passed all five
+tests, with no skipped, failed, xfailed or deselected cases.
+
+Benchmark command, run from the frozen project copy with `PYTHONPATH` set to
+its `src` directory. Set `project_python` to the absolute path of the existing
+project interpreter and `trial_dir` to a newly created private temporary
+directory for each sample. The required variables fail closed when unset; do
+not reuse an existing pytest base directory.
+
+```bash
+"${project_python:?}" -m pytest -q -m "not integration" \
+  -o "cache_dir=${trial_dir:?}/cache" --basetemp "${trial_dir:?}/base" \
+  'tests/unit/test_credential_enrollment.py::test_each_uncertain_iam_creation_resumes_exact_request_and_receipt[accepted-permit]' \
+  'tests/unit/test_credential_enrollment.py::test_local_publication_boundaries_resume_selected_key[published]' \
+  'tests/unit/test_ordinary_credential_recovery.py::test_completed_first_enrollment_recovers_same_key_without_expanding_iam' \
+  'tests/unit/test_credential_replan.py::test_settlement_preserves_partial_iam_graph_and_key_for_fresh_approval[ha]' \
+  'tests/unit/test_route_target_binding.py::test_unknown_network_read_cannot_authorize_default_attachment'
+```
+
+| Sample | Before (seconds) | After (seconds) |
+| --- | ---: | ---: |
+| 1 | 42.632772 | 5.943557 |
+| 2 | 43.490995 | 4.634339 |
+| 3 | 43.119363 | 4.687808 |
+| 4 | 43.773344 | 6.056840 |
+| 5 | 45.946762 | 4.512953 |
+
+The median decreased from **43.490995** seconds (42.632772-45.946762) to
+**4.687808** seconds (4.512953-6.056840): 89.2% less elapsed time, or 9.28 times
+faster for this exact selection. These ranges do not overlap. Focused node-ID
+digest: `85114b51416b6d913190303ecda270550d6ce65dec5ab02eb82d75f6345a3005`.
+
+Full collection before and after retained the identical 7,885 node IDs. The
+complete serial unit diagnostic for that snapshot passed **7,885 tests in 298.777952
+seconds** of process wall time (297.96 seconds reported by pytest), with frozen
+source/test hashes stable during execution. This single full-suite run is
+correctness evidence and an observation, not a comparable full-suite speedup.
+The earlier 7,860-test diagnostic predates concurrent source changes.
+
+Ruff passed for all four changed test files; mypy passed for 232 source files.
+Changed-scope code/security review found no blocker: cached objects remain
+per-test, changed bytes still reach the real parser, no key material is embedded
+in the repository, and the unit network guard remains active. Existing invalid
+input, key drift, permission, conflict and uncached credential tests passed in
+the complete unit run. Integration/native/coverage/CI results are not claimed.
+
+A later scoped alignment pass reran all 167 tests in the six affected credential,
+replan, replacement and route-binding modules, including the uncached managed-key
+suite. All passed. Ruff passed for those tests and their shared fixtures; mypy
+passed for the then-current 233 source files. Relevant source, test and
+configuration hashes stayed unchanged during that validation. These scoped
+checks do not replace a new full-suite or integration run.
+
+Historical verification follows.
 
 - Five baseline samples of the exact four-test selection passed all four tests
   in 29.23, 28.75, 28.59, 28.42, and 28.58 seconds. Five candidate samples
@@ -10530,6 +10687,18 @@ the frozen predecessor and passes after the source correction; focused tests
 cover progress, deadlines, stall, unavailable reads, identity drift and no-write
 paths. These source checks do not close final-candidate live qualification.
 
+The CLI and streamed package owner share one stdlib-only predecessor projection,
+including asset-retirement evidence, so identical approved state compares equally
+on both sides. A settled failed worker retains only a closed failure predicate in
+its existing phase result, never raw exception text or stderr. Recovery compares
+semantic phase results and a bounded digest of validated native package state,
+Python checkpoints and admitted file identities without transport generation
+counters. Real progress permits another bounded repair; foreign content or
+unavailable evidence does not. An unchanged failed repair cannot consume more
+attempts merely by restarting the same worker.
+Unknown failures remain safely classified and exact authority checks still gate
+every retry. These changes restore the existing automatic recovery contract.
+
 Keep existing command, package and lifecycle journals as authorities. Three
 corrective attempts span both members. Use 120 seconds as a soft progress target
 for activation recovery and a soft interruption target for normal upgrades.
@@ -10866,6 +11035,24 @@ native gates pass, docs agree, and live qualification gaps are explicitly record
 
 #### Implementation Evidence
 
+The guarded-install predecessor mismatch is repaired by the shared
+`ha_package_contract` projection, included in the streamed bootstrap and wheel.
+Worker phase results retain closed failure predicates and semantic progress;
+recovery ignores generation-only changes and rejects late settlement reads.
+The original missing-retirement-field counterexample fails at guest admission,
+while the complete approved predecessor passes and every actual field change
+still rejects. Automatic-recovery tests cover an unchanged failed worker across
+restart/resume and successful continuation after native/Python progress.
+680 focused source tests and 28 integration composition tests pass. The frozen
+candidate completed normal apply from the original failed package-preparation
+checkpoint using supported artifact recovery and transaction resume. Independent
+checks confirmed exact installed candidate files and assets on both members,
+healthy current-state HA, correct active/passive forwarding, cleared apply locks,
+and no running package workers. A second normal apply returned unchanged with
+no pending actions and an unchanged durable lifecycle. This verifies the reported
+package-preparation recovery and current-state HA convergence; forced failover,
+traffic load, long-duration and other-environment qualification remain untested.
+
 `controller_observation` derives progress from validated member, operation,
 generation and recovery transitions. Repeated heartbeats and timestamps do not
 extend the stalled window. The existing operation deadline bounds observation
@@ -11035,7 +11222,7 @@ documentation evidence does not qualify native supervision.
 
 <!-- /FEATURE: FEAT-037 -->
 
-<!-- FEATURE: FEAT-038 reqs=REQ-038 status=ready delivery=implemented priority=P0 version=7 -->
+<!-- FEATURE: FEAT-038 reqs=REQ-038 status=ready delivery=implemented priority=P0 version=8 -->
 ### FEAT-038: Confirmed full software repair on retained VMs
 
 #### Requirements Covered
@@ -11052,6 +11239,58 @@ provide reusable transport and installation primitives, not full reset authority
 The exact cause of the reported customer mismatch remains unproven.
 
 #### Design Details
+
+Before this refinement, repair proceeded from confirmation through remote
+preparation and package installation without normal progress output, and its HA
+activation adapter dropped the existing progress sink. A terminal could therefore
+appear hung while durable repair effects continued. The command-scoped
+presentation owner now uses the existing Rich dependency: an indeterminate
+spinner, fixed stage labels, configured member index and elapsed stage time.
+Rich stdout/stderr redirection stays disabled; all presentation uses stderr,
+with bounded plain stage/wait messages when stderr is not interactive.
+A spinner communicates activity, never a healthy worker, completed effect,
+percentage or outage estimate.
+
+The repair coordinator reports before each blocking boundary: record admission
+and predecessor settlement, retained identity/access, dependency inspection and
+resolution, payload upload, guard installation, Compute stop/start, package
+worker observation, installation proof, activation binding and finalization.
+Reuse canonical HA activation progress through a presentation adapter sharing
+the same display; ordinary activation uses fixed repair stages. Nested stages
+restore their parent label, and terminal markers follow successful return only.
+Known worker states and per-request remaining allowance may annotate waits;
+raw remote output, resource identities and exception text are never rendered.
+Cleanup closes the display even on KeyboardInterrupt, without cancelling durable
+workers or granting new retry authority. No timeout increase or workflow change
+is justified by the missing display.
+
+A single generic busy spinner was rejected because it cannot identify the silent
+boundary. A separate polling process was rejected because it adds queries and
+another lifecycle without improving authority. The selected local Rich renderer
+uses no new dependency, persistence, provider behavior or public flags. Validate
+real terminal animation, pre-blocking emission, nested state, wait throttling,
+interruption, presentation failures, ordinary/HA paths and JSON isolation before
+a frozen-artifact full repair plus independent health and retained-identity proof.
+The progress refinement is implemented in `deploy/repair_progress.py`, wired
+through retained-VM preparation, package installation and ordinary/HA activation.
+The same configured member index is retained across repair and canonical HA
+observations. Existing peer-uncertainty warnings survive both wait and terminal
+rendering. A focused suite of 344 repair, result, pair and activation tests passes,
+including a real terminal redraw/JSON-isolation test. The original frozen repair
+entrypoint fails all four public progress-before-work oracles; the corrected
+entrypoint passes. Scoped lint and type checks pass. Frozen candidate
+`e0cc6ddc5e441b1efc52abc6e1f9451899371229f8b3f4b47cc55b14e4a3df6e`
+completed a fresh supported HA repair from an independently healthy, quiescent
+checkpoint. Real terminal capture observed 14 repair stages and 7,704 redraws;
+the first stage appeared immediately after confirmation. The 819.3-second command
+duration is not an outage measurement. No out-of-band guest changes were used.
+Independent checks found healthy HA, exact installed candidate files and assets,
+ready redundancy and identity, correct active/passive forwarding, cleared apply
+locks and repair fences, completed repair journals and no running package workers.
+Compute and disk identities were retained. A subsequent normal apply returned
+unchanged with no pending actions and an unchanged durable lifecycle. This proves
+the scoped repair-progress and retained-VM HA workflow; ordinary live deployments,
+forced failover, traffic load and broader release qualification remain untested.
 
 Keep the recovery order visible: normal apply, retained-VM software repair with
 authenticated SSH, then separately confirmed destruction and fresh apply for
@@ -11853,6 +12092,20 @@ Share one activation evaluator between readiness acceptance and reason reporting
 Preserve first/latest failure and owner-replacement semantics. Expected apply locks
 are context, not an initiating failure. Do not change recovery admission or fencing.
 
+The CLI confirms archive creation and omits routine history-limit warnings for
+journals and fixed log tails. Other gaps, including current-state source limits,
+remain visible. List every affected source before the summary's general evidence
+inventory. Group JSON and text views by source to avoid counting one probe three
+times; a text-only truncation still counts. Preserve the manifest's existing
+complete and incomplete-probe fields and nonzero partial exit code. Suppressing a
+routine history warning does not assert complete historical coverage.
+
+Decode journal MESSAGE byte arrays (systemd's representation for non-printable
+bytes) before classification and stateful credential redaction. Invalid arrays
+remain invalid records. Firewall rules receive independent bounded traversal
+budgets; retain the fixed object and serialized byte caps and the existing field
+allowlist. Neither correction increases collection time or archive limits.
+
 The enhanced support-bundle is the sole public diagnostic command; existing flags
 and exit codes remain. Structured journal envelopes keep coverage independent of
 bounded event arrays. Count invalid, unrecognized and recognized records separately;
@@ -12014,6 +12267,17 @@ fields on the same line. No access or trust policy changes.
 
 #### Verification Evidence
 
+Coverage regressions reproduced rejection of journal byte-array messages and
+premature firewall traversal truncation before repair. All 171 focused collector
+cases passed across the full suite and added edge-case checks, including multiline
+redaction, malformed arrays, cyclic/oversized firewall input, text-only truncation,
+and warning classification. Scoped Ruff, mypy and Markdown checks passed.
+Read-only replay of the standalone product probes on both members, using the
+original journal window, collected firewall data without structural truncation
+and cloud-final records without invalid messages. Routine busy-journal limits
+remained truthful. This verifies the changed guest paths; a new full archive and
+published-release qualification were not performed for this correction.
+
 Focused negative controls reproduced oversized-line credential continuation,
 early sudo/Python diagnostic loss and missing-interpreter misclassification.
 The repaired cases passed. An additional upload-timeout regression failed before
@@ -12068,7 +12332,7 @@ no unresolved customer HA cause is claimed fixed.
 <!-- /FEATURE: FEAT-041 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-042 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=3 -->
+<!-- FEATURE: FEAT-042 reqs=REQ-042 status=ready delivery=implemented priority=P1 version=4 -->
 ### FEAT-042: Classified peer heartbeat channel diagnosis and pre-fence gate
 
 #### Requirements Covered
@@ -12108,9 +12372,10 @@ blockage.
 
 `status` reads the member heartbeat section and renders
 `peer-heartbeat-endpoint-unreachable` or `peer-heartbeat-tls-failure` as
-degraded reasons when the peer heartbeat is not fresh and roughly ten
-consecutive classified failures accumulated, with an Action naming TCP 9443
-and customer-owned security-group rules or managed-mTLS guidance. Both codes
+degraded reasons when the peer heartbeat is not fresh and at least ten
+consecutive failed send attempts accumulated, including publication retries.
+The Action names TCP 9443 and customer-owned security-group rules or managed-mTLS
+guidance. Both codes
 join the CLI safe-reason codes and the support-bundle safe-reason allowlist;
 the projection value and diagnostic-string sets retain the new typed fields
 and the previously dropped peer freshness fields.
@@ -12118,9 +12383,11 @@ and the previously dropped peer freshness fields.
 `apply` inserts a bounded per-node `verify-peer-channel-node-N` wait inside the
 fenced verification step, after the progress step opens and before the long
 per-node fenced waits, reusing the same status fetch bindings. The gate
-requires a provably up channel (fresh peer heartbeat or a recent successful
-send) and otherwise fails fast with the classified reason through the existing
-first/latest diagnostics; a resume whose transition already started skips it.
+accepts the existing up-channel predicate (fresh peer heartbeat or a recent
+successful send). At expiry it aborts only when the latest observation reports
+an existing classified connection/TLS failure; other observations are unknown
+and continue into full verification. A resume whose transition already started
+skips it. The gate never treats historical failure as current evidence.
 Fenced-predicate failures additionally carry the send-error kind when peer
 freshness is the unmet condition. No heartbeat or failover timers change; the
 1 s cadence with 5 s suspicion and 10 s staleness is validated conservative
@@ -12155,7 +12422,7 @@ redaction preserved; publisher success and failure recording and the
 consecutive counter are proven with the fake clock; the written status
 document carries the new fields; the status view renders each new reason and
 Action only under the persistence gates, with healthy and foreign cases
-unchanged; the pre-fence gate fails fast with the classified reason; the
+unchanged; the pre-fence gate aborts at expiry for a latest classified failure; the
 projection retains the new fields.
 
 #### Validation Plan
@@ -12190,6 +12457,56 @@ artifact; apply retains immutable pins and uses the REQ-043 successor policy. Li
 Local gates green; live evaluation scenarios produce the expected reasons and
 recoveries; requirements and design carry implementation and verification
 evidence.
+
+#### Activation Diagnostics Refinement
+
+Retain the ten-attempt threshold, including all retries, and share the existing
+classifier between status and apply. Publisher behavior and wire/status formats
+stay unchanged. This is a count, not a ten-second persistence timer.
+
+Use a private healthy/failed/unknown gate result carrying existing first/latest
+diagnostics plus the last classified observation and its monotonic observation
+time. Healthy continues; failed preserves the existing verification exception;
+unknown continues with a historical warning. All existing status validation and
+full activation-readiness checks remain authoritative.
+
+The existing waiter emits optional structured, best-effort observations from
+its actual deadline. Add member/check context, unmet condition, window elapsed
+and remaining time, and total verification elapsed to private progress events.
+TTY rendering updates at the existing bounded cadence. Noninteractive rendering
+keeps one terminal row per phase; terminal summaries retain unknown-gate history
+and explain when full verification subsequently passed. JSON stdout is unchanged.
+No renderer error may change waiting, success, failure, or cloud/guest effects.
+
+Keep both 30-second peer gates before both 300-second fenced waits. Their maximum
+combined allowance is 660 seconds for two members, excluding other work. No
+shared deadline, extra probing, configuration or background worker is added.
+Remaining time is scoped to the current window and never presented as an ETA.
+
+The existing behavior alone leaves ambiguity; wording-only changes would leave
+unknown evidence and timing opaque. The selected private result and observation
+extension addresses those gaps without a duration threshold or global budget.
+Use fake clocks and composed gate/verification tests, preserve non-HA and resume
+behavior, and validate formatting, types and the unit suite before delivery.
+
+The refinement is implemented in the CLI's private peer result, optional wait
+observations and activation progress decorator. Both managed VM-HA execution and
+ordinary apply without a supplied reporter render through stderr. Unknown-gate
+warnings explicitly describe gate-expiry history, including when full
+verification later succeeds or another peer gate prevents it from starting.
+The publisher, public schemas, timers and ownership checks are unchanged.
+
+Local refinement verification covers the nine/ten attempt boundary, successful
+recovery, missing and late evidence, retained history, permanent validation
+errors, nested deadlines, observer failures, per-member/total timing, terminal
+output and no-sink reporting. Composed apply tests retain 30/30/300/300 ordering
+and prove unknown evidence continues while classified failure aborts. A JSON
+command variant checks that warnings stay on stderr. Existing publisher tests
+retain the three-attempt and reset behavior. The complete working-tree unit suite
+passed all 7,838 tests; mypy passed across 231 source files; Ruff, changed-file
+format checks and Markdown lint passed. A separate read-only review found no
+remaining correctness or security issue after historical-warning wording was
+corrected. No deployment or live fault injection is claimed.
 
 #### Implementation Evidence
 
@@ -12381,6 +12698,195 @@ tests archived-receipt conversion with changed-key reconciliation, not continuit
 of the destroyed predecessor VMs.
 
 <!-- /FEATURE: FEAT-043 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-044 reqs=REQ-043,REQ-041,REQ-007,REQ-010,REQ-035 status=ready delivery=implemented priority=P1 version=3 -->
+### FEAT-044: Complete wheel-owned convergence and operational diagnostics
+
+#### Requirements Covered
+
+- REQ-043: Converge supported releases with ordinary apply.
+- REQ-041: Collect bounded private support evidence without deployment effects.
+- REQ-007: Consolidate VM-HA status into the ordinary status command.
+- REQ-010: Keep the primary VPN status table concise and complete.
+- REQ-035: One reviewed and resumable apply workflow.
+
+#### Context Evidence
+
+Existing wheel manifests already enumerate first-party files and managed assets;
+package planning retains compatible dependencies and freezes their resolved closure.
+Automatic upgrade admission rejects downgrades but is not a global release-order
+gate. Initial-artifact recovery has narrower admission than retained upgrades.
+Asset publication visits target destinations, leaving generic obsolete-asset
+retirement uncovered. Local operation records are collected but generic projection
+omits checkpoint fields. Healthy table styling and collection/privacy messages are
+inconsistent. These are source findings, not a proved customer initiating cause.
+
+#### Design Details
+
+Keep one immutable wheel version/digest and existing package, lifecycle, activation
+and journal owners. Classify installed release at each owning pre-mutation boundary;
+newer installed VPNGW blocks the whole deployment, proven absence permits install,
+unknown stays explicit, and equal versions require content and runtime evidence.
+Only the exact existing package owner may resume interrupted installation with
+unreadable metadata; guard, artifact, configuration and frozen manifest must match.
+Ordinary command, HA reservation, replacement and repair owners retain their own
+receipts. Newer releases remain blockers even for an exact owner resume.
+Existing confirmed stopped-VM repair retains its guarded identity-discovery boot;
+the release gate runs before reconstruction and never treats unknown as absent.
+Added code, dependencies and service assets are ordinary convergence effects.
+Compatible dependencies remain installed; exact selected closure and hashes remain
+bound to each operation. Same-version valid editable builds use successor authority;
+invalid artifact provenance never selects repair automatically.
+
+Settle interrupted preparation, initial/upgrade activation and predecessor chains
+through canonical owners before admitting a same-scope successor. Preserve original
+pins and receipts. Expanded effects retain review, and explicit repair remains a
+separate reconstruction owner with the same release-order prerequisite.
+
+Read the completed runtime/package predecessor manifest before preparation replaces
+it. A corrective successor may also use the exact digest-bound installed or activating
+predecessor after package settlement; carry forward its pending removals as well as
+its published assets. Reject omitted or changed removal evidence before replacing
+that journal. Guarded package preparation performs retirement inside the existing
+writer locks before its ordinary child records completion; failure preserves the
+incomplete operation. Full repair publishes its verified asset ownership through the same runtime
+asset owner; later upgrades read that receipt when no runtime operation exists. Bind exact removed destinations, hashes, modes and predecessor identity into
+the successor manifest/journal. Revalidate under existing writer locks, establish
+replacement boot fencing first, stop/disable obsolete timers before their services,
+then remove only exact owned assets, reload systemd and verify postconditions.
+Missing unit files still require authoritative inactive/disabled state; file absence
+does not establish that the loaded service stopped. If systemd cannot disable an
+already missing file, remove only root-owned startup links pointing exactly to the
+proven obsolete destination, then reload and recheck the manager state. Retry from bound intent after
+interruption. Retained verified predecessor manifests can supply missing history;
+missing ownership blocks required removal. Never infer ownership from filename
+patterns or remove shared third-party packages from a dependency difference alone.
+
+Use current health owners for active/passive, oneshot, timer, maintenance and fenced
+states. Report concise release alignment and health; disk metadata alone does not
+prove the build loaded by a running process. Share validated healthy presentation
+without modifying structured results. Reuse SSH acquisition and authenticated peer
+heartbeat evidence for separately labelled SSH22 and mTLS9443 observations.
+For support archives, compare heartbeat freshness with the gateway-recorded
+collection time and retain that timestamp in the derived record. Later log
+collection or archive assembly must not erase valid historical evidence. Missing
+or invalid collection times and already stale snapshots remain unknown.
+
+Extend owner-defined diagnostic projections and closed error allowlists together.
+Retain safe operation/checkpoint identifiers, selected/pinned hashes, settlement and
+omissions; never copy raw journals or arbitrary binding maps. Evidence coverage
+remains separate from gateway health. Derived peer-channel diagnostics never count
+as successful guest acquisition; an unreachable member retains zero successful
+probes even when an unknown peer diagnosis is included. Follow FEAT-041's terminal policy: routine
+history limits stay in the archive; other collection gaps remain visible. State
+automatic targeted redaction and its non-exhaustive limit, retaining private-support
+guidance.
+
+#### Selected Option
+
+Extend existing wheel-derived manifests and effect owners; generate diagnostics
+from their evidence. Keep the fixed deterministic Python/Nebius stack, no separate
+inventory service, independent component releases or operator-maintained table.
+
+#### Alternatives Considered
+
+Independent component versions and a manual inventory duplicate ownership and add
+release coordination. Blind pin replacement loses history. Always reinstalling or
+implicitly invoking full repair adds avoidable disruption. Release-wide dependency
+locks unnecessarily replace compatible installed dependencies for this scope.
+
+#### Implementation Boundaries
+
+Artifact and package inspection, all apply admission owners, canonical asset
+publication/retirement and activation, shared CLI presentation, support projection,
+focused regressions, README and changelog. Preserve supported public command syntax,
+trust, resource/credential identity and unrelated working-tree changes.
+
+#### Test-First Success Criteria
+
+- Public apply paths reject either newer member before gateway effects.
+- New components install; exact obsolete assets retire safely and resumably.
+- Interrupted initial and upgrade operations converge through immutable successors.
+- Healthy unchanged apply avoids effects; supported drift respects role/maintenance.
+- Human/structured/archive diagnostics retain causes without credential disclosure.
+
+#### Validation Plan
+
+Focused unit and public-entrypoint regressions, required lint/typing/unit checks,
+affected isolated integration tests, wheel build and documentation alignment.
+Keep the controlled live campaign opt-in and distinct from local evidence.
+
+#### Test Plan
+
+Exercise mixed releases, same-version drift/editable artifacts, invalid provenance,
+new/removed/renamed assets, modified paths/symlinks/missing ownership, interrupted
+retirement and reboot fencing, dependency freeze/retry, successive interrupted
+upgrades, passive/maintenance no-op, diagnostic projection/redaction and no-color
+rendering. Assert no remote effects on classified blocking prerequisites.
+
+#### Evaluation Plan
+
+Separate source, installed, isolated integration and live proof. A future authorized
+test pair campaign performs upgrade, independent healthy status, unchanged apply,
+interruption/resume and explicit repair. No customer recovery is implied.
+
+#### Rollout And Rollback
+
+Ship through the existing release process only when its own gates are satisfied.
+Preserve original artifacts/journals for supported recovery; older CLI invocation
+is not an implicit rollback. No zero-downtime guarantee or automatic publication.
+
+#### Done Definition
+
+The implementation and required local checks pass, docs match delivered behavior,
+and any unrun live qualification remains explicit without claiming a customer fix.
+
+#### Implementation Evidence
+
+- `release_identity.py` and `deploy/release_policy.py` provide package-independent
+  observation, version classification, all-member admission and exact-owner resume.
+  CLI, ordinary/HA package planning, repair and replacement use the shared policy.
+- `vm_ha_corrective.py`, `ha_replan.py`, `ha_members.py`, `ha_command.py` and
+  `upgrade_admission.py` admit settled initial-created lineage through canonical
+  successors, including the original created-package manifest namespace.
+- `runtime_migration.py`, ordinary/handoff activation and repair own frozen asset
+  retirement, verified repair ownership, guarded execution and resumable removal.
+- `operational_diagnostics.py`, CLI rendering and support-bundle collectors expose
+  release/access evidence, shared healthy styling, typed safe checkpoint projections
+  and explicit incomplete-evidence/redaction wording. README and changelog align.
+
+#### Verification Evidence
+
+- `make check`: Ruff and mypy passed (231 source files); all 7,801 collected unit
+  tests passed. Additional retirement and qualification regressions passed after
+  the native edge-case correction (106 focused tests).
+- CLI/wheel integration: 34 tests passed; final release build suite: four passed,
+  including wheel installation/help/streamed bootstrap checks and a standalone
+  executable with bundled sources and support-bundle smoke checks.
+- The new `test_release_asset_retirement_native.py` passed against the candidate
+  runtime source with real Ubuntu systemd 255.4 in an isolated, network-disabled
+  disposable container. A still-running unit with a missing file was stopped,
+  its exact root-owned startup symlink was removed, and retry remained successful.
+  The fixture was stopped and removed. Both native topology groups include it.
+- New regressions cover initial/upgrade checkpoint lineage through public apply,
+  newer-member blocking before effects, exact-owner unknown-metadata recovery,
+  lost replacement receipts, owned/modified/symlink asset boundaries, full-repair
+  ownership retention, archive credential sentinels, channel direction/freshness,
+  release/access rendering and plain/colored healthy text.
+- Follow-up alignment reproduced and corrected archive-time freshness loss and
+  dropped asset-retirement failure predicates. Archive regressions cover delayed
+  assembly, invalid timestamps, stale snapshots, preserved observation time, and
+  fixed guest predicates without exporting arbitrary private error text.
+- Final diff whitespace checks and paired specification validation passed.
+
+Local evidence does not qualify a live gateway upgrade or prove customer recovery.
+The full disposable Linux/systemd campaign and live two-gateway campaign were not run.
+The retirement implementation follows the official
+[systemctl stop, disable and reload semantics](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html):
+disabling or reloading a unit alone does not establish that its service stopped.
+
+<!-- /FEATURE: FEAT-044 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

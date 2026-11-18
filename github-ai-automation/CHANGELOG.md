@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Keep the prepared completion listener independent of dynamic broker run titles
+  by matching the broker workflow path before receipt validation.
+
 - Align workflow validation with GitHub's 25-input dispatch limit while retaining
   every required candidate identity field.
 

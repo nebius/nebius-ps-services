@@ -505,6 +505,15 @@ def remote(config: dict[str, Any], request: dict[str, Any]) -> None:
             **(auth.paramiko_connect_kwargs() if auth is not None else {}),
         )
         progress("connect", "completed")
+        emit(
+            "network/operator-ssh",
+            {
+                "local_port": 22,
+                "direction": "operator-to-gateway",
+                "assessment": "authenticated",
+                "source": "collector-ssh",
+            },
+        )
         progress("sudo")
         payload = {"since": request["since"], "until": request["until"], "budget": 180}
         script = (

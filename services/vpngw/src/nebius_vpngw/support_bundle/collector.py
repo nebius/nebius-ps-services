@@ -21,7 +21,7 @@ from .diagnostics import clean_failure, clean_progress
 from .probe import bounded_command, read_regular, valid_remote_name
 from .projection import MAX_BYTES, project, project_journal, retention_priorities
 from .redaction import REDACTION_POLICY, redact_text, unsafe_text
-from .report import build_reports
+from .report import build_reports, collection_counts
 from .worker import scope
 
 SCHEMA = "nebius-vpngw/support-bundle-v3"
@@ -606,13 +606,22 @@ def collect(
         try:
             value = json.loads(read_regular(path))
             add(f"operator/state/{index}", {label: value} if label else value)
+            from .checkpoints import project as project_checkpoint
+
+            try:
+                checkpoint = project_checkpoint(value, config) if isinstance(value, dict) else None
+            except (ValueError, KeyError, TypeError, AttributeError, RuntimeError):
+                checkpoint = None
+                add(f"operator/checkpoints/{index}", {}, "invalid-data")
+            if checkpoint is not None:
+                add(f"operator/checkpoints/{index}", checkpoint)
             operations.update(operation_references(value))
             if index == 0:
                 resources = lifecycle_resources(value, config)
                 add("operator/scoped-resources", resources)
         except FileNotFoundError:
             add(f"operator/state/{index}", {}, "not-applicable")
-        except (OSError, ValueError):
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
             add(f"operator/state/{index}", {}, "invalid-data")
     base = {
         "config": str(config_path.absolute()),
@@ -727,11 +736,35 @@ def collect(
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         for index, records, outcome in pool.map(member, range(group["instance_count"])):
             snapshots = {
-                item.get("probe"): item.get("data")
+                item.get("probe"): item
                 for item in records
                 if isinstance(item.get("probe"), str)
             }
-            first, last = snapshots.get("ha-0/native"), snapshots.get("ha-1/native")
+            first_record = snapshots.get("ha-0/native", {})
+            last_record = snapshots.get("ha-1/native", {})
+            first, last = first_record.get("data"), last_record.get("data")
+            from ..operational_diagnostics import peer_channel, peer_direction
+
+            sample = last_record if isinstance(last, dict) else first_record
+            captured_at = record_metadata(sample).get("observed_at")
+            # Both timestamps come from the gateway. Log collection and a slower
+            # peer must not age a valid observation while the archive is assembled.
+            assessment = (
+                peer_channel(sample.get("data"), now=captured_at)
+                if captured_at is not None
+                else "unknown"
+            )
+
+            add(
+                f"nodes/{index}/network/peer-channel",
+                {
+                    "local_port": 9443,
+                    "direction": peer_direction(assessment),
+                    "assessment": assessment,
+                    "source": "ha-heartbeat-snapshot",
+                },
+                **({"observed_at": captured_at} if captured_at is not None else {}),
+            )
             if (
                 isinstance(first, dict)
                 and isinstance(last, dict)
@@ -803,9 +836,11 @@ def collect(
             result.append(
                 {
                     "node": node,
+                    **collection_counts(rows),
                     "successful_probes": sum(
                         row["file"].endswith(".json")
                         and row["outcome"] == "ok"
+                        and not row["file"].endswith("/network/peer-channel.json")
                         and any(
                             part in row["file"]
                             for part in ("/host/", "/services/", "/ha-", "/logs/", "/network")
@@ -919,6 +954,7 @@ def collect(
             "node": None,
             "guest_nodes": len(guest_nodes),
             "expected_nodes": group["instance_count"],
+            **collection_counts(manifest),
         }
     )
     return destination, 1 if partial else 0

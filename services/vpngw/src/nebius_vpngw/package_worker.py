@@ -34,6 +34,83 @@ ACTIVE = False
 TRANSPORT = None
 BACKEND = "handoff"
 
+# Closed predicates only: worker stderr and arbitrary exception text may contain
+# deployment data. These results are diagnostics, never authority to retry.
+_FAILURES = {
+    "HA package predecessor changed": "package-predecessor-changed",
+    "HA resumed package authority changed": "package-resume-authority-changed",
+    "HA package lacks exact apply lock": "package-apply-lock-missing",
+    "HA package requires independent forwarding fence": "package-forwarding-fence-missing",
+    "HA startup authority is ambiguous": "package-startup-authority-ambiguous",
+    "HA product staging is unproven": "package-staging-unproven",
+    "HA package writer is not stopped": "package-writer-not-stopped",
+    "HA asset identity changed": "package-asset-identity-changed",
+}
+FAILURE_CODES = frozenset((*_FAILURES.values(), "package-worker-failed"))
+
+
+def failure_code(error: BaseException) -> str:
+    return _FAILURES.get(str(error), "package-worker-failed")
+
+
+def settled_result(value: dict, entry: dict | None) -> dict:
+    result = {"generation": value["generation"]}
+    if entry and entry["state"] == "failed" and entry["result"] is not None:
+        failure = entry["result"]
+        if set(failure) != {"failure"} or failure["failure"] not in FAILURE_CODES:
+            raise RuntimeError("package failure evidence is invalid")
+        result.update(failure)
+    return result
+
+
+def package_progress(request: dict, migration: Any, *, deadline: float) -> str | None:
+    """Hash admitted package progress, excluding transport/process retry counters.
+
+    This is diagnostic evidence only. Read the canonical protected checkpoints
+    and scoped installed bytes; never stage, restore or verify-with-repair here.
+    """
+    manifest = request["package"]["desired"]
+    runtime = migration.state()
+    if runtime is None or runtime["manifest"] != manifest:
+        return None
+    plan = runtime["plan"]
+    native = migration.packages(deadline=deadline)
+    migration.verify_package_progress(plan, native)
+    progress: dict[str, Any] = {
+        "phase": runtime["phase"],
+        "step": runtime.get("package_step"),
+        "native": {name: native.get(name)
+                   for name in set(plan["before"]) | set(plan["desired"]) | set(plan["remove"])},
+        "python": {},
+    }
+    if "ordinary_assets" in manifest:
+        python: Any = sys.modules.get("_vpngw_python_package_recovery")
+        if python is None:
+            from . import python_package_recovery as python
+        payload = migration.ROOT / migration.digest(plan) / "payload"
+        root = python.checkpoint_root(manifest, payload)
+        for name, wheel in {**manifest["dependency_wheels"],
+                            manifest["wheel_name"]: manifest["wheel_sha256"]}.items():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("package progress observation deadline expired")
+            checkpoint = python.load(root / wheel, payload / name)
+            inventory = {}
+            for path in checkpoint["before"].keys() | checkpoint["target"].keys():
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("package progress observation deadline expired")
+                current = python.content(python.safe(Path(path), python.schemes()))
+                if current not in (None, checkpoint["before"].get(path),
+                                   checkpoint["target"].get(path)) and not (
+                    python.matches_before(root / wheel, checkpoint, path, current)
+                    or python.completed_cache(root / wheel, checkpoint, path, current)
+                ):
+                    raise RuntimeError("Python package progress contains foreign file contents")
+                inventory[path] = current
+            progress["python"][wheel] = {"state": checkpoint["state"], "inventory": inventory}
+    if time.monotonic() >= deadline or migration.state() != runtime:
+        raise RuntimeError("package progress changed during observation")
+    return digest(progress)
+
 
 def use_repair_backend() -> None:
     """Select the isolated full-repair owner in a fresh bootstrap process."""
@@ -187,9 +264,12 @@ def rpc(key: str, request: dict) -> dict:
             return frame(stream)
 
 
-def unit_running(value: dict) -> bool:
+def unit_running(value: dict, *, deadline: float | None = None) -> bool:
     if value["boot"] != BOOT.read_text().strip():
         return False
+    remaining = 10.0 if deadline is None else min(10.0, deadline - time.monotonic())
+    if remaining <= 0:
+        raise TimeoutError("package unit observation deadline expired")
     result = subprocess.run(
         [
             "systemctl",
@@ -200,9 +280,11 @@ def unit_running(value: dict) -> bool:
         ],
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=remaining,
         check=False,
     )
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError("package unit observation deadline expired")
     fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
     if set(fields) != {
         "LoadState",
@@ -238,6 +320,7 @@ def unit_running(value: dict) -> bool:
 
 
 def status(key: str, request_key: str | None = None) -> dict:
+    deadline = time.monotonic() + 20
     try:
         _path, value = record(key)
     except FileNotFoundError:
@@ -272,7 +355,7 @@ def status(key: str, request_key: str | None = None) -> dict:
         return {
             "state": "READY_TO_CONTINUE",
             "identity": key,
-            "result": {"generation": value["generation"]},
+            "result": settled_result(value, entry),
         }
     if (
         entry
@@ -300,13 +383,21 @@ def status(key: str, request_key: str | None = None) -> dict:
             or journal["purpose"] != "ha-handoff"
         ):
             return {"state": "BLOCKED", "identity": key, "result": None}
-        manager = operations.Manager(time.monotonic() + 20)
+        manager = operations.Manager(deadline)
         if not operations.handoff_recoverable(journal, manager, inhibited_quiescence=True):
             return {"state": "RUNNING_OWNED", "identity": key, "result": None}
+    result = settled_result(value, entry)
+    result["progress"] = package_progress(
+        request, migration, deadline=min(deadline, time.monotonic() + 15)
+    )
+    if record(key)[1] != value or unit_running(value, deadline=deadline):
+        return {"state": "RUNNING_OWNED", "identity": key, "result": None}
+    if time.monotonic() >= deadline:
+        raise TimeoutError("package progress observation deadline expired")
     return {
         "state": "READY_TO_CONTINUE",
         "identity": key,
-        "result": {"generation": value["generation"]},
+        "result": result,
     }
 
 
@@ -841,10 +932,15 @@ class Transport:
             publish(self.path, self.value)
             self.current = None
 
-    def close(self, failed: bool) -> None:
+    def close(self, failed: bool, *, failure: str = "package-worker-failed") -> None:
+        if failure not in FAILURE_CODES:
+            raise ValueError("invalid package failure predicate")
         with self.lock:
             if self.current is not None:
-                self.value["requests"][self.current]["state"] = "failed"
+                self.value["requests"][self.current].update(
+                    state="failed", result={"failure": failure}
+                )
+                self.current = None
             self.value["terminal"] = "failed" if failed else "complete"
             publish(self.path, self.value)
         self.stopped.set()
@@ -919,11 +1015,15 @@ def main(key: str, generation: int, source: str) -> None:
         thread.start()
         handoff_remote.receive, handoff_remote.reply = transport.receive, transport.reply
         failed = True
+        failure = "package-worker-failed"
         try:
             handoff_remote.main(durable=True)
             failed = False
+        except BaseException as error:
+            failure = failure_code(error)
+            raise
         finally:
-            transport.close(failed)
+            transport.close(failed, failure=failure)
             thread.join(timeout=11)
             transport.listener.close()
             TRANSPORT = None

@@ -1,6 +1,7 @@
 """HA attachment retirement keeps original cloud requests and native release order."""
 
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace as NS
 
 import pytest
@@ -952,6 +953,9 @@ def test_real_apply_reaches_ha_attachment_settlement_before_obsolete_retry(
         def check_changes(self, _):
             return []
 
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.release_policy.require_targets", lambda *_a, **_k: None
+    )
     monkeypatch.setattr(cli, "load_local_config", lambda _: local)
     monkeypatch.setattr(cli, "merge_with_peer_configs", lambda *_: plan)
     monkeypatch.setattr(cli, "VMHALifecycleStore", lambda *_: NS(read=lambda **_: state))
@@ -976,7 +980,9 @@ def test_real_apply_reaches_ha_attachment_settlement_before_obsolete_retry(
     monkeypatch.setattr(
         cli,
         "_resolve_vm_ha_agent_artifact",
-        lambda _: NS(sha256="b" * 64, dependency_plans=(), capabilities=()),
+        lambda _: NS(
+            path=Path("fixture-release.whl"), sha256="b" * 64, dependency_plans=(), capabilities=()
+        ),
     )
     monkeypatch.setattr(cli, "_vm_ha_observation_matches_bindings", lambda *_a, **_k: True)
     monkeypatch.setattr(cli, "_vm_ha_provisioning_members", lambda *_: members)

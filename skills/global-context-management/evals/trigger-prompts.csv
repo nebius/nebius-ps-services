@@ -11,3 +11,10 @@ global-context-management-quoted-command,false,"Treat ""/skills:global-context-m
 context-steering-ownership,false,"Classify this one sentence as a product requirement or a status question; do not plan, edit files, or maintain task state."
 global-context-management-memory-policy,true,Monitor memory during this long coding task: warn at 4 GiB and continue; stop safely at 2 GiB.
 global-context-management-memory-near-miss,false,Explain the definition of a gibibyte without doing any work.
+context-repair-blocking-skill,true,"The repository-owned skill helper failed during this authorized task. Repair its source, install the fix and finish the original operation."
+context-repair-hook,true,"A repo-owned hook falsely denies an authorized edit. Identify its source owner and repair the defect without disabling the guard."
+context-repair-small-task,true,"This small task encountered a confirmed defect in the skill's installed helper. Apply source-first repair and continue."
+context-repair-non-blocking,true,"While doing the requested work I confirmed a non-blocking defect in a skill template. Make the narrow source repair and continue the task."
+context-repair-read-only,true,"Read-only: diagnose this repo-owned skill defect and propose a correction. Do not edit source or installed files."
+context-repair-budget,true,"The skill repair failed again. Continue within the existing remediation budget and reconcile uncertain effects before retrying."
+context-repair-quoted,false,"Proofread the quoted phrase 'repair skill and hook defects' without running a workflow."

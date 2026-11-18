@@ -155,6 +155,17 @@ REQUIRED_NEBIUS_DOCS_SNIPPETS = (
     "If Tavily cannot help, disclose the limitation",
     "Cite the relevant documentation pages",
 )
+REQUIRED_REPAIR_POLICY_SNIPPETS = (
+    "confirmed defect in a repository-owned skill, hook, or supporting helper",
+    "during an authorized task",
+    "`global-context-management`'s source-first repair procedure",
+    "fix canonical source, validate, install through the repository's existing script",
+    "verify the repaired path",
+    "continue the original task without requesting repeated approval",
+    "Apply this to small tasks too",
+    "Preserve active mode, explicit read-only scope, invocation restrictions",
+    "permissions, workflow ownership, checkpoints, repair budgets, and deadlines",
+)
 REQUIRED_RESEARCH_ROUTING_SNIPPETS = (
     "vendor-specific documentation MCP tools already exposed or discoverable in the current session",
     "A configuration entry alone does not establish availability",
@@ -545,6 +556,9 @@ def check_agents_md(codex_home: Path, strict: bool, failures: list[str]) -> None
         fail("AGENTS.md managed block is stale or incomplete", failures)
         return
     routing_text = active_markdown_text(actual)
+    if not all(needle in routing_text for needle in REQUIRED_REPAIR_POLICY_SNIPPETS):
+        fail("AGENTS.md lacks current skill and hook repair guidance", failures)
+        return
     if not all(needle in routing_text for needle in REQUIRED_NEBIUS_DOCS_SNIPPETS):
         fail("AGENTS.md lacks current Nebius documentation routing guidance", failures)
         return

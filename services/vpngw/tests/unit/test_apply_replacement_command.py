@@ -31,6 +31,7 @@ def public_replacement(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_gateway_ssh_trust_scope", lambda *args, **kwargs: object())
     monkeypatch.setattr(cli, "_approve_disruption", lambda digest, supplied, dry_run: not dry_run)
     ports = Ports()
+    ports.require_release = lambda _journal: None
     ports.inspect = lambda: desired
     state = NS(lose_final=False, reads=0)
 

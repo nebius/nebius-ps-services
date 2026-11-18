@@ -11,17 +11,20 @@ effect; this adviser creates no redundant triage plan or GitHub writes.
 
 Review GitHub issues by project and shared remediation, apply evidence-backed
 triage decisions, and save one implementation plan per accepted batch. The
-skill never implements the plans.
+skill ends triage with an operator approval handoff; implementation is separate.
 
 ## Usage
 
 ```text
 $review-github-issues
+$review-github-issues --project vpngw
+$review-github-issues --project services/vpngw --issues 123,124
+$review-github-issues --project .
 $review-github-issues --priority services/vpngw,services/nebius-cxcli
-$review-github-issues --issue 123,124
+$review-github-issues --issues 123,124
 $review-github-issues --repo example-org/alpha,example-org/beta
-$review-github-issues --repo example-org/alpha,example-org/beta --issue 12,34
-$review-github-issues --repo https://github.com/example-org/alpha --issue 12
+$review-github-issues --repo example-org/alpha,example-org/beta --issues 12,34
+$review-github-issues --repo https://github.com/example-org/alpha --issues 12
 $review-github-issues --label being-fixed --issue-batch 10
 $review-github-issues --label being-fixed
 $review-github-issues --help
@@ -33,24 +36,34 @@ explicit-only. This is an agent skill, not a separately installed executable.
 
 | Option | Meaning |
 | --- | --- |
-| No flags | Review all observed open issues in the current checkout's GitHub repo, across all project folders. |
+| No flags | Review open issues related to the current folder's project; descendants inherit their project root. |
 | `--repo` | Comma-separated repository names or URLs; finish repositories in supplied order. |
-| `--issue` | Comma-separated positive numbers; check each in every selected repo and review every existing issue match. |
-| `--label` | One exact existing label; select oldest-created open issues repository-wide. |
-| `--issue-batch` | Total across the invocation, default five in label mode; requires `--label` and excludes `--issue`. |
+| `--issues` | Comma-separated positive numbers; check each in every selected repo, intersected with current/explicit project scope. |
+| `--project` | Override scope with an exact project root or unique name; `.` means whole repository. |
+| `--label` | One exact existing label; select oldest-created open issues matching project scope. |
+| `--issue-batch` | Total matching issues after project filtering, default five in label mode; requires `--label` and excludes `--issues`. |
 | `--priority` | Comma-separated exact project roots, highest first, applied independently in each repo. |
 | `-h`, `--help` | Explain the interface and effects without tools or side effects. |
 
-Without `--issue` or `--label`, collect all open issues from each selected repository.
+From `services/vpngw`, bare `$review-github-issues` selects vpngw-owned and
+proven-affected issues. Running from its `src` subfolder uses the same project.
+At the repository root, or with `--project .`, scope is the whole repository.
+An explicit project overrides the folder in every selector mode. Ambiguous
+project names require a choice; unknown paths never silently widen selection.
+With `--repo` alone, the inferred project-relative root must exist in each target.
+Without `--issues` or `--label`, enumerate open candidates completely, then filter
+by that scope. A shared-component issue remains owned by its actual project.
 Unknown repository identity requires clarification. Empty backlogs end without
 effects. Repeated inputs are deduplicated; positional issue numbers/URLs and
-unknown flags are rejected. There are no implementation flags.
-All argument syntax, including priority paths, is validated before discovery or
+unknown flags are rejected. Retired `--issue` is rejected with the `--issues`
+correction. There are no implementation flags.
+All argument syntax, including project and priority paths, is validated before discovery or
 GitHub calls; invalid input cannot partially start a review.
 
 ## Review order and batches
 
-1. Finish the selected collection, excluding PRs; label mode freezes its total
+1. Resolve current/explicit project scope and collect matching issues, excluding
+   PRs; label mode filters by project before its cap and freezes its total
    across repositories before effects, while unbounded mode exhausts each repo.
 2. Map issues to primary project owners using discussion, docs and source.
 3. Process explicit priority projects first, then other projects by selected
@@ -112,7 +125,31 @@ recommendations; they do not block independent comments or justified closure.
 No labels are created. Verify labels, comments and closure separately; observe
 state before terminal labeling and read back ambiguous outcomes before retrying.
 
-The maintainer owns implementation, commits, pushes, PR creation and merge.
+## Project overview and implementation approval
+
+Complete batch files remain under their primary owners. The selected project
+gets `docs/github-issues/project-plan.md`: scope, coverage, individual outcomes,
+ordered batch links, owners, exact fingerprints, dependencies and readiness.
+This snapshot does not duplicate detailed designs or track live execution.
+Existing human edits and concurrent changes are protected.
+
+After triage, the agent offers a specific ready set with links and actual project
+targets. Approval can cover all proposed batches or a dependency-complete subset:
+
+- Explicit `$implement` uses that workflow, one existing run per approved batch
+  in dependency order and under its actual project.
+- "Approve and continue", "implement it" or "proceed" in response to the exact
+  proposal starts ordinary local implementation without invoking `$implement`.
+
+Before either route, verify the matching checkout, project root, instructions,
+change boundaries, plan bytes and material evidence. The agent resolves these
+from source instead of assuming the review folder or asking for known paths.
+Changed scope requires renewed agreement; host Plan Mode remains binding.
+Implementation approval grants no publication or issue-closure authority.
+Natural implementation creates no Implement receipt or automatic commit.
+
+See [operator handoff](references/implementation-handoff.md) and
+[project selection](references/project-selection.md).
 
 ## Prerequisites and boundaries
 
@@ -151,4 +188,5 @@ acceptance evidence to Implement, concise comments and verified closing referenc
 to create-pr, and merge/issue-state verification to merge-pr. GitHub performs
 native issue closure on default-branch merge when enabled. A partial fix or mere
 issue mention never qualifies. Each delivery owner retains its explicit authority;
-review does not start implementation, PR creation or merge.
+review does not start implementation, PR creation or merge by itself. Only a
+separate direct operator approval activates the root handoff described above.

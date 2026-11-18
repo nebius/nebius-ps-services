@@ -187,13 +187,9 @@ def predecessor_generations(
     transaction = state.transaction
     if transaction is None:
         raise ReplanRejected("HA predecessor transaction is unavailable")
-    manifests = (
-        selected_manifests
-        if selected_manifests is not None
-        else json.loads(
-            dict(transaction.resource_bindings).get("runtime-package-manifests", "null")
-        )
-    )
+    from .ha_created_packages import saved_manifests
+
+    manifests = selected_manifests if selected_manifests is not None else saved_manifests(state)
     if (
         not isinstance(manifests, dict)
         or set(manifests) != {member.instance_name for member in state.members}
@@ -280,6 +276,61 @@ def operation_id(state: VMHALifecycleState, parent: dict, desired: str, artifact
     return digest([SCHEMA, state.record_sha256, digest(parent), desired, artifact])
 
 
+def retained_targets(previous: dict, state: VMHALifecycleState) -> bool:
+    from .apply_plan import CommandPlan
+    from .ha_command import runtime_effect
+    from .ha_members import targets, verify_lineage
+
+    plan = CommandPlan.parse(previous["transaction"]["plan"])
+    actual = tuple(sorted(runtime_effect(plan).targets))
+    retained = tuple(sorted(member.compute_id for member in state.members))
+    if actual == retained:
+        return True
+    runtime = previous["bindings"].get("runtime", {})
+    members = runtime.get("members")
+    return bool(
+        state.transaction is not None
+        and "heartbeat-initial-artifact" in dict(state.transaction.resource_bindings)
+        and isinstance(members, dict)
+        and all(value.get("kind") in {"created", "retained"} for value in members.values())
+        and actual == targets(members)
+        and verify_lineage(state, members)
+    )
+
+
+def creation_action_matches(previous: dict, state: VMHALifecycleState, action: dict) -> bool:
+    """Only settled creation prerequisites may normalize to retained reuse."""
+    if not retained_targets(previous, state) or state.transaction is None:
+        return False
+    if "heartbeat-initial-artifact" not in dict(state.transaction.resource_bindings):
+        return False
+    if action != {
+        "recreate": False,
+        "prepare_peer_rotation": False,
+        "destructive": False,
+        "managed_ssh": None,
+        "managed_credentials": "reuse",
+    }:
+        return False
+    bindings = previous["bindings"]
+    credential = bindings.get("credentials", {}).get("action", "reuse")
+    if credential not in {"create", "reuse", "resume"}:
+        return False
+    # The caller additionally proves both completed prerequisite journals and
+    # unchanged selected identities through settled_owners/validate_record.
+    return any(
+        bindings["runtime"]["action_scope"]
+        == digest(
+            {
+                **action,
+                "managed_credentials": credential,
+                "managed_ssh": ssh,
+            }
+        )
+        for ssh in (("create", "migrate", "enroll") if "ssh" in bindings else (None,))
+    )
+
+
 def settled_owners(journal, state, credential_plan, ssh_policy) -> tuple[dict, dict, dict]:
     """Observe every local participant, including effects hidden by parent lag."""
     from .apply_plan import CommandPlan
@@ -337,8 +388,7 @@ def settled_owners(journal, state, credential_plan, ssh_policy) -> tuple[dict, d
             effect.key == "runtime" and effect.owner == "ha-lifecycle" for effect in plan.effects
         )
         != 1
-        or tuple(sorted(next(effect for effect in plan.effects if effect.key == "runtime").targets))
-        != tuple(sorted(member.compute_id for member in state.members))
+        or not retained_targets(previous, state)
         or (
             successor_authority is None
             and (
@@ -615,7 +665,7 @@ def inspect(
                 "package_reservation": reservation,
             },
         )
-        installed_artifact = dict(state.transaction.resource_bindings)[ARTIFACT]
+        installed_artifact = vm_ha_corrective.predecessor_artifact(state)
         if unfinished is not None:
             baseline = recovery_member_manifest(
                 state, member.instance_name, observed["children"], reservation, prior_manifests

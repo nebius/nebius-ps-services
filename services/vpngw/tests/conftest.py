@@ -2,8 +2,41 @@ from __future__ import annotations
 
 import os
 import socket
+from functools import lru_cache
+from types import SimpleNamespace
 
 import pytest
+
+
+@pytest.fixture
+def cached_managed_key_validation(monkeypatch):
+    """Reuse real parsing of identical bytes within one credential workflow test.
+
+    Enrollment/recovery tests repeatedly read the same immutable PEM material.
+    Keep fresh key generation, file reads and binding checks real; cache only
+    successful cryptography parsing by bytes and password, never by file path.
+    The dedicated managed-credential tests do not request this fixture.
+    """
+    from cryptography.hazmat.primitives import serialization
+
+    from nebius_vpngw import vm_ha_managed_credentials as managed
+
+    load_key = lru_cache(maxsize=4)(serialization.load_pem_private_key)
+    monkeypatch.setattr(
+        managed,
+        "serialization",
+        SimpleNamespace(
+            Encoding=serialization.Encoding,
+            PrivateFormat=serialization.PrivateFormat,
+            PublicFormat=serialization.PublicFormat,
+            NoEncryption=serialization.NoEncryption,
+            load_pem_private_key=load_key,
+        ),
+    )
+    try:
+        yield
+    finally:
+        load_key.cache_clear()
 
 
 @pytest.fixture

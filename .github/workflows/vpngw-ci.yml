@@ -431,7 +431,7 @@ jobs:
         run: python -m pytest -n auto tests/integration/test_cli_commands.py
 
   build:
-    needs: [merge-inputs, unit-tests]
+    needs: [merge-inputs]
     if: (github.event_name != 'workflow_dispatch') || needs.merge-inputs.outputs.post_merge == 'true' || needs.merge-inputs.outputs.candidate == 'true' || needs.merge-inputs.outputs.qualification == 'true'
     runs-on: ubuntu-latest
     defaults:

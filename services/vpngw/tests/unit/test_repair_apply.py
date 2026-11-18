@@ -220,6 +220,7 @@ def test_dependency_tags_are_computed_for_guest_not_controller():
 
 @pytest.mark.parametrize("error", [EOFError(), ConnectionResetError(), "banner"])
 def test_repair_waits_for_authenticated_ssh_after_boot_transport_failure(monkeypatch, error):
+    monkeypatch.setattr(repair_apply.Coordinator, "require_release", lambda *_: None)
     import paramiko
 
     if error == "banner":
@@ -246,6 +247,7 @@ def test_repair_waits_for_authenticated_ssh_after_boot_transport_failure(monkeyp
 
 @pytest.mark.parametrize("failure", ["identity", "authentication", "permission", "semantic"])
 def test_repair_readiness_does_not_retry_identity_or_authority_failure(monkeypatch, failure):
+    monkeypatch.setattr(repair_apply.Coordinator, "require_release", lambda *_: None)
     import paramiko
 
     errors = {
@@ -267,6 +269,7 @@ def test_repair_readiness_does_not_retry_identity_or_authority_failure(monkeypat
 
 
 def test_repair_boot_transport_retry_retains_bounded_deadline(monkeypatch):
+    monkeypatch.setattr(repair_apply.Coordinator, "require_release", lambda *_: None)
     import paramiko
 
     coordinator = repair_apply.Coordinator.__new__(repair_apply.Coordinator)
@@ -284,11 +287,16 @@ def test_repair_boot_transport_retry_retains_bounded_deadline(monkeypatch):
     from nebius_vpngw.deploy.recovery import Invocation, advice
 
     recovery = advice(Invocation("apply", Path("gateway.config.yaml"), repair=True), failure.value)
-    assert recovery.destroy_command == "nebius-vpngw destroy --local-config-file gateway.config.yaml"
-    assert recovery.fresh_apply_command == "nebius-vpngw apply --local-config-file gateway.config.yaml"
+    assert (
+        recovery.destroy_command == "nebius-vpngw destroy --local-config-file gateway.config.yaml"
+    )
+    assert (
+        recovery.fresh_apply_command == "nebius-vpngw apply --local-config-file gateway.config.yaml"
+    )
 
 
 def test_resume_waits_for_guest_writer_across_real_shared_error_boundary(monkeypatch):
+    monkeypatch.setattr(repair_apply.Coordinator, "require_release", lambda *_: None)
     import json
     from unittest.mock import Mock
 
@@ -355,6 +363,7 @@ def test_resume_waits_for_guest_writer_across_real_shared_error_boundary(monkeyp
 
 @pytest.mark.parametrize("settles", [False, True])
 def test_guest_writer_wait_has_its_own_fixed_bound(monkeypatch, settles):
+    monkeypatch.setattr(repair_apply.Coordinator, "require_release", lambda *_: None)
     from nebius_vpngw.deploy.ordinary_apply import RemoteGuestWriterBusy
 
     coordinator = repair_apply.Coordinator.__new__(repair_apply.Coordinator)
@@ -383,6 +392,7 @@ def test_guest_writer_wait_has_its_own_fixed_bound(monkeypatch, settles):
 
 @pytest.mark.parametrize("denied", [False, True])
 def test_repair_boot_retry_crosses_real_shared_transport_error_boundary(monkeypatch, denied):
+    monkeypatch.setattr(repair_apply.Coordinator, "require_release", lambda *_: None)
     from nebius_vpngw import repair_bootstrap
     from nebius_vpngw.deploy import ordinary_apply
 

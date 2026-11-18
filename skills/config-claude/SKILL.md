@@ -112,6 +112,17 @@ the session. Installing this skill does not configure the user's machine.
    the native validation steps in the setup reference; a template or JSON parse
    does not prove runtime hook execution or model behavior.
 
+## Selected Skill And Hook Repair Policy
+
+For a requested always-on self-repair rule, reconcile only the template's
+Skill and Hook Repair section inside the native config-claude managed block.
+Preserve unrelated user guidance and settings. A policy-only request does not
+bootstrap settings, hooks, roles, permissions or the rest of the home. Validate
+the selected guidance separately from full-home convergence and fresh-session
+loading. The shared procedure belongs to global-context-management and covers
+small tasks, hooks and helpers as well as blocking skill defects. Installing
+this setup skill does not apply the global rule to the native home.
+
 ## Selected Host Memory Policy
 
 For a requested memory guard, reconcile only the template's Host Memory Safety
