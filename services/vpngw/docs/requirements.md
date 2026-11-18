@@ -3163,6 +3163,15 @@ roles. VM ownership failback remains separate from tunnel failback.
   incarnation. Peer grace requires fresh authenticated exact-owner bounded-episode
   evidence; missing heartbeats get no extra grace. Unready standby promotion remains
   forbidden and former Compute owner must be Stopped before allocation transfer.
+- A former owner observed STOPPING leaves the backup fenced with its Stop action
+  pending across controller passes. Stop acceptance and exact-operation polling
+  are bounded single requests, with durable receipt reuse and no duplicate Stop
+  submission while work is accepted. Expected progress does not restart the
+  controller or drain heartbeat publication. A fresh authoritative STOPPED read
+  and terminal successful accepted operation remain prerequisites for transfer.
+  Fenced local Static cleanup uses exact non-owner attachment geometry without
+  requiring the attached former owner to be Running. Healthy standby readiness
+  and promotion keep their existing stronger proofs.
 - An existing exact cloud-route receipt remains separate from confirmed temporary
   BGP path availability; readiness still requires actual usable selected routes.
   The existing persisted five-second owner repair may clear only a confirmed

@@ -5420,7 +5420,9 @@ def _run_vm_ha_controller(
                 return
             state = str(status.get("state") or "")
             pending = status.get("pending_operation_id")
-            if pending:
+            if "former-owner-stop-pending" in status.get("reasons", ()):
+                delay = 1.0
+            elif pending:
                 delay = 0.05
             elif state in {
                 HAState.SUSPECT.value,

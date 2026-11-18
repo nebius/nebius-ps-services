@@ -226,12 +226,22 @@ class CloudObservation:
     def passive_attachment_exact(self, local_node_id: str, peer_node_id: str) -> bool:
         """Prove the running peer owns the allocation and this member has none."""
         return bool(
+            self.former_owner_compute_state is ComputeState.RUNNING
+            and self.non_owner_attachment_exact(local_node_id, peer_node_id)
+        )
+
+    def non_owner_attachment_exact(self, local_node_id: str, peer_node_id: str) -> bool:
+        """Prove attachment geometry, without asserting peer health or fencing.
+
+        This permits fenced local cleanup while an attached former owner stops.
+        It does not authorize takeover, forwarding, or healthy standby status.
+        """
+        return bool(
             local_node_id != peer_node_id
             and self.authoritative
             and self.allocation_id
             and self.ownership_epoch
             and self.observed_owner_node_id == self.former_owner_node_id == peer_node_id
-            and self.former_owner_compute_state is ComputeState.RUNNING
             and self.former_attachment_exact
             and not self.former_attachment_absent
             and self.candidate_attachment_absent
@@ -2296,6 +2306,10 @@ class AutomaticStopCancelled(RuntimeError):
         self.checkpoint = checkpoint
 
 
+class FormerOwnerStopPending(RuntimeError):
+    """An exact Stop is in progress; retain its checkpoint and yield this pass."""
+
+
 class RecoverableController:
     """Small orchestration shell enforcing checkpoint-before-effect ordering."""
 
@@ -2326,7 +2340,10 @@ class RecoverableController:
 
     def step(self) -> ControllerResult:
         checkpoint = self.checkpoints.load()
-        self.before_observe(checkpoint)
+        try:
+            self.before_observe(checkpoint)
+        except FormerOwnerStopPending:
+            return self._waiting_for_stop(self.snapshots.observe(), checkpoint)
         snapshot = self.snapshots.observe()
         decision = self.policy.decide(snapshot, checkpoint)
         if self.decision_preflight is not None and self.decision_preflight(
@@ -2344,6 +2361,8 @@ class RecoverableController:
         if decision.action is not None:
             try:
                 self.effects.apply(decision.action)
+            except FormerOwnerStopPending:
+                return self._waiting_for_stop(snapshot, decision.checkpoint)
             except AutomaticStopCancelled as cancelled:
                 if decision.action.kind is not ActionKind.STOP_FORMER_OWNER:
                     raise
@@ -2356,3 +2375,25 @@ class RecoverableController:
                     forwarding_enabled=False,
                 )
         return decision
+
+    @staticmethod
+    def _waiting_for_stop(
+        snapshot: ControllerSnapshot, checkpoint: ControllerCheckpoint
+    ) -> ControllerResult:
+        # Waiting grants no mutation authority. A restarted runtime may still be
+        # BLOCKED behind its current-boot guard while an accepted Stop settles.
+        pending = checkpoint.pending_action
+        if (
+            pending is None
+            or pending.kind is not ActionKind.STOP_FORMER_OWNER
+            or snapshot.guard_boot_id != snapshot.boot_id
+            or snapshot.data_plane_mode not in {DataPlaneMode.PASSIVE, DataPlaneMode.BLOCKED}
+        ):
+            raise RuntimeError("pending former-owner Stop requires a locally fenced controller")
+        return ControllerResult(
+            state=HAState.FENCING,
+            reasons=("former-owner-stop-pending",),
+            forwarding_enabled=False,
+            action=None,
+            checkpoint=checkpoint,
+        )

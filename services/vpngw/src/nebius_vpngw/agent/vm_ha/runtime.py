@@ -51,6 +51,7 @@ from nebius_vpngw.agent.vm_ha_controller import (
     ControllerAction,
     ControllerSnapshot,
     DataPlaneMode,
+    FormerOwnerStopPending,
     LocalReadiness,
     RepairAttempt,
 )
@@ -63,6 +64,7 @@ from nebius_vpngw.deploy.vm_ha_cloud import (
     ClusterCloudObservation,
     InstanceCloudState,
     NebiusSDKCloudClient,
+    PendingHACloudOperation,
     VMHACloudAdapter,
     VMHACloudOperationJournal,
     vm_ha_observation_budget,
@@ -603,8 +605,10 @@ class BoundCloudRuntime:
         *,
         peer_binding_provider: Callable[[], VMHARuntimeNodeBinding] | None = None,
         settle_cloud_operation: Callable[[str | None, str | None], None] = lambda _id, _kind: None,
+        poll_stop_operation: Callable[[str, str], None] | None = None,
     ) -> None:
         self._settle_cloud_operation = settle_cloud_operation
+        self._poll_stop_operation = poll_stop_operation
         self.binding = binding
         self.local = local
         self.peer = peer
@@ -614,6 +618,16 @@ class BoundCloudRuntime:
         self._confirmed_candidate_revision: str | None = None
 
     def settle_pending_action(self, action: ControllerAction | None) -> None:
+        if (
+            action is not None
+            and action.kind is ActionKind.STOP_FORMER_OWNER
+            and self._poll_stop_operation is not None
+        ):
+            try:
+                self._poll_stop_operation(action.operation_id, self._current_peer().compute_id)
+            except PendingHACloudOperation as error:
+                raise FormerOwnerStopPending(str(error)) from error
+            return
         kinds = {
             ActionKind.STOP_FORMER_OWNER: "stop-instance",
             ActionKind.DETACH_FORMER_ATTACHMENT: "set-alias-absent",
@@ -709,7 +723,14 @@ class BoundCloudRuntime:
             and observation.ownership_epoch == action.ownership_epoch
         ):
             raise RuntimeError("former-owner stop authority changed before the effect")
-        self.adapter.require_stopped(peer.compute_id, action.operation_id)
+        if observation.former_owner_compute_state is ComputeState.STOPPING:
+            raise FormerOwnerStopPending("former owner is STOPPING")
+        try:
+            stopped = self.adapter.request_stop(peer.compute_id, action.operation_id)
+        except PendingHACloudOperation as error:
+            raise FormerOwnerStopPending(str(error)) from error
+        if not stopped:
+            raise FormerOwnerStopPending("former owner Stop is awaiting confirmation")
 
     def detach_former(self, action: ControllerAction) -> None:
         self.settle_pending_action(action)
@@ -825,7 +846,7 @@ def build_cloud_runtime(
     calls = NebiusSDKCloudClient(sdk, operation_journal=operation_journal)
     adapter = VMHACloudAdapter(
         instance_reader=calls.get_instance,
-        instance_stopper=calls.stop_instance,
+        instance_stopper=calls.request_stop_instance,
         allocation_reader=calls.get_allocation,
         alias_allocation_setter=calls.set_alias_allocation,
         attempts=attempts,
@@ -844,6 +865,9 @@ def build_cloud_runtime(
         adapter,
         peer_binding_provider=peer_binding_provider,
         settle_cloud_operation=calls.settle_pending_action,
+        poll_stop_operation=lambda operation_id, instance_id: calls.poll_pending_action(
+            operation_id, "stop-instance", expected_resource_id=instance_id
+        ),
     )
 
 
@@ -4393,7 +4417,7 @@ def build_runtime_ports(
                 )
                 admitted = observation.local_attachment_exact(local_node_id)
                 if not candidate:
-                    admitted = admitted or observation.passive_attachment_exact(
+                    admitted = admitted or observation.non_owner_attachment_exact(
                         local_node_id, peer.node_id
                     )
                 return bool(

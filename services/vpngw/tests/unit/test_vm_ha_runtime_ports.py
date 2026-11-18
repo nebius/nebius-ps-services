@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 import os
+import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -2511,8 +2512,9 @@ def test_bound_cloud_transfer_uses_one_candidate_revision_boundary(tmp_path: Pat
                 candidate_owner=AllocationOwner(local.compute_id, local.network_interface_name),
             )
 
-        def require_stopped(self, _compute_id: str, _operation_id: str) -> None:
+        def request_stop(self, _compute_id: str, _operation_id: str) -> bool:
             state["former_state"] = InstanceCloudState.STOPPED
+            return True
 
         def require_former_attachment_absent(self, *_args: object) -> None:
             state["owner"] = None
@@ -2817,6 +2819,91 @@ def test_static_cleanup_admission_uses_one_remaining_cloud_budget(tmp_path, monk
             ports.data_plane.inactive_static_reconciler(action, True)
         assert budgets == [30.0, 19.0, 8.0]
         assert vm_ha_request_kwargs()["timeout"] == 30.0  # Context released on failure.
+    finally:
+        ports.close()
+
+
+@pytest.mark.parametrize(
+    "former_state", [ComputeState.RUNNING, ComputeState.STOPPING, ComputeState.STOPPED]
+)
+@pytest.mark.parametrize(
+    "invalid",
+    [None, "forwarding", "guard-boot", "action-epoch", "foreign-owner", "unknown-attachment"],
+)
+def test_static_local_cleanup_is_independent_of_former_owner_liveness(
+    tmp_path, monkeypatch, former_state, invalid
+):
+    from nebius_vpngw.agent.vm_ha import tunnel_runtime
+
+    config = _runtime_config(tmp_path)
+    config["node"] = {"node_id": "node-b", "role": "passive"}
+    manifest = json.dumps([{"connection": "site", "remote_prefixes": ["10.1.0.0/16"]}])
+    digest = hashlib.sha256(manifest.encode()).hexdigest()
+    config["generation"]["logical_manifests"]["static_routes_json"] = manifest
+    config["generation"]["digests"]["static_routes"] = digest
+    config["readiness"]["digests"]["static_routes"] = digest
+    config["runtime_binding"]["static_routes_digest"] = digest
+    ports = build_runtime_ports(
+        config,
+        state_dir=tmp_path,
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **_kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        route_backend_factory=lambda _sdk: FakeRouteBackend(),
+        candidate_preparer=lambda: None,
+        runner=lambda _argv, _timeout: CommandResult(0, "1" if invalid == "forwarding" else "0"),
+    )
+    guard = {
+        "schema": "nebius-vpngw/vm-ha-status-v1",
+        "guard_boot_id": "old-boot" if invalid == "guard-boot" else "boot-b",
+        "data_plane_mode": "blocked",
+    }
+    state = {
+        "schema": "nebius-vpngw/vm-ha-data-plane-v1",
+        "boot_id": "boot-b",
+        "mode": "blocked",
+    }
+    (tmp_path / "guard.json").write_text(json.dumps(guard))
+    (tmp_path / "data-plane.json").write_text(json.dumps(state))
+    observation = CloudObservation(
+        authoritative=invalid != "unknown-attachment",
+        allocation_id="allocation-a",
+        observed_owner_node_id="foreign" if invalid == "foreign-owner" else "node-a",
+        former_owner_node_id="node-a",
+        former_owner_compute_state=former_state,
+        former_attachment_absent=False,
+        former_attachment_exact=True,
+        candidate_attachment_exact=False,
+        candidate_attachment_absent=True,
+        ownership_re_read_exact=False,
+        ownership_epoch="3",
+    )
+    monkeypatch.setattr(ports.cloud, "observe", lambda: observation)
+    outcomes = []
+
+    def check_cleanup(_cfg, _directory, _authority, *, candidate, permitted, **_kwargs):
+        assert candidate is False
+        # Exercise the real factory callback and its complete revalidation, with
+        # no kernel mutation or implicit promotion from attachment geometry.
+        outcomes.append(permitted(time.monotonic() + 30))
+
+    monkeypatch.setattr(tunnel_runtime, "reconcile_inactive_static", check_cleanup)
+    action = ControllerAction(
+        ActionKind.ENTER_PASSIVE,
+        "passive-cleanup",
+        "boot-b",
+        "node-b",
+        "allocation-a",
+        "stale-epoch" if invalid == "action-epoch" else "3",
+        "a" * 64,
+        DigestSet(**config["generation"]["digests"]),
+    )
+    try:
+        ports.data_plane.inactive_static_reconciler(action, False)
+        assert outcomes == [invalid is None]
+        if former_state is not ComputeState.RUNNING:
+            assert not observation.passive_attachment_exact("node-b", "node-a")
+        assert not observation.transfer_complete("node-b")
     finally:
         ports.close()
 

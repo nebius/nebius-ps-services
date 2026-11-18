@@ -193,6 +193,76 @@ def test_stopping_timeout_is_retryable_and_never_detaches() -> None:
     assert setters == []
 
 
+@pytest.mark.parametrize(
+    ("states", "expected_stops"),
+    [
+        (["STOPPED"], []),
+        (["STOPPING", "STOPPING", "STOPPED"], []),
+        (["RUNNING", "RUNNING", "STOPPING", "STOPPED"], ["old"]),
+    ],
+)
+def test_require_stopped_submits_stop_only_for_running_owner(
+    states: list[str], expected_stops: list[str]
+) -> None:
+    responses = deque(states)
+    reads = []
+    stops = []
+    sleeps = []
+
+    def read_instance(instance_id):
+        reads.append(instance_id)
+        return _instance(responses.popleft())
+
+    def unexpected_allocation_effect(*_args):
+        pytest.fail("Stop confirmation must not access or change the allocation")
+
+    adapter = VMHACloudAdapter(
+        instance_reader=read_instance,
+        instance_stopper=stops.append,
+        allocation_reader=unexpected_allocation_effect,
+        alias_allocation_setter=unexpected_allocation_effect,
+        attempts=6,
+        poll_interval=1,
+        sleeper=sleeps.append,
+    )
+
+    proof = adapter.require_stopped("old")
+
+    assert proof.state is InstanceCloudState.STOPPED
+    assert reads == ["old"] * len(states)
+    assert stops == expected_stops
+    assert sleeps == [1] * (len(states) - 1)
+    assert not responses
+
+
+def test_already_stopping_owner_exhausts_poll_without_submitting_stop() -> None:
+    reads = []
+    sleeps = []
+
+    def read_instance(instance_id):
+        reads.append(instance_id)
+        return _instance("STOPPING")
+
+    def unexpected_mutation(*_args):
+        pytest.fail("An already STOPPING owner must not receive another Stop")
+
+    adapter = VMHACloudAdapter(
+        instance_reader=read_instance,
+        instance_stopper=unexpected_mutation,
+        allocation_reader=unexpected_mutation,
+        alias_allocation_setter=unexpected_mutation,
+        attempts=6,
+        poll_interval=1,
+        sleeper=sleeps.append,
+    )
+
+    with pytest.raises(RetryableHACloudError, match="did not become STOPPED"):
+        adapter.require_stopped("old")
+
+    assert reads == ["old"] * 6
+    assert sleeps == [1] * 5
+
+
 def test_unexpected_allocation_owner_is_permanent_and_not_mutated() -> None:
     setters: list[tuple[object, ...]] = []
     adapter = VMHACloudAdapter(

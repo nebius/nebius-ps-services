@@ -15184,3 +15184,30 @@ confirmed loss persists for thirty seconds does not admit backup selection.
 Ordinary single-VM, BGP and explicit manual request behavior are unchanged.
 Live gateway reachability, independent campaign traffic and Home/owner continuity
 still require separate qualification before claiming S01 recovery is fixed.
+
+### Former-owner Stop progress across controller passes
+
+VM-HA Stop fencing yields a typed pending result while the former Compute owner
+is STOPPING or its accepted Stop operation remains nonterminal. The existing
+checkpoint retains the same action identity. Each later controller pass reads
+fresh state and checks any accepted operation once through its exact Instance
+operation service, including resource identity. No synchronous completion waiter,
+six-poll sleep loop, Stop replay, or generic controller restart is used for this
+expected progress. A one-second service-loop delay avoids busy polling while
+heartbeat and status work continue. This shared path applies to Static and BGP.
+
+Accepted-operation settlement precedes checkpoint acknowledgment, even when
+Compute already reports STOPPED. Unknown, foreign, failed, or unavailable operation
+evidence retains the receipt and the existing fail-closed behavior. Existing
+synchronous cloud helpers remain available to other bounded workflows. The
+controller checkpoint, accepted-operation record and configuration shapes do not
+change.
+
+Attachment geometry is defined once by `non_owner_attachment_exact()`. Healthy
+passive readiness additionally requires a Running peer through
+`passive_attachment_exact()`. Only fenced inactive Static cleanup uses the
+geometry-only predicate, retaining its current action, boot, generation, epoch,
+guard, configuration-scope and physical forwarding-off checks. It therefore
+remains possible to clean the backup's local state after its attached former
+owner stops. Candidate preparation, ownership transfer and forwarding retain
+their existing stopped-former-owner and exclusive-allocation requirements.
