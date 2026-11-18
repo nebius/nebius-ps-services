@@ -15181,8 +15181,15 @@ port is added. Native effect failure records the sanitized result
 A transient effect failure permits re-admission only after terminal rollback,
 fresh original-authority restoration proof, a thirty-second first or sixty-second
 second cooldown and two new path proofs. At most three attempts per candidate
-are admitted in a continuous process-local observed loss window. Scope rejection
-and unknown rollback never admit such a retry. Exact terminal operation states
+are admitted in a continuous process-local observed loss window. A scope
+rejection (`suspension-scope-unproven`) is retried under the same cooldown,
+restoration proof, fresh path proofs and attempt cap. Its proof fails before the
+first native mutation and cannot tell a stalled native read from real ownership
+ambiguity. Without the retry, one stalled read disabled recovery for the whole
+loss window, leaving a one-active, one-backup connection with no backup. Real
+ambiguity therefore spends at most three read-only promotion checks, each a
+pending operation for about one pass, before its candidate is skipped. Unknown
+rollback never admits a retry. Exact terminal operation states
 are retained in their existing checksummed envelope under operation-ID-named
 `static-recovery-results` files before replacement with a new operation. Restart
 retains accepted-operation resume and conservatively starts a new observation

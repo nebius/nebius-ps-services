@@ -3841,7 +3841,9 @@ REQ-033 where they conflict; their remaining safety obligations remain active.
   require fresh restoration proof, a 30s/60s cooldown and two new path proofs for
   bounded re-admission, at most three attempts per candidate in a continuous
   observed loss window. Preserve terminal receipts and never replace pending
-  cleanup or retry scope rejection. Fresh read-only rollback-authority checks
+  cleanup. Retry a pre-mutation scope rejection within those same bounds, because
+  a stalled native read must not disable recovery for the whole loss window; real
+  ownership ambiguity still never mutates. Fresh read-only rollback-authority checks
   receive a bounded observation allowance independent of the failed operation's
   expired effect deadline. They still require exact configuration, loaded names,
   routes and current authority, and grant no new mutation authority. A backup may

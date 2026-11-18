@@ -27,6 +27,15 @@ CAPABILITY = "connection-tunnel-selection-v1"
 STATE_NAME = "tunnel-selection.json"
 SCHEMA = "nebius-vpngw/ha-tunnel-selection-v1"
 STATIC_VERIFICATION_SECONDS = 29
+# Terminal automatic-recovery results that may be admitted again after the
+# cooldown, within the per-candidate attempt cap, and only after fresh proof that
+# the previous path's configuration, loaded names and routes are intact. A
+# scope-unproven result failed its proof before the first native mutation. That
+# proof cannot tell a stalled native read from real ownership ambiguity, so both
+# get the same bounded retries rather than disabling recovery for the whole loss.
+RETRYABLE_RECOVERY_RESULTS = frozenset(
+    {"native-recovery-retained", "previous-path-restored", "suspension-scope-unproven"}
+)
 
 
 class Health(str, Enum):
@@ -764,8 +773,7 @@ class TunnelController(Generic[AuthorityT]):
                 if (
                     operation is None
                     or operation["phase"] != "failed"
-                    or operation["result"]
-                    not in {"native-recovery-retained", "previous-path-restored"}
+                    or operation["result"] not in RETRYABLE_RECOVERY_RESULTS
                     or attempt["count"] >= 3
                 ):
                     diagnostic(

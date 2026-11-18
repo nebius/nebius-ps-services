@@ -3,7 +3,7 @@
 import json
 from copy import deepcopy
 from pathlib import Path
-from subprocess import CompletedProcess
+from subprocess import CompletedProcess, TimeoutExpired
 
 import pytest
 from test_ha_tunnel_selection import AUTH, Effects, config
@@ -53,6 +53,9 @@ class NativeModel:
         self.on_load = lambda: None
         self.on_routes = lambda: None
         self.ping_ok = True
+        # One exact command times out once, as a stalled native read would.
+        self.fail_once = None
+        self.faults = 0
         self.conf = directory / "swanctl.conf"
         monkeypatch.setattr(tunnel_runtime, "SWANCTL_CONF", self.conf)
 
@@ -142,6 +145,10 @@ class NativeModel:
         assert timeout > 0
         argv = tuple(argv)
         self.events.append(argv)
+        if argv == self.fail_once:
+            self.fail_once = None
+            self.faults += 1
+            raise TimeoutExpired(argv, timeout)
         output = ""
         if argv == ipsec_observation.command():
             entries = []
@@ -426,3 +433,109 @@ def test_fresh_retry_observation_still_requires_exact_restoration(native, failur
         call == (*ipsec_observation.command(), "--connections") or "show" in call
         for call in native.events
     )
+
+
+def recovery_loop(native, monkeypatch):
+    """Drive the composed controller from detected loss, not a pre-admitted operation.
+
+    Configure the common one-active, one-backup Static topology: with no other
+    alternative, a backup that is never retried leaves nothing to recover to.
+    The model has no FRR, so the unrelated BGP connection cannot be observed by
+    a full controller pass. Its SA, like the third path's, stays in the native
+    model and must remain untouched. Admission uses the native SA/kernel path
+    proof; the configuration-inventory part of the inner-peer probe is outside
+    this model and is covered elsewhere.
+    """
+    native.cfg["connections"] = [c for c in native.cfg["connections"] if c["name"] == "site"]
+    site = native.cfg["connections"][0]
+    site["tunnels"] = [t for t in site["tunnels"] if t["name"] in {"preferred", "backup"}]
+    state = native.conf.parent / STATE_NAME
+    state.unlink()
+    monkeypatch.setattr(tunnels, "monotonic", lambda: native.clock)
+    selector = TunnelController(
+        native.cfg,
+        state,
+        native.effects,
+        backup_probe=lambda policy, target, authority: native.effects.observe(
+            policy, target, selected=False
+        ),
+        static_recovery_observations={},
+        monotonic=lambda: native.clock,
+    )
+    selector.bind(AUTH)
+    # Apply installed the normal policy before the remote failed.
+    native.effects._write_swan_config(native.effects._effective(AUTH))
+    return selector
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Suspension scope proof of the dead path, before any mutation.
+        ("ip", "xfrm", "state", "list", "nokeys"),
+        # Promotion's recheck that the selected path is still DOWN.
+        ("ip", "-j", "-4", "route", "show", "table", "main"),
+    ],
+    ids=["kernel-state-read", "route-read"],
+)
+def test_transient_read_failure_during_promotion_still_recovers_to_backup(
+    native, monkeypatch, command
+):
+    """Regression: one stalled read must not disable recovery for the loss window.
+
+    The read fails before any native mutation, so nothing needs rolling back.
+    The selected path stays dead and the backup stays healthy throughout, so
+    the controller must collect the evidence again and complete the promotion.
+    """
+    selector = recovery_loop(native, monkeypatch)
+    activate = native.effects.activate
+
+    def fail_first_promotion_read(policy, target, authority):
+        if target == "backup" and native.faults == 0:
+            native.fail_once = command
+        return activate(policy, target, authority)
+
+    native.effects.activate = fail_first_promotion_read
+    for _ in range(180):
+        native.clock += 1
+        selector.tick(AUTH, native.clock)
+    operation = selector.state["operation"]
+    assert native.faults == 1
+    assert selector.state["selected"] == {"site": "backup"}, (
+        "backup was never promoted after one transient read failure; "
+        f"last operation ended {operation['phase']}/{operation['result']}"
+    )
+    assert operation["result"] == "verified"
+    assert native.routes == [{"dst": "10.1.0.0/16", "dev": "xfrm1"}]
+    assert native.sas["backup"] == native.original["backup"]
+    assert native.sas["unrelated"] == native.original["unrelated"]
+
+
+def test_kernel_ownership_ambiguity_never_promotes_or_mutates(native, monkeypatch):
+    """Guard for the fix: real scope ambiguity stays fail-closed, unlike a stalled read."""
+    selector = recovery_loop(native, monkeypatch)
+    preferred = native.paths["preferred"]
+    native.states.append(
+        {
+            "src": preferred.outer_pair[1],
+            "dst": "198.51.100.10",
+            "spi": hex(0x4242),
+            "proto": "esp",
+            "mode": "tunnel",
+            "if_id": preferred.if_id,
+            "reqid": preferred.if_id,
+            # A marked SA on the managed interface has unprovable ownership.
+            "mark": "0x1",
+        }
+    )
+    for _ in range(300):
+        native.clock += 1
+        selector.tick(AUTH, native.clock)
+    assert selector.state["selected"] == {}
+    assert selector.state["operation"]["phase"] == "failed"
+    assert 1 <= selector.state["sequence"] <= 3
+    assert native.routes == [{"dst": "10.1.0.0/16", "dev": "xfrm0"}]
+    assert not any(
+        call[:2] in {("swanctl", "--load-all"), ("ip", "-batch")} for call in native.events
+    )
+    assert native.sas == native.original

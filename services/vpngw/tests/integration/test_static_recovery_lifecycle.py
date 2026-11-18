@@ -201,6 +201,8 @@ class Scenario:
         return self.last_fault_at
 
     def select(self, name, *, seconds=RECOVERY_SECONDS):
+        rejected = set()
+
         def settled(sample):
             operation = sample["operation"]
             if (
@@ -208,8 +210,12 @@ class Scenario:
                 and operation["target"] == name
                 and operation["phase"] == "failed"
                 and operation["result"] == "suspension-scope-unproven"
+                and operation["id"] not in rejected
             ):
-                pytest.fail("Recovery stopped at terminal suspension-scope-unproven")
+                # A scope rejection changes nothing and is retried after its
+                # cooldown. Record it as evidence; selection must still follow.
+                rejected.add(operation["id"])
+                self.mark("scope-rejection-retry-pending", path=name)
             return (
                 sample["selected"] == name
                 and sample["health"].get("site") == "healthy"
@@ -244,7 +250,9 @@ class Scenario:
         )
         sample = self.select("backup")
         for setting, expected in (
-            ("start_action", "trap"), ("dpd_action", "restart"), ("keyingtries", "0")
+            ("start_action", "trap"),
+            ("dpd_action", "restart"),
+            ("keyingtries", "0"),
         ):
             self.contract(
                 sample["settings"]["backup"][setting] == expected,

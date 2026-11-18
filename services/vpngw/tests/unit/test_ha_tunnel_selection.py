@@ -2192,7 +2192,15 @@ def test_static_transient_effect_failure_retries_only_after_completed_restore_an
     assert ("fence",) not in effects.calls
 
 
-def test_static_repeated_transient_failures_have_finite_cooled_attempts(tmp_path):
+@pytest.mark.parametrize(
+    "failure,result",
+    [
+        (RuntimeError("routing writer busy"), "native-recovery-retained"),
+        (TunnelScopeError("scope is unproven"), "suspension-scope-unproven"),
+    ],
+    ids=["effect", "scope"],
+)
+def test_static_repeated_transient_failures_have_finite_cooled_attempts(tmp_path, failure, result):
     effects, clock = Effects(), RecoveryClock()
     effects.health["preferred"] = Health.DOWN
     original_activate = effects.activate
@@ -2202,7 +2210,7 @@ def test_static_repeated_transient_failures_have_finite_cooled_attempts(tmp_path
         if target != "backup":
             return original_activate(policy, target, authority)
         submissions.append(clock.now)
-        raise RuntimeError("routing writer busy")
+        raise failure
 
     effects.activate = activate
     selector = recovery_selector(tmp_path, effects, clock)
@@ -2213,6 +2221,7 @@ def test_static_repeated_transient_failures_have_finite_cooled_attempts(tmp_path
     assert submissions[1] - submissions[0] >= 35
     assert submissions[2] - submissions[1] >= 65
     assert selector.state["operation"]["phase"] == "failed"
+    assert selector.state["operation"]["result"] == result
     assert ("fence",) not in effects.calls
 
 
