@@ -15195,6 +15195,8 @@ operation service, including resource identity. No synchronous completion waiter
 six-poll sleep loop, Stop replay, or generic controller restart is used for this
 expected progress. A one-second service-loop delay avoids busy polling while
 heartbeat and status work continue. This shared path applies to Static and BGP.
+The production effect adapter reports this result as deferred, without calling
+the failure reporter or writing a completed-effect receipt.
 
 Accepted-operation settlement precedes checkpoint acknowledgment, even when
 Compute already reports STOPPED. Unknown, foreign, failed, or unavailable operation

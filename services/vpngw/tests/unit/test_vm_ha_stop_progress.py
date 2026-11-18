@@ -8,7 +8,7 @@ from test_vm_ha_controller import _peer, _snapshot
 from test_vm_ha_runtime_ports import _runtime_config
 from test_vm_manager_fencing import _allocation, _instance
 
-from nebius_vpngw.agent.main import VMHAControllerRuntime
+from nebius_vpngw.agent.main import VMHAControllerRuntime, VMHAEffectAdapter
 from nebius_vpngw.agent.vm_ha import DigestSet
 from nebius_vpngw.agent.vm_ha.runtime import BoundCloudRuntime
 from nebius_vpngw.agent.vm_ha_checkpoint import (
@@ -311,6 +311,32 @@ def test_service_runtime_does_not_enter_failure_guard_while_owner_is_stopping(
     assert not model.sleeps
     assert not model.allocation_writes
     assert len(model.stop_requests) == 1
+
+
+def test_pending_stop_is_deferred_by_the_production_effect_adapter(tmp_path):
+    model = StopModel(tmp_path, "RUNNING")
+    events = []
+    failures = []
+    receipt = tmp_path / "completed-effect.json"
+    handlers = {kind: model.apply for kind in ActionKind}
+    model.runtime.effects = VMHAEffectAdapter(
+        handlers,
+        receipt_path=receipt,
+        event_sink=events.append,
+        effect_failed=failures.append,
+    )
+
+    for _ in range(12):
+        decision = model.runtime.step()
+        assert decision.state is HAState.FENCING
+        assert not decision.forwarding_enabled
+        model.now += 1
+
+    assert not failures
+    assert not receipt.exists(), "Pending is neither a failed nor a completed effect"
+    assert {event["event"] for event in events} == {"started", "deferred"}
+    assert len(model.stop_requests) == 1
+    assert not model.allocation_writes
 
 
 @pytest.mark.parametrize("state", ["ERROR", "UNKNOWN"])
