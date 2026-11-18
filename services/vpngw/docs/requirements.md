@@ -4821,6 +4821,9 @@ apply, timer convergence, no-leak withdrawal and current default-route behavior.
 Keep source, native runtime and live provider qualification separate. A release
 recommendation requires independent lab acceptance; customer changes stay with
 the customer and use specific on-premises advertisements where possible.
+For v0.6.8 only, the operator explicitly waives live validation at every release
+step. Required local and CI validation still applies. This release exception
+does not establish unperformed live acceptance or resolve observed packet loss.
 
 <!-- /REQUIREMENT: REQ-044 -->
 

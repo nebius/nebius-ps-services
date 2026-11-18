@@ -443,9 +443,29 @@ def preflight_reconfigure(cfg: dict[str, Any]) -> None:
     previous = _ledger()
     known = set(previous["destinations"]) if previous else set()
     old = Network(**previous["network"]) if previous else network
-    for row in network.routes:
-        if row.get("protocol") == "kernel" and row.get("scope") == "link":
-            continue
+    routes = []
+    # networkd's reconfiguration cleans every table and family on the link,
+    # plus manager-owned routes and policy rules. Main-table readiness alone
+    # cannot establish that this wider operation preserves foreign state.
+    for family in ("-4", "-6"):
+        rules = _json(["ip", "-j", family, "-details", "rule", "show"])
+        rows = _json(["ip", "-j", family, "route", "show", "table", "all"])
+        if any(
+            not isinstance(values, list) or any(not isinstance(row, dict) for row in values)
+            for values in (rules, rows)
+        ):
+            raise UnderlayError("networkd reconfiguration routing inventory is malformed")
+        if any(rule.get("protocol") != "kernel" for rule in rules):
+            raise UnderlayError("network reconfiguration may remove a foreign policy rule")
+        for row in rows:
+            if row.get("protocol") == "kernel":
+                continue  # networkd never removes kernel-owned routes or rules.
+            if row.get("dev") and row["dev"] != expected.interface:
+                continue  # Other unmanaged links are not reconfigured.
+            if family != "-4" or str(row.get("table", "main")) not in {"main", "254"}:
+                raise UnderlayError("network reconfiguration may remove an unmanaged route")
+            routes.append(row)
+    for row in routes:
         if _destination(row) in known and _exact(row, _destination(row), old):
             continue
         if previous and any(

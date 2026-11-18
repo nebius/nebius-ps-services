@@ -11,6 +11,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.6.8] - 2026-11-18
+
 - Include the original operator YAML in support-bundle v4 with targeted secret
   and public-address replacements, preserving comments, formatting and unknown
   fields. Correlate public addresses through per-bundle aliases across evidence;
@@ -25,6 +27,13 @@ All notable changes to this project are tracked here. This changelog follows
   runtime and workstation cloud effects on deployment-owned routing admission
   and settle exact predecessor route operations before package activation.
 - Include sanitized underlay and routing-admission evidence in support bundles.
+- Reject network reconfiguration when unmanaged IPv4/IPv6 routes or policy rules
+  could be removed, including non-main tables and routes without an interface.
+- Recognize underscore, hyphen and camelCase credential names in source YAML
+  snapshots while preserving reference metadata and bounded text redaction.
+- Release v0.6.8 waives live validation by explicit operator decision. Local and
+  required CI checks remain required; earlier incomplete live coverage and
+  unexplained packet loss remain limitations, not successful qualification.
 
 ## [nebius-vpngw-v0.6.7] - 2026-11-17
 

@@ -5927,7 +5927,10 @@ remote-default branch and switches to a new unique branch for independent work.
 - AC-004: Advance an existing local default only by fast-forward to exactly the
   fetched commit, or create it when absent. Stop for ahead/divergent history.
   Create and switch to the new branch at that exact commit without upstream
-  tracking; preserve the previous feature ref and commits.
+  tracking; preserve the previous feature ref and commits. If a missing local
+  default lacks an origin fetch mapping, add only its exact tracking mapping
+  while preserving existing mappings; reject explicit exclusions and collisions
+  before checkout effects.
 - AC-005: Preserve and validate supplied names; otherwise derive a repository
   slug from origin and append eight uniformly sampled lowercase letters/digits.
   Check local and advertised remote names; retry generated collisions at most

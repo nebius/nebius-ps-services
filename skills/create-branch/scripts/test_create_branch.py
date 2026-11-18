@@ -131,6 +131,44 @@ class BranchTests(unittest.TestCase):
         self.assertEqual(self.command(self.root, "rev-parse", "--abbrev-ref", "main@{upstream}"),
                          "origin/main")
 
+    def test_missing_default_with_narrow_fetch_mapping(self):
+        self.command(self.root, "branch", "-D", "main")
+        self.command(self.root, "update-ref", "-d", "refs/remotes/origin/main")
+        existing = "+refs/heads/work:refs/remotes/origin/work"
+        self.command(self.root, "config", "remote.origin.fetch", existing)
+        result = self.run_skill()
+        self.assert_success(result)
+        self.assertEqual(self.command(self.root, "rev-parse", "--abbrev-ref", "main@{upstream}"),
+                         "origin/main")
+        self.assertEqual(self.command(self.root, "config", "--get-all", "remote.origin.fetch").splitlines(),
+                         [existing, "+refs/heads/main:refs/remotes/origin/main"])
+        self.assertEqual(self.command(self.root, "config", "branch.main.remote"), "origin")
+        self.assertEqual(self.command(self.root, "config", "branch.main.merge"), "refs/heads/main")
+
+    def test_missing_default_rejects_excluded_or_conflicting_tracking(self):
+        self.command(self.seed, "push", "origin", "HEAD:ain")
+        self.command(self.root, "branch", "-D", "main")
+        self.command(self.root, "update-ref", "-d", "refs/remotes/origin/main")
+        for mappings in [
+            ["+refs/heads/*:refs/remotes/origin/m*"],
+            ["+refs/heads/*:refs/remotes/origin/*", "+refs/heads/*:refs/remotes/origin/m*"],
+            ["+refs/heads/ain:refs/remotes/origin/main"],
+            ["+refs/heads/*:refs/remotes/origin/*", "^refs/heads/main"],
+            ["+refs/heads/*:refs/remotes/origin/*", "^refs/heads/m*"],
+        ]:
+            with self.subTest(mappings=mappings):
+                self.command(self.root, "config", "--unset-all", "remote.origin.fetch")
+                for mapping in mappings:
+                    self.command(self.root, "config", "--add", "remote.origin.fetch", mapping)
+                with self.assertRaisesRegex(skill.Blocked, "excludes|conflicts"):
+                    self.run_skill()
+                self.assertEqual(self.branch(), "work")
+                self.assertEqual(self.value("HEAD"), self.base)
+                self.assertEqual(self.command(self.root, "for-each-ref", "--format=%(refname)",
+                                              "refs/heads/main", "refs/heads/new-work"), "")
+                self.assertEqual(self.command(self.root, "config", "--get-all", "remote.origin.fetch").splitlines(),
+                                 mappings)
+
     def test_renamed_remote_default_ignores_cached_head(self):
         self.command(self.seed, "push", "origin", "HEAD:trunk")
         self.command(self.origin, "symbolic-ref", "HEAD", "refs/heads/trunk")

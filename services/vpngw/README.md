@@ -4034,6 +4034,9 @@ changed YAML with `apply` first. Interrupted cloud changes must settle under
 their recorded ownership before upgrade.
 
 Existing operator-added routes are never adopted or deleted automatically.
+Before network reconfiguration, apply checks IPv4 and IPv6 routes in every table,
+routes without an interface, and global policy rules. Unmanaged state that
+networkd could remove blocks reconfiguration; kernel-owned state is preserved.
 If apply reports an unmanaged physical-route conflict, review and remove the
 temporary workaround during the maintenance window, then rerun the same apply.
 Do not add a scope-link route for the entire VPC as a persistence workaround.
@@ -5069,6 +5072,10 @@ checksum and any change detected during collection. An unsafe snapshot is omitte
 with an explicit evidence gap, never exported raw. Existing configuration-scope
 admission still applies. Treat the redacted snapshot as diagnostic evidence,
 not a deployable configuration.
+
+Credential names include underscore, hyphen and camelCase spellings such as
+`secret_key`, `private-key` and `accessToken`. Reference metadata such as key paths
+and checksums remains intact; unknown encodings still require operator review.
 
 SSH uses the deployment's existing public-key file or inline public key, exact
 matching private identity, username and established host trust. The root

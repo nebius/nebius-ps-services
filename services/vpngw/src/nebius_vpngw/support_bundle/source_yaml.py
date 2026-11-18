@@ -10,9 +10,10 @@ from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 from yaml.tokens import ScalarToken
 
 from .addresses import AddressAliases, address_spans
+from .redaction import CREDENTIAL_NAME
 
 PLACEHOLDER = "REDACTED_SECRET"
-_KEY = r"(?:psk|pre[-_ ]?shared[-_ ]?key|password|passwd|secrets?|token|access_token|refresh_token|client_secret|private_key|api[-_ ]?key|credentials?|authorization)"
+_KEY = CREDENTIAL_NAME
 _SECRET_KEY = re.compile(r"(?i)(?:^|[_ -])" + _KEY + r"(?:$|[_ -](?:value|data|pem)$)")
 _REFERENCE = re.compile(r"(?:\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*)\Z")
 _ASSIGNMENT = re.compile(

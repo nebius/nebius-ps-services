@@ -15775,6 +15775,12 @@ creates a new branch; explicit existing names fail. Network snapshots cannot
 reserve remote names or prevent later pushes. No persistent controller or
 publication ownership is introduced.
 
+For a missing local default, inspect origin fetch mappings before checkout
+effects. Add only an absent exact default tracking mapping using Git remote
+set-branches --add, preserving existing mappings. Explicit default exclusions
+or a conflicting destination mapping stop before changing checkout state.
+The new feature branch remains untracked.
+
 #### Selected Option
 
 A deterministic helper plus concise instructions supports repeatable Git safety
@@ -15868,6 +15874,12 @@ Native CLI discovery/trigger evaluation remains unavailable in the isolated
 runner because API authentication is absent; account credentials were not copied.
 Actual explicit candidate execution and installed-helper behavior are verified,
 but neither is claimed as fresh model-driven discovery on Codex or Claude.
+
+Release review added narrow-fetch default tracking and independent reverse
+refspec collision checks. Forty disposable Git tests pass, including exact
+upstream identity and unchanged refs/configuration on excluded or conflicting
+mappings. This is deterministic source evidence; installation is checked
+separately and does not imply fresh model-driven skill discovery.
 
 <!-- /FEATURE: FEAT-084 -->
 

@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -99,6 +101,42 @@ def test_references_nonsecret_fields_and_no_secret_fetch(monkeypatch):
     monkeypatch.setenv("ENV_PSK", "must-not-be-read")
     raw = b"psk: ${ENV_PSK}\nssh_private_key_path: /local/key\nprivate_prefix: 10.0.0.0/8\n"
     assert sanitized(raw) == raw
+
+
+@pytest.mark.parametrize(
+    "key", ["secret_key", "aws_secret_access_key", "private-key", "privateKey", "accessToken"]
+)
+def test_credential_name_variants_are_redacted(key):
+    raw = f"{key}: synthetic-credential-value\n".encode()
+    assert unsafe_yaml(raw)
+    assert sanitized(raw) == raw.replace(b"synthetic-credential-value", b"REDACTED_SECRET")
+
+
+def test_credential_metadata_references_are_preserved():
+    raw = (
+        b"private_key_path: /local/key\nprivateKeySha256: abc123\n"
+        b"secret_key: ${ENV_SECRET}\naccessToken: $ENV_TOKEN\n"
+    )
+    assert sanitized(raw) == raw
+
+
+def test_ordinary_long_text_redaction_remains_bounded():
+    text = "ordinary " * 6000 + "completed\n"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            "-c",
+            "import sys; from nebius_vpngw.support_bundle.redaction import redact_text; "
+            "value=sys.stdin.read(); assert redact_text(value)['content'] == value",
+        ],
+        input=text,
+        text=True,
+        capture_output=True,
+        timeout=3,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_block_header_comment_secret_is_removed_without_losing_header():
@@ -256,6 +294,19 @@ def test_real_nested_psk_and_original_yaml_survive_whole_archive_pipeline(tmp_pa
             assert row["sha256"] == hashlib.sha256(contents[row["file"]]).hexdigest()
             assert row["bytes"] == len(contents[row["file"]])
     assert yaml_name.encode() in contents["evidence-index.json"]
+
+
+def test_extension_credentials_are_removed_from_every_archive_member(tmp_path, monkeypatch):
+    path, original = config_file(tmp_path, monkeypatch)
+    original += b"extension: {aws_secret_access_key: synthetic-credential-value}\n"
+    path.write_bytes(original)
+    output, _ = collector.collect(path, output=tmp_path / "bundle.zip", runner=runner)
+    assert path.read_bytes() == original
+    with zipfile.ZipFile(output) as archive:
+        assert b"extension: {aws_secret_access_key: REDACTED_SECRET}" in archive.read(
+            "operator/customer-config.redacted.yaml"
+        )
+        assert all(b"synthetic-credential-value" not in archive.read(n) for n in archive.namelist())
 
 
 def test_comment_only_source_change_is_visible(tmp_path, monkeypatch):

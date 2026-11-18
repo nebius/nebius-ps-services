@@ -105,6 +105,37 @@ def provider(tmp_path, monkeypatch):
         command("networkctl", "reload")
 
 
+@pytest.mark.parametrize(
+    ("family", "kind", "args"),
+    [
+        ("-4", "route", ["198.51.100.0/24", "dev", "eth0", "table", "100", "proto", "boot"]),
+        ("-6", "route", ["2001:db8::/64", "dev", "eth0", "table", "100", "proto", "boot"]),
+        ("-4", "route", ["blackhole", "198.51.100.0/24", "table", "100", "proto", "boot"]),
+        ("-4", "rule", ["priority", "10100", "table", "100", "protocol", "static"]),
+        ("-6", "rule", ["priority", "10100", "table", "100", "protocol", "static"]),
+    ],
+)
+def test_reconfiguration_preserves_foreign_routing_state(provider, family, kind, args):
+    """Real iproute2 inventories must fail closed before networkd is changed."""
+    cfg = {"gateway": {"local_prefixes": ["10.66.16.0/24"]}, "connections": []}
+    command("ip", family, kind, "add", *args)
+    query = ("ip", "-j", family, "-details", kind, "show")
+    if kind == "route":
+        query += ("table", "100")
+    try:
+        before = json.loads(command(*query))
+        assert before
+        with pytest.raises(underlay.UnderlayError, match="foreign policy rule|unmanaged route"):
+            underlay.reconcile_locked(cfg, reconfigure=True)
+        assert json.loads(command(*query)) == before
+        assert not underlay.STATE.exists()
+        assert not Path(
+            "/etc/systemd/network/00-underlay-fixture.network.d", underlay.DROPIN
+        ).exists()
+    finally:
+        command("ip", family, kind, "del", *args)
+
+
 def test_networkd_dhcp_persistence_and_aggregate_packet_paths(provider):
     cfg = {
         "gateway": {"local_prefixes": ["10.66.16.0/24", "10.66.0.9/32"]},

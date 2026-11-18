@@ -117,6 +117,15 @@ def host(tmp_path, monkeypatch):
                     route = self.route(prefix)
                     if route not in self.routes:
                         self.routes.append(route)
+            elif argv in (
+                ["ip", "-j", "-4", "-details", "rule", "show"],
+                ["ip", "-j", "-6", "-details", "rule", "show"],
+            ):
+                output = json.dumps(
+                    [{"priority": 0, "src": "all", "table": "local", "protocol": "kernel"}]
+                )
+            elif argv == ["ip", "-j", "-6", "route", "show", "table", "all"]:
+                output = json.dumps([{"dst": "fe80::/64", "dev": "eth0", "protocol": "kernel"}])
             elif argv[:6] == ["ip", "-j", "-4", "route", "show", "table"]:
                 rows = self.routes
                 if "exact" in argv:
@@ -135,6 +144,42 @@ def host(tmp_path, monkeypatch):
     instance = Host()
     monkeypatch.setattr(underlay, "run", instance.run)
     return instance
+
+
+@pytest.mark.parametrize(
+    "family,kind", [("-4", "route"), ("-6", "route"), ("-4", "rule"), ("-6", "rule")]
+)
+def test_reconfigure_rejects_unobserved_foreign_routing(cfg, host, monkeypatch, family, kind):
+    original = underlay.run
+    foreign = (
+        {
+            "dst": "198.51.100.0/24" if family == "-4" else "2001:db8:1::/64",
+            "gateway": host.gateway if family == "-4" else "fe80::1",
+            "protocol": "boot",
+            "dev": "eth0",
+            "table": 100,
+            "metric": 5,
+        }
+        if kind == "route"
+        else {"priority": 100, "src": "all", "table": 100}
+    )
+
+    def run(argv, **kwargs):
+        normalized = [arg for arg in argv if arg != "-details"]
+        if normalized[:5] == ["ip", "-j", family, kind, "show"]:
+            host.calls.append(argv)
+            rows = list(host.routes) if family == "-4" and kind == "route" else []
+            if kind == "rule" or "all" in argv:
+                rows.append(foreign)
+            return subprocess.CompletedProcess(argv, 0, json.dumps(rows), "")
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(underlay, "run", run)
+    with pytest.raises(underlay.UnderlayError, match="unmanaged|foreign"):
+        underlay.preflight_reconfigure(cfg)
+    assert not any(
+        c[:2] in (["networkctl", "reload"], ["networkctl", "reconfigure"]) for c in host.calls
+    )
 
 
 def test_specific_local_and_transport_routes_override_remote_aggregate(cfg, host):

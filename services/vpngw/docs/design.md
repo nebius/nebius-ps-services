@@ -13076,6 +13076,9 @@ workarounds after validating narrowed advertisements during maintenance.
 
 Implementation, aligned documentation and tests pass; lab qualification is
 required before release recommendation, independently of local implementation.
+The explicit v0.6.8 release exception waives live validation throughout review,
+merge and publication. Local and required CI checks remain mandatory; earlier
+failed or incomplete trials retain their original disposition.
 
 #### Implementation Evidence
 
@@ -13134,7 +13137,15 @@ required before release recommendation, independently of local implementation.
   five-minute maintenance-timer cycle.
 - Delivery remains implemented. Full ordinary/static live coverage, failover,
   failback, reboot, repeated loss-budget trials and the complete release matrix
-  remain unqualified. No release was published or recommended.
+  remain unqualified. At that checkpoint no release was published or recommended.
+- Release review reproduced unmanaged IPv4/IPv6 route and policy-rule loss risks
+  before networkd reconfiguration. All-family/all-table inventory now rejects
+  collateral unmanaged state while preserving kernel and exact owned routes.
+  Focused underlay and support-bundle regressions passed (95 tests). Native
+  fixture coverage is committed for CI; this source check is not live proof.
+- The operator explicitly accepted the v0.6.8 live-validation waiver; unresolved
+  loss and incomplete ordinary/static, failover/failback, reboot and sustained
+  traffic qualification remain limitations. Delivery remains implemented.
 
 <!-- /FEATURE: FEAT-045 -->
 

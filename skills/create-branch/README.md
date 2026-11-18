@@ -27,7 +27,10 @@ namespace and case-only collisions are rejected for portable filesystem safety.
 
 The helper uses native Git to discover the actual default (not necessarily
 `main`), fetch that branch, safely update its local counterpart and create/switch
-at the frozen commit. A missing local default receives origin tracking. Existing
+at the frozen commit. A missing local default receives origin tracking. If the
+fetch configuration is narrow, the helper adds only the exact default mapping,
+preserving existing mappings. Explicit exclusions or competing mappings to that
+tracking destination stop execution before checkout changes. Existing
 default tracking is preserved; the new branch has no upstream until deliberately
 published through another workflow.
 

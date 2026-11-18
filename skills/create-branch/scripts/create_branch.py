@@ -196,6 +196,31 @@ class Workflow:
             if self.ref_value(self.previous_ref) != self.previous_sha:
                 raise Blocked("Previous feature branch changed during the operation")
 
+    def default_tracking_missing(self) -> bool:
+        result = git(self.root, "config", "--get-all", "remote.origin.fetch", check=False)
+        if result.returncode not in (0, 1):
+            raise Blocked("Cannot inspect origin tracking mappings")
+        source = f"refs/heads/{self.default}"
+        destination = f"refs/remotes/origin/{self.default}"
+        present = False
+        for refspec in output(result).splitlines():
+            left, _, right = refspec.lstrip("+").partition(":")
+            pattern = left.removeprefix("^")
+            match = re.fullmatch(re.escape(pattern).replace(r"\*", "(.*)"), source)
+            if left.startswith("^"):
+                if match:
+                    raise Blocked("Origin explicitly excludes its default branch from tracking")
+                continue
+            if match:
+                mapped = right.replace("*", match[1]) if "*" in right else right
+                present |= mapped == destination
+            reverse = re.fullmatch(re.escape(right).replace(r"\*", "(.*)"), destination)
+            if right and reverse:
+                mapped_source = left.replace("*", reverse[1]) if "*" in left else left
+                if mapped_source != source:
+                    raise Blocked("Origin tracking destination conflicts with its default branch")
+        return not present
+
     def run(self, branch: str | None) -> dict:
         self.guard({self.previous_ref})
         if branch is not None:
@@ -225,6 +250,8 @@ class Workflow:
         self.default_before = self.ref_value(default_ref)
         tracking = f"refs/remotes/origin/{self.default}"
         self.ref_value(tracking)
+        if self.default_before is None:
+            self.default_tracking_missing()  # Reject exclusions/collisions before effects.
         self.check_merge_options()
         self.phase = "fetch"
         git(self.root, "fetch", "--no-tags", "--no-prune", "--no-recurse-submodules",
@@ -241,6 +268,8 @@ class Workflow:
             raise Blocked("New branch name became occupied")
         self.phase = "update_default"
         if self.default_before is None:
+            if self.default_tracking_missing():
+                git(self.root, "remote", "set-branches", "--add", "origin", self.default)
             git(self.root, "switch", "--no-overwrite-ignore", "--no-guess", "--no-track",
                 "-c", self.default, self.target)
             self.expected_ref, self.expected_sha = default_ref, self.target

@@ -13,7 +13,15 @@ REDACTION_POLICY = "nebius-vpngw/redaction-v2"
 REDACTED = "[REDACTED]"
 TEXT_LIMIT = 2 * 1024 * 1024
 LINE_LIMIT = 65536
-_CREDENTIAL = r"(?:psk|pre[-_ ]?shared[-_ ]?key|password|passwd|secret|token|access_token|refresh_token|client_secret|private_key|api[-_ ]?key|authorization)"
+# Shared by streamed text redaction and source-preserving YAML. Optional
+# separators also recognize camelCase; suffixes such as _path are not values.
+CREDENTIAL_NAME = (
+    r"(?:psk|pre[-_ ]?shared[-_ ]?key|password|passwd|"
+    r"(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?s?|"
+    r"(?:access[-_ ]?|refresh[-_ ]?)?token|client[-_ ]?secret|"
+    r"private[-_ ]?key|api[-_ ]?key|credentials?|authorization)"
+)
+_CREDENTIAL = CREDENTIAL_NAME
 _ASSIGNMENT = re.compile(
     r"(?i)([\"']?\b" + _CREDENTIAL + r"\b[\"']?\s*[:=]\s*)"
     r"""("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\[REDACTED\]|[^\r\n]+)"""
