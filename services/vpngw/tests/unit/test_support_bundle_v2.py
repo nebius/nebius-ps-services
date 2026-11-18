@@ -308,7 +308,7 @@ def test_final_reports_only_cite_retained_evidence(bundle_config, tmp_path, monk
         timeline = json.loads(archive.read("timeline.json"))
         index = json.loads(archive.read("evidence-index.json"))
         assert (
-            manifest["schema"].endswith("v3") and manifest["diagnostic_sufficiency"] == "unassessed"
+            manifest["schema"].endswith("v4") and manifest["diagnostic_sufficiency"] == "unassessed"
         )
         for row in manifest["probes"]:
             if row["sha256"]:

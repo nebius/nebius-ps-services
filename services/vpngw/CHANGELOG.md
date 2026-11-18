@@ -11,6 +11,36 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.6.8] - 2026-11-18
+
+- Establish native BGP fixtures with the real startup table-220 cleanup before
+  asserting active readiness; retain the product's routing-hygiene checks.
+
+- Declare deployment admission and physical-underlay prerequisites in the native
+  BGP namespace fixtures; retain separate real DHCP/networkd qualification.
+
+- Include the original operator YAML in support-bundle v4 with targeted secret
+  and public-address replacements, preserving comments, formatting and unknown
+  fields. Correlate public addresses through per-bundle aliases across evidence;
+  retain non-public addresses and other operational context. Fix nested tunnel
+  PSK literal protection and record source changes and safe snapshot omissions.
+- Persist local workload, HA-peer and IPsec transport routes through the verified
+  DHCP router on supported Ubuntu/networkd gateways. Preserve these routes across
+  renewal, restart and normal apply; replace blanket local-route deletion with
+  exact ownership checks and repair.
+- Admit ordinary RFC1918 remote summaries that strictly contain local ranges,
+  retaining exact-prefix, contained-prefix and default-route exclusions. Gate
+  runtime and workstation cloud effects on deployment-owned routing admission
+  and settle exact predecessor route operations before package activation.
+- Include sanitized underlay and routing-admission evidence in support bundles.
+- Reject network reconfiguration when unmanaged IPv4/IPv6 routes or policy rules
+  could be removed, including non-main tables and routes without an interface.
+- Recognize underscore, hyphen and camelCase credential names in source YAML
+  snapshots while preserving reference metadata and bounded text redaction.
+- Release v0.6.8 waives live validation by explicit operator decision. Local and
+  required CI checks remain required; earlier incomplete live coverage and
+  unexplained packet loss remain limitations, not successful qualification.
+
 ## [nebius-vpngw-v0.6.7] - 2026-11-17
 
 - Complete guarded HA asset retirement under the writer locks and retain pending

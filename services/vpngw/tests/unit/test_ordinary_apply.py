@@ -111,7 +111,9 @@ def test_inspection_contention_can_settle_after_interruption_target(monkeypatch)
     clock = [0.0]
     monkeypatch.setattr(ordinary_remote, "DEADLINE", 300)
     monkeypatch.setattr(ordinary_remote.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(ordinary_remote.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay))
+    monkeypatch.setattr(
+        ordinary_remote.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay)
+    )
 
     def settle(*_args, **_kwargs):
         if clock[0] < 150:
@@ -145,7 +147,9 @@ def test_package_inspection_rejects_conflicting_metadata_in_one_prefix(
     monkeypatch.setattr(ordinary_remote, "BOOT", boot)
     monkeypatch.setattr(ordinary_remote, "CONFIG", tmp_path / "absent.yaml")
     with pytest.raises(RuntimeError, match="conflicting installed package metadata"):
-        ordinary_remote.inspect({"files": {}, "assets": {}, "requirements": ["pydantic"]}, runtime_admission=False)
+        ordinary_remote.inspect(
+            {"files": {}, "assets": {}, "requirements": ["pydantic"]}, runtime_admission=False
+        )
 
 
 def test_package_inspection_preserves_distinct_prefix_shadowing(tmp_path, monkeypatch):
@@ -165,7 +169,9 @@ def test_package_inspection_preserves_distinct_prefix_shadowing(tmp_path, monkey
     boot.write_text("boot-id")
     monkeypatch.setattr(ordinary_remote, "BOOT", boot)
     monkeypatch.setattr(ordinary_remote, "CONFIG", tmp_path / "absent.yaml")
-    result = ordinary_remote.inspect({"files": {}, "assets": {}, "requirements": ["pydantic"]}, runtime_admission=False)
+    result = ordinary_remote.inspect(
+        {"files": {}, "assets": {}, "requirements": ["pydantic"]}, runtime_admission=False
+    )
     assert result["dependencies"] == {"pydantic": "2.14.2"}
 
 
@@ -185,16 +191,22 @@ def test_package_inspection_accepts_same_version_distro_metadata_forms(tmp_path,
     boot.write_text("boot-id")
     monkeypatch.setattr(ordinary_remote, "BOOT", boot)
     monkeypatch.setattr(ordinary_remote, "CONFIG", tmp_path / "absent.yaml")
-    result = ordinary_remote.inspect({"files": {}, "assets": {}, "requirements": ["cryptography"]}, runtime_admission=False)
+    result = ordinary_remote.inspect(
+        {"files": {}, "assets": {}, "requirements": ["cryptography"]}, runtime_admission=False
+    )
     assert result["dependencies"] == {"cryptography": "41.0.7"}
 
 
-def test_real_inspection_excludes_unrelated_metadata_from_both_approval_paths(tmp_path, monkeypatch):
+def test_real_inspection_excludes_unrelated_metadata_from_both_approval_paths(
+    tmp_path, monkeypatch
+):
     from nebius_vpngw.dependency_scope import name
 
     def distribution(package, version, requirements=()):
         return SimpleNamespace(
-            metadata={"Name": package}, version=version, requires=list(requirements),
+            metadata={"Name": package},
+            version=version,
+            requires=list(requirements),
             locate_file=lambda _: tmp_path,
         )
 
@@ -209,7 +221,9 @@ def test_real_inspection_excludes_unrelated_metadata_from_both_approval_paths(tm
     items.extend([distribution("unrelated", "1"), distribution("unrelated", "2")])
     after = ordinary_remote.inspect_for_plan(manifest, runtime_admission=False)
     assert before["observation"] == after["observation"]
-    assert vm_ha_package.package_predecessor(before["observation"]) == vm_ha_package.package_predecessor(after["observation"])
+    assert vm_ha_package.package_predecessor(
+        before["observation"]
+    ) == vm_ha_package.package_predecessor(after["observation"])
     assert name("unrelated") in after["dependency_inventory"]["dependencies"]
     assert "dependency_inventory" not in after["observation"]
     # This new dependent is relevant only because the proposed shared version changes.
@@ -830,7 +844,9 @@ def test_approved_transaction_publishes_exact_assets_then_rerun_has_no_effects(t
     )
     tx.effects.clear()
     assert ordinary_remote.execute(tx.request)["status"] == "unchanged"
-    assert tx.effects == [["verify"]]
+    assert tx.effects[0] == ["verify"]
+    assert len(tx.effects) == 2
+    assert "admit_ordinary_locked" in tx.effects[1][-1]
     assert before == {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in paths}
 
 
@@ -853,8 +869,11 @@ def test_metadata_only_drift_reinstalls_product_and_verifies(transaction, config
     tx = transaction
     manifest = tx.request["manifest"]
     manifest["expected_requirements"] = {"nebius-vpngw": []}
-    tx.state.update(files=copy.deepcopy(manifest["files"]), package_version=manifest["version"],
-                    requirements={"nebius-vpngw": ["obsolete-dependency"]})
+    tx.state.update(
+        files=copy.deepcopy(manifest["files"]),
+        package_version=manifest["version"],
+        requirements={"nebius-vpngw": ["obsolete-dependency"]},
+    )
     if not configuration_change:
         ordinary_remote.CONFIG.write_bytes(base64.b64decode(tx.request["config"]))
     tx.request["predecessor"] = ordinary_remote.canonical(tx.inspect(manifest))
@@ -865,23 +884,37 @@ def test_metadata_only_drift_reinstalls_product_and_verifies(transaction, config
 
 
 @pytest.mark.parametrize("configuration_change", [False, True])
-def test_metadata_only_drift_is_in_the_approved_install_plan(release_wheel, monkeypatch, configuration_change):
+def test_metadata_only_drift_is_in_the_approved_install_plan(
+    release_wheel, monkeypatch, configuration_change
+):
     config = "gateway: {}\nconnections: []\n"
     manifest = ordinary_apply.artifact(release_wheel, config)
     observed = {
-        "files": manifest["files"], "package_version": manifest["version"],
+        "files": manifest["files"],
+        "package_version": manifest["version"],
         "assets": {path: value["sha256"] for path, value in manifest["assets"].items()},
         "asset_modes": {path: [value["mode"], 0, 0] for path, value in manifest["assets"].items()},
-        "boot_id": "boot", "config_sha256": "changed" if configuration_change else manifest["config_sha256"],
-        "verified": True, "agent_state": "active", "runtime": {"ready": True},
-        "runtime_plan": {}, "runtime_pending": None,
+        "boot_id": "boot",
+        "config_sha256": "changed" if configuration_change else manifest["config_sha256"],
+        "verified": True,
+        "agent_state": "active",
+        "runtime": {"ready": True},
+        "runtime_plan": {},
+        "runtime_pending": None,
         "dependencies": {"nebius-vpngw": manifest["version"]},
-        "requirements": {"nebius-vpngw": ["obsolete-dependency"]}, "markers": {},
+        "requirements": {"nebius-vpngw": ["obsolete-dependency"]},
+        "markers": {},
         "route_ownership": empty_routes(),
     }
     monkeypatch.setattr(ordinary_apply, "remote", Mock(return_value=planning_result(observed)))
     ssh = SimpleNamespace(_build_wheel=lambda **kw: release_wheel, _find_project_root=lambda: None)
-    plan = ordinary_apply.inspect_plan(ssh, "203.0.113.10", SimpleNamespace(hostname="gateway-0", config_yaml=config), {}, target_identity="compute-0")
+    plan = ordinary_apply.inspect_plan(
+        ssh,
+        "203.0.113.10",
+        SimpleNamespace(hostname="gateway-0", config_yaml=config),
+        {},
+        target_identity="compute-0",
+    )
     try:
         assert "install agent wheel" in plan.effects and not plan.noop
         assert not plan.dependency_paths
@@ -898,17 +931,25 @@ def test_new_shared_consumer_after_native_install_blocks_python_mutation(
         name = "fixture_dependency-2.0-py3-none-any.whl"
         raw = b"selected dependency bytes"
         tx.request["manifest"]["dependency_wheels"] = {name: ordinary_remote.sha(raw)}
-        tx.request["dependency_wheels"] = [{"name": name, "content": base64.b64encode(raw).decode()}]
+        tx.request["dependency_wheels"] = [
+            {"name": name, "content": base64.b64encode(raw).decode()}
+        ]
     installed = []
-    monkeypatch.setattr(ordinary_remote.python_packages.metadata, "distributions", lambda: installed)
+    monkeypatch.setattr(
+        ordinary_remote.python_packages.metadata, "distributions", lambda: installed
+    )
     native_install = ordinary_remote.migration.install
 
     def install_native():
         native_install()
-        installed.append(SimpleNamespace(
-            metadata={"Name": "new-consumer"}, version="1", requires=["cryptography<46"],
-            locate_file=lambda _: tmp_path,
-        ))
+        installed.append(
+            SimpleNamespace(
+                metadata={"Name": "new-consumer"},
+                version="1",
+                requires=["cryptography<46"],
+                locate_file=lambda _: tmp_path,
+            )
+        )
 
     monkeypatch.setattr(ordinary_remote.migration, "install", install_native)
     result = ordinary_remote.execute(tx.request)
@@ -1408,7 +1449,8 @@ def test_preview_cannot_invoke_route_or_service_effects(monkeypatch):
     from nebius_vpngw.agent import frr_renderer, strongswan_renderer
 
     effect = Mock(side_effect=AssertionError("preview mutated runtime"))
-    monkeypatch.setattr(frr_renderer.FRRRenderer, "ensure_local_prefix_routes", effect)
+    monkeypatch.setattr(ordinary.underlay, "reconcile_locked", effect)
+    monkeypatch.setattr(ordinary.underlay, "preflight_reconfigure", effect)
     monkeypatch.setattr(frr_renderer, "run", effect)
     monkeypatch.setattr(strongswan_renderer, "run", effect)
     files = ordinary.managed_files(
@@ -1441,6 +1483,7 @@ def test_preview_cannot_invoke_route_or_service_effects(monkeypatch):
         "static-default",
         "static-host",
         "bgp-learned",
+        "underlay",
     ],
 )
 def test_local_observation_checks_invariants_without_peer_liveness(
@@ -1563,6 +1606,14 @@ def test_local_observation_checks_invariants_without_peer_liveness(
             )
         raise AssertionError(args)
 
+    monkeypatch.setattr(
+        ordinary.underlay,
+        "verify",
+        Mock(
+            side_effect=RuntimeError("underlay unavailable") if fault == "underlay" else None,
+            return_value="underlay-proof",
+        ),
+    )
     monkeypatch.setattr(ordinary, "_output", output)
     if fault and fault not in {
         "static-valid",

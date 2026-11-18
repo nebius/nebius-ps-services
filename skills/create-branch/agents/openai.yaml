@@ -1,0 +1,6 @@
+interface:
+  display_name: "Create Branch"
+  short_description: "Start a fresh branch from the current remote default"
+  default_prompt: "Use $create-branch to update the local default and switch to a new unique branch safely."
+policy:
+  allow_implicit_invocation: false

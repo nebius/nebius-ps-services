@@ -21,6 +21,7 @@ import yaml
 from .. import ingress_policy, ordinary_routes
 from ..ordinary_operations import Journal, Manager, Operation, require_idle
 from . import firewall_manager as firewall
+from . import underlay
 from .frr_renderer import FRR_CONF, FRRRenderer
 from .local_commands import CURRENT, CommandBudget, run
 from .routing_guard import REQUIRED_SYSCTLS, acquire_routing_lock, enforce_routing_invariants_locked
@@ -257,10 +258,7 @@ def observe_local(cfg: dict[str, Any]) -> str:
                     for row in neighbors
                 )
             )
-    local_prefixes = {
-        ipaddress.ip_network(prefix, strict=False)
-        for prefix in (cfg.get("gateway") or {}).get("local_prefixes", [])
-    }
+    underlay.verify(cfg)
     for row in routes:
         if str(row.get("table", "main")) not in {"main", "254"}:
             continue
@@ -268,7 +266,6 @@ def observe_local(cfg: dict[str, Any]) -> str:
             "0.0.0.0/0" if row.get("dst") == "default" else row.get("dst", "0.0.0.0/0"),
             strict=False,
         )
-        _require(not (network in local_prefixes and row.get("scope") == "link"))
         if row.get("type", "unicast") == "unicast":
             devices = {row.get("dev"), *(hop.get("dev") for hop in row.get("nexthops", []))}
             for name in devices & static_routes.keys():

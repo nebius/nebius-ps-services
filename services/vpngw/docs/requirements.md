@@ -487,7 +487,7 @@ Prevent unauthorized VM-HA origination and all export of peer-learned routes, ma
 - Active enablement verifies exact owner exports while forwarding remains disabled. Passive materialization verifies the current-boot passive guard and disabled forwarding, refreshes the exact firewall, renders deny-all exports, removes table-220 rules/routes and only the broad `169.254.0.0/16` route while preserving peer `/32` routes, verifies postconditions, and writes its receipt last. Before requesting a new agent materialization in the same boot and generation, the controller durably invalidates the prior receipt and accepts only a newly written receipt after routing-lock handoff. Any failure leaves no success receipt and returns authority to `BLOCKED`.
 - The controller derives its expected per-peer export set from the same resolved node `gateway.local_prefixes`, connections, and connection-level origination flags consumed by rendering. Missing or inconsistent resolved policy must fail closed; it must not be projected as an empty expected prefix set.
 - Passive and blocked transition safety may prove zero exports before every peer establishes only when the live peer set is exact, every established peer has an empty Adj-RIB-Out, and the running FRR configuration binds every expected peer exclusively to the exact deny-all route-map. Missing or additional bindings, nonempty established-peer exports, unexpected peers, or unavailable running configuration still fail closed. Readiness and observational audit retain their existing `UNKNOWN` result for any non-established expected peer.
-- The periodic routing owner accepts either exact current-boot active readiness or an exact current-boot passive guard with forwarding disabled, then rechecks that authority under the routing lock. Its passive branch may remove only table-220 rules/routes and the broad `169.254.0.0/16` route plus flush the route cache when those removals changed state; it must not enable forwarding, rewrite sysctls, create peer/local-prefix routes, render services, mutate cloud/VPC state, or acquire active-owner authority. Blocked, stale, mismatched, or lock-contended authority skips or fails without routing mutation.
+- The periodic routing owner accepts either exact current-boot active readiness or an exact current-boot passive guard with forwarding disabled, then rechecks that authority under the routing lock. Its passive branch may remove table-220 rules/routes and the broad `169.254.0.0/16` route, flush changed routing state, and restore exact product-owned physical-interface routes under REQ-044. Basic underlay maintenance does not grant active authority; it must not enable forwarding, rewrite forwarding sysctls, render protocol services, or mutate cloud/VPC state. Blocked, stale, mismatched, or lock-contended authority skips or fails without routing mutation.
 - A DHCP/network renewal or other external writer that reintroduces table-220 state or the broad APIPA route after passive materialization is removed within the configured timer cadence. Route-only table-220 state is equivalent to a policy rule for cleanup and health. Until the exact postcondition is restored, local transfer/promotion readiness, heartbeat readiness, `standby_ready`, redundancy health, and operator status must remain degraded rather than reporting the member healthy.
 - Bounded per-peer Adj-RIB-Out evidence is compared as `MATCH`, `DRIFT`, or `UNKNOWN`. Missing or malformed output, a non-established expected peer, or unavailable/transitioning HA authority is `UNKNOWN`, never a match and never repair authority.
 - Ordinary VM-HA `status` retains its exact table shape and redaction contract. Proven active-owner export drift is unsafe and blocks readiness; standby-only export or local routing-hygiene drift degrades an otherwise safe owner; unavailable owner/standby evidence follows the existing conservative `UNKNOWN`/`DEGRADED` precedence. Its routing table detects both a table-220 policy rule and route-only table-220 contents without performing repair.
@@ -4481,6 +4481,22 @@ an interrupted HA deployment, without upgrading gateways or disturbing recovery.
 
 #### Acceptance Criteria
 
+- Include the exact operator YAML as `operator/customer-config.redacted.yaml`,
+  replacing only secret values and public addresses. Preserve source bytes outside
+  sensitive spans: comments, formatting, duplicate keys, unknown fields, aliases,
+  extensions and configuration mistakes. Never reconstruct it with a field allowlist.
+- Locate sensitive source spans with the existing YAML tokenizer/composer; resolve
+  secret-bearing anchors and every duplicate occurrence without expanding secret
+  references. Mask configured tunnel PSK literals throughout diagnostic evidence.
+- Use consistent per-bundle aliases for public IPv4/IPv6 addresses and prefixes in
+  every artifact, including dictionary keys. Retain non-public addresses, default
+  routes, names, IDs, paths and other non-secret evidence. Keep the reverse map only
+  in memory; generate reports and checksums from sanitized retained bytes.
+- Record source changes, omission outcomes and redaction counts in the manifest.
+  Never persist raw config, raw-config hashes, secrets or reverse mappings. Unsafe
+  source spans omit the YAML with partial evidence, never an unredacted fallback.
+  Existing invalid-scope failure, CLI options, limits and exit codes remain.
+
 - Preserve an owner-defined diagnostic checkpoint projection: operation kind,
   initial/upgrade classification, safe pending/completed effect identifiers,
   selected/pinned digests, settlement and explicit omissions. Never widen arbitrary
@@ -4509,9 +4525,9 @@ an interrupted HA deployment, without upgrading gateways or disturbing recovery.
   scoped cloud ownership, allocation, routes, security groups and operation state;
   and redacted diagnostic journal messages and command output. Distinguish unavailable, partial,
   changed and not-applicable evidence from healthy observations.
-- Retain operational identifiers for private support. Export typed fields plus broader redacted
+- Retain operational identifiers other than public IPs for private support. Export typed fields plus broader redacted
   log messages and command stdout/stderr by default; exclude credentials, keys,
-  raw config, user data, environment and unrestricted process arguments,
+  unredacted config, user data, environment and unrestricted process arguments,
   packet captures and XFRM cryptographic material. Report omissions and scan the
   final safe export. Never write raw source material into staging files.
 - Bound collection to five minutes, two member workers, thirty seconds per guest
@@ -4529,7 +4545,7 @@ an interrupted HA deployment, without upgrading gateways or disturbing recovery.
 - Explain artifact-changed through selected versus pending wheel digests; installed
   CLI version alone is not the selected deployment artifact. No automatic recovery.
 
-- Export schema v3 with coverage outside event arrays, exact/lower-bound counts,
+- Export schema v4 with coverage outside event arrays, exact/lower-bound counts,
   acquisition intervals, stable evidence references and explicit unknown retention.
   Collection completeness never promises diagnostic sufficiency or gateway health.
 - Include recognized error context, boot/invocation and monotonic chronology,
@@ -4748,6 +4764,68 @@ separate. Preserve failed and intervened trials. Missing identity evidence is a
 specific prerequisite, not proof of successful automatic recovery.
 
 <!-- /REQUIREMENT: REQ-043 -->
+
+<!-- REQUIREMENT: REQ-044 status=active priority=P1 type=feature -->
+### REQ-044: Preserve physical local and control routes across VPN aggregates
+
+#### User Story
+
+Ordinary and VM-HA IPv4 gateways retain local workload and control reachability
+when a VPN advertises a less-specific aggregate. Existing normal apply upgrades
+this behavior without new public flags, configuration fields or opt-in workflows.
+
+#### Acceptance Criteria
+
+- One shared reconciler validates the primary physical NIC and DHCP router, owns
+  persistent workload, HA peer and outer endpoint routes, and independently
+  verifies their kernel paths before protocol/forwarding readiness.
+- Networkd persistence follows DHCP renewal. Boot preparation precedes protocol
+  services. Passive maintenance may restore owned routes without forwarding,
+  export, cloud-write or promotion authority. Existing fencing remains mandatory.
+- Preserve connected and foreign routes; exact conflicting ownership fails with
+  a diagnostic. Never perform prefix-wide route deletion or global foreign-route
+  management changes. Network reconfiguration requires fencing and proof that
+  unrelated unmanaged routes will not be removed.
+- Preserve more-specific VPN routing and withdrawal no-leak protection. Reject
+  exact contradictory roles. Keep existing default-route behavior and IPv4,
+  single-primary-interface scope; no full-tunnel, VRF or IPv6 expansion.
+- Ordinary cloud routing admits RFC1918 strict supernets of local exclusions;
+  retain equal/contained/special/default exclusions, foreign conflicts and HA
+  route selection. Do not split aggregates into synthetic cloud prefixes.
+- Admit revised semantics only through exact fenced normal-apply preparation
+  after independent underlay/no-leak verification. Admission is distinct from
+  completed deployment and promotion. Runtime mutations require exact admission;
+  pending predecessor plans recover through fenced deployment before activation.
+- Report unknown or failed route proof as not ready. Preserve actionable first
+  failures, sanitized support evidence and existing public status interfaces.
+
+#### Negative Criteria
+
+- No customer access, manual route injection as product proof, automatic foreign
+route adoption, blind downgrade, or claim that every possible topology works.
+
+#### Validation Method
+
+Focused unit/integration checks, native Linux networkd and namespace tests, then
+frozen-artifact isolated Nebius ordinary/HA static/BGP qualification with real
+bidirectional traffic, DHCP renewal, reboot, failover and clean v0.6.7 upgrades.
+
+#### Test Method
+
+Cover broad/narrow/equal prefix relations, /32 physical addresses, off-subnet
+DHCP routers, route collisions, interrupted writes, stale proofs, unchanged
+apply, timer convergence, no-leak withdrawal and current default-route behavior.
+
+#### Evaluation Method
+
+Keep source, native runtime and live provider qualification separate. A release
+recommendation requires independent lab acceptance; customer changes stay with
+the customer and use specific on-premises advertisements where possible.
+For v0.6.8 only, the operator explicitly waives live validation at every release
+step. Required local and CI validation still applies. This release exception
+does not establish unperformed live acceptance or resolve observed packet loss.
+
+<!-- /REQUIREMENT: REQ-044 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->

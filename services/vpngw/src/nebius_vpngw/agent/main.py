@@ -24,6 +24,7 @@ from nebius_vpngw.faults import FaultCategory
 from nebius_vpngw.schema import VMHARuntimeBinding
 from nebius_vpngw.vm_ha_diagnostics import encode_not_ready, readiness_reasons
 
+from . import underlay
 from .firewall_manager import update_firewall_from_config
 from .frr_renderer import FRRRenderer
 from .routing_guard import (
@@ -3066,6 +3067,7 @@ def _prepare_vm_ha_active_data_plane(config_path: Path) -> None:
     """Restore owner-only firewall and BGP state before forwarding is enabled."""
 
     resolved = _resolved_vm_ha_data_plane_config(config_path)
+    underlay.verify(resolved)
     update_firewall_from_config(resolved, require_reload=True)
     FRRRenderer().render_and_apply(
         resolved,
@@ -3145,6 +3147,7 @@ def build_default_vm_ha_controller_runtime(
     config = _read_vm_ha_config(config_path)
     if config is None:
         raise RuntimeError("VM HA is not enabled on this node")
+    underlay.verify(yaml.safe_load(config_path.read_text(encoding="utf-8")))
     current_boot_id = boot_id()
     effective_monotonic_clock = monotonic_clock or (time.monotonic if clock is time.time else clock)
     generation_store = AtomicGenerationStore(state_dir / "generation-store")
@@ -5682,7 +5685,7 @@ class Agent:
             update_firewall_from_config(cfg, require_reload=True)
 
             interface_endpoints = self.ss.build_interface_endpoints(cfg)
-            self.frr.ensure_local_prefix_routes(cfg)
+            underlay.reconcile_locked(cfg)
 
             if not force_reconcile and not self.state.is_changed(configured):
                 print("[Agent] No changes detected; skipping config render")

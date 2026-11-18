@@ -21,7 +21,13 @@ def composed(request, monkeypatch):
             raise RouteManagementError("incomplete observation")
         return learned
 
-    discovery = NS(journal=journal, observe=observe, learned=learn, force_copy=False)
+    discovery = NS(
+        journal=journal,
+        observe=observe,
+        learned=learn,
+        force_copy=False,
+        routing_admission=lambda: {"gateway": "a" * 64},
+    )
     manager = NS(project_id="project", auth_token=None, _get_client=lambda: object())
     discovery.manager = manager
     monkeypatch.setattr(command, "Discovery", lambda *args, **kwargs: discovery)
@@ -90,6 +96,33 @@ def test_pending_routes_reject_another_commands_approval(composed):
         prepared.finish("b" * 64)
     assert state.effects == []
     assert journal.transaction()["approval"] == "a" * 64
+
+
+def test_workstation_cannot_mutate_routes_on_an_unadmitted_guest(composed):
+    state, journal, _learned, prepare = composed
+    prepared = prepare()
+
+    def missing():
+        raise RuntimeError("normal apply admission required")
+
+    prepared.discovery.routing_admission = missing
+    with pytest.raises(RuntimeError, match="normal apply admission"):
+        prepared.finish("a" * 64)
+    assert state.effects == []
+    assert journal.transaction() is None
+
+
+def test_workstation_rechecks_admission_before_each_cloud_effect(composed):
+    state, _journal, learned, prepare = composed
+    learned["peer"] = ("192.168.1.0/24", "192.168.2.0/24")
+    prepared = prepare()
+    values = iter(
+        ({"gateway": "a" * 64}, {"gateway": "a" * 64}, {"gateway": "b" * 64})
+    )
+    prepared.discovery.routing_admission = lambda: next(values)
+    with pytest.raises(RuntimeError, match="admission changed"):
+        prepared.finish("a" * 64)
+    assert len(state.effects) == 1
 
 
 @pytest.mark.parametrize("whitelist", [True, False])

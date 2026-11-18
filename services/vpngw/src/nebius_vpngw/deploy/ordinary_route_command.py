@@ -169,12 +169,26 @@ class PreparedRoutes:
                     raise RuntimeError("Route scope changed before post-activation selection")
         else:
             selected = self.preview
+        admissions: dict[str, str] | None = None
+
+        def admit_request(_request: Any) -> None:
+            nonlocal admissions
+            current = self.discovery.routing_admission()
+            if admissions is not None and current != admissions:
+                raise RuntimeError("Gateway routing admission changed during cloud mutation")
+            admissions = current
+
+        # Do not publish a replayable request for an unprepared predecessor.
+        # The callback still rechecks at each actual submission boundary.
+        if selected["requests"]:
+            admit_request(None)
         execute(
             self.discovery.manager._get_client(),
             journal,
             selected,
             approval=approval,
             observe=self.discovery.observe,
+            admit_request=admit_request,
         )
         return {
             "approval": approval,

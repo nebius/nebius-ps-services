@@ -9,6 +9,8 @@ from nebius_vpngw.agent import strongswan_renderer as swan
 
 @pytest.fixture
 def runtime(tmp_path, monkeypatch, sample_config):
+    monkeypatch.setattr("nebius_vpngw.agent.underlay.preflight_reconfigure", lambda cfg: None)
+    monkeypatch.setattr("nebius_vpngw.agent.underlay.reconcile_locked", lambda cfg, **kwargs: None)
     root = tmp_path / "etc"
     directory = root / "strongswan.d" / "charon"
     directory.mkdir(parents=True)

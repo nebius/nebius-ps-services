@@ -95,7 +95,9 @@ class RouteAuthority:
             raise RouteAuthorityConflict("Runtime routes changed since reviewed observation")
         journal = snapshot["journal"]
         if journal and journal["transaction"] and journal["transaction"]["phase"] != "complete":
-            raise RouteAuthorityConflict("Runtime route operation must settle before workstation handoff")
+            raise RouteAuthorityConflict(
+                "Runtime route operation must settle before workstation handoff"
+            )
         self._save(
             {
                 "schema": SCHEMA,
@@ -117,11 +119,18 @@ class RouteAuthority:
         current = self.snapshot()
         owner = current["authority"]
         receipt = {"holder": holder, "request": digest(["supersede", previous, holder, expected])}
-        if owner and owner["writer"] == "workstation" and owner["holder"] == holder and owner["receipt"] == receipt:
+        if (
+            owner
+            and owner["writer"] == "workstation"
+            and owner["holder"] == holder
+            and owner["receipt"] == receipt
+        ):
             return current  # Recover a lost reply through this exact transition.
         if (
-            digest(current) != expected or owner is None
-            or owner["writer"] != "workstation" or owner["holder"] != previous
+            digest(current) != expected
+            or owner is None
+            or owner["writer"] != "workstation"
+            or owner["holder"] != previous
         ):
             raise RouteAuthorityConflict("Reservation predecessor changed before succession")
         transaction = current["journal"]["transaction"] if current["journal"] else None
@@ -137,7 +146,12 @@ class RouteAuthority:
         directory = self.root / "history"
         protected_directory(directory)
         path = directory / (expected + ".json")
-        archived = {"content": json.dumps(current, sort_keys=True), "uid": os.geteuid(), "gid": os.getegid(), "mode": 0o600}
+        archived = {
+            "content": json.dumps(current, sort_keys=True),
+            "uid": os.geteuid(),
+            "gid": os.getegid(),
+            "mode": 0o600,
+        }
         existing = read_file(path)
         if existing is None:
             publish(path, None, archived)
@@ -160,7 +174,9 @@ class RouteAuthority:
             or repair["phase"] not in {"installed", "enrolled"}
             or not re.fullmatch(r"[a-f0-9]{64}", holder)
         ):
-            raise RouteAuthorityConflict("Route repair requires the confirmed ordinary reconstruction")
+            raise RouteAuthorityConflict(
+                "Route repair requires the confirmed ordinary reconstruction"
+            )
         repair_guest.verify_guard(operation)
         repair_guest.verify_quiescent()
         snapshot = self.snapshot()
@@ -181,7 +197,9 @@ class RouteAuthority:
         ledger = RouteJournal(project, gateway, root=self.root / "journal")
         ledger.validate(journal_state)
         if journal_state["transaction"] is not None:
-            raise RouteAuthorityConflict("Repair route handoff requires settled predecessor effects")
+            raise RouteAuthorityConflict(
+                "Repair route handoff requires settled predecessor effects"
+            )
         previous = current["binding"] if current else None
         if previous and (previous["project"] != project or previous["gateway"] != gateway):
             raise RouteAuthorityConflict("Repair route authority crossed deployment identity")
@@ -218,7 +236,9 @@ class RouteAuthority:
             or repair["id"] != operation
             or repair["phase"] not in {"installed", "enrolled"}
         ):
-            raise RouteAuthorityConflict("Route metadata repair requires the confirmed reconstruction")
+            raise RouteAuthorityConflict(
+                "Route metadata repair requires the confirmed reconstruction"
+            )
         repair_guest.verify_guard(operation)
         repair_guest.verify_quiescent()
         project, gateway = repair["intent"]["project"], repair["intent"]["gateway"]
@@ -288,7 +308,9 @@ class RouteAuthority:
         ):
             return self.snapshot()
         if current is None or current["writer"] != "workstation" or current["holder"] != holder:
-            raise RouteAuthorityConflict("Runtime route handoff has no exact workstation reservation")
+            raise RouteAuthorityConflict(
+                "Runtime route handoff has no exact workstation reservation"
+            )
         if current["binding"] and any(
             current["binding"][key] != desired[key] for key in ("project", "gateway", "node")
         ):
@@ -310,7 +332,9 @@ class RouteAuthority:
         if journal_state is not None:
             journal.validate(journal_state)
             if journal_state["transaction"] and journal_state["transaction"]["phase"] != "complete":
-                raise RouteAuthorityConflict("Unsettled cloud operations cannot hand off to runtime")
+                raise RouteAuthorityConflict(
+                    "Unsettled cloud operations cannot hand off to runtime"
+                )
         elif journal.snapshot() is not None:
             raise RouteAuthorityConflict("Runtime route handoff cannot discard creation receipts")
         # Publication is ordered: a crash after the journal write leaves the
@@ -400,12 +424,16 @@ def action(request: dict) -> dict:
         if request["action"] == "reserve":
             return owner.reserve(request["holder"], request["expected"])
         if request["action"] == "supersede-reservation":
-            return owner.supersede_reservation(request["previous"], request["holder"], request["expected"])
+            return owner.supersede_reservation(
+                request["previous"], request["holder"], request["expected"]
+            )
         if request["action"] == "retire":
             import hashlib
 
             if hashlib.sha256(ordinary.CONFIG.read_bytes()).hexdigest() != request["generation"]:
-                raise RouteAuthorityConflict("Installed configuration changed before runtime retirement")
+                raise RouteAuthorityConflict(
+                    "Installed configuration changed before runtime retirement"
+                )
             return owner.retire(request["holder"], request["generation"], request["journal"])
         desired = binding.validate(request["binding"])
         binding.authority(
@@ -416,4 +444,7 @@ def action(request: dict) -> dict:
         from .ordinary_cloud_routes import OrdinaryCloudRoutes
 
         OrdinaryCloudRoutes._credentials(desired)
+        from ..routing_semantics import bind_ordinary_locked
+
+        bind_ordinary_locked(desired)
         return owner.release(request["holder"], desired, request["journal"])

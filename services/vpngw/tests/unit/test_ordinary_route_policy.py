@@ -7,6 +7,26 @@ from nebius_vpngw.config_loader import load_local_config
 from nebius_vpngw.deploy.ordinary_route_policy import freeze
 
 
+@pytest.mark.parametrize(
+    ("remote", "local", "excluded"),
+    [
+        ("10.0.0.0/8", "10.64.0.0/16", False),
+        ("172.16.0.0/12", "172.20.0.0/24", False),
+        ("192.168.0.0/16", "192.168.20.0/24", False),
+        ("10.64.0.0/16", "10.64.0.0/16", True),
+        ("10.64.1.0/24", "10.64.0.0/16", True),
+        ("0.0.0.0/0", "10.64.0.0/16", True),
+        ("8.0.0.0/6", "10.64.0.0/16", True),
+        ("192.0.2.0/24", "192.0.2.0/28", True),
+        ("10.128.0.0/16", "10.64.0.0/16", False),
+    ],
+)
+def test_only_private_strict_supernets_cross_local_exclusions(remote, local, excluded):
+    from nebius_vpngw.deploy.ordinary_route_policy import Policy
+
+    assert Policy((), (local,)).excluded(remote) is excluded
+
+
 @pytest.fixture
 def local():
     return {

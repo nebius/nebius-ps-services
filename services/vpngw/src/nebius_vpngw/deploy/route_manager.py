@@ -155,6 +155,9 @@ class NebiusSDKRouteBackend:
         self._authority_allocation_id: str | None = None
         self._authority_targets: tuple[VMHARouteTarget, ...] = ()
         self._migration_routes: dict[str, VMHAMigrationRouteBinding] = {}
+        # Installed runtime binds this to semantic and pending-intent admission.
+        # Explicit workstation deployment retains its separate authority owner.
+        self.admit_effect: t.Callable[[], object] = lambda: None
 
     @staticmethod
     def _authority_fingerprint(value: str) -> str:
@@ -667,6 +670,7 @@ class NebiusSDKRouteBackend:
             prefix=before.prefix,
             allocation_id=before.allocation_id,
         )
+        self.admit_effect()
         try:
             operation = (
                 RouteServiceClient(self.sdk)
@@ -801,6 +805,7 @@ class NebiusSDKRouteBackend:
             except Exception as error:
                 if not operation_status_lookup_unsupported(error):
                     raise
+                self.admit_effect()
                 operation = submit().wait()
                 replayed_operation_id = str(getattr(operation, "id", "") or "")
                 if replayed_operation_id != accepted.cloud_operation_id:
@@ -809,6 +814,7 @@ class NebiusSDKRouteBackend:
                         "operation identity"
                     ) from error
             return operation, accepted
+        self.admit_effect()
         operation = submit().wait()
         cloud_operation_id = str(getattr(operation, "id", "") or "")
         if pending is None:
