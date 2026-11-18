@@ -631,6 +631,16 @@ class TunnelController(Generic[AuthorityT]):
                 self._save()
         self._save()
         if self._pending():
+            if self.static_recovery_observations is not None:
+                # Other connections must not retain loss evidence across a
+                # healthy/unknown sample while this operation owns the slot.
+                # Keep the active operation's attempt and cooldown history.
+                for name, observed in health.items():
+                    if (
+                        name != self.state["operation"]["connection"]
+                        and observed != Health.DOWN.value
+                    ):
+                        self.static_recovery_observations.pop(name, None)
             self.preferred_observations.clear()
             self._advance(authority, now, elapsed_seconds=monotonic() - started)
             return

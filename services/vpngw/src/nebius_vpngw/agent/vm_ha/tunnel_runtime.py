@@ -967,7 +967,12 @@ class NativeTunnelEffects(Generic[AuthorityT]):
         peer = probe["target_ip"] if probe else tunnel.get("inner_remote_ip")
         if not source or not peer:
             raise RuntimeError("HA preserved backup inner addresses are missing")
-        addresses = json.loads(self.run(("ip", "-j", "address", "show", "dev", path.interface)))
+        address_command = (
+            ("ip", "-j", "-4", "address", "show")
+            if probe
+            else ("ip", "-j", "address", "show", "dev", path.interface)
+        )
+        addresses = json.loads(self.run(address_command))
         assigned = set()
         for row in addresses:
             for address in row.get("addr_info", []):

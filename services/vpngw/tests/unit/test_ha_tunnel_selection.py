@@ -1902,6 +1902,89 @@ class RecoveryClock:
         return self.now
 
 
+@pytest.mark.parametrize("source_interface", ["eth0", "lo"])
+def test_static_promotion_accepts_configured_probe_source_on_another_interface(
+    tmp_path, source_interface
+):
+    cfg = config()
+    cfg["gateway"]["local_prefixes"] = ["10.0.0.0/24"]
+    cfg["gateway"]["tunnel_probes"] = {"backup": {"source_ip": "10.0.0.1", "target_ip": "10.1.2.3"}}
+    calls = []
+    addresses = [
+        {"ifname": source_interface, "addr_info": [{"local": "10.0.0.1"}]},
+        {"ifname": "xfrm1", "addr_info": [{"local": "169.254.2.1"}]},
+    ]
+
+    def runner(argv, timeout):
+        calls.append(tuple(argv))
+        if "address" in argv:
+            rows = addresses
+            if "dev" in argv:
+                device = argv[argv.index("dev") + 1]
+                rows = [row for row in rows if row["ifname"] == device]
+            return subprocess.CompletedProcess(argv, 0, json.dumps(rows), "")
+        assert tuple(argv) == (
+            "ping",
+            "-n",
+            "-c",
+            "1",
+            "-I",
+            "xfrm1",
+            "-I",
+            "10.0.0.1",
+            "-W",
+            "1",
+            "10.1.2.3",
+        )
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    effects = NativeTunnelEffects(
+        cfg,
+        tmp_path,
+        lambda authority: authority == AUTH,
+        active_revalidate=lambda authority: authority == AUTH,
+        command_runner=runner,
+    )
+    effects._path_health = lambda *args, **kwargs: Health.HEALTHY
+    effects._require_healthy_static_path(connection_policies(cfg)[0], "backup")
+    assert any(call[0] == "ping" for call in calls)
+
+
+@pytest.mark.parametrize("interruption", [Health.HEALTHY, Health.UNKNOWN])
+def test_pending_other_connection_does_not_hide_static_loss_reset(tmp_path, interruption):
+    cfg = config()
+    other = deepcopy(cfg["connections"][0])
+    other["name"] = "other"
+    other["remote_prefixes"] = ["10.2.0.0/16"]
+    for index, tunnel in enumerate(other["tunnels"], 1):
+        tunnel["name"] = f"other-{tunnel['name']}"
+        tunnel["remote_public_ip"] = f"198.51.100.{index}"
+    cfg["connections"].append(other)
+    effects, clock = Effects(), RecoveryClock()
+    effects.health.update(
+        {
+            "preferred": Health.DOWN,
+            "other-preferred": Health.HEALTHY,
+            "other-backup": Health.HEALTHY,
+        }
+    )
+    selector = recovery_selector(tmp_path, effects, clock, cfg=cfg)
+    for second in range(20):
+        recovery_tick(selector, clock, second)
+    assert selector.static_recovery_observations["site"]["since"] == 0
+    selector.request("failover", "other-backup", AUTH, 1020)
+    effects.health["preferred"] = interruption
+    recovery_tick(selector, clock, 21)
+    assert selector.state["health"]["site"] == interruption.value
+    assert "site" not in selector.static_recovery_observations
+    effects.health["preferred"] = Health.DOWN
+    for second in range(22, 36):
+        recovery_tick(selector, clock, second)
+    assert selector.state["operation"]["connection"] == "other"
+    assert ("probe", "backup") not in effects.calls
+    assert "site" not in selector.state["selected"]
+
+
 def recovery_selector(tmp_path, effects, clock, records=None, cfg=None):
     return TunnelController(
         cfg or config(),
@@ -2072,7 +2155,6 @@ def test_ha_static_failed_native_effect_has_reason_and_does_not_renew_deadline(t
 
 
 def test_native_static_backup_route_uses_new_effect_deadline_after_old_episode_expired(tmp_path):
-
     effects = NativeTunnelEffects(
         config(),
         tmp_path,
@@ -2116,7 +2198,6 @@ def test_native_static_backup_route_uses_new_effect_deadline_after_old_episode_e
 
 
 def test_ha_static_multiple_dead_paths_do_not_starve_late_uk_backup(tmp_path):
-
     cfg = config()
     second = deepcopy(cfg["connections"][0]["tunnels"][1])
     second.update(name="uk-b", remote_public_ip="192.0.2.3")

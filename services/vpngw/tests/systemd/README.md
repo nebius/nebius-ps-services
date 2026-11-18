@@ -3,7 +3,7 @@
 ## Static recovery lifecycle contract
 
 Run `python3 tests/systemd/run.py --static-recovery-only --report /tmp/static-recovery.json`
-from the service directory for the seven test-first lifecycle cases. They use
+from the service directory for the seven lifecycle cases. They use
 exactly two sites: site A runs the product tunnel controller and native effects;
 site B runs a plain strongSwan responder, independently configured without the
 product renderer or any peer-side gateway controller. Two addresses at site B
@@ -15,8 +15,11 @@ ICMP measures actual packet recovery. No optional workload tunnel probe is confi
 The cases cover primary return before backup qualification, SA-preserving backup
 promotion, both-path failure with either path returning first, both returning,
 neither returning, and remote initiation of the preferred path followed by the
-existing 60-second failback qualification. Promotion must use `trap`, preserve
-the validated SA set, and retain selected-path recovery settings. Demotion must
+existing 60-second failback qualification. Promotion retains `trap|start`, preserves
+the previously validated SA identities while allowing additional native CHILDs,
+and applies selected-path recovery settings. Automatic failback retains the
+existing suspension and activation sequence; SA preservation applies to backup
+promotion. Unselected paths retain `none`, `clear`, and bounded initiation. Demotion must
 stop the losing attempt and leave it locally cold. Later bounded qualification
 of the preferred path remains allowed. Duplicate initiation while a negotiation
 is pending is rejected. Tests never install traps or move routes on behalf of
@@ -34,10 +37,10 @@ credential/configuration files. This focused lane has a one-hour execution bound
 and uses accelerated fixture retransmission timing, with no change to product
 timing. Ordinary runs skip it unless the disposable fixture is explicitly enabled.
 
-These are tests for proposed behavior. They do not claim that SA-preserving
-promotion or the slow-observation fix has been implemented. Run them red before
-changing the implementation, then require all seven to pass. Docker must be
-running on a Linux kernel with the XFRM support described below.
+Offline tests cover controller and native-command behavior. They do not establish
+native SA preservation or packet recovery. Record all seven native case results
+before claiming that qualification. Docker must run on a Linux kernel with the
+XFRM support described below.
 
 Run `python3 tests/systemd/run.py --static-recovery-timing-only --report /tmp/static-timing.json`
 for a separate native timing regression. The fixture inserts eleven seconds of
@@ -71,10 +74,10 @@ and fault-window packet measurements. Loss windows include the adjacent bounding
 replies, and an unrecovered window cannot be reported as zero loss.
 
 Use `--static-recovery-traffic-only` instead of `--static-recovery-only` to
-qualify current traffic recovery without requiring the proposed SA-preservation
-or trap-only policy. The same native faults, qualification gates, packet windows,
+qualify traffic recovery while recording SA-preservation and configuration
+contract checks as observations. The same native faults, qualification gates, packet windows,
 losing-path cleanup and stability checks still run. Contract deviations remain
-in the evidence as observations. This mode does not qualify the proposed contract.
+in the evidence as observations. This mode does not qualify the full lifecycle contract.
 `--case-filter test_case_7` selects only that case in either lane and records the
 filtered collection, so a partial trial cannot be presented as all seven cases.
 

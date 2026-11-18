@@ -3781,9 +3781,14 @@ independent workload reachability checks when qualifying gateway availability.
 
 Confirmed required-destination coverage loss starts one persisted 30-second
 episode. Failures, native retries and controller restarts cannot renew it.
-Static candidates retain the ten-second first-candidate and five-second
-alternative schedule, followed by verified restoration within the remaining
-budget. At expiry, retain the healthy owner and native retry unless fresh
+HA Static recovery waits for thirty seconds of observed selected-path loss,
+then requires two fresh backup proofs at least five seconds apart. A healthy or
+unknown observation resets that connection's loss window, including while another
+connection is switching. Explicit probe sources may be assigned on any local
+interface covered by the selectors; probes remain bound to the selected tunnel.
+Promotion preserves the proven backup and only cleans up confirmed unhealthy
+sibling paths. Native retries are bounded and do not renew the persisted episode.
+At expiry, retain the healthy owner and native retry unless fresh
 candidate evidence proves every required destination or another authorized
 transfer condition applies. A cold Static standby cannot provide this proof.
 Interrupted restoration resumes without a new window. Two healthy observations

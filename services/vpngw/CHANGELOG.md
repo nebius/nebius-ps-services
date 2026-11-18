@@ -11,6 +11,12 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Recover HA Static traffic after thirty seconds of confirmed selected-path loss,
+  with fresh backup probes, scoped cleanup, bounded retries and recovery diagnostics.
+  Preserve configured probe sources on any assigned local interface and reset
+  other connections' loss evidence on healthy or unknown observations during
+  pending work. Resume Compute stop polling without relaxing the stopped-owner fence.
+
 ## [nebius-vpngw-v0.6.8] - 2026-11-18
 
 - Establish native BGP fixtures with the real startup table-220 cleanup before
