@@ -46,6 +46,7 @@ def scenario(request, tmp_path, monkeypatch):
         }
 
     monkeypatch.setattr(Discovery, "observe", current_observation)
+    monkeypatch.setattr(Discovery, "routing_admission", lambda self: {"gateway": "a" * 64})
     learned = ("192.168.1.0/24",) if variant == "routes" else ()
     monkeypatch.setattr(Discovery, "learned", lambda *a: {"peer": learned})
     monkeypatch.setattr(publication, "RouteJournal", lambda *a: route_journal)

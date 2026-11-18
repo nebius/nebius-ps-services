@@ -66,14 +66,14 @@ def test_every_approved_field_still_rejects_actual_drift(admission, field):
 
 
 @pytest.mark.parametrize("retained", [False, True])
-@pytest.mark.parametrize("retirement_fails", [False, True])
+@pytest.mark.parametrize("failure", [None, "settlement", "retirement"])
 def test_guarded_package_retires_assets_under_writer_lock_before_completion(
-    admission, tmp_path, monkeypatch, retained, retirement_fails
+    admission, tmp_path, monkeypatch, retained, failure
 ):
     request, _ = admission
     manifest = request["package"]["desired"]
     manifest.update(config_sha256="a" * 64, package_identity="b" * 64,
-                    wheel_name="release.whl", assets={},
+                    wheel_name="release.whl", wheel_sha256="d" * 64, assets={},
                     asset_retirement={"predecessor": {"operation": "c" * 32},
                                       "removals": {"obsolete": {}}})
     with ZipFile(tmp_path / "payload" / "release.whl", "w"):
@@ -93,8 +93,15 @@ def test_guarded_package_retires_assets_under_writer_lock_before_completion(
     def retire(selected):
         assert locked and selected == manifest
         events.append("retire")
-        if retirement_fails:
+        if failure == "retirement":
             raise RuntimeError("asset_retirement_changed")
+
+    def settle(expected, artifact):
+        assert locked and artifact == manifest["wheel_sha256"]
+        assert expected == request.get("expected")
+        events.append("settle")
+        if failure == "settlement":
+            raise RuntimeError("predecessor_settlement_blocked")
 
     if retained:
         guest.MARKER.touch()
@@ -119,16 +126,20 @@ def test_guarded_package_retires_assets_under_writer_lock_before_completion(
     monkeypatch.setattr(guest.ops.Operation, "begin", lambda **_: operation)
     monkeypatch.setattr(guest.remote.migration, "begin", lambda *_: None)
     monkeypatch.setattr(guest.remote.migration, "inhibit", lambda: None)
-    monkeypatch.setattr(guest.remote.migration, "install", lambda: None)
+    monkeypatch.setattr(guest, "settle_predecessor_routes", settle)
+    monkeypatch.setattr(guest.remote.migration, "install", lambda: events.append("native"))
     monkeypatch.setattr(guest.remote.migration, "retire_assets", retire)
-    monkeypatch.setattr(guest.remote.python_packages, "install_payload", lambda *_: None)
+    monkeypatch.setattr(guest.remote.python_packages, "install_payload", lambda *_: events.append("python"))
     monkeypatch.setattr(guest, "verify_package", lambda _: {"verified": True})
-    if retirement_fails:
-        with pytest.raises(RuntimeError, match="asset_retirement_changed"):
+    if failure:
+        with pytest.raises(RuntimeError, match="asset_retirement_changed|predecessor_settlement_blocked"):
             guest.prepare_guarded(request)
         assert "complete" not in events
     else:
         assert guest.prepare_guarded(request) == {"verified": True}
         assert events[-2:] == ["retire", "complete"]
-    assert events[:3] == ["install", "publish", "reload"]
+    if failure == "settlement":
+        assert events == ["install", "settle"]
+    else:
+        assert events[:6] == ["install", "settle", "native", "python", "publish", "reload"]
     assert not locked

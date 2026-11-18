@@ -3537,6 +3537,7 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
                     raise RuntimeError("HA handoff activation requires its exact apply lock")
                 handoff.publish_activation(receipt=staged_receipt, operation_id=apply_operation_id)
             checkpoint_commands = []
+            route_settlement_commands = []
             if handoff is None:
                 if apply_operation_id is None or runtime_binding is None or agent_artifact is None:
                     raise RuntimeError("HA checkpoint activation requires its exact apply identity")
@@ -3550,11 +3551,22 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
                     "boot_id": ingress_boot_id,
                     "unstarted": initialize_checkpoint,
                 }
+                route_settlement_commands.append(
+                    "sudo -n /usr/bin/python3 -B -c "
+                    + shlex.quote(
+                        "import time\nfrom nebius_vpngw import ha_repair as r\n"
+                        "from nebius_vpngw.ha_route_settlement import settle_locked\n"
+                        "with r.writer_locks(deadline=time.monotonic()+30):\n"
+                        f" settle_locked({admission['expected']!r},artifact={agent_artifact.sha256!r})"
+                    )
+                )
                 checkpoint_commands.append(
                     "sudo -n /usr/bin/python3 -B -c "
                     + shlex.quote(
                         "from nebius_vpngw import checkpoint_upgrade as u,ha_repair as r;"
-                        f"u.admit_activation(state_dir=r.STATE,repair=r,**{admission!r})"
+                        f"u.admit_activation(state_dir=r.STATE,repair=r,**{admission!r});"
+                        "from nebius_vpngw.routing_semantics import prepare_ha;"
+                        f"prepare_ha({admission['expected']!r},{agent_artifact.sha256!r})"
                     )
                 )
             ingress_activation = (
@@ -3570,6 +3582,7 @@ printf "VM_HA_TERMINAL_NON_HA=1\\n"
                     if staged_receipt is not None
                     else []
                 ),
+                *route_settlement_commands,
                 *([] if handoff is not None else [config_install_cmd]),
                 "sudo chown root:root /etc/nebius-vpngw/config-resolved.yaml",
                 f"sudo chmod {config_mode} /etc/nebius-vpngw/config-resolved.yaml",

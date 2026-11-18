@@ -106,8 +106,14 @@ class Policy:
 
     def excluded(self, destination: str) -> bool:
         network = ipaddress.IPv4Network(prefix(destination))
+        private = any(
+            network.subnet_of(ipaddress.IPv4Network(block))
+            for block in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+        )
         return any(
-            network.overlaps(ipaddress.IPv4Network(excluded)) for excluded in self.excluded_prefixes
+            network.overlaps(local)
+            and not (private and local != network and local.subnet_of(network))
+            for local in map(ipaddress.IPv4Network, self.excluded_prefixes)
         )
 
     def retains(self, destination: str, instance_index: int) -> bool:

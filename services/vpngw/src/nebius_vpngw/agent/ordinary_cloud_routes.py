@@ -315,6 +315,11 @@ class OrdinaryCloudRoutes:
                 CURRENT.reset(token)
 
     def _reconcile(self, value, raw, boot, identity, cfg, owner, journal, discovery) -> dict:
+        from ..routing_semantics import require
+
+        admission = require(runtime_binding=value)
+        identity = digest([identity, admission])
+
         def observe():
             operations.require_idle()
             owner.require_runtime(value)
@@ -325,6 +330,8 @@ class OrdinaryCloudRoutes:
             ):
                 raise RuntimeError("Ordinary runtime route authority changed")
             self._credentials(value)
+            if require(runtime_binding=value) != admission:
+                raise RuntimeError("Routing semantic admission changed during reconciliation")
             protection.verify()
             return discovery.observe()
 
@@ -352,7 +359,10 @@ class OrdinaryCloudRoutes:
             if plan is None:
                 raise RuntimeError("Runtime route selection is incomplete")
             # A saved cloud mutation is resumed only within its exact binding.
-            if plan["options"].get("runtime_binding") != digest(value):
+            if (
+                plan["options"].get("runtime_binding") != digest(value)
+                or plan["options"].get("routing_admission") != admission
+            ):
                 raise RuntimeError("Pending runtime route effect belongs to another binding")
             approval = pending["approval"]
         else:
@@ -369,6 +379,7 @@ class OrdinaryCloudRoutes:
                 absence=absence,
             )
             plan["options"]["runtime_binding"] = digest(value)
+            plan["options"]["routing_admission"] = admission
             approval = digest([identity, plan])
         if any(
             item["type"] not in {"CreateRouteRequest", "DeleteRouteRequest"}

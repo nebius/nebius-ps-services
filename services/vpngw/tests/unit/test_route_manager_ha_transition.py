@@ -283,6 +283,7 @@ def test_route_progress_dispatch_preserves_pending_effect_without_receipt(
 
     owner = _owner()
     runtime = object.__new__(BoundRouteRuntime)
+    runtime.admission = None
     runtime.binding = SimpleNamespace(cluster_id="cluster-a")
     runtime.backend = SimpleNamespace()
     runtime.store = RuntimeStateStore(tmp_path / "routes")

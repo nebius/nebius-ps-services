@@ -4135,6 +4135,7 @@ def test_current_boot_gate_rejects_stale_status_and_preserves_non_ha(
 def test_passive_routing_hygiene_requires_current_fenced_guard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr("nebius_vpngw.agent.underlay.reconcile_locked", lambda cfg: None)
     boot = tmp_path / "boot-id"
     guard = tmp_path / "guard.json"
     boot.write_text("boot-a\n", encoding="utf-8")
@@ -4167,7 +4168,7 @@ def test_passive_routing_hygiene_requires_current_fenced_guard(
             return SimpleNamespace(returncode=0, stdout="")
         raise AssertionError(argv)
 
-    monkeypatch.setattr("nebius_vpngw.agent.routing_guard.subprocess.run", run)
+    monkeypatch.setattr("nebius_vpngw.agent.routing_guard.run", run)
     enforce_vm_ha_passive_routing_hygiene({"vm_ha": {}}, guard_path=guard, boot_id_path=boot)
     assert removed == ["table-220", "broad-apipa"]
 
@@ -4248,6 +4249,27 @@ def test_route_maintenance_admits_only_current_active_or_fenced_passive(
 def test_periodic_routing_reenforces_only_passive_hygiene(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    import contextlib
+
+    @contextlib.contextmanager
+    def writer_locks(*args, **kwargs):
+        yield
+
+    monkeypatch.setattr("nebius_vpngw.ha_repair.writer_locks", writer_locks)
+    monkeypatch.setattr(
+        "nebius_vpngw.agent.vm_ha.auto_healing.require_auto_healing_writer_quiescent",
+        lambda state: None,
+    )
+    monkeypatch.setattr(
+        "nebius_vpngw.agent.main._vm_ha_writer_inhibition_operation_id", lambda **kwargs: None
+    )
+    cfg = {
+        "vm_ha": {
+            "cluster_id": "cluster",
+            "node": {"node_id": "a"},
+            "generation": {"generation_id": "a" * 64},
+        }
+    }
     calls: list[str] = []
     monkeypatch.setattr(
         "nebius_vpngw.agent.routing_guard.acquire_routing_lock",
@@ -4266,10 +4288,10 @@ def test_periodic_routing_reenforces_only_passive_hygiene(
         lambda _cfg: pytest.fail("passive maintenance used the active reconciler"),
     )
 
-    enforce_periodic_routing_invariants({"vm_ha": {}})
+    enforce_periodic_routing_invariants(cfg)
     # Model DHCP/network renewal reintroducing drift before the next timer run:
     # the periodic owner must invoke the narrow cleanup again.
-    enforce_periodic_routing_invariants({"vm_ha": {}})
+    enforce_periodic_routing_invariants(cfg)
 
     assert calls == ["passive", "passive"]
 
@@ -4278,23 +4300,34 @@ def test_periodic_routing_reenforces_only_passive_hygiene(
         lambda _cfg: (_ for _ in ()).throw(RuntimeError("postcondition failed")),
     )
     with pytest.raises(RuntimeError, match="postcondition failed"):
-        enforce_periodic_routing_invariants({"vm_ha": {}})
+        enforce_periodic_routing_invariants(cfg)
 
 
 def test_periodic_routing_preserves_active_and_lock_contention_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls: list[str] = []
-    lock_results = iter(
-        (
-            os.open(tmp_path / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600),
-            None,
-        )
+    import contextlib
+
+    @contextlib.contextmanager
+    def writer_locks(*args, **kwargs):
+        yield
+
+    monkeypatch.setattr("nebius_vpngw.ha_repair.writer_locks", writer_locks)
+    monkeypatch.setattr(
+        "nebius_vpngw.agent.vm_ha.auto_healing.require_auto_healing_writer_quiescent",
+        lambda state: None,
     )
     monkeypatch.setattr(
-        "nebius_vpngw.agent.routing_guard.acquire_routing_lock",
-        lambda blocking=False: next(lock_results),
+        "nebius_vpngw.agent.main._vm_ha_writer_inhibition_operation_id", lambda **kwargs: None
     )
+    cfg = {
+        "vm_ha": {
+            "cluster_id": "cluster",
+            "node": {"node_id": "a"},
+            "generation": {"generation_id": "a" * 64},
+        }
+    }
+    calls: list[str] = []
     monkeypatch.setattr(
         "nebius_vpngw.agent.routing_guard._vm_ha_route_maintenance_mode",
         lambda _cfg: "active",
@@ -4308,8 +4341,15 @@ def test_periodic_routing_preserves_active_and_lock_contention_paths(
         lambda _cfg: pytest.fail("active maintenance used passive cleanup"),
     )
 
-    enforce_periodic_routing_invariants({"vm_ha": {}})
-    enforce_periodic_routing_invariants({"vm_ha": {}})
+    enforce_periodic_routing_invariants(cfg)
+
+    @contextlib.contextmanager
+    def busy(*args, **kwargs):
+        raise RuntimeError("HA repair writer did not settle")
+        yield
+
+    monkeypatch.setattr("nebius_vpngw.ha_repair.writer_locks", busy)
+    enforce_periodic_routing_invariants(cfg)
 
     assert calls == ["active"]
 
@@ -4335,7 +4375,7 @@ def test_remove_table_220_flushes_route_only_state(
             return SimpleNamespace(returncode=0, stdout="")
         raise AssertionError(argv)
 
-    monkeypatch.setattr("nebius_vpngw.agent.routing_guard.subprocess.run", run)
+    monkeypatch.setattr("nebius_vpngw.agent.routing_guard.run", run)
 
     assert _remove_table_220() is True
     assert ("ip", "route", "flush", "table", "220") in calls
@@ -4360,7 +4400,7 @@ def test_remove_table_220_preserves_unrelated_priority_and_lookup_rules(
         }
         return SimpleNamespace(returncode=0, stdout=outputs[tuple(argv)])
 
-    monkeypatch.setattr("nebius_vpngw.agent.routing_guard.subprocess.run", run)
+    monkeypatch.setattr("nebius_vpngw.agent.routing_guard.run", run)
 
     assert _remove_table_220() is False
     assert not any(call[:3] == ("ip", "rule", "del") for call in calls)
@@ -4391,7 +4431,7 @@ def test_remove_table_220_deletes_only_exact_table_rules(
             return SimpleNamespace(returncode=0, stdout="")
         raise AssertionError(argv)
 
-    monkeypatch.setattr("nebius_vpngw.agent.routing_guard.subprocess.run", run)
+    monkeypatch.setattr("nebius_vpngw.agent.routing_guard.run", run)
 
     assert _remove_table_220() is True
     assert calls.count(("ip", "rule", "del", "lookup", "220")) == 1
@@ -4401,6 +4441,7 @@ def test_remove_table_220_deletes_only_exact_table_rules(
 def test_passive_routing_hygiene_rejects_remaining_table_220_routes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr("nebius_vpngw.agent.underlay.reconcile_locked", lambda cfg: None)
     boot = tmp_path / "boot-id"
     guard = tmp_path / "guard.json"
     boot.write_text("boot-a\n", encoding="utf-8")
@@ -4428,7 +4469,7 @@ def test_passive_routing_hygiene_rejects_remaining_table_220_routes(
             return SimpleNamespace(returncode=0, stdout="")
         raise AssertionError(argv)
 
-    monkeypatch.setattr("nebius_vpngw.agent.routing_guard.subprocess.run", run)
+    monkeypatch.setattr("nebius_vpngw.agent.routing_guard.run", run)
 
     with pytest.raises(RuntimeError, match="postcondition failed"):
         enforce_vm_ha_passive_routing_hygiene({"vm_ha": {}}, guard_path=guard, boot_id_path=boot)
@@ -4852,6 +4893,8 @@ def test_systemd_preflight_consumes_pending_activation_heartbeat_reset(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("nebius_vpngw.agent.underlay.verify", lambda cfg: "underlay-proof")
+    (tmp_path / "config.yaml").write_text("{}")
     state_dir = tmp_path / "state"
     generation_store = AtomicGenerationStore(state_dir / "generation-store")
     generation_store.request_accepted_peer_heartbeat_reset(
@@ -5427,6 +5470,7 @@ def test_service_fails_closed_without_bound_runtime(tmp_path: Path, monkeypatch)
 def test_default_factory_two_node_transfer_restarts_after_every_effect(
     tmp_path: Path, monkeypatch, crash_after: ActionKind
 ) -> None:
+    monkeypatch.setattr("nebius_vpngw.agent.underlay.verify", lambda cfg: "underlay-proof")
     digest = "a" * 64
     clock = [0.0]
     shared: dict[str, object] = {

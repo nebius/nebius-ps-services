@@ -655,6 +655,7 @@ def test_saved_proof_lost_reply_retry_rebinds_ledger_before_final_confirmation(
             }
 
         monkeypatch.setattr(ordinary_remote, "agent_receipt", receipt)
+        monkeypatch.setattr(ordinary_remote, "admit_routing_semantics", lambda manifest, request_id: None)
         ordinary_remote.final_confirmation(manifest, final, "f" * 32, retry)
         assert ops.Journal().read()["state"] == "complete"
     finally:

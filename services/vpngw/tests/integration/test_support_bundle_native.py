@@ -184,7 +184,7 @@ def test_installed_collector_collects_live_guest_evidence(native, artifact, brok
         assert files["operator/status.txt"]
         assert files["nodes/0/ha-0/native.stderr.txt"]
         manifest = json.loads(files["manifest.json"])
-        assert manifest["schema"].endswith("v3") and manifest["guest_nodes"] == [0]
+        assert manifest["schema"].endswith("v4") and manifest["guest_nodes"] == [0]
         for row in manifest["probes"]:
             if row["sha256"]:
                 assert row["sha256"] == hashlib.sha256(files[row["file"]]).hexdigest()

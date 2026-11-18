@@ -20,6 +20,7 @@
     "./config-claude",
     "./config-codex",
     "./container",
+    "./create-branch",
     "./create-learning-course",
     "./create-pr",
     "./design",

@@ -28,6 +28,7 @@ BOOT = Path("/proc/sys/kernel/random/boot_id")
 ROUTING_LOCK = Path("/run/nebius-vpngw/fix-routes.lock")
 SCHEMA = "nebius-vpngw.ordinary-operation.v1"
 MANAGEMENT = (
+    "nebius-vpngw-underlay.service",
     "nebius-vpngw-fix-routes.timer",
     "nebius-vpngw-health-monitor.service",
     "nebius-vpngw-agent.service",

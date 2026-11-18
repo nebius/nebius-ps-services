@@ -105,6 +105,7 @@ from nebius_vpngw.vm_ha_credentials import (
 )
 
 from ... import ipsec_observation
+from .. import underlay
 from .forwarding import DestinationProtection
 
 RUNTIME_IDENTITY_SCHEMA = "nebius-vpngw/vm-ha-runtime-identity-v1"
@@ -1327,6 +1328,7 @@ class SystemDataPlaneRuntime:
         static_tunnel_names: tuple[str, ...] | None = None,
         tunnel_cold_passive: bool = False,
         destination_protection: DestinationProtection | None = None,
+        underlay_verifier: Callable[[], bool] | None = None,
         passive_materialization_attempts: int = 12,
         passive_materialization_interval: float = 0.5,
         bgp_export_attempts: int = 60,
@@ -1376,6 +1378,7 @@ class SystemDataPlaneRuntime:
         self.commands = commands
         self.routing_lock_path = routing_lock_path
         self.active_preparer = active_preparer
+        self.underlay_verifier = underlay_verifier
         self.origination_verifier = origination_verifier
         self.blocked_preparer = blocked_preparer
         self.candidate_preparer = candidate_preparer
@@ -1795,7 +1798,9 @@ class SystemDataPlaneRuntime:
             established_ike_sa_count=established_ike_sa_count,
             static_suspended=static_suspended,
             bgp_export_state=export_state,
-            routing_hygiene_ready=_routing_hygiene_ready(rules, all_routes, broad_apipa),
+            routing_hygiene_ready=_routing_hygiene_ready(rules, all_routes, broad_apipa)
+            and self.underlay_verifier is not None
+            and self.underlay_verifier(),
             protection_ready=self.destination_protection is not None
             and self.destination_protection.ready(),
             failed_services=tuple(failed_services),
@@ -2462,6 +2467,7 @@ class RuntimeStateStore:
         self.transition_path = root / "route-transition.json"
         self.receipt_path = root / "route-receipt.json"
         self.pending_path = root / "route-pending.json"
+        self.admission: Callable[[], str] | None = None
 
     @staticmethod
     def _read(path: Path) -> Mapping[str, object] | None:
@@ -2555,6 +2561,10 @@ class RuntimeStateStore:
             if existing == pending:
                 return
             raise ValueError("another VM-HA route mutation intent is pending")
+        if self.admission is not None:
+            from ...routing_semantics import pending_admission
+
+            pending_admission(self, mutation, context, self.admission(), publish=True)
         self._write_pending_mutation(pending)
 
     @staticmethod
@@ -2731,6 +2741,7 @@ class BoundRouteRuntime:
         clock: Callable[[], float] = time.time,
         takeover_hold_down_seconds: float = 30.0,
         withdrawal_stability_observations: int = 3,
+        admission: Callable[[], str] | None = None,
     ) -> None:
         if hashlib.sha256(bgp_policy_json.encode()).hexdigest() != binding.bgp_policy_digest:
             raise ValueError("Committed BGP policy manifest digest mismatch")
@@ -2740,6 +2751,10 @@ class BoundRouteRuntime:
         self.data_plane = data_plane
         self.backend = backend
         self.store = store
+        self.admission = admission
+        self.store.admission = admission
+        if admission is not None:
+            self.backend.admit_effect = self._admit_effect  # type: ignore[attr-defined]
         bind_route_authority = getattr(self.backend, "bind_route_authority", None)
         if callable(bind_route_authority):
             bind_route_authority(
@@ -2771,6 +2786,17 @@ class BoundRouteRuntime:
             withdrawal_stability_observations=withdrawal_stability_observations,
             route_targets=binding.route_targets,
         )
+
+    def _admit_effect(self) -> str | None:
+        if self.admission is None:
+            return None
+        from ...routing_semantics import pending_admission
+
+        admission = self.admission()
+        pending = self.store.load_pending_mutation()
+        if pending is not None:
+            pending_admission(self.store, pending.mutation, pending.context, admission)
+        return admission
 
     def _bgp(self, observed: LocalDataPlaneObservation) -> BGPRouteReadiness:
         if not self.bgp_policies:
@@ -2853,9 +2879,7 @@ class BoundRouteRuntime:
             BGPExportState.UNKNOWN: "bgp-export-unavailable",
         }.get(observed.bgp_export_state)
         passive_mode = mode is DataPlaneMode.PASSIVE
-        routing_hygiene_ready = (
-            observed.routing_hygiene_ready if mode is not DataPlaneMode.ACTIVE else True
-        )
+        routing_hygiene_ready = observed.routing_hygiene_ready
         hygiene_reason = "routing-hygiene-not-ready" if not routing_hygiene_ready else None
         verifier = getattr(self.data_plane, "origination_policy_ready", None)
         readiness = LocalReadiness(
@@ -3163,6 +3187,7 @@ class BoundRouteRuntime:
         self.store.save_ledger(ledger)
 
     def reconcile(self, action: ControllerAction) -> None | RepairDisposition:
+        self._admit_effect()
         ownership = self._ownership(require_takeover_fence=action.takeover_fence_required)
         context = self._context(action, self.binding.cluster_id)
         if not context.matches(ownership):
@@ -3267,6 +3292,7 @@ class BoundRouteRuntime:
     def _apply_mutation(
         self, mutation: RouteMutation, ledger: dict[str, ManagedRouteOwnership]
     ) -> None:
+        self._admit_effect()
         pending = self.store.load_pending_mutation()
         if pending is None or pending.mutation != mutation:
             raise RuntimeError("route mutation lacks an exact durable pending intent")
@@ -4251,6 +4277,7 @@ def build_runtime_ports(
     origination_verifier: Callable[[], bool] | None = None,
     blocked_preparer: Callable[[], None] | None = None,
     candidate_preparer: Callable[[], None] | None = None,
+    route_admission: Callable[[], str] | None = None,
 ) -> VMHARuntimePorts:
     """Construct every runtime port without connecting it to the default service."""
 
@@ -4473,10 +4500,18 @@ def build_runtime_ports(
             local_prefixes=tuple(cast(dict, config.get("gateway", {})).get("local_prefixes", ())),
             run=protection_run,
         )
+        data_plane_kwargs["underlay_verifier"] = lambda: underlay.ready(
+            {
+                "vm_ha": dict(config),
+                **{key: config.get(key) for key in ("gateway", "connections", "defaults")},
+            }
+        )
         data_plane = data_plane_factory(
             **data_plane_kwargs,
         )
         backend = route_backend_factory(sdk.client)
+        from ...routing_semantics import require as require_routing_admission
+
         routes = BoundRouteRuntime(
             binding=binding,
             local_node_id=local_node_id,
@@ -4488,6 +4523,8 @@ def build_runtime_ports(
             bgp_policy_json=bgp_json,
             expected_import_policy_digest=expected_import_policy_digest,
             clock=clock,
+            admission=route_admission
+            or (lambda: require_routing_admission(runtime_binding=binding.model_dump(mode="json"))),
         )
         peer_host, peer_port = _split_endpoint(peer.peer_endpoint)
         local_host, local_port = _split_endpoint(local.peer_endpoint)

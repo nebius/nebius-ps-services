@@ -17065,7 +17065,7 @@ def support_bundle(
     typer.echo(str(path))
     print("Contains operational identifiers. Attach only to a private support ticket.")
     print(
-        "Known credential patterns were redacted automatically. Redaction is not exhaustive; review the bundle before sharing through a private support channel."
+        "Known credential patterns were redacted and public IPs replaced with consistent aliases. Redaction is not exhaustive; review the bundle before sharing through a private support channel."
     )
     raise typer.Exit(code)
 

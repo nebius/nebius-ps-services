@@ -12074,7 +12074,7 @@ GitHub deployment and registry behavior remain unverified.
 <!-- /FEATURE: FEAT-040 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-041 reqs=REQ-041 status=ready delivery=implemented priority=P1 version=13 -->
+<!-- FEATURE: FEAT-041 reqs=REQ-041 status=ready delivery=implemented priority=P1 version=15 -->
 ### FEAT-041: Private read-only support bundle and exact activation diagnostics
 
 #### Requirements Covered
@@ -12088,6 +12088,32 @@ from installed CLI metadata. Before this change, fenced activation used a compou
 failed-predicate classifier, obscuring the original failure.
 
 #### Design Details
+
+The v4 extension preserves the operator's original YAML with targeted source-span
+replacements. A bounded in-memory snapshot supplies both diagnostic scope and the
+new YAML artifact. Existing PyYAML source marks locate scalar/anchor values; no
+schema filtering, normalization or YAML serialization is used. Preserve untouched
+bytes, comments, duplicate keys, unknown fields, line endings and multiline shape.
+Credentials use placeholders; references remain unresolved. Detect secrets in
+comments and decoded/aliased scalar values, including canonical nested tunnel PSKs.
+
+One parent-owned address policy masks public unicast IPv4/IPv6 and public-prefix
+literals after typed projection, with consistent per-bundle aliases. Preserve
+private, link-local/APIPA, loopback, shared, multicast, unspecified and documentation
+ranges and default routes. Preserve prefix lengths and distinguish address/prefix
+aliases. The alias map never leaves memory. Redaction policy v2 and archive schema
+v4 explicitly identify the new representation; no unredacted mode is added.
+
+Retain the initial snapshot and mark it changed if a bounded final read differs.
+Unsupported encoding, cyclic/ambiguous secret structures or unsafe span handling
+omit only the source artifact with explicit partial evidence. Scope admission is
+unchanged. Final scans inspect JSON keys/values, YAML source text and archive names.
+Reports, event references and hashes derive from retained sanitized data. The
+manifest records source outcome, redaction counts and sanitized checksums only.
+No new guest probes, config normalization, model calls or secret discovery occur.
+
+V4 is implemented with focused local, installed-wheel and bounded live collection
+verification described below. Historical v3 evidence remains separately qualified.
 
 A dedicated support_bundle package owns safe projection, a standard-library probe
 streamed over verified SSH, bounded orchestration and private archive publication.
@@ -12113,7 +12139,7 @@ deterministically. Inspect bounded package-worker history, prioritize unfinished
 workers and mark overflow or incomplete inspection. Preserve exact worker digests
 and product-pattern service names even before the first request is accepted.
 Observe route-fix timer state and allowlisted OS identity/version. Manifest schema is
-nebius-vpngw/support-bundle-v3 and records source, timing, outcome and omissions.
+nebius-vpngw/support-bundle-v4 and records source, timing, outcome and omissions.
 Atomic exclusive publication uses mode 0600. Exit codes are 0 complete, 1 partial,
 2 no bundle. No automatic upload. All source and archive names are product-owned.
 
@@ -12252,6 +12278,22 @@ and installed smoke tests; required release qualification and asset checks pass.
 
 #### Implementation Evidence
 
+V4 adds operator-only source-span redaction and public-address aliases. The source
+snapshot preserves comments, whitespace, line endings, unknown fields, duplicate
+keys and scalar styles; unsupported or unsafe spans omit only that artifact.
+Secret anchors, escaped values, embedded credentials and canonical nested tunnel
+PSKs receive targeted masking. References remain unresolved. JSON keys and values,
+text, source YAML and final archive names share the final privacy checks. Event IDs,
+report references and hashes derive from sanitized retained observations. A final
+bounded source read marks even comment-only concurrent changes.
+
+Source tests cover malformed tunnel collections without losing their original
+YAML. Alias collisions fail safely instead of collapsing diagnostic mapping keys.
+The guest reader remains standalone and the operational address/SSH path is
+unchanged; aliases exist only in exported evidence.
+
+The following implementation details describe the retained v3 foundation.
+
 Support-bundle v3 implements live cloud and SSH acquisition using shared access
 normalization, existing exact host trust and operator identity precedence. It
 reports acquisition stages, closed failure codes and SSH-attempt evidence, plus
@@ -12295,6 +12337,36 @@ multiline state across reads and journal entries, even after earlier credential
 fields on the same line. No access or trust policy changes.
 
 #### Verification Evidence
+
+V4 focused collector tests and the installed-wheel build smoke passed 232 cases.
+The smoke proves both new modules are packaged and the installed CLI emits the
+original YAML with secret/public-address substitutions. Scoped Ruff, formatting,
+mypy and Markdown checks passed. Independent changed-scope review closed the
+identified privacy and malformed-input findings.
+
+An authorized public-command trial from frozen complete source/build inputs
+collected both members, with 118 and 119 successful guest probes. Independent
+checks verified exact original YAML bytes outside intended substitutions, absence
+of configured literal PSKs and public addresses across raw and decoded exports,
+all manifest/report hashes, ZIP integrity and owner-only permissions. The input
+file and frozen source remained unchanged. Artifact provenance was available.
+
+The first live trial exposed public endpoints immediately after strongSwan's
+ellipsis separator. A synthetic reproducer isolated the address matcher; the
+owner repair and archive regression now cover that delimiter, and the fresh
+trial passed the independent scan. The first trial's artifact-provenance gap
+came from incomplete frozen build inputs and was corrected in the trial setup;
+it was not attributed to the product. No gateway mutation or recovery occurred.
+
+The final archive correctly remains partial because journal history reaches
+existing bounds and oversized single-line firewall text is discarded by the
+credential-safe line cap. Structured firewall evidence remains available without
+structural truncation. These are explicit evidence limits, not access failures.
+Native Linux/frozen-binary, CI and exact-commit release qualification were not
+repeated for v4; publication and customer gateway recovery remain outside scope.
+
+The following verification evidence predates v4 and does not independently qualify
+its source-YAML or public-address changes.
 
 Coverage regressions reproduced rejection of journal byte-array messages and
 premature firewall traversal truncation before repair. All 171 focused collector
@@ -12916,6 +12988,208 @@ The retirement implementation follows the official
 disabling or reloading a unit alone does not establish that its service stopped.
 
 <!-- /FEATURE: FEAT-044 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-045 reqs=REQ-044,REQ-011,REQ-043 status=ready delivery=implemented priority=P1 version=2 -->
+### FEAT-045: Owned persistent underlay routing and apply activation
+
+#### Requirements Covered
+
+- REQ-044: Preserve local and control reachability through VPN aggregates.
+- REQ-011: Keep passive maintenance independent from forwarding authority.
+- REQ-043: Transparently converge the selected wheel through normal apply.
+
+#### Context Evidence
+
+In v0.6.7, the routing guard deleted scope-link local prefixes while its
+replacement helper returned without creating routes. FRR duplicated that no-op. Physical /32 guests
+with a less-specific VPN aggregate consequently lack a more-specific local
+path. Ordinary cloud admission excludes all overlapping local ranges.
+
+#### Design Details
+
+A shared agent underlay owner derives workload prefixes, exact HA peer /32 and
+outer endpoint /32 routes; default prefixes are not synthesized. Validate DHCP
+router and primary NIC provenance without using a possibly tunneled route lookup.
+Use the actual networkd matching file and a fixed product-owned drop-in under
+its /etc/systemd/network basename. Routes use Gateway=_dhcp4, GatewayOnLink,
+main table, numeric DHCP protocol 16 and metric 50; the verified NIC supplies
+source IP. Native Ubuntu systemd 255 assigns DHCP protocol to Gateway=_dhcp4
+routes; symbolic Protocol=dhcp is not accepted by networkd.
+Match networkd DHCP classless-route precedence per destination when selecting
+the physical router for kernel repair; do not substitute the default router.
+Record exact route tuples, config/boot/NIC/network-file identities and owned
+bytes in a pending/committed ledger. Never adopt or delete routes by prefix.
+Preserve valid kernel-connected coverage; reject conflicting foreign intent.
+
+Fenced apply and boot may reload/reconfigure networkd only after unmanaged-route
+preservation checks; ambiguous collateral effects fail closed. The periodic
+owner only repairs exact missing owned kernel routes, without network reload.
+Boot preparation follows network-online and the HA guard and is required by
+protocol/agent/controller services. Apply calls the module directly under the
+existing locks, never starts a lock-taking service while holding that lock.
+The controller verifies proof without new filesystem write permissions. New
+assets join deployment, quiescence, repair and exact retirement inventories;
+dynamic network drop-ins have a separate narrowly validated ownership ledger.
+
+Preserve longest-prefix behavior and existing no-leak destination protection.
+Admit ordinary RFC1918 remote strict supernets containing local exclusions while
+retaining other admission exclusions and HA behavior. Preserve original cloud
+prefixes. A semantic admission receipt binds revision, policy/binding and exact approved
+deployment transaction after route/no-leak proof. Publish it at deployment-only
+pre-start activation boundaries (HA) or final guest confirmation (ordinary),
+never automatic agent reconciliation. Admission does not attest overall apply
+completion: HA requires cloud reconciliation before completion, so using a
+completed-apply receipt as its prerequisite would deadlock activation. Fenced deployment first
+settles predecessor plans as recorded before package/configuration replacement.
+The bounded settlement owner retains the original context, route intent and
+idempotency identities, reproves current cloud ownership and forwarding fences,
+and may complete or compensate only that operation. Unknown predecessor code or
+cloud state blocks before installation. It never invokes general reconciliation.
+Runtime cannot replay or mutate without current activation; pending HA mutations
+carry an exact admission sidecar and ordinary runtime plans carry the admission
+digest. Workstation route submission checks installed guest admission and the exact
+desired configuration before recording a replayable request, then rechecks
+immediately before each cloud write and replay.
+Planning remains available before upgrade. Both handoff and guarded package
+installation settle predecessor intent before native or Python replacement.
+Package copying or unchanged config alone is insufficient.
+
+#### Selected Option
+
+One shared persistent route owner integrated into normal apply and boot; no new
+public interface. Specific peer advertisements remain recommended configuration.
+
+#### Alternatives Considered
+
+Reject manual routes (nonpersistent), global ManageForeignRoutes changes
+(unrelated ownership), a second routing stack/table (unnecessary migration),
+aggregate subtraction (provider local precedence), and HA-only fixes (same
+ordinary data-path limitation). Full-tunnel expansion is deferred.
+
+#### Implementation Boundaries
+
+Agent route guard, ordinary and HA lifecycle, deployed units, cloud policy and
+apply receipts; docs/status/support evidence follow those owners. No customer
+mutation, public schema change, new runtime dependency or compatibility shim.
+
+#### Test-First Success Criteria
+
+- TDD-001: A synthetic /32 physical guest with an off-subnet DHCP router and broad learned
+VPN aggregate retains peer, transport and workload paths without manual routes.
+
+#### Validation Plan
+
+Run focused tests, repository checks/build and native isolated systemd harness;
+then qualify the frozen candidate in an isolated Nebius lab before recommending.
+
+#### Test Plan
+
+Ordinary and HA static/BGP, unchanged/default control cases, exact ownership
+conflicts, more-specific VPN routes, no-leak withdrawal, DHCP/reboot/timer,
+upgrade, interrupted recovery and failover/failback with independent packet proof.
+
+#### Evaluation Plan
+
+Keep local tests, native systemd behavior and live provider acceptance distinct.
+Retain failed/intervened trials; mocks and API success cannot certify traffic.
+
+#### Rollout And Rollback
+
+Install the qualified CLI and use normal apply. Preserve predecessors and owned
+journals on failure. Keep fencing when route verification fails; no blind binary
+downgrade or foreign cleanup. Customer operator removes only their own temporary
+workarounds after validating narrowed advertisements during maintenance.
+
+#### Done Definition
+
+Implementation, aligned documentation and tests pass; lab qualification is
+required before release recommendation, independently of local implementation.
+The explicit v0.6.8 release exception waives live validation throughout review,
+merge and publication. Local and required CI checks remain mandatory; earlier
+failed or incomplete trials retain their original disposition.
+
+#### Implementation Evidence
+
+- `agent/underlay.py` owns persistent networkd intent and exact kernel repair;
+  agent readiness, renderers, route maintenance and packaged systemd dependencies
+  share its proof. Unit inventories include the new owner.
+- `routing_semantics.py` binds activation to the installed package and policy;
+  ordinary and HA runtime effects and workstation route submission verify it.
+- `ha_route_settlement.py` preserves predecessor context and idempotency through
+  deployment-only completion or compensation before package/config replacement.
+- Ordinary prefix policy, support-bundle projection, README and Unreleased
+  changelog match the new behavior. No public flags or configuration fields were added.
+
+#### Verification Evidence
+
+- Final source: 7,968 unit tests passed; Ruff, mypy (233 source files), and
+  production wheel build passed. Development artifact SHA-256:
+  `96c7df283c01bf0b67d6465dbd65d211a12c2f32c894f17bd50663d291d8b8c2`.
+- Native Ubuntu 24.04/systemd 255: three focused tests passed with real DHCP,
+  an off-subnet router, persistent route reload, renewal, exact repair, packaged
+  boot ordering and ordinary-active/HA-passive periodic entry points. The passive
+  checkpoint was a fixture, not a full activation trial. A broader native run
+  passed seven tests before the host kernel rejected XFRM device creation;
+  this does not qualify the full native matrix.
+- Isolated Nebius/GCP HA BGP lab: normal upgrade and unchanged reapply passed
+  with stable admission identity, independently healthy active/standby roles,
+  and bidirectional workload traffic. A later aggregate trial learned both
+  private summaries and retained every protected physical route, with successful
+  five-packet checks in both directions. Its agent, underlay and systemd files
+  are byte-identical to the final build; later changes tighten workstation
+  admission and guarded predecessor settlement.
+- The 70-second aggregate observation retained healthy roles and valid underlay
+  at every sampled checkpoint but received only 69 of 70 packets in each
+  direction. Its all-packets-reply criterion did not pass; the cause is not
+  established. Do not infer sustained loss-free forwarding from command success.
+- DHCP renewal requests were accepted, followed by a brief owner fence/recovery.
+  Protocol restart began before independent standby recovery was established.
+  Subsequent health, routes and packets passed, but this combined trial proves
+  neither hitless DHCP renewal nor isolated HA recovery after renewal.
+- Retained unsuccessful fixture trials: a copied YAML lacked its adjacent
+  lifecycle sidecar; a later apply awaited exact configured BGP prefixes that
+  the peer had not yet advertised. Correcting those prerequisites and resuming
+  the recorded operation succeeded; neither fixture repair is a product fix.
+- The final frozen candidate completed normal apply with the original lab
+  configuration, all readiness boundaries reported ready, and no pending steps.
+  Independent checks confirmed the final artifact on both guests, healthy active
+  and passive roles, and five of five packets in each direction. Original YAML
+  bytes and the peer router configuration were restored; complete workload cloud
+  route inventories and both kernel tables contained no temporary aggregates.
+- A separate 70-second observation after restoration received 70 of 70 packets
+  toward Nebius and 69 of 70 toward the peer; all eight role and underlay samples
+  per guest remained healthy. Loss therefore also occurred with specific
+  prefixes. Bounded owner journals showed no fencing, underlay failure, or
+  networkd event at the sampled loss times; this does not establish the cause.
+  Neither short observation qualifies sustained forwarding or a complete
+  five-minute maintenance-timer cycle.
+- Delivery remains implemented. Full ordinary/static live coverage, failover,
+  failback, reboot, repeated loss-budget trials and the complete release matrix
+  remain unqualified. At that checkpoint no release was published or recommended.
+- Release review reproduced unmanaged IPv4/IPv6 route and policy-rule loss risks
+  before networkd reconfiguration. All-family/all-table inventory now rejects
+  collateral unmanaged state while preserving kernel and exact owned routes.
+  Focused underlay and support-bundle regressions passed (95 tests). Native
+  fixture coverage is committed for CI; this source check is not live proof.
+- Release CI passed 81 native cases before the BGP restart fixture failed its
+  baseline readiness check: static namespaces have no provider DHCP/networkd
+  deployment. Native BGP fixtures now declare deployment admission and physical
+  underlay as prerequisite inputs, retaining real SA/XFRM, FRR and forwarding
+  assertions. Separate native underlay cases retain real DHCP/networkd coverage.
+  The fixture correction passed 52 composed/qualification-selection checks in a
+  restricted local container. The first native replay again passed 81 cases and
+  failed baseline routing hygiene. An isolated native strongSwan reproduction
+  proved that startup creates a table-220 rule even with route installation
+  disabled, and that the real product cleanup restores hygiene. Both BGP drivers
+  now perform that cleanup before declaring their active fixture checkpoint;
+  readiness and transition assertions remain real. Complete native replay is
+  required to verify the corrected fixture beyond this focused reproduction.
+- The operator explicitly accepted the v0.6.8 live-validation waiver; unresolved
+  loss and incomplete ordinary/static, failover/failback, reboot and sustained
+  traffic qualification remain limitations. Delivery remains implemented.
+
+<!-- /FEATURE: FEAT-045 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

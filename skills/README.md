@@ -103,7 +103,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Skill Catalog
 
-The catalog contains 75 flat skill folders with shared execution instructions,
+The catalog contains 77 flat skill folders with shared execution instructions,
 native invocation controls, and separate standard, host and distribution checks.
 Stateful workflows use the selected host's private home, identity and hook
 adapters. Read the [executing-agent contract](global-context-management/references/agent-hosts.md)
@@ -205,6 +205,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `github-report` | Implicit allowed | Report completed GitHub activity grouped by human contributor and one shared open backlog; filter users by login/profile-name substring and retain dated roles, folder evidence, unique item counts and whole-PR metrics. |
 | `commit` | Implicit allowed | Create one local commit with task-scoped safe retries for the complete repository diff; reports receipt-capture failures, stages with repo-root `git add -A` inside the exact transaction and never pushes. |
 | `commit-push` | Implicit allowed | Commit all current feature-branch changes with safe no-commit retries and push the branch to `origin` without opening a pull request. |
+| `create-branch` | Explicit only | Update origin’s local default safely and switch to a new named or generated branch; preserve previous feature history and local work. |
 | `create-pr` | Explicit only | Create or reuse GitHub pull requests and continue validated repairs across frozen targets with recorded synchronization and explicit task closure; preserve exact-SHA publication-only behavior for active Agentic SDLC runs. |
 | `merge-pr` | Explicit only | Merge a ready GitHub PR without admin bypass; verify result ancestry, explicit result CI and configured Pages publication. |
 | `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
@@ -476,6 +477,14 @@ explicitly starts the request with `Run` or `Execute` (or equivalent);
 otherwise read the script or report the command that would be used.
 
 ## Skill Details
+
+### Create a fresh branch
+
+Use `$create-branch` to fetch origin's actual default, update its local branch
+safely and switch to a generated `<repository>-<eight-character-suffix>` branch.
+Use `$create-branch --branch <name>` for an exact name; `--help` is report-only.
+Requires a clean ordinary checkout. The previous feature branch is preserved;
+no commit or push is performed. See [Create Branch](create-branch/README.md).
 
 The catalog above is the complete live index. This section gives extra context
 for the broader, commonly reused skills and groups the Agentic SDLC phases

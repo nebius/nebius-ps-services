@@ -1371,6 +1371,8 @@ def project(
         return project_journal(value, omitted, limited)
     if depth == 0 and isinstance(value, dict) and isinstance(value.get("nftables"), list):
         return project_firewall(value, omitted, limited)
+    if depth == 0 and isinstance(value, dict) and value.get("schema") == "nebius-vpngw.underlay.v1":
+        value = {**value, "underlay_intent_sha256": value.get("intent")}
     if _seen is None:
         _seen = set()
     if _budget is None:
@@ -1557,5 +1559,36 @@ ENUMS |= frozenset(
         "collector-ssh",
         "ha-heartbeat-snapshot",
         "stale",
+    }
+)
+
+# Persistent routing receipts contain no credentials. Export only typed proof
+# identities and route destinations; owned configuration bytes stay omitted.
+HASH_KEYS |= frozenset(
+    {
+        "config_digest",
+        "preparation_proof",
+        "pending_sha256",
+        "ledger_before",
+        "ledger_after",
+        "admission",
+        "underlay_intent_sha256",
+        "package_identity",
+        "runtime_binding",
+        "artifact",
+    }
+)
+VALUE_KEYS |= frozenset({"destinations", "network", "dhcp_routes", "phase", "revision", "mode"})
+ENUMS |= frozenset(
+    {
+        "nebius-vpngw.underlay.v1",
+        "nebius-vpngw.routing-admission.v1",
+        "nebius-vpngw.route-pending-admission.v1",
+        "nebius-vpngw.route-settlement.v1",
+        "persistent-underlay-private-supernets-v1",
+        "pending",
+        "committed",
+        "ordinary",
+        "ha",
     }
 )

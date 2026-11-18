@@ -95,6 +95,8 @@ def test_managed_child_reqids_stay_outside_dynamic_allocator_range(sample_config
 def test_failed_daemon_restart_never_loads_policy_into_previous_allocator(
     tmp_path, monkeypatch, sample_config, failure
 ):
+    monkeypatch.setattr("nebius_vpngw.agent.underlay.preflight_reconfigure", lambda cfg: None)
+    monkeypatch.setattr("nebius_vpngw.agent.underlay.reconcile_locked", lambda cfg, **kwargs: None)
     monkeypatch.setattr(strongswan_renderer, "STRONGSWAN_CONF_DIR", tmp_path / "charon")
     monkeypatch.setattr(strongswan_renderer, "SWANCTL_CONF", tmp_path / "swanctl.conf")
     monkeypatch.setattr(strongswan_renderer, "IPSEC_CONF", tmp_path / "ipsec.conf")
@@ -247,6 +249,8 @@ def test_active_render_uses_one_duplicate_safe_start_path(
     monkeypatch,
     sample_config: dict,
 ) -> None:
+    monkeypatch.setattr("nebius_vpngw.agent.underlay.preflight_reconfigure", lambda cfg: None)
+    monkeypatch.setattr("nebius_vpngw.agent.underlay.reconcile_locked", lambda cfg, **kwargs: None)
     calls: list[list[str]] = []
 
     def run(argv, **kwargs):

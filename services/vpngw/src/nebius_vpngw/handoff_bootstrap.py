@@ -39,6 +39,7 @@ SOURCES = (
     ("nebius_vpngw.agent.vm_ha_checkpoint", "agent/vm_ha_checkpoint.py"),
     ("nebius_vpngw.agent.vm_ha.mtls", "agent/vm_ha/mtls.py"),
     ("nebius_vpngw.checkpoint_upgrade", "checkpoint_upgrade.py"),
+    ("nebius_vpngw.ha_route_settlement", "ha_route_settlement.py"),
     ("_vpngw_ha_repair", "ha_repair.py"),
     ("nebius_vpngw.package_worker", "package_worker.py"),
     ("_vpngw_python_package_recovery", "python_package_recovery.py"),
