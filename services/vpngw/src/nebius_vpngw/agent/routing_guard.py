@@ -59,7 +59,6 @@ import ipaddress
 import json
 import logging
 import os
-import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -187,6 +186,9 @@ def enforce_vm_ha_passive_routing_hygiene_locked(
         guard_path=guard_path,
         boot_id_path=boot_id_path,
     )
+    from .underlay import reconcile_locked
+
+    reconcile_locked(cfg)
     table_removed = _remove_table_220()
     apipa_removed = _remove_broad_apipa_route()
     rules = run(["ip", "rule", "show"], capture_output=True, text=True)
@@ -293,6 +295,38 @@ def require_vm_ha_route_maintenance_ready(
 def enforce_periodic_routing_invariants(cfg: dict[str, Any]) -> None:
     """Run the role-appropriate route repair under the shared routing lock."""
 
+    if cfg.get("vm_ha") is not None:
+        from contextlib import ExitStack
+
+        from ..ha_repair import writer_locks
+        from .main import _vm_ha_writer_inhibition_operation_id
+        from .vm_ha.auto_healing import require_auto_healing_writer_quiescent
+
+        state_dir = VM_HA_STATUS_PATH.parent
+        with ExitStack() as stack:
+            try:
+                stack.enter_context(writer_locks(state_dir, deadline=time.monotonic() + 0.1))
+            except RuntimeError:
+                print("[RoutingGuard] HA writer lock held; skipping")
+                return
+            require_auto_healing_writer_quiescent(state_dir)
+            ha = cfg["vm_ha"]
+            if (
+                _vm_ha_writer_inhibition_operation_id(
+                    state_dir=state_dir,
+                    cluster_id=ha["cluster_id"],
+                    node_id=ha["node"]["node_id"],
+                    generation_id=ha["generation"]["generation_id"],
+                )
+                is not None
+            ):
+                return
+            mode = _vm_ha_route_maintenance_mode(cfg)
+            if mode == "passive":
+                enforce_vm_ha_passive_routing_hygiene_locked(cfg)
+            else:
+                _enforce_routing_invariants_locked(cfg)
+        return
     lock_fd = acquire_routing_lock(blocking=False)
     if lock_fd is None:
         print("[RoutingGuard] Lock held; skipping")
@@ -458,7 +492,6 @@ def _enforce_routing_invariants_locked(cfg: dict[str, Any]) -> None:
         "broad_apipa_removed": False,
         "orphaned_apipa_removed": 0,
         "bgp_peer_routes_ensured": 0,
-        "scope_link_routes_removed": 0,
         "local_prefix_routes_fixed": 0,
     }
 
@@ -484,13 +517,10 @@ def _enforce_routing_invariants_locked(cfg: dict[str, Any]) -> None:
     # INVARIANT 2: Remove broad APIPA route if present (keep metadata-specific routes)
     stats["broad_apipa_removed"] = _remove_broad_apipa_route()
 
-    # INVARIANT 3: Remove scope link routes for local prefixes
-    # "scope link" routes mark prefixes as directly connected, breaking forwarding
-    # These must be routed via gateway instead to enable VPN traffic
-    stats["scope_link_routes_removed"] = _remove_scope_link_local_prefixes(cfg)
+    # Physical destinations remain reachable even when VPN aggregates contain them.
+    from .underlay import reconcile_locked
 
-    # INVARIANT 4: Ensure local prefix routes exist and are canonical
-    stats["local_prefix_routes_fixed"] = ensure_local_prefix_routes(cfg)
+    stats["local_prefix_routes_fixed"] = reconcile_locked(cfg)
 
     # INVARIANT 5: Clean up unexpected APIPA routes (declarative management)
     # Only APIPA routes explicitly defined in config should exist.
@@ -505,7 +535,6 @@ def _enforce_routing_invariants_locked(cfg: dict[str, Any]) -> None:
     route_cache_needed = (
         stats["table_220_removed"]
         or stats["broad_apipa_removed"]
-        or stats["scope_link_routes_removed"] > 0
         or stats["local_prefix_routes_fixed"] > 0
         or stats["orphaned_apipa_removed"] > 0
     )
@@ -516,7 +545,6 @@ def _enforce_routing_invariants_locked(cfg: dict[str, Any]) -> None:
         or stats["table_220_removed"]
         or stats["broad_apipa_removed"]
         or stats["orphaned_apipa_removed"] > 0
-        or stats["scope_link_routes_removed"] > 0
         or stats["local_prefix_routes_fixed"] > 0
     ):
         # Something was fixed
@@ -524,7 +552,6 @@ def _enforce_routing_invariants_locked(cfg: dict[str, Any]) -> None:
             f"[RoutingGuard] Summary: sysctls_fixed={stats['sysctls_fixed']} "
             f"table_220_removed={stats['table_220_removed']} "
             f"broad_apipa_removed={stats['broad_apipa_removed']} "
-            f"scope_link_routes_removed={stats['scope_link_routes_removed']} "
             f"local_prefix_routes_fixed={stats['local_prefix_routes_fixed']} "
             f"orphaned_apipa_removed={stats['orphaned_apipa_removed']} "
             f"bgp_peer_routes_ensured={stats['bgp_peer_routes_ensured']}"
@@ -695,295 +722,6 @@ def _flush_route_cache() -> None:
     result = run(["ip", "route", "flush", "cache"], capture_output=True, text=True)
     if result.returncode != 0:
         print(f"[RoutingGuard] WARNING: Failed to flush route cache: {result.stderr.strip()}")
-
-
-def _remove_scope_link_local_prefixes(cfg: dict[str, Any]) -> int:
-    """Remove scope link routes for local prefixes that break packet forwarding.
-
-    Problem:
-    - FRR may add "scope link" routes for local_prefixes to enable BGP advertisement
-    - Example: "10.49.0.0/16 dev eth0 scope link"
-    - "scope link" marks the prefix as directly connected on eth0
-    - This causes the kernel to treat packets from that prefix as local delivery
-    - Packets arrive at the gateway but are NOT forwarded to VPN tunnels
-
-    Solution:
-    - Remove any "scope link" routes for prefixes in gateway.local_prefixes
-    - These should instead route via the VPC gateway (169.254.169.1)
-    - FRR renderer has been updated to create proper routes
-    - This guard removes any that slip through
-
-    Args:
-        cfg: Gateway configuration containing local_prefixes
-
-    Returns:
-        Number of scope link routes removed
-    """
-    local_prefixes = cfg.get("gateway", {}).get("local_prefixes", [])
-    if not local_prefixes:
-        return 0
-
-    removed_count = 0
-
-    for prefix in local_prefixes:
-        # Get the current route for this prefix
-        result = run(["ip", "route", "show", prefix], capture_output=True, text=True)
-
-        if result.returncode != 0 or not result.stdout.strip():
-            # No route exists for this prefix
-            continue
-
-        route_info = result.stdout.strip()
-
-        # Check if this is a scope link route
-        if "scope link" in route_info:
-            # This is a problematic scope link route - remove it
-            result = run(["ip", "route", "del", prefix], capture_output=True, text=True)
-            if result.returncode == 0:
-                print(
-                    f"[RoutingGuard] ⚠ CRITICAL: Removed scope link route that breaks forwarding: {prefix}"
-                )
-                print(f"[RoutingGuard]   Was: {route_info}")
-                print("[RoutingGuard]   This route prevented VPN traffic forwarding!")
-                removed_count += 1
-            else:
-                print(
-                    f"[RoutingGuard] ⚠ Failed to remove scope link route for {prefix}: {result.stderr}"
-                )
-
-    if removed_count > 0:
-        print(f"[RoutingGuard] ✓ Removed {removed_count} scope link route(s) for local prefixes")
-
-    return removed_count
-
-
-def _collect_remote_prefixes(
-    cfg: dict[str, Any],
-) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
-    prefixes: list[str] = []
-
-    for conn in cfg.get("connections", []):
-        prefixes.extend(conn.get("remote_prefixes", []) or [])
-        conn_bgp = conn.get("bgp", {}) or {}
-        prefixes.extend(conn_bgp.get("remote_prefixes", []) or [])
-
-        for tun in conn.get("tunnels", []):
-            static_routes = tun.get("static_routes", {}) or {}
-            prefixes.extend(static_routes.get("remote_prefixes", []) or [])
-            prefixes.extend(tun.get("remote_prefixes", []) or [])
-
-    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
-    for prefix in prefixes:
-        try:
-            networks.append(ipaddress.ip_network(prefix, strict=False))
-        except ValueError:
-            print(f"[RoutingGuard] WARNING: Skipping invalid remote prefix: {prefix}")
-    return networks
-
-
-def ensure_local_prefix_routes(cfg: dict[str, Any], interface: str = "eth0") -> int:
-    """CRITICAL: Adding kernel routes for local_prefixes that represent SOURCE subnets
-    breaks packet forwarding from workload VMs!
-
-    When a packet from 10.49.0.47 arrives at the gateway destined for 10.10.0.2:
-    1. Gateway must FORWARD it to the VPN tunnel (xfrm0)
-    2. Route "10.49.0.0/16 via 169.254.169.1 dev eth0" makes the gateway route packets
-       FROM the workload subnet BACK to the VPC gateway instead of forwarding to VPN
-    3. This breaks all connectivity
-
-    Solution: Use FRR's "no bgp network import-check" instead to allow advertising without
-    kernel routes. This is configured in frr_renderer.py.
-
-    Args:
-        cfg: Gateway configuration (unused)
-        interface: Interface (unused)
-
-    Returns:
-        Always 0 (no routes added)
-    """
-    print(
-        "[RoutingGuard] Skipping local_prefix routes (would break packet forwarding from workload VMs)"
-    )
-    return 0
-
-    local_prefixes = cfg.get("gateway", {}).get("local_prefixes", [])
-    if not local_prefixes:
-        return 0
-
-    blocked_networks = [ipaddress.ip_network("169.254.0.0/16")]
-    blocked_networks.extend(_collect_remote_prefixes(cfg))
-
-    route_metric = "50"
-    changes_made = False
-    prefixes_fixed = 0
-
-    # Get the default gateway IP for proper routing
-    try:
-        result = run(
-            ["ip", "route", "show", "default"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0 and "via" in result.stdout:
-            # Extract gateway IP (e.g., "default via 169.254.169.1 dev eth0")
-            gateway_ip = result.stdout.split("via")[1].split()[0]
-        else:
-            print(
-                "[RoutingGuard] WARNING: Could not determine default gateway, skipping local prefix routes"
-            )
-            return 0
-    except Exception as e:
-        print(f"[RoutingGuard] WARNING: Error getting default gateway: {e}")
-        return 0
-
-    def _parse_route(line: str) -> tuple[str, dict[str, str | bool]] | None:
-        tokens = line.split()
-        if not tokens:
-            return None
-        if tokens[0].endswith(":"):
-            tokens = tokens[1:]
-        if not tokens:
-            return None
-        attrs: dict[str, str | bool] = {
-            "via": "",
-            "dev": "",
-            "metric": "",
-            "proto": "",
-            "scope": "",
-            "src": "",
-            "onlink": False,
-        }
-        i = 1
-        while i < len(tokens):
-            tok = tokens[i]
-            if tok in ("via", "dev", "metric", "proto", "scope", "src"):
-                if i + 1 < len(tokens):
-                    attrs[tok] = tokens[i + 1]
-                    i += 2
-                    continue
-            if tok == "onlink":
-                attrs["onlink"] = True
-            i += 1
-        return tokens[0], attrs
-
-    def _route_is_canonical(line: str, prefix: str) -> bool:
-        parsed = _parse_route(line)
-        if not parsed:
-            return False
-        route_prefix, attrs = parsed
-        return (
-            route_prefix == prefix
-            and attrs.get("via") == gateway_ip
-            and attrs.get("dev") == interface
-            and attrs.get("metric") == route_metric
-            and bool(attrs.get("onlink"))
-        )
-
-    def _delete_route(line: str) -> bool:
-        parsed = _parse_route(line)
-        if not parsed:
-            return False
-        prefix, attrs = parsed
-        cmd = ["ip", "route", "del", prefix]
-        if attrs.get("via"):
-            cmd.extend(["via", str(attrs["via"])])
-        if attrs.get("dev"):
-            cmd.extend(["dev", str(attrs["dev"])])
-        if attrs.get("metric"):
-            cmd.extend(["metric", str(attrs["metric"])])
-        if attrs.get("proto"):
-            cmd.extend(["proto", str(attrs["proto"])])
-        if attrs.get("scope"):
-            cmd.extend(["scope", str(attrs["scope"])])
-        if attrs.get("src"):
-            cmd.extend(["src", str(attrs["src"])])
-        if attrs.get("onlink"):
-            cmd.append("onlink")
-        result = run(cmd, capture_output=True, text=True, timeout=5, check=False)
-        if result.returncode == 0:
-            print(f"[RoutingGuard] Removed duplicate route: {line}")
-            return True
-        print(f"[RoutingGuard] WARNING: Failed to remove route: {line}: {result.stderr}")
-        return False
-
-    for prefix in local_prefixes:
-        try:
-            local_net = ipaddress.ip_network(prefix, strict=False)
-        except ValueError:
-            print(f"[RoutingGuard] WARNING: Skipping invalid local prefix: {prefix}")
-            continue
-        if local_net.version != 4:
-            print(f"[RoutingGuard] WARNING: Skipping non-IPv4 local prefix: {prefix}")
-            continue
-        if any(
-            local_net.version == blocked.version and local_net.overlaps(blocked)
-            for blocked in blocked_networks
-        ):
-            print(
-                f"[RoutingGuard] WARNING: Skipping local prefix {prefix} due to overlap with remote/APIPA"
-            )
-            continue
-
-        existing_routes: list[str] = []
-        result = run(
-            ["ip", "-o", "route", "show", prefix],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            existing_routes = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-
-        if len(existing_routes) == 1 and _route_is_canonical(existing_routes[0], prefix):
-            continue
-
-        prefix_changed = False
-        for line in existing_routes:
-            if _delete_route(line):
-                changes_made = True
-                prefix_changed = True
-
-        # Add static route via gateway (NOT scope link)
-        # This allows BGP to advertise the prefix while enabling proper forwarding
-        try:
-            run(
-                [
-                    "ip",
-                    "route",
-                    "replace",
-                    prefix,
-                    "via",
-                    gateway_ip,
-                    "dev",
-                    interface,
-                    "onlink",
-                    "metric",
-                    route_metric,
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            print(f"[RoutingGuard] Ensured local route: {prefix} via {gateway_ip} dev {interface}")
-            changes_made = True
-            prefix_changed = True
-        except subprocess.CalledProcessError as e:
-            print(f"[RoutingGuard] WARNING: Failed to add route for {prefix}: {e.stderr}")
-
-        if prefix_changed:
-            prefixes_fixed += 1
-
-    if changes_made:
-        run(
-            ["ip", "route", "flush", "cache"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-
-    return prefixes_fixed
 
 
 def _cleanup_unexpected_apipa_routes(cfg: dict[str, Any]) -> int:

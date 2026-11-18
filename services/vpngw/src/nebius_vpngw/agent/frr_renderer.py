@@ -96,31 +96,6 @@ class FRRRenderer:
             return True
         return False
 
-    def ensure_local_prefix_routes(self, cfg: dict[str, Any]) -> None:
-        """Ensure static routes exist for local_prefixes so BGP can advertise them.
-
-        BGP requires routes to exist in the kernel routing table before advertising them.
-        This is controlled by FRR's 'import-check' feature (enabled by default).
-        Without a kernel route, BGP will mark the prefix as 'inaccessible' and not advertise it.
-
-        CRITICAL: Adding routes for local_prefixes that represent the source subnets
-        (workload VMs) breaks packet forwarding! The gateway receives packets FROM these
-        subnets and must forward them to the VPN tunnel, not route them back.
-
-        Solution: Disable import-check in BGP configuration and skip adding these routes.
-        This allows BGP to advertise local_prefixes without breaking packet forwarding.
-
-        Args:
-            cfg: Gateway configuration dictionary
-        """
-        # DO NOT add routes for local_prefixes as they break packet forwarding
-        # from the workload subnets. BGP will be configured with 'no bgp network import-check'
-        # to allow advertising these prefixes without requiring kernel routes.
-        print(
-            "[FRR] Skipping local_prefix routes (would break packet forwarding from workload VMs)"
-        )
-        return
-
     def render_and_apply(
         self,
         cfg: dict[str, Any],
@@ -163,15 +138,7 @@ class FRRRenderer:
         # Gateway-level local_prefixes: single source of truth for Nebius-side subnets
         gateway_local_prefixes: list[str] = gateway.get("local_prefixes", [])
 
-        # Ensure kernel routes exist for local_prefixes so BGP can advertise them
-        if (
-            activate
-            and rendered_files is None
-            and advertise_local_prefixes
-            and gateway_local_prefixes
-        ):
-            self.ensure_local_prefix_routes(cfg)
-
+        # Local physical routing is owned by underlay, independently of BGP export.
         bgp_defaults = BGPDefaults()
         hold = d_bgp.get("hold_time_seconds", bgp_defaults.hold_time_seconds)
         keep = d_bgp.get("keepalive_seconds", bgp_defaults.keepalive_seconds)

@@ -4008,6 +4008,47 @@ connections:
         inner_remote_ip: "169.254.10.2"
 ```
 
+### Local paths and remote summaries
+
+Use `gateway.local_prefixes` for the Nebius workload subnets reachable over the
+VPN. Keep the gateway management subnet separate from the advertised workload
+ranges. Configure `connections[].remote_prefixes` with the actual on-premises
+prefixes and have the peer advertise those prefixes over BGP. Avoid duplicate
+prefix lists in the connection and its `bgp` block; the connection-level list
+takes precedence.
+
+On the supported Ubuntu/networkd single-primary-NIC topology, normal `apply`
+persists physical routes for local workload prefixes, the HA peer, and IPsec
+outer endpoints. This includes a DHCP `/32` interface with an off-subnet router.
+More-specific local routes preserve local reachability when a remote RFC1918
+summary contains those ranges; narrower remote destinations still use normal
+longest-prefix routing. This does not support duplicate addresses across sites,
+VRFs, multiple primary NICs, IPv6, or a new full-tunnel mode.
+
+Install the updated CLI and use normal `apply`; there is no additional repair
+flag for persistent routing. The deployment verifies route persistence and
+destination protection before admitting the installed routing behavior. A
+package copy alone cannot enable cloud-route writers. `add-routes-local` also
+checks the installed gateway's admission before each cloud mutation; deploy
+changed YAML with `apply` first. Interrupted cloud changes must settle under
+their recorded ownership before upgrade.
+
+Existing operator-added routes are never adopted or deleted automatically.
+Before network reconfiguration, apply checks IPv4 and IPv6 routes in every table,
+routes without an interface, and global policy rules. Unmanaged state that
+networkd could remove blocks reconfiguration; kernel-owned state is preserved.
+If apply reports an unmanaged physical-route conflict, review and remove the
+temporary workaround during the maintenance window, then rerun the same apply.
+Do not add a scope-link route for the entire VPC as a persistence workaround.
+The product owns only its networkd drop-in and exact recorded kernel routes;
+periodic maintenance does not reload networking. Support bundles include the
+underlay service and sanitized routing-admission evidence.
+
+Native BGP namespace tests supply their static physical links and deployment
+admission as fixture inputs. They exercise real IPsec/FRR restart and owner
+behavior, including real routing cleanup before the declared active checkpoint;
+separate DHCP/networkd fixtures qualify persistent underlay routing.
+
 ### Nebius Managed Kubernetes
 
 For a typical Nebius Managed Kubernetes cluster, treat the stable worker-subnet CIDR as `gateway.local_prefixes`, not the current per-node Pod `/24`s.
@@ -5017,12 +5058,29 @@ nebius-vpngw support-bundle --local-config-file nebius-vpngw.config.yaml
 
 The command connects to the configured gateways and writes one private ZIP on the
 operator workstation. Attach it manually only to a private support ticket. It
-retains operational identifiers, including IP addresses, gateway names and resource
-IDs. Journals and command stdout/stderr retain ordinary diagnostic messages, with
+retains non-public IP addresses, gateway names, resource IDs and other operational
+identifiers. Public IPv4/IPv6 addresses use consistent per-bundle aliases in YAML,
+JSON keys and values, logs, command output and reports. Prefix aliases preserve
+prefix lengths but do not encode numerical subnet relationships. Journals and
+command stdout/stderr retain ordinary diagnostic messages, with
 targeted redaction of private-key blocks, PSKs, passwords, tokens and sensitive key
 dumps. Redaction cannot guarantee removal of every possible secret; review the
-bundle before private sharing. Raw configuration, cloud-init user data, environment
-dumps, packet captures and XFRM cryptographic state are not collected.
+bundle before private sharing. Unredacted configuration, cloud-init user data,
+environment dumps, packet captures and XFRM cryptographic state are not exported.
+
+`operator/customer-config.redacted.yaml` preserves the original customer YAML,
+including comments, formatting, duplicate keys, unknown fields and mistakes.
+Only secret/public-address spans are replaced; the collector does not reconstruct
+or normalize the YAML. Environment references remain unresolved. The source file
+is never modified. The manifest records its outcome, redaction count, sanitized
+checksum and any change detected during collection. An unsafe snapshot is omitted
+with an explicit evidence gap, never exported raw. Existing configuration-scope
+admission still applies. Treat the redacted snapshot as diagnostic evidence,
+not a deployable configuration.
+
+Credential names include underscore, hyphen and camelCase spellings such as
+`secret_key`, `private-key` and `accessToken`. Reference metadata such as key paths
+and checksums remains intact; unknown encodings still require operator review.
 
 SSH uses the deployment's existing public-key file or inline public key, exact
 matching private identity, username and established host trust. The root
@@ -5039,7 +5097,7 @@ Derived peer-channel observations remain diagnostic context and do not count as
 successful guest probes when the member cannot be reached.
 
 `support-bundle` replaces `collect-logs`; the old command is not an alias.
-The v3 bundle is collected live and intended for offline investigation, including review by
+The v4 bundle is collected live and intended for offline investigation, including review by
 Codex or Claude. It does not call an AI service or upload anything automatically.
 
 Additional evidence includes:

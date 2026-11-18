@@ -536,6 +536,7 @@ def test_package_install_is_journal_bound_after_admission(
         {
             "package": plan,
             "observed": {"mode": "ha" if repairing else "ordinary"},
+            "ha": {},
             "artifact": manifest["wheel_sha256"],
             "approval": "3" * 64,
         },
@@ -625,6 +626,7 @@ def test_fresh_guarded_packages_own_lock_layout_before_install(
         ha_parent="a" * 64,
         config_sha256="b" * 64,
         package_identity="c" * 64,
+        wheel_sha256="d" * 64,
     )
     staged = migration.stage(runtime_migration_guest) / "payload"
     migration.write(staged / "manifest.json", json.dumps(manifest).encode())

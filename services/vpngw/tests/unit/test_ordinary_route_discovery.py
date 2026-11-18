@@ -138,6 +138,64 @@ def test_discovery_binds_workload_tables_exact_compute_and_primary_allocation_wi
     assert state.calls
 
 
+@pytest.mark.parametrize("failure", [None, "old-package", "config", "ha", "malformed"])
+def test_workstation_admission_uses_installed_verifier_and_exact_configuration(
+    scope, monkeypatch, failure
+):
+    import contextlib
+    import io
+    import shlex
+
+    from nebius_vpngw import routing_semantics
+    from nebius_vpngw.deploy import ordinary_handoff
+
+    _state, discovery = scope
+    instance = NS(hostname="gateway", instance_index=0, config_yaml="gateway: {}\n")
+    discovery.deployment.iter_instance_configs = lambda: iter((instance,))
+    monkeypatch.setattr(
+        routing_semantics,
+        "_configuration",
+        lambda: (
+            b"changed" if failure == "config" else instance.config_yaml.encode(),
+            {"vm_ha": {}} if failure == "ha" else {},
+        ),
+    )
+    calls = []
+
+    def require():
+        calls.append("verify")
+        return "malformed" if failure == "malformed" else "a" * 64
+
+    monkeypatch.setattr(routing_semantics, "require", require)
+    if failure == "old-package":
+        monkeypatch.delattr(routing_semantics, "require")
+
+    def execute(command, *, timeout):
+        assert timeout == 30
+        output = io.StringIO()
+        code = 0
+        with contextlib.redirect_stdout(output):
+            try:
+                exec(shlex.split(command)[-1], {})
+            except (AttributeError, RuntimeError):
+                code = 1
+        stdout = io.BytesIO(output.getvalue().encode())
+        stdout.channel = NS(recv_exit_status=lambda: code)
+        return None, stdout, None
+
+    monkeypatch.setattr(
+        ordinary_handoff,
+        "_connection",
+        lambda *args: contextlib.nullcontext(NS(exec_command=execute)),
+    )
+    if failure:
+        with pytest.raises(RuntimeError, match="admission"):
+            discovery.routing_admission()
+    else:
+        assert discovery.routing_admission() == {"gateway": "a" * 64}
+    assert calls == (["verify"] if failure in (None, "malformed") else [])
+
+
 @pytest.mark.parametrize("change", ["default", "shared"])
 def test_default_or_shared_tables_require_reviewed_private_copy(scope, change):
     state, discovery = scope

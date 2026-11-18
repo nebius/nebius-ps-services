@@ -471,6 +471,11 @@ network:
 
         # Apply netplan configuration
         network_applied = preserve_network
+        if activate and not preview:
+            from . import underlay
+
+            if not preserve_network:
+                underlay.preflight_reconfigure(cfg)
         if activate and not preview and not preserve_network:
             result = run(["netplan", "apply"], capture_output=True, text=True)
             if result.returncode == 0:
@@ -478,6 +483,9 @@ network:
                 print("[StrongSwan] ✓ Applied netplan configuration")
             else:
                 print(f"[StrongSwan] ⚠ netplan apply failed: {result.stderr}")
+
+        if activate and not preview:
+            underlay.reconcile_locked(cfg, reconfigure=True)
 
         # Write swanctl.conf (includes secrets)
         if not preview:

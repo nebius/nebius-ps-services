@@ -250,6 +250,7 @@ def test_periodic_runtime_adds_and_withdraws_through_existing_receipt_owner(
     from nebius_vpngw.agent import ordinary_cloud_routes as module
     from nebius_vpngw.deploy.ordinary_route_policy import Connection
 
+    monkeypatch.setattr("nebius_vpngw.routing_semantics.require", lambda **kwargs: "a" * 64)
     cloud, _, policy, _, observe = request.getfixturevalue("world")
     if mixed_summary:
         policy = replace(

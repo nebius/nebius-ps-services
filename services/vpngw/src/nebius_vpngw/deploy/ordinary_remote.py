@@ -520,6 +520,22 @@ def _wait_final_settlement(operation: operations.Operation) -> None:
     operations.wait_quiet(operation.manager, operation.check)
 
 
+def admit_routing_semantics(manifest: dict[str, Any], request_id: str) -> None:
+    # This runner may be streamed into an interpreter with empty package paths.
+    # Validate the installed package in a fresh child while retaining our lock.
+    command(
+        [
+            sys.executable,
+            "-B",
+            "-c",
+            "from nebius_vpngw.routing_semantics import admit_ordinary_locked;"
+            f"admit_ordinary_locked(config_sha256={manifest['config_sha256']!r},"
+            f"package_identity={manifest['package_identity']!r},operation={request_id!r})",
+        ],
+        limit=60,
+    )
+
+
 def final_confirmation(
     manifest: dict[str, Any],
     current: dict[str, Any],
@@ -585,10 +601,12 @@ def final_confirmation(
                         obligations=envelope["plan"]["obligations"],
                     )
             if operation is None:
+                admit_routing_semantics(manifest, request_id)
                 return receipt
             if operation.manager.quiet((*operations.MANAGEMENT, *operations.DATAPLANE)):
                 if time.monotonic() >= operation.manager.deadline:
                     raise TimeoutError("ordinary_manager_unresolved")
+                admit_routing_semantics(manifest, request_id)
                 migration.release()
                 # Full repair retains a separate timer guard until its outer
                 # completion, whose owner starts the timer after removing it.

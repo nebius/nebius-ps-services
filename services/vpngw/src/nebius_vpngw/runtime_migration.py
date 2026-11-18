@@ -48,6 +48,7 @@ REPAIR_REQUIRED = (
     "python3-wheel",
 )
 UNITS = (
+    "nebius-vpngw-underlay.service",
     "strongswan.service",
     "strongswan-starter.service",
     "strongswan-swanctl.service",

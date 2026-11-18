@@ -430,6 +430,7 @@ def test_composed_owner_resumes_conversion_then_reapply_is_mutation_free(copying
         observe=observe,
         learned=lambda policy: {},
         force_copy=False,
+        routing_admission=lambda: {"gateway": "a" * 64},
     )
     monkeypatch.setattr(command, "Discovery", lambda *args, **kwargs: discovery)
     deployment = NS(vm_ha=None, gateway_group=NS(name="gateway"))

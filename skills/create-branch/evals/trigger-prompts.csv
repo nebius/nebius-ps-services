@@ -1,0 +1,10 @@
+id,should_trigger,prompt
+fresh-generated,true,"$create-branch: start new work from the latest default branch."
+fresh-named,true,"$create-branch --branch feature/new-work"
+after-merge,true,"The PR merged. Use $create-branch from this nested directory."
+help,true,"$create-branch --help"
+update-existing,false,"Use $update-branch to merge main into my current feature branch."
+publication,false,"Create a pull request for these existing changes."
+worktree,false,"Create a separate managed worktree for this feature."
+plain-language,false,"Start a fresh branch from main without selecting a skill."
+explanation,false,"Explain how git switch differs from git checkout."

@@ -29,6 +29,9 @@ STATE_FILES = (
     "controller-checkpoint.json",
     "guard.json",
     "materialization.json",
+    "route-pending.json",
+    "route-pending-admission.json",
+    "route-settlement.json",
     "apply.lock",
     "apply-owner-adoption.json",
     "effect-receipt.json",
@@ -49,6 +52,7 @@ STATE_FILES = (
     "generation-store/route-reconciliation-receipt.json",
 )
 UNITS = (
+    "nebius-vpngw-underlay",
     "nebius-vpngw-agent",
     "nebius-vpngw-vm-ha",
     "nebius-vpngw-vm-ha-guard",
@@ -163,7 +167,7 @@ def valid_remote_name(name: Any) -> bool:
                 name,
             )
         )
-        or name in {"state/ordinary", "state/repair"}
+        or name in {"state/ordinary", "state/repair", "state/underlay", "state/routing-admission"}
     )
 
 
@@ -1001,6 +1005,8 @@ def collect_probe(request: dict[str, Any], emit: Any = None) -> list[dict[str, A
     worker_units: list[tuple[int, str]] = []
     for label, path in (
         ("state/ordinary", Path("/var/lib/nebius-vpngw/ordinary/operation.json")),
+        ("state/underlay", Path("/var/lib/nebius-vpngw/underlay.json")),
+        ("state/routing-admission", Path("/etc/nebius-vpngw/routing-semantics.json")),
         ("state/repair", Path("/var/lib/nebius-vpngw-repair/operation.json")),
     ):
         try:

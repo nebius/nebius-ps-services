@@ -4,6 +4,13 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Add explicit-only `create-branch` with optional `--branch`, collision-checked
+  generated names and safe switching from the freshly fetched origin default.
+  Preserve previous feature history, local work, hooks and worktree ownership;
+  verify exact final refs and report partial failures without automatic rollback.
+  Support a missing local default with narrow origin tracking; preserve existing
+  mappings and reject default exclusions or conflicting tracking destinations.
+
 - Default `review-github-issues` to the current folder's owning project; add
   explicit `--project` root/name override and `.` for whole-repository scope.
   Replace `--issue` with canonical `--issues`, filter before label batch limits,

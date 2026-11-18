@@ -15729,5 +15729,159 @@ GitHub deployment and registry behavior remain unverified.
 
 <!-- /FEATURE: FEAT-083 -->
 
+<!-- FEATURE: FEAT-084 reqs=REQ-085 status=ready delivery=verified priority=P1 version=2 -->
+### FEAT-084: Small deterministic create-branch workflow
+
+#### Requirements Covered
+
+- REQ-085: Create a fresh branch from the current remote default.
+
+#### Context Evidence
+
+`update-branch` supplies ordinary-checkout and exact worktree-association rules,
+remote-default discovery and targeted fetch conventions, but merges into the
+current feature branch. Commit/create-pr effects have separate authority and
+must not be reused for this standalone local operation. Selected-skill
+installation can refresh shared runtime and binds source provenance.
+
+#### Design Details
+
+A lean explicit-only skill invokes a self-contained standard-library Python
+helper. The helper resolves the Git root, primary worktree, attached branch,
+status, operation markers and exact linked registrations. Path records retain
+meaningful whitespace. Assume-unchanged and skip-worktree entries are rejected
+without clearing user flags because they can hide local changes. It rejects applicable
+conflicts without interpreting private workflow stores. One Git writer is an
+operational assumption; fresh state checks detect observed competing changes.
+
+Query origin's live HEAD and branch names, then fetch only the default with an
+explicit refspec, empty refmap and no tags, pruning or submodule recursion.
+Freeze the fetched commit. Validate a supplied literal branch name or generate
+an origin-derived safe slug plus eight secrets-sampled lowercase alphanumeric
+characters. Check ref namespace collisions locally and on the advertised remote;
+retry generated names at most ten times before any checkout effect.
+
+Preflight local-default ancestry and occupancy before switching. Switch safely
+to the existing default and fast-forward only, or create the missing default at
+the frozen commit with origin tracking. Require exact equality. Create/switch
+transactionally to the selected new branch with tracking disabled. Preserve
+hooks, signing settings and ignored files; reject conflicting merge settings.
+Recheck after each effect. Nonzero commands, changed state or failed postconditions
+report actual partial state and never initiate blind cleanup or retry.
+
+Success reports previous/new branch, default and fetched/result commit, plus
+cleanliness and previous-feature preservation. Each successful bare invocation
+creates a new branch; explicit existing names fail. Network snapshots cannot
+reserve remote names or prevent later pushes. No persistent controller or
+publication ownership is introduced.
+
+For a missing local default, inspect origin fetch mappings before checkout
+effects. Add only an absent exact default tracking mapping using Git remote
+set-branches --add, preserving existing mappings. Explicit default exclusions
+or a conflicting destination mapping stop before changing checkout state.
+The new feature branch remains untracked.
+
+#### Selected Option
+
+A deterministic helper plus concise instructions supports repeatable Git safety
+and naming tests with low per-invocation agent overhead. Git/Python are fixed;
+there is no new AI subsystem, cloud dependency or application-stack decision.
+
+#### Alternatives Considered
+
+Instruction-only Git commands are smaller but repeat parsing and collision
+logic across invocations. Bare pull/switch lacks exact-target and preservation
+checks. Reusing create-pr adds unrelated state and authority. All are rejected.
+
+#### Implementation Boundaries
+
+New skill, helper/tests/evals and native metadata; skills catalog/plugin entries,
+README, changelog and this canonical pair. No shared owner, hook or service
+behavior change. Actual checkout testing and installation require explicit task
+scope; ordinary skill invocation performs neither installation nor tests.
+
+#### Test-First Success Criteria
+
+Disposable histories verify exact starting/final refs, unchanged prior feature,
+absence of new commits/upstream/push and correct current-directory scope. Failure
+cases preserve local work and distinguish no-effect from partial-effect states.
+
+#### Validation Plan
+
+Run focused executable Git tests, syntax/lint and repository Codex/Claude/core
+validators, catalog validation, scoped code/security review and align-skill/align.
+Verify disposable packaging and canonical installed payload separately.
+
+#### Test Plan
+
+Cover default/feature invocation, renamed/missing/current/behind/ahead/diverged
+default, explicit/random names and collisions, dirty and ignored files, submodule
+state, operations, worktree association, competing changes, fetch/hook errors
+and failed final checks. Public help is inert. Use real local bare origins.
+
+#### Evaluation Plan
+
+At least three positive and three near-miss trigger cases. Deterministic tests
+own mechanical assertions. Fresh native discovery remains unverified until
+observed in an authenticated isolated surface; never copy credentials.
+
+#### Rollout And Rollback
+
+Develop/reconcile/test in an independent candidate checkout. Run the verified
+candidate on the explicitly selected clean real checkout, independently verify
+its transition, then materialize reviewed changes uncommitted on the new branch.
+Publish final specs through the selected-project owner and install from canonical
+source to retain provenance. Do not install a temporary candidate into real home.
+Retain partial Git effects on failure and report recovery; do not reset work.
+
+#### Done Definition
+
+Focused checks and alignment pass; requested real transition and installed-byte
+proof are reported independently. Unavailable native evidence stays explicit.
+
+#### Implementation Evidence
+
+Implemented the explicit-only skill, self-contained Python/Git helper and focused
+executable tests with canonical trigger cases and both native plugin entries.
+Catalog, README and Unreleased documentation describe the same public interface,
+preservation rules and partial-failure boundary. Selected canonical-source Codex
+installation preserves source provenance and identical source/installed bytes.
+
+#### Verification Evidence
+
+All 38 disposable local-Git tests passed, including three reproduced negative
+controls: two hidden-index-flag false-clean cases and whitespace truncation that
+could target a sibling checkout. Corrections preserve path record bytes and
+reject hidden index flags. Read-only code/security review closed both findings
+with no remaining blocker. Ruff, non-writing syntax, strict Codex/Claude/core
+structure and eval validation, plugin catalogs, changed Markdown and whitespace
+checks passed. Pinned npx skills 1.5.26 discovery/copy/repeat/isolation checks
+passed for Codex and Claude.
+
+One explicitly authorized real primary-checkout invocation from a nested
+project created and selected a generated branch at the freshly fetched default.
+Independent Git checks verified exact default/HEAD equality, expected prior
+merge containment, unchanged previous feature ref, no upstream and no remote
+branch. Reviewed source changes were then left uncommitted on that new branch.
+
+All six installed payload files match source bytes and modes with canonical
+provenance. Five focused installed Git tests passed. The installed helper also
+rejected the now-dirty real checkout before effects and preserved the complete
+uncommitted diff and branch. Unrelated installed skills and shared hook/runtime
+contents stayed unchanged. No commit, push or external write was performed.
+
+Native CLI discovery/trigger evaluation remains unavailable in the isolated
+runner because API authentication is absent; account credentials were not copied.
+Actual explicit candidate execution and installed-helper behavior are verified,
+but neither is claimed as fresh model-driven discovery on Codex or Claude.
+
+Release review added narrow-fetch default tracking and independent reverse
+refspec collision checks. Forty disposable Git tests pass, including exact
+upstream identity and unchanged refs/configuration on excluded or conflicting
+mappings. This is deterministic source evidence; installation is checked
+separately and does not imply fresh model-driven skill discovery.
+
+<!-- /FEATURE: FEAT-084 -->
+
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

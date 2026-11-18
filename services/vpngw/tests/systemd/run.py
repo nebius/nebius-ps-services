@@ -30,6 +30,7 @@ def main() -> None:
     parser.add_argument("--ingress-only", action="store_true")
     parser.add_argument("--modernization-only", action="store_true")
     parser.add_argument("--package-migration-only", action="store_true")
+    parser.add_argument("--underlay-only", action="store_true")
     parser.add_argument("--historical-package-upgrades", action="store_true")
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--candidate-wheel", type=Path)
@@ -41,6 +42,17 @@ def main() -> None:
     )
     parser.add_argument("--platform", default="linux/amd64")
     args = parser.parse_args()
+    if args.underlay_only and any(
+        (
+            args.ssh_bootstrap_only,
+            args.support_bundle_only,
+            args.ingress_only,
+            args.modernization_only,
+            args.package_migration_only,
+            args.historical_package_upgrades,
+        )
+    ):
+        parser.error("underlay qualification is a separate fixture lane")
     if args.support_bundle_only and any(
         (
             args.ssh_bootstrap_only,
@@ -69,7 +81,9 @@ def main() -> None:
         return
     project = Path(__file__).resolve().parents[2]
     tests = ["/workspace/tests/integration/test_ssh_bootstrap.py"]
-    if args.support_bundle_only:
+    if args.underlay_only:
+        tests = ["/workspace/tests/integration/test_underlay_native.py"]
+    elif args.support_bundle_only:
         if not args.candidate_wheel or not args.candidate_wheel.is_file():
             parser.error("support-bundle qualification requires an existing --candidate-wheel")
         tests = ["/workspace/tests/integration/test_support_bundle_native.py"]

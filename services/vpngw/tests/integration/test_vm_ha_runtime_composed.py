@@ -18,6 +18,7 @@ from tests.unit.test_vm_ha_runtime_ports import (
     FakeSDK,
     MemoryReplayStore,
     _runtime_config,
+    build_runtime_ports,
 )
 
 import nebius_vpngw.agent.frr_renderer as frr_module
@@ -25,7 +26,6 @@ import nebius_vpngw.agent.main as agent_main
 import nebius_vpngw.agent.strongswan_renderer as strongswan_module
 import nebius_vpngw.agent.vm_ha.runtime as runtime_module
 from nebius_vpngw.agent.vm_ha.models import DigestSet
-from nebius_vpngw.agent.vm_ha.runtime import build_runtime_ports
 from nebius_vpngw.agent.vm_ha_controller import (
     ActionKind,
     CloudObservation,
@@ -421,7 +421,9 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
     monkeypatch.setattr(
         frr_module.FRRRenderer, "_ensure_bgpd_enabled", lambda *args, **kwargs: False
     )
-    monkeypatch.setattr(frr_module.FRRRenderer, "ensure_local_prefix_routes", lambda *args: None)
+    monkeypatch.setattr(agent_main.underlay, "preflight_reconfigure", lambda cfg: None)
+    monkeypatch.setattr(agent_main.underlay, "verify", lambda cfg: "underlay-proof")
+    monkeypatch.setattr(agent_main.underlay, "reconcile_locked", lambda cfg, **kwargs: None)
     monkeypatch.setattr(
         frr_module.subprocess,
         "run",

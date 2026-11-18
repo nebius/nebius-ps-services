@@ -133,6 +133,26 @@ def entries(*, ha: bool) -> tuple[tuple[str, str, int], ...]:
         ("nebius_vpngw/systemd/" + name, path, mode)
         for name, path, mode in (HA if ha else ORDINARY)
     )
+    result += (
+        (
+            "nebius_vpngw/systemd/nebius-vpngw-underlay.service",
+            "/etc/systemd/system/nebius-vpngw-underlay.service",
+            0o644,
+        ),
+    )
+    result += tuple(
+        (
+            "nebius_vpngw/systemd/nebius-vpngw-underlay-ordering.conf",
+            f"/etc/systemd/system/{unit}.service.d/20-underlay.conf",
+            0o644,
+        )
+        for unit in (
+            "strongswan",
+            "frr",
+            "nebius-vpngw-agent",
+            *(("nebius-vpngw-vm-ha",) if ha else ()),
+        )
+    )
     if not ha:
         result += (
             ("nebius_vpngw/ingress_policy.py", "/usr/local/lib/nebius-vpngw-ingress.py", 0o644),

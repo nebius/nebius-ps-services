@@ -45,6 +45,7 @@ def test_ha_operational_selection_uses_runtime_only_xfrm_on_reload(monkeypatch, 
         "load_effective_config",
         lambda cfg, _: {**cfg, "_ha_tunnel_selections": {"site": "backup"}},
     )
+    monkeypatch.setattr(agent_main.underlay, "reconcile_locked", lambda cfg: None)
     agent = agent_main.Agent()
     if not changed:
         agent.state.save_last_applied(config)
@@ -121,6 +122,7 @@ def test_ha_reload_preserves_ready_owner_with_failed_redundant_path(monkeypatch,
         "acquire_routing_lock",
         lambda **k: os.open(tmp_path / "routing.lock", os.O_CREAT | os.O_RDWR, 0o600),
     )
+    monkeypatch.setattr(agent_main.underlay, "reconcile_locked", lambda cfg: None)
     agent = agent_main.Agent()
     agent.state.save_last_applied(config)
     agent.ss = Mock()
@@ -592,7 +594,9 @@ def test_active_vm_ha_preparation_restores_bgp_origination_before_forwarding(
         lambda cfg, **kwargs: calls.append(("firewall", {"cfg": cfg, **kwargs})),
     )
 
+    monkeypatch.setattr(agent_main.underlay, "verify", lambda cfg: calls.append(("underlay", cfg)))
     agent_main._prepare_vm_ha_active_data_plane(config_path)
+    assert calls.pop(0)[0] == "underlay"
 
     assert calls[0] == (
         "firewall",
@@ -990,7 +994,7 @@ def test_blocked_frr_render_does_not_install_kernel_routes(
 ) -> None:
     renderer = FRRRenderer()
     ensure_routes = Mock()
-    monkeypatch.setattr(renderer, "ensure_local_prefix_routes", ensure_routes)
+    monkeypatch.setattr(agent_main.underlay, "reconcile_locked", ensure_routes)
     monkeypatch.setattr(
         "nebius_vpngw.agent.frr_renderer.subprocess.run",
         lambda *args, **kwargs: (_ for _ in ()).throw(

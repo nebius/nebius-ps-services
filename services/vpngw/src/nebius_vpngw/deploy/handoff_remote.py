@@ -44,6 +44,8 @@ REPLAN_WRITERS = (
     "strongswan-swanctl.service",
     "strongswan.service",
 )
+
+
 def package_exclusion(function, *, always: bool = False):
     """Hold dpkg's native frontend lock for one prepared package phase only."""
 
@@ -204,6 +206,28 @@ def reply(value: dict[str, Any]) -> None:
 def package_observation(manifest: dict[str, Any]) -> dict[str, Any]:
     observed = remote.inspect(manifest, runtime_admission=False)
     return package_predecessor(observed)
+
+
+def settle_predecessor_routes(expected: dict | None, artifact: str) -> None:
+    """Caller holds all writer locks; execute only installed predecessor intent."""
+    pending = repair.STATE / "route-pending.json"
+    if not pending.exists() and not pending.is_symlink():
+        return
+    if expected is None:
+        raise RuntimeError("predecessor route settlement requires fenced HA writers")
+    from nebius_vpngw.ha_route_settlement import command as settlement_command
+
+    lock = repair.exact_lock(expected)
+    remote.command(
+        settlement_command(
+            {
+                key: lock[key]
+                for key in ("cluster_id", "node_id", "generation_id", "operation_id")
+            },
+            artifact,
+        ),
+        limit=120,
+    )
 
 
 def inspect(expected: dict[str, Any], *, inhibited: bool = False) -> dict[str, Any]:
@@ -482,6 +506,9 @@ class Holder:
                         if current[key] != predecessor[key]:
                             raise RuntimeError("HA resumed package identity changed")
                     remote.migration.verify_inhibited()
+                settle_predecessor_routes(
+                    self.request["ha"] if self.repairing else None, self.request["artifact"]
+                )
                 for name, digest in {
                     manifest["wheel_name"]: manifest["wheel_sha256"],
                     **manifest["dependency_wheels"],
@@ -634,6 +661,16 @@ class Holder:
                     getattr(repair, "_SOURCE", None) or Path(repair.__file__).read_bytes()
                 )
                 repair.cold_guard(state_dir=repair.STATE, boot_id=ops.BOOT.read_text().strip())
+                remote.command(
+                    [
+                        sys.executable,
+                        "-B",
+                        "-c",
+                        "from nebius_vpngw.routing_semantics import prepare_ha_locked;"
+                        f"prepare_ha_locked({expected!r},{self.request['artifact']!r})",
+                    ],
+                    limit=60,
+                )
                 remote.command([sys.executable, "-B", "-m", "nebius_vpngw.boot_policy"], limit=30)
                 remote.migration.retire_assets(manifest)
                 repair.initialize_unstarted_checkpoint(unstarted=not self.repairing)
@@ -756,6 +793,7 @@ def prepare_guarded(request: dict) -> dict:
                 repair.exact_lock(expected)
                 repair.cold_guard(state_dir=repair.STATE, boot_id=ops.BOOT.read_text().strip())
             operation.phase("install")
+            settle_predecessor_routes(expected, manifest["wheel_sha256"])
             remote.migration.install()
             remote.python_packages.install_payload(
                 manifest, directory, remote.command, operation.check

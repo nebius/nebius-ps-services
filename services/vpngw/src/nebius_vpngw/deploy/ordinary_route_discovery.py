@@ -52,6 +52,54 @@ class Discovery:
     summarize: bool = False
     force_copy: bool = False
 
+    def routing_admission(self) -> dict[str, str]:
+        """Reprove installed guest protection before workstation cloud effects.
+
+        Planning intentionally works before an upgrade. Mutation uses the
+        installed verifier, so a newer workstation cannot enable aggregate
+        routing on an older, unprepared guest.
+        """
+        import hashlib
+        import json
+        import re
+        import shlex
+
+        from .ordinary_handoff import _connection
+        from .ssh_push import SSHPush
+
+        instances = tuple(self.deployment.iter_instance_configs())
+        targets = self.manager.inspect_ordinary_targets(item.hostname for item in instances)
+        if not instances or set(targets) != {item.hostname for item in instances}:
+            raise RuntimeError("Routing admission requires every configured gateway")
+        ssh = SSHPush(ssh_policy=self.routes._ssh_policy)
+        result = {}
+        for instance in instances:
+            generation = hashlib.sha256(instance.config_yaml.encode()).hexdigest()
+            probe = (
+                "import hashlib,json\nfrom nebius_vpngw import routing_semantics as s\n"
+                "raw,cfg=s._configuration()\n"
+                f"if hashlib.sha256(raw).hexdigest()!={generation!r} or cfg.get('vm_ha') is not None:\n"
+                "    raise RuntimeError('Routing configuration changed')\n"
+                "print(json.dumps(s.require()))\n"
+            )
+            with _connection(
+                ssh, targets[instance.hostname][1], instance, self.local
+            ) as client:
+                _, stdout, _ = client.exec_command(
+                    "sudo -n /usr/bin/python3 -B -c " + shlex.quote(probe), timeout=30
+                )
+                raw = stdout.read(1025)
+                if len(raw) > 1024 or stdout.channel.recv_exit_status() != 0:
+                    raise RuntimeError("Gateway routing requires verified normal apply admission")
+            try:
+                admission = json.loads(raw)
+            except (ValueError, UnicodeError):
+                raise RuntimeError("Gateway routing admission is unavailable") from None
+            if not isinstance(admission, str) or not re.fullmatch("[0-9a-f]{64}", admission):
+                raise RuntimeError("Gateway routing admission is malformed")
+            result[instance.hostname] = admission
+        return result
+
     def observe_infrastructure(self, *, completed: bool = False) -> dict:
         from nebius.api.nebius.vpc import v1 as vpc
 

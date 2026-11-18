@@ -1,6 +1,7 @@
 """Real BGP path loss preserves the owner while native alternative paths converge.
 
-Cloud ownership/routes and service-unit discovery are fixture inputs.
+Cloud ownership/routes, deployment admission, physical underlay and service-unit
+discovery are fixture inputs. DHCP/networkd is covered by test_underlay_native.py.
 Native SA, XFRM, FRR, route selection and receipts are real.
 Run exclusively inside the disposable integration namespace.
 """
@@ -23,7 +24,7 @@ from tests.unit.test_vm_ha_runtime_ports import (
     _runtime_config,
 )
 
-from nebius_vpngw.agent.routing_guard import require_vm_ha_current_boot_ready
+from nebius_vpngw.agent.routing_guard import _remove_table_220, require_vm_ha_current_boot_ready
 from nebius_vpngw.agent.vm_ha.models import DigestSet, PeerHeartbeat
 from nebius_vpngw.agent.vm_ha.runtime import (
     CommandResult,
@@ -104,6 +105,8 @@ class Backend(FakeRouteBackend):
 
 def dataplane(**kwargs):
     kwargs["runner"] = runner
+    # Static namespace links do not have a provider DHCP/networkd deployment.
+    kwargs["underlay_verifier"] = lambda: True
     result = SystemDataPlaneRuntime(**kwargs)
     # Declare the already-active fixture checkpoint, never change live resources.
     result.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -121,11 +124,15 @@ ports = build_runtime_ports(
     sdk_factory=lambda **k: FakeSDK(),
     credential_bundle_factory=_fake_credential_bundle,
     route_backend_factory=lambda sdk: Backend(),
+    route_admission=lambda: "a" * 64,
     data_plane_factory=dataplane,
     monotonic_clock=time.monotonic,
 )
 # The declared active checkpoint includes the product's persistent protection,
 # established from real BGP route provenance before the path-loss trial starts.
+# Charon startup creates a table-220 rule even with install_routes=no. Apply
+# the real product cleanup before declaring the healthy active checkpoint.
+_remove_table_220()
 ports.data_plane.destination_protection.admit(frozenset({"10.200.2.1/32"}))
 cloud = CloudObservation(
     authoritative=True,

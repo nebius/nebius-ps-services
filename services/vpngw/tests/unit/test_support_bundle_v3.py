@@ -326,7 +326,7 @@ def test_text_archive_and_report_integrity(tmp_path, monkeypatch):
                     "instance_count": 1,
                     "external_ips": [["192.0.2.1"]],
                 },
-                "connections": [{"psk": "unlabelled-canary"}],
+                "connections": [{"tunnels": [{"psk": "unlabelled-canary"}]}],
             }
         )
     )

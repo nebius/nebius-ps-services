@@ -5905,5 +5905,67 @@ separate local checks from deployed qualification without claiming unrun tests.
 
 <!-- /REQUIREMENT: REQ-084 -->
 
+<!-- REQUIREMENT: REQ-085 status=satisfied priority=P1 type=feature -->
+### REQ-085: Create a fresh branch from the current remote default
+
+#### User Story
+
+Developers need an explicitly invoked, fast local skill that updates the local
+remote-default branch and switches to a new unique branch for independent work.
+
+#### Acceptance Criteria
+
+- AC-001: Accept optional `--branch <name>` and side-effect-free `-h`/`--help`.
+  Require explicit invocation on Codex and Claude and use one canonical name,
+  `create-branch`.
+- AC-002: Discover origin's live symbolic default, fetch only that branch and
+  freeze its commit. Never substitute a cached target after network failure.
+- AC-003: Require a clean ordinary primary checkout, including untracked files
+  and dirty submodules; preserve pending Git operations, applicable workflow
+  restrictions, occupied branches and ignored files. Unrelated worktrees and
+  stale metadata alone do not establish current-branch ownership.
+- AC-004: Advance an existing local default only by fast-forward to exactly the
+  fetched commit, or create it when absent. Stop for ahead/divergent history.
+  Create and switch to the new branch at that exact commit without upstream
+  tracking; preserve the previous feature ref and commits. If a missing local
+  default lacks an origin fetch mapping, add only its exact tracking mapping
+  while preserving existing mappings; reject explicit exclusions and collisions
+  before checkout effects.
+- AC-005: Preserve and validate supplied names; otherwise derive a repository
+  slug from origin and append eight uniformly sampled lowercase letters/digits.
+  Check local and advertised remote names; retry generated collisions at most
+  ten times and refuse explicit collisions without replacing a ref.
+- AC-006: Recheck state around effects, report partial failures truthfully and
+  verify final branch, target/default equality, clean status and previous-ref
+  preservation. Freshness and remote-name uniqueness apply to observed refs.
+- AC-007: Keep routine execution small and deterministic, using Python's standard
+  library and Git without GitHub APIs, custom persistent workflow state, a test
+  suite, installation or publication during ordinary invocation.
+
+#### Negative Criteria
+
+- NC-001: Do not commit, push, delete branches, reset, rebase, autostash, bypass
+  hooks, silently change origins or overwrite ignored files.
+- NC-002: Do not borrow publication grants, parse private owner schemas or claim
+  concurrent-writer exclusion from state rechecks alone.
+
+#### Validation Method
+
+Strict target portable/Codex/Claude validation, plugin registration, scoped
+review/security/lint and disposable installation parity.
+
+#### Test Method
+
+Executable local Git fixtures cover histories, names, collisions, preservation,
+worktrees, network/hook failures and postconditions. An explicitly authorized
+real-checkout run separately proves the requested post-merge transition.
+
+#### Evaluation Method
+
+Canonical trigger cases and deterministic behavior assertions. Report source,
+real-checkout, installed-payload and native-discovery evidence separately.
+
+<!-- /REQUIREMENT: REQ-085 -->
+
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

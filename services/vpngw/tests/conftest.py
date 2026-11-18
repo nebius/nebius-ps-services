@@ -138,7 +138,14 @@ def ordinary_static_observer(monkeypatch, tmp_path):
 
     def prepare(cfg):
         tunnels, _, endpoints = collect_tunnel_state(cfg, log=lambda _: None)
-        state = SimpleNamespace(routes=[], ip_reader=None)
+        state = SimpleNamespace(routes=[], ip_reader=None, underlay_ready=True)
+
+        def underlay_verifier(cfg):
+            if not state.underlay_ready:
+                raise RuntimeError("ordinary physical routing is unavailable")
+            return "underlay-proof"
+
+        monkeypatch.setattr(ordinary.underlay, "verify", underlay_verifier)
 
         def ip_rows(args):
             if "rule" in args:
