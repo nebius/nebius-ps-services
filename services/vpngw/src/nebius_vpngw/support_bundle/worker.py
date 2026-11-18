@@ -45,9 +45,15 @@ def guest_failure_code(stderr: bytes, began: bool) -> str:
     return "probe-failed"
 
 
-def scope(path: Path, project_id: str | None = None, region: str | None = None) -> dict[str, Any]:
+def scope(
+    path: Path,
+    project_id: str | None = None,
+    region: str | None = None,
+    *,
+    raw: bytes | None = None,
+) -> dict[str, Any]:
     try:
-        config = yaml.safe_load(read_regular(path))
+        config = yaml.safe_load(read_regular(path) if raw is None else raw)
     except yaml.YAMLError:
         raise ValueError("invalid-data") from None
     if not isinstance(config, dict) or not isinstance(config.get("gateway_group"), dict):

@@ -9,10 +9,12 @@ SHARED = (
     "test_ingress_packets.py",
     "test_runtime_modernization.py",
     "test_release_asset_retirement_native.py",
+    "test_underlay_native.py",
 )
 ORDINARY = ("test_ordinary_systemd_jobs.py", "test_ordinary_transport.py")
 HA = (
-    "test_ha_tunnel_native.py", "test_ha_daemon_reload_native.py",
+    "test_ha_tunnel_native.py",
+    "test_ha_daemon_reload_native.py",
     "test_repair_idle_handoff_native.py",
 )
 

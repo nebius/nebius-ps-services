@@ -120,6 +120,8 @@ def test_wheel_build_uses_package_local_version_file(tmp_path, monkeypatch) -> N
     assert "nebius_vpngw/replay_window.py" in names
     assert "nebius_vpngw/packet_health.py" in names
     assert "nebius_vpngw/support_bundle/redaction.py" in names
+    assert "nebius_vpngw/support_bundle/source_yaml.py" in names
+    assert "nebius_vpngw/support_bundle/addresses.py" in names
     assert "nebius_vpngw/support_bundle/projection.py" in names
     assert "nebius_vpngw/support_bundle/probe.py" in names
     assert "nebius_vpngw/systemd/nebius-vpngw-esp4-preflight.sh" in names
@@ -174,13 +176,14 @@ def test_wheel_build_uses_package_local_version_file(tmp_path, monkeypatch) -> N
             sys.executable,
             "-c",
             """
-import json, pathlib, zipfile
+import hashlib, json, pathlib, zipfile
 from functools import partial
 from typer.testing import CliRunner
 from nebius_vpngw import cli
 from nebius_vpngw.support_bundle import collector
-p=pathlib.Path('support-fixture.json')
-p.write_text(json.dumps({'project_id':'project-fixture','gateway_group':{'name':'fixture','instance_count':1},'psk':'SYNTHETIC_PRIVATE_VALUE'}))
+p=pathlib.Path('support-fixture.yaml')
+raw = '# keep original comment\\nproject_id: project-fixture\\ngateway_group: {name: fixture, instance_count: 1, external_ips: [[8.8.8.8]]}\\nconnections: [{tunnels: [{psk: SYNTHETIC_PRIVATE_VALUE}]}]\\nunknown: {keep: me}\\n'
+p.write_text(raw)
 def unavailable(request, timeout): return [], 'unavailable'
 collector.collect = partial(collector.collect, runner=unavailable)
 out=pathlib.Path('support-fixture.zip')
@@ -189,9 +192,16 @@ assert result.exit_code == 1, result.output
 assert CliRunner().invoke(cli.app, ['collect-logs', '--help']).exit_code == 2
 with zipfile.ZipFile(out) as archive:
     assert 'manifest.json' in archive.namelist()
-    assert json.loads(archive.read('manifest.json'))['schema'] == 'nebius-vpngw/support-bundle-v3'
+    manifest = json.loads(archive.read('manifest.json'))
+    assert manifest['schema'] == 'nebius-vpngw/support-bundle-v4'
+    assert archive.read('operator/customer-config.redacted.yaml').decode() == raw.replace('SYNTHETIC_PRIVATE_VALUE', 'REDACTED_SECRET').replace('8.8.8.8', 'PUBLIC_IPV4_001')
     assert {'summary.md','analysis-guide.md','timeline.json','evidence-index.json'} <= set(archive.namelist())
     assert all(b'SYNTHETIC_PRIVATE_VALUE' not in archive.read(name) for name in archive.namelist())
+    assert all(b'8.8.8.8' not in archive.read(name) for name in archive.namelist())
+    for row in manifest['probes'] + manifest['reports']:
+        if row['file'] in archive.namelist():
+            assert row['sha256'] == hashlib.sha256(archive.read(row['file'])).hexdigest()
+assert p.read_text() == raw
 """,
         ],
         cwd=tmp_path,

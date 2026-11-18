@@ -22,6 +22,7 @@ from tests.unit.test_vm_ha_runtime_ports import (
     FakeSDK,
     MemoryReplayStore,
     _runtime_config,
+    build_runtime_ports,
 )
 
 from nebius_vpngw.agent import frr_renderer, main, strongswan_renderer
@@ -31,7 +32,6 @@ from nebius_vpngw.agent.vm_ha.models import DigestSet
 from nebius_vpngw.agent.vm_ha.runtime import (
     CommandResult,
     SystemDataPlaneRuntime,
-    build_runtime_ports,
 )
 from nebius_vpngw.agent.vm_ha.tunnels import Authority, TunnelController, read_state
 from nebius_vpngw.agent.vm_ha_controller import (
@@ -137,7 +137,7 @@ def test_promoted_owner_dispatches_deferred_agent_reload(tmp_path, monkeypatch, 
         monkeypatch.setattr(agent.ss, "render_and_apply", unexpected_render)
         monkeypatch.setattr(agent.frr, "render_and_apply", unexpected_render)
         monkeypatch.setattr(
-            agent.frr, "ensure_local_prefix_routes", lambda _cfg: effects.append("local-routes")
+            main.underlay, "reconcile_locked", lambda _cfg: effects.append("underlay")
         )
         monkeypatch.setattr(
             agent.xfrm,
@@ -185,7 +185,7 @@ def test_promoted_owner_dispatches_deferred_agent_reload(tmp_path, monkeypatch, 
             assert effects == (
                 []
                 if case == "pending"
-                else [("firewall", True), "local-routes", ("xfrm", True, False), "routing"]
+                else [("firewall", True), "underlay", ("xfrm", True, False), "routing"]
             )
         assert main.STATE_PATH.read_bytes() == saved
         assert native.forwarding
@@ -368,7 +368,7 @@ def composed(tmp_path, monkeypatch, *, advertise=True, protected_checkpoint=True
     monkeypatch.setattr(frr_renderer, "BGPD_CONF", tmp_path / "bgpd.conf")
     monkeypatch.setattr(tunnel_runtime, "FRR_CONF", frr_path)
     monkeypatch.setattr(frr_renderer.FRRRenderer, "_ensure_bgpd_enabled", lambda *a, **kw: False)
-    monkeypatch.setattr(frr_renderer.FRRRenderer, "ensure_local_prefix_routes", lambda *a: None)
+    monkeypatch.setattr(main.underlay, "verify", lambda cfg: "underlay-proof")
     monkeypatch.setattr(
         frr_renderer.FRRRenderer, "_enable_vm_ha_controller_writes", lambda *a: None
     )
@@ -386,6 +386,7 @@ def composed(tmp_path, monkeypatch, *, advertise=True, protected_checkpoint=True
         native.command(("vtysh", "-b"))
 
     def data_plane(**kwargs):
+        kwargs["underlay_verifier"] = lambda: True
         return SystemDataPlaneRuntime(
             **kwargs,
             routing_lock_path=state_dir / "routing.lock",

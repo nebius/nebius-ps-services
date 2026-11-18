@@ -11,6 +11,21 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Include the original operator YAML in support-bundle v4 with targeted secret
+  and public-address replacements, preserving comments, formatting and unknown
+  fields. Correlate public addresses through per-bundle aliases across evidence;
+  retain non-public addresses and other operational context. Fix nested tunnel
+  PSK literal protection and record source changes and safe snapshot omissions.
+- Persist local workload, HA-peer and IPsec transport routes through the verified
+  DHCP router on supported Ubuntu/networkd gateways. Preserve these routes across
+  renewal, restart and normal apply; replace blanket local-route deletion with
+  exact ownership checks and repair.
+- Admit ordinary RFC1918 remote summaries that strictly contain local ranges,
+  retaining exact-prefix, contained-prefix and default-route exclusions. Gate
+  runtime and workstation cloud effects on deployment-owned routing admission
+  and settle exact predecessor route operations before package activation.
+- Include sanitized underlay and routing-admission evidence in support bundles.
+
 ## [nebius-vpngw-v0.6.7] - 2026-11-17
 
 - Complete guarded HA asset retirement under the writer locks and retain pending

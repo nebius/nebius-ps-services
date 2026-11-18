@@ -9,11 +9,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
-REDACTION_POLICY = "nebius-vpngw/redaction-v1"
+REDACTION_POLICY = "nebius-vpngw/redaction-v2"
 REDACTED = "[REDACTED]"
 TEXT_LIMIT = 2 * 1024 * 1024
 LINE_LIMIT = 65536
-_CREDENTIAL = r"(?:psk|pre[-_ ]?shared[-_ ]?key|password|passwd|secret|token|access_token|refresh_token|client_secret|private_key|authorization)"
+_CREDENTIAL = r"(?:psk|pre[-_ ]?shared[-_ ]?key|password|passwd|secret|token|access_token|refresh_token|client_secret|private_key|api[-_ ]?key|authorization)"
 _ASSIGNMENT = re.compile(
     r"(?i)([\"']?\b" + _CREDENTIAL + r"\b[\"']?\s*[:=]\s*)"
     r"""("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\[REDACTED\]|[^\r\n]+)"""

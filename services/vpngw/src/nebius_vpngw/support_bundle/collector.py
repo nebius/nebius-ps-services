@@ -17,14 +17,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .addresses import AddressAliases, contains_public_address
 from .diagnostics import clean_failure, clean_progress
 from .probe import bounded_command, read_regular, valid_remote_name
 from .projection import MAX_BYTES, project, project_journal, retention_priorities
 from .redaction import REDACTION_POLICY, redact_text, unsafe_text
 from .report import build_reports, collection_counts
+from .source_yaml import SourceYaml, unsafe_yaml
 from .worker import scope
 
-SCHEMA = "nebius-vpngw/support-bundle-v3"
+SCHEMA = "nebius-vpngw/support-bundle-v4"
 OUTCOMES = {
     "ok",
     "partial",
@@ -317,16 +319,22 @@ def bounded_text(data: bytes, limit: int) -> bytes:
 
 def unsafe_export(name: str, data: bytes, literals: tuple[str, ...]) -> bool:
     """Scan decoded values, so JSON quoting cannot hide or invent credentials."""
+    if name.endswith(".yaml"):
+        return unsafe_yaml(data, literals)
     if not name.endswith(".json"):
-        return unsafe_text(data.decode("utf-8"), literals)
+        text = data.decode("utf-8")
+        return unsafe_text(text, literals) or contains_public_address(text)
     pending = [json.loads(data)]
     while pending:
         value = pending.pop()
         if isinstance(value, dict):
             pending.extend(value.values())
+            pending.extend(value.keys())
         elif isinstance(value, list):
             pending.extend(value)
-        elif isinstance(value, str) and unsafe_text(value, literals):
+        elif isinstance(value, str) and (
+            unsafe_text(value, literals) or contains_public_address(value)
+        ):
             return True
     return False
 
@@ -410,16 +418,31 @@ def collect(
     now = datetime.now(timezone.utc)
     start, end = time_window(since, now)
     deadline = time.monotonic() + 300
-    config = scope(config_path, project_id, region)
+    raw_config = read_regular(config_path)
+    config = scope(config_path, project_id, region, raw=raw_config)
     group = config["gateway_group"]
+    connections = config.get("connections")
     literals = tuple(
-        str(connection["psk"])
-        for connection in config.get("connections", [])
-        if isinstance(connection, dict)
-        and isinstance(connection.get("psk"), str)
-        and connection["psk"]
-        and "${" not in connection["psk"]
+        tunnel["psk"]
+        for connection in (connections if isinstance(connections, list) else [])
+        if isinstance(connection, dict) and isinstance(connection.get("tunnels"), list)
+        for tunnel in connection["tunnels"]
+        if isinstance(tunnel, dict)
+        and isinstance(tunnel.get("psk"), str)
+        and tunnel["psk"]
+        and "${" not in tunnel["psk"]
     )
+    aliases = AddressAliases()
+    config_outcome = "ok"
+    config_redactions = 0
+    try:
+        source = SourceYaml.read(raw_config)
+        literals = tuple(set(literals) | set(source.literals))
+        config_data, config_redactions = source.redact(aliases)
+        if unsafe_yaml(config_data, literals):
+            raise ValueError("Unsafe YAML export.")
+    except ValueError:
+        config_data, config_outcome = b"", "invalid-data"
 
     def notify(event: dict[str, Any]) -> None:
         if progress is not None:
@@ -457,12 +480,9 @@ def collect(
         ):
             clean, outcome = {}, "invalid-data"
         if isinstance(clean, dict) and "coverage" in clean and "events" in clean:
-            for index, event in enumerate(clean["events"]):
+            for event in clean["events"]:
                 if isinstance(event.get("message"), str):
                     event["message"] = redact_text(event["message"], literals=literals)["content"]
-                event["event_id"] = hashlib.sha256(
-                    (name + ":" + str(index) + ":" + json.dumps(event, sort_keys=True)).encode()
-                ).hexdigest()
             clean = project_journal(clean, omitted, limited, byte_limit=log_allowance)
         truncated = limited[0] + int(metadata.get("truncated_fields", 0))
         if outcome == "ok" and truncated:
@@ -471,6 +491,16 @@ def collect(
             outcome = "partial"
         if "failure" in metadata:
             clean = {"failure": clean_failure(metadata["failure"]), "observation": clean}
+        try:
+            clean = aliases.value(clean)
+        except ValueError:
+            clean, outcome = {}, "invalid-data"
+        if isinstance(clean, dict) and "coverage" in clean and "events" in clean:
+            for index, event in enumerate(clean["events"]):
+                event.pop("event_id", None)
+                event["event_id"] = hashlib.sha256(
+                    (name + ":" + str(index) + ":" + json.dumps(event, sort_keys=True)).encode()
+                ).hexdigest()
         data = json.dumps(clean, sort_keys=True, indent=2).encode()
         if unsafe_export(name + ".json", data, literals):
             data, outcome = b"{}", "invalid-data"
@@ -532,6 +562,7 @@ def collect(
                 )
                 if "/logs/" in name and stream == "stdout" and isinstance(clean, dict):
                     clean_text["content"] = journal_text(clean)
+                clean_text["content"] = aliases.text(clean_text["content"])
                 encoded = clean_text["content"].encode()
                 text_outcome = (
                     "source-limit"
@@ -577,6 +608,28 @@ def collect(
                     }
                 )
 
+    config_name = "operator/customer-config.redacted.yaml"
+    if len(config_data) > MAX_BYTES:
+        config_data, config_outcome = b"", "source-limit"
+    if config_outcome == "ok":
+        entries[config_name] = config_data
+        total += len(config_data)
+    manifest.append(
+        {
+            "file": config_name,
+            "record_id": hashlib.sha256(config_name.encode()).hexdigest()[:24],
+            "outcome": config_outcome,
+            "bytes": len(config_data),
+            "sha256": hashlib.sha256(config_data).hexdigest() if config_data else None,
+            "observed_at": now.timestamp(),
+            "evidence_class": "customer-source-snapshot",
+            "redaction_policy": REDACTION_POLICY,
+            "redactions": config_redactions,
+            "omitted_fields": 0,
+            "truncated_fields": 0,
+        }
+    )
+    config_row = manifest[-1]
     add("operator/topology", config)
     from .. import __version__
 
@@ -736,9 +789,7 @@ def collect(
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         for index, records, outcome in pool.map(member, range(group["instance_count"])):
             snapshots = {
-                item.get("probe"): item
-                for item in records
-                if isinstance(item.get("probe"), str)
+                item.get("probe"): item for item in records if isinstance(item.get("probe"), str)
             }
             first_record = snapshots.get("ha-0/native", {})
             last_record = snapshots.get("ha-1/native", {})
@@ -794,10 +845,18 @@ def collect(
                 else:
                     add_member_record(index, record)
     try:
-        current_config = scope(config_path, project_id, region)
+        current_source = read_regular(config_path)
+        if current_source != raw_config:
+            config_row["source_changed"] = True
+            if config_row["outcome"] == "ok":
+                config_row["outcome"] = "changed"
+        current_config = scope(config_path, project_id, region, raw=current_source)
         if project(current_config) != project(config):
             add("operator/topology-end", current_config, "changed")
     except (OSError, ValueError, RuntimeError):
+        config_row["source_changed"] = True
+        if config_row["outcome"] == "ok":
+            config_row["outcome"] = "changed"
         add("operator/topology-end", {}, "changed")
     # All members' current facts take precedence over historical logs.
     # Reserve each source a share before admitting logs from any member.
@@ -879,13 +938,15 @@ def collect(
                 "node_coverage": coverage,
                 "expected_nodes": group["instance_count"],
                 "redaction_policy": REDACTION_POLICY,
+                "public_address_replacements": aliases.replacements,
+                "public_address_aliases": len(aliases.aliases),
                 "probes": manifest,
                 "diagnostic_sufficiency": "unassessed",
                 "reports": [
                     {"file": name, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
                     for name, data in reports.items()
                 ],
-                "privacy": "Private operational evidence with targeted credential redaction; unknown ordinary text retained. Redaction cannot guarantee removal of every secret.",
+                "privacy": "Private operational evidence with targeted credential redaction and public address aliases; other ordinary text retained. Redaction cannot guarantee removal of every secret.",
             }
             summary = (
                 "VPNGW private support bundle\n\n"
@@ -917,8 +978,10 @@ def collect(
                     bundle.writestr(name, data)
             with zipfile.ZipFile(archive) as bundle:
                 for name in bundle.namelist():
-                    if unsafe_text(name, literals) or unsafe_export(
-                        name, bundle.read(name), literals
+                    if (
+                        unsafe_text(name, literals)
+                        or contains_public_address(name)
+                        or unsafe_export(name, bundle.read(name), literals)
                     ):
                         raise ValueError("Unsafe bundle export rejected.")
             if archive.stat().st_size <= ZIP_LIMIT and uncompressed <= TOTAL_LIMIT:

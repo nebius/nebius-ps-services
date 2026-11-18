@@ -25,6 +25,16 @@ tails; only journals honor the selected time window. Package installer output
 discarded by worker units with StandardOutput/StandardError=null cannot be recovered.
 Use operator/status.txt for the actual bounded public status command output.
 
+operator/customer-config.redacted.yaml is the original operator source with only
+secret/public-address spans replaced. Comments, unknown fields, duplicate keys,
+formatting and configuration mistakes are preserved. It is diagnostic evidence,
+not a deployable config. Environment references remain unresolved. Check its
+manifest outcome and source_changed flag before comparing it with runtime facts.
+PUBLIC_IPV4/6 aliases correlate the same public address within this bundle; PREFIX
+aliases preserve prefix lengths but do not encode numerical subnet relationships.
+Other operational identifiers and non-public addresses remain private information.
+The manifest records the redaction policy and sanitized content checksums only.
+
 Use the evidence index to locate these investigations:
 - Artifact mismatch: operator/selected-artifact, operator/checkpoints, operator/state and node worker
   records. Compare actual digests; CLI version alone is not deployment identity.

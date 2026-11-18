@@ -50,7 +50,9 @@ def config(tmp_path, monkeypatch):
                     "vm_spec": {"ssh_username": "ubuntu", "ssh_public_key": "SECRET_PUBLIC_VALUE"},
                     "vm_ha": {"enabled": True, "cluster_id": "cluster-example"},
                 },
-                "connections": [{"name": "connection-one", "psk": "SUPER_PRIVATE_PSK"}],
+                "connections": [
+                    {"name": "connection-one", "tunnels": [{"psk": "SUPER_PRIVATE_PSK"}]}
+                ],
             }
         )
     )
@@ -104,7 +106,7 @@ def test_complete_bundle_private_and_no_secret_source_or_state_changes(config, t
     with zipfile.ZipFile(path) as archive:
         exported = b"\n".join(archive.read(name) for name in archive.namelist())
         assert b"SUPER_PRIVATE" not in exported
-        assert b"SECRET_PUBLIC_VALUE" not in exported
+        assert b"SECRET_PUBLIC_VALUE" in archive.read("operator/customer-config.redacted.yaml")
         assert b"computeinstance-example" in exported
         assert b'"apply_locked": true' in exported
         assert json.loads(archive.read("manifest.json"))["schema"] == collector.SCHEMA
@@ -272,7 +274,7 @@ def test_only_required_access_placeholders_expand(config, monkeypatch):
     monkeypatch.setenv("PSK", "DO_NOT_READ_THIS_SECRET")
     loaded = worker.scope(config)
     assert loaded["gateway_group"]["vm_spec"]["ssh_public_key"] == "selected-public-key"
-    assert loaded["connections"][0]["psk"] == "${PSK}"
+    assert loaded["connections"][0]["tunnels"][0]["psk"] == "${PSK}"
 
 
 def test_operator_identity_propagates_privately(config, tmp_path, monkeypatch):
@@ -1280,9 +1282,7 @@ def test_archive_peer_channel_preserves_observed_direction(
         assert view["assessment"] == assessment
         manifest = json.loads(archive.read("manifest.json"))
         sample = next(
-            row
-            for row in manifest["probes"]
-            if row["file"] == "nodes/0/network/peer-channel.json"
+            row for row in manifest["probes"] if row["file"] == "nodes/0/network/peer-channel.json"
         )
         assert sample["observed_at"] == captured_at
 

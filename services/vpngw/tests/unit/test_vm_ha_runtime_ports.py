@@ -39,9 +39,11 @@ from nebius_vpngw.agent.vm_ha.runtime import (
     _passive_bgp_policy_matches,
     _policy_digest,
     _routing_hygiene_ready,
-    build_runtime_ports,
     runtime_identity_public_status,
     validate_installed_credential_bundle,
+)
+from nebius_vpngw.agent.vm_ha.runtime import (
+    build_runtime_ports as _build_runtime_ports,
 )
 from nebius_vpngw.agent.vm_ha.store import AtomicGenerationStore
 from nebius_vpngw.agent.vm_ha_controller import (
@@ -77,6 +79,13 @@ from nebius_vpngw.deploy.vm_ha_routes import (
 )
 from nebius_vpngw.ipsec_observation import ConfigurationInventory, Inventory
 from nebius_vpngw.schema import VMHARouteTarget, VMHARuntimeBinding
+
+
+def build_runtime_ports(*args, **kwargs):
+    # These adapter tests supply cloud/credential and deployment-admission ports.
+    # Receipt publication and rejection are exercised by test_routing_semantics.
+    kwargs.setdefault("route_admission", lambda: "a" * 64)
+    return _build_runtime_ports(*args, **kwargs)
 
 
 @dataclass
@@ -436,6 +445,7 @@ def test_static_cold_readiness_accepts_empty_frr_bgp_summary(
         raise AssertionError(argv)
 
     def data_plane_factory(**kwargs: object) -> SystemDataPlaneRuntime:
+        kwargs["underlay_verifier"] = lambda: True
         return SystemDataPlaneRuntime(
             **kwargs,
             routing_lock_path=tmp_path / "routing.lock",
@@ -555,6 +565,7 @@ def test_bgp_readiness_rejects_empty_frr_bgp_summary(tmp_path: Path) -> None:
         raise AssertionError(argv)
 
     def data_plane_factory(**kwargs: object) -> SystemDataPlaneRuntime:
+        kwargs["underlay_verifier"] = lambda: True
         return SystemDataPlaneRuntime(
             **kwargs,
             routing_lock_path=tmp_path / "routing.lock",
@@ -1726,8 +1737,8 @@ def test_passive_readiness_fails_closed_on_routing_hygiene_drift(
 
     ports.data_plane.current = DataPlaneMode.ACTIVE  # type: ignore[attr-defined]
     active = ports.routes.readiness()
-    assert active.routing_hygiene_ready is True
-    assert active.promotion_ready is True
+    assert active.routing_hygiene_ready is False
+    assert active.promotion_ready is False
     ports.close()
 
 
@@ -4242,6 +4253,7 @@ def test_local_data_plane_observes_text_xfrm_and_exact_bgp_nexthop(tmp_path, rou
         raise AssertionError(argv)
 
     observed = SystemDataPlaneRuntime(
+        underlay_verifier=lambda: True,
         state_path=tmp_path / "data-plane.json",
         guard_path=tmp_path / "guard.json",
         routing_lock_path=tmp_path / "routing.lock",
@@ -5499,6 +5511,7 @@ def test_pending_bgp_sampler_requires_complete_native_evidence(tmp_path, case, m
     ports = replace(
         ports,
         data_plane=SystemDataPlaneRuntime(
+            underlay_verifier=lambda: True,
             state_path=state_path,
             guard_path=state_dir / "guard.json",
             configured_bgp_sessions=peers,
@@ -5685,6 +5698,7 @@ def test_pending_bgp_health_accepts_only_complete_serving_transition_policy(
     ports = replace(
         ports,
         data_plane=SystemDataPlaneRuntime(
+            underlay_verifier=lambda: True,
             state_path=state_path,
             guard_path=state_dir / "guard.json",
             configured_bgp_sessions=peers,
