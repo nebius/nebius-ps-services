@@ -395,6 +395,7 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path, monkeypatch)
         "package_worker.py",
         "python_package_recovery.py",
         "repair_state.py",
+        "underlay_state.py",
         "repair_guest.py",
         "ordinary_routes.py",
         "ha_tunnel_policy.py",

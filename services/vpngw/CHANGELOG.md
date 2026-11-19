@@ -26,7 +26,8 @@ All notable changes to this project are tracked here. This changelog follows
   inventory so apply and repair cannot incorrectly retire required networking assets.
 - Align composed HA and strongSwan test fixtures with the current runtime-binding
   and networking-preparation contracts, including refusal of externally changed
-  managed Netplan files.
+  managed Netplan files. Include the ownership reader in the frozen-binary
+  bootstrap fixture so packaged repair transport is tested in isolation.
 - Further live validation for v0.6.9 is waived by explicit operator decision.
   Earlier HA/BGP repair and unchanged apply succeeded, but the sustained traffic
   check observed intermittent packet loss with an unresolved cause. Clean upgrade
