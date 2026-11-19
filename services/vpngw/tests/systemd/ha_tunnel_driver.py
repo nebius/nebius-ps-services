@@ -36,11 +36,8 @@ def recover_owner(cfg, config_path, state_dir):
     )
 
     digests = DigestSet("a" * 64, "b" * 64, "c" * 64)
-    cfg["vm_ha"].update(
-        node={"node_id": "owner"},
-        runtime_binding={"shared_allocation_id": "allocation"},
-        generation={"generation_id": digests.configuration},
-    )
+    # Retain the complete node/interface binding used for native rendering.
+    cfg["vm_ha"]["generation"] = {"generation_id": digests.configuration}
     config_path.write_text(yaml.safe_dump(cfg))
     peer = PeerHeartbeat(
         cluster_id="native-fixture",

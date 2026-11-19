@@ -26,7 +26,6 @@ def composed_runtime(tmp_path, monkeypatch):
     cfg = config()
     cfg["vm_ha"].update(
         node={"node_id": "node-b"},
-        runtime_binding={"shared_allocation_id": "allocation"},
         generation={"generation_id": "a" * 64},
     )
     path = tmp_path / "config.yaml"

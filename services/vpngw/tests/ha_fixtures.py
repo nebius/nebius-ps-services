@@ -3,7 +3,7 @@
 from nebius_vpngw.schema import VMHARouteTarget, VMHARuntimeBinding
 
 
-def runtime_ha(cluster_id="cluster"):
+def runtime_ha(cluster_id="cluster", *, node_id="node-a", peer_node_id="node-b"):
     targets = (
         VMHARouteTarget(
             project_id="project",
@@ -25,17 +25,19 @@ def runtime_ha(cluster_id="cluster"):
         bgp_policy_digest="c" * 64,
         nodes=tuple(
             {
-                "node_id": f"node-{name}",
+                "node_id": member_id,
                 "role": role,
                 "compute_id": f"compute-{name}",
                 "network_interface_name": "eth0",
                 "peer_endpoint": f"192.0.2.{index + 20}:9443",
             }
-            for index, (name, role) in enumerate((("a", "active"), ("b", "passive")))
+            for index, (name, role, member_id) in enumerate(
+                (("a", "active", node_id), ("b", "passive", peer_node_id))
+            )
         ),
     )
     return {
         "cluster_id": cluster_id,
-        "node": {"node_id": "node-a"},
+        "node": {"node_id": node_id},
         "runtime_binding": binding.model_dump(mode="json"),
     }
