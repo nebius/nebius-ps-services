@@ -16,6 +16,9 @@ All notable changes to this project are tracked here. This changelog follows
   Preserve configured probe sources on any assigned local interface and reset
   other connections' loss evidence on healthy or unknown observations during
   pending work. Resume Compute stop polling without relaxing the stopped-owner fence.
+- Supply the declared active data-plane mode in the native owner-recovery fixture,
+  preserving the production recovery authority check, and allow its full admission
+  and verification windows within the fixture timeout.
 
 ## [nebius-vpngw-v0.6.8] - 2026-11-18
 

@@ -174,7 +174,14 @@ release, bounded recovery, repeated reconciliation, and bidirectional packets.
 Mixed-mode cases check that switching a Static connection preserves an unrelated
 BGP session, its routes and traffic under both owner bindings. Production systemd
 filesystem and capability restrictions cover XFRM preparation and FRR policy writes.
-Cloud ownership is a frozen fixture input; these tests do not prove Compute
+Cloud ownership is a frozen fixture input. The late-loss owner-recovery driver
+also declares its active data-plane mode through the runtime adapter, so recovery
+uses the production authority predicate while observing the real native path.
+Its 120-second convergence cap covers the 30-second loss threshold, five-second
+proof separation, 29-second mutation and 29-second verification windows, and
+fixture overhead. The outer process has 150 seconds for setup and cleanup.
+These fixture limits do not change product timers or establish a recovery SLA.
+These tests do not prove Compute
 fencing, allocation transfer or peer-provider return routing.
 
 BGP restart cases persist an operation at activate, verify or release, or hold a

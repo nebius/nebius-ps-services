@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 import yaml
 from test_strongswan_sessions import Endpoint, run
+from tests.systemd.ha_tunnel_driver import OWNER_RECOVERY_TIMEOUT_SECONDS
 from tests.systemd.static_recovery_peer import install_peer, peer_interfaces
 
 from nebius_vpngw.agent.vm_ha.tunnel_observation import parse_sas, xfrm_records
@@ -211,7 +212,9 @@ def drive(endpoint, command, target="backup"):
             capture_output=True,
             text=True,
             check=True,
-            timeout=45,
+            # Allow setup/cleanup outside the recovery loop; other commands
+            # retain their existing bound.
+            timeout=OWNER_RECOVERY_TIMEOUT_SECONDS + 30 if command == "recover-owner" else 45,
         )
     except subprocess.CalledProcessError as exc:
         raise AssertionError(f"native driver {command} failed: {exc.stderr}") from exc
