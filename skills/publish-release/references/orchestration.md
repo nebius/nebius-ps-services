@@ -237,6 +237,13 @@ source project/tag and `--checkout <clone-root>`. It verifies the saved object's
 hash and creates only that exact local ref. Repeat runtime verification before
 pushing. Conflicting remote/local tags block; no force, deletion or replacement.
 
+## Withdrawal boundary
+
+The release observer rejects the versioned `<!-- withdraw-release:` marker
+before evaluating expected assets. This includes immutable metadata-only
+withdrawals and partial asset removal. Existing checkpoints do not authorize
+removing a notice, restoring assets or publishing a withdrawn tag again.
+
 ## Workflow and assets
 
 Observe `--phase release`. The helper identifies the exact push workflow by

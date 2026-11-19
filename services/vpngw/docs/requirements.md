@@ -4850,6 +4850,10 @@ this behavior without new public flags, configuration fields or opt-in workflows
   pending predecessor plans recover through fenced deployment before activation.
 - Report unknown or failed route proof as not ready. Preserve actionable first
   failures, sanitized support evidence and existing public status interfaces.
+- Full software repair reconstructs managed networking before routing admission.
+  Preserve exact persistent-route ownership through reset; never interpret a stale
+  networkd filename or an archived readiness receipt as current network readiness.
+  Include every underlay writer in repair guarding and quiescence.
 
 #### Negative Criteria
 
@@ -4876,6 +4880,19 @@ the customer and use specific on-premises advertisements where possible.
 For v0.6.8 only, the operator explicitly waives live validation at every release
 step. Required local and CI validation still applies. This release exception
 does not establish unperformed live acceptance or resolve observed packet loss.
+For v0.6.9, the operator selects focused local regression checks and live HA/BGP
+full software repair with the final candidate, followed by unchanged reapply,
+on one retained pair with independent health and encrypted traffic checks.
+Clean upgrade is blocked by the unfinished predecessor repair baseline and must
+not be claimed from recovery. No
+container, interrupted-recovery, additional topology, or destroy/recreate campaign
+is required for this scoped delivery. Other modes remain supported by the shared
+implementation but are not live-qualified by this campaign. For the v0.6.9
+publication follow-up, the operator explicitly waives further live testing at
+every step and delegates repository commit, review, PR, protected merge and
+release publication. Full local `make all` and required CI must pass. Preserve
+the historical traffic-loss finding and blocked clean-upgrade qualification;
+the waiver does not establish unperformed acceptance.
 
 <!-- /REQUIREMENT: REQ-044 -->
 

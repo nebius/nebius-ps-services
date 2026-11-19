@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import shutil
 import time
 from dataclasses import dataclass, replace
@@ -524,6 +525,66 @@ class Coordinator:
             names, key=lambda name: self.admission.bindings[name]["compute"] == identifier
         )
 
+    def start_from_predecessor(self, name: str) -> bool:
+        """Boot under exact settled predecessor authority, never relabel its guard."""
+        current = self.journal.load()
+        if current is None or current["id"] != self.operation or current["phase"] != "confirmed":
+            raise RuntimeError("Repair predecessor boot history is incomplete")
+        history = self.admission.root / "history"
+        for _ in range(32):
+            wanted = current["previous"]
+            if wanted is None:
+                return False
+            matches = []
+            for path in history.glob("*.json"):
+                if not re.fullmatch(r"[a-f0-9]{32}\.json", path.name):
+                    continue
+                raw = state.read(path)
+                if raw is None:
+                    continue
+                candidate = state.Journal.decode(raw)
+                if state.digest(candidate) == wanted:
+                    if path.stem != candidate["id"]:
+                        raise RuntimeError("Repair predecessor boot history is incomplete")
+                    matches.append(candidate)
+            if len(matches) != 1:
+                raise RuntimeError("Repair predecessor boot history is incomplete")
+            current = matches[0]
+            if current["intent"]["targets"] != self.admission.intent["targets"]:
+                raise RuntimeError("Repair predecessor boot history changed retained targets")
+            if current["phase"] == "complete":
+                return False
+            raw = state.read(self.admission.root / "runs" / current["id"] / "context.json")
+            context = json.loads(raw) if raw is not None else {}
+            if not isinstance(context, dict) or not isinstance(context.get("guards", {}), dict):
+                raise RuntimeError("Repair predecessor boot context is invalid")
+            if context and context.get("intent") != state.digest(current["intent"]):
+                raise RuntimeError("Repair predecessor boot context changed authority")
+            proof = context.get("guards", {}).get(name)
+            if proof is not None:
+                if (
+                    not isinstance(proof, dict)
+                    or not re.fullmatch(r"[a-f0-9]{64}", proof.get("predecessor", ""))
+                    or any(
+                        effect["state"] not in {"complete", "settled"}
+                        for effect in current["effects"].values()
+                    )
+                ):
+                    raise RuntimeError("Repair predecessor boot guard lacks settlement proof")
+                previous = RetainedCloud(
+                    self.cloud.sdk,
+                    CloudJournal(
+                        self.admission.root, operation=current["id"], intent=current["intent"]
+                    ),
+                    self.admission.bindings,
+                )
+                self.cloud.owner.settle()
+                previous.start_guarded(name, boot_protection=proof)
+                return True
+            if current["phase"] != "confirmed":
+                raise RuntimeError("Repair predecessor boot guard is unavailable")
+        raise RuntimeError("Repair predecessor boot history exceeds its bound")
+
     def prepare(self) -> None:
         # Download on reachable members before intentionally interrupting VPN
         # traffic. A resumed quarantined boot first needs its independent guard
@@ -568,6 +629,8 @@ class Coordinator:
                 quarantine = Quarantine(self.cloud, name)
                 if name in self.context["guards"]:
                     self.cloud.start_guarded(name, boot_protection=self.context["guards"][name])
+                elif self.start_from_predecessor(name):
+                    pass
                 else:
                     quarantine.apply()
                     quarantine.start()
@@ -719,7 +782,10 @@ def execute(admission: Admission, *, report: Any) -> None:
             # HA controller must not race the successor's quarantine or cold stop.
             settled_members = set()
             for name in sorted(predecessor.instances):
-                if instance_cloud_state(predecessor.cloud.require(name)) is InstanceCloudState.RUNNING:
+                if (
+                    instance_cloud_state(predecessor.cloud.require(name))
+                    is InstanceCloudState.RUNNING
+                ):
                     predecessor.wait_access(name)
                     predecessor.remember_guard(name, predecessor.remote(name, "settle"))
                     quarantine = Quarantine(predecessor.cloud, name)
@@ -731,12 +797,16 @@ def execute(admission: Admission, *, report: Any) -> None:
             for name in sorted(predecessor.instances):
                 if name in settled_members:
                     continue
-                if instance_cloud_state(predecessor.cloud.require(name)) is InstanceCloudState.STOPPED:
+                if (
+                    instance_cloud_state(predecessor.cloud.require(name))
+                    is InstanceCloudState.STOPPED
+                ):
                     proof = predecessor.context["guards"].get(name)
                     if proof is None:
-                        quarantine = Quarantine(predecessor.cloud, name)
-                        quarantine.apply()
-                        quarantine.start()
+                        if not predecessor.start_from_predecessor(name):
+                            quarantine = Quarantine(predecessor.cloud, name)
+                            quarantine.apply()
+                            quarantine.start()
                     else:
                         predecessor.cloud.start_guarded(name, boot_protection=proof)
                 predecessor.wait_access(name)

@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 import yaml
 from test_strongswan_sessions import Endpoint, run
+from tests.ha_fixtures import runtime_ha
 from tests.systemd.ha_tunnel_driver import OWNER_RECOVERY_TIMEOUT_SECONDS
 from tests.systemd.static_recovery_peer import install_peer, peer_interfaces
 
@@ -267,7 +268,6 @@ def native_paths(tmp_path, request):
     logs = []
     psk = secrets.token_hex(32)
     gateway = {
-        "vm_ha": {"cluster_id": "native-fixture"},
         "gateway": {"local_prefixes": ["10.200.1.1/32"]},
         "defaults": {
             "crypto": {
@@ -286,6 +286,11 @@ def native_paths(tmp_path, request):
     }
     if mixed_static:
         gateway["_fixture_owner"] = request.param.removeprefix("static-mixed-")
+    gateway["vm_ha"] = runtime_ha(
+        "native-fixture",
+        node_id=gateway.get("_fixture_owner", "owner"),
+        peer_node_id="standby",
+    )
     if mode == "bgp" or mixed_static:
         gateway["gateway"]["local_asn"] = 65001
     for name, names, routing, destination in [

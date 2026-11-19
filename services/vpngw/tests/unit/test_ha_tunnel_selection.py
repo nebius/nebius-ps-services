@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from tests.ha_fixtures import runtime_ha
 
 from nebius_vpngw.agent import strongswan_renderer
 from nebius_vpngw.agent.vm_ha import tunnel_runtime
@@ -28,7 +29,7 @@ from nebius_vpngw.tunnel_state import collect_tunnel_state
 
 def config(mode="static"):
     return {
-        "vm_ha": {"cluster_id": "cluster"},
+        "vm_ha": runtime_ha(),
         "gateway": {},
         "connections": [
             {

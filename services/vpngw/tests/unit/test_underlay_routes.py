@@ -193,6 +193,152 @@ def test_specific_local_and_transport_routes_override_remote_aggregate(cfg, host
     assert "Destination=0.0.0.0/0" not in text
 
 
+@pytest.mark.parametrize("ha", [False, True], ids=["single", "ha"])
+@pytest.mark.parametrize("mode", ["static", "bgp"])
+def test_network_preparation_rebuilds_stale_generated_file_before_route_admission(
+    cfg, host, tmp_path, ha, mode
+):
+    from nebius_vpngw.schema import VMHARouteTarget, VMHARuntimeBinding
+
+    cfg["connections"][0]["routing_mode"] = mode
+    cfg["connections"][0]["bgp"] = {"enabled": mode == "bgp"}
+    if ha:
+        targets = (
+            VMHARouteTarget(
+                project_id="project",
+                network_id="network",
+                workload_subnet_id="subnet",
+                route_table_id="routes",
+            ),
+        )
+        binding = VMHARuntimeBinding(
+            cluster_id="cluster",
+            shared_allocation_id="allocation",
+            route_targets=targets,
+            route_runtime_id=VMHARuntimeBinding.derive_route_runtime_id(
+                "cluster", "allocation", targets
+            ),
+            generation_id="a" * 64,
+            configuration_digest="a" * 64,
+            static_routes_digest="b" * 64,
+            bgp_policy_digest="c" * 64,
+            nodes=tuple(
+                {
+                    "node_id": f"node-{index}",
+                    "role": role,
+                    "compute_id": f"compute-{index}",
+                    "network_interface_name": "eth0",
+                    "peer_endpoint": f"10.64.0.{index + 5}:9443",
+                }
+                for index, role in enumerate(("active", "passive"))
+            ),
+        )
+        cfg["vm_ha"] = {
+            "runtime_binding": binding.model_dump(mode="json"),
+            "node": {"node_id": "node-0"},
+        }
+    underlay.reconcile_locked(cfg, reconfigure=True)
+    old_dropin = host.dropin
+    host.network_file.unlink()
+    override = tmp_path / "netplan" / "99-nebius-vpngw.yaml"
+    applied = []
+
+    def apply(argv, **kwargs):
+        assert argv == ["netplan", "apply"]
+        assert override.read_text() == underlay.netplan_content()
+        applied.append(argv)
+        host.network_file = host.network_file.with_name("10-netplan-interface0.network")
+        host.network_file.write_text("[Match]\nName=eth0\n[Network]\nDHCP=ipv4\n")
+        host.loaded = False
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    underlay.prepare_network_locked(cfg, netplan_path=override, command=apply)
+    assert underlay.ready(cfg)
+    assert not old_dropin.exists()
+    assert host.dropin.exists()
+    assert ("Destination=10.64.0.6/32" in host.dropin.read_text()) == ha
+    assert len(applied) == 1
+    before = underlay.STATE.read_bytes()
+    calls = len(host.calls)
+    underlay.prepare_network_locked(cfg, netplan_path=override, command=apply)
+    assert underlay.STATE.read_bytes() == before
+    assert len(applied) == 1
+    assert not any(c[:2] == ["networkctl", "reload"] for c in host.calls[calls:])
+
+
+def test_stale_network_file_does_not_bypass_foreign_route_preservation(cfg, host, tmp_path):
+    host.network_file.unlink()
+    host.routes.append({"dst": "198.51.100.0/24", "dev": "eth0", "protocol": "boot"})
+    override = tmp_path / "netplan" / "99-nebius-vpngw.yaml"
+    with pytest.raises(underlay.UnderlayError, match="unmanaged physical route"):
+        underlay.prepare_network_locked(cfg, netplan_path=override)
+    assert not override.exists()
+
+
+def test_network_apply_failure_never_publishes_underlay_readiness(cfg, host, tmp_path):
+    with pytest.raises(underlay.UnderlayError, match="could not be applied"):
+        underlay.prepare_network_locked(
+            cfg,
+            netplan_path=tmp_path / "netplan" / "99-nebius-vpngw.yaml",
+            command=lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, "", "private"),
+        )
+    assert not underlay.STATE.exists()
+
+
+@pytest.mark.parametrize("fault", ["current", "retired", "orphan", "missing-ledger", "intent"])
+def test_network_preparation_checks_ownership_before_any_effect(cfg, host, tmp_path, fault):
+    underlay.reconcile_locked(cfg, reconfigure=True)
+    record = json.loads(underlay.STATE.read_bytes())
+    if fault == "current":
+        host.dropin.write_text("# foreign edit\n")
+    elif fault in {"retired", "orphan"}:
+        path = host.dropin.parent.parent / "20-other.network.d" / underlay.DROPIN
+        path.parent.mkdir()
+        path.write_text("# foreign edit\n")
+        if fault == "retired":
+            record["retire_files"] = [{"path": str(path), "content": record["content"]}]
+            underlay.STATE.write_text(json.dumps(record))
+    elif fault == "missing-ledger":
+        underlay.STATE.unlink()
+    else:
+        record["phase"] = "pending"
+        record["intent"] = "c" * 64
+        underlay.STATE.write_text(json.dumps(record))
+    host.calls.clear()
+    override = tmp_path / "netplan" / "99-nebius-vpngw.yaml"
+    with pytest.raises(underlay.UnderlayError, match="ownership|pending"):
+        underlay.prepare_network_locked(cfg, netplan_path=override)
+    assert not override.exists()
+    assert host.calls == []
+
+
+@pytest.mark.parametrize(
+    "fault", ["routes", "unknown-network", "intent", "boot", "retire-files", "dhcp-routes"]
+)
+def test_malformed_ownership_rejects_before_network_effects(cfg, host, tmp_path, fault):
+    underlay.reconcile_locked(cfg, reconfigure=True)
+    record = json.loads(underlay.STATE.read_bytes())
+    if fault == "routes":
+        del record["network"]["routes"]
+    elif fault == "unknown-network":
+        record["network"]["unexpected"] = True
+    elif fault == "intent":
+        del record["intent"]
+    elif fault == "boot":
+        record["boot"] = None
+    elif fault == "retire-files":
+        record["retire_files"] = [None]
+    else:
+        record["network"]["dhcp_routes"] = [None]
+    underlay.STATE.write_text(json.dumps(record))
+    host.calls.clear()
+    override = tmp_path / "netplan" / "99-nebius-vpngw.yaml"
+    with pytest.raises(underlay.UnderlayError, match="ledger"):
+        underlay.prepare_network_locked(cfg, netplan_path=override)
+    assert not override.exists()
+    assert host.calls == []
+
+
 def test_timer_repairs_exact_owned_route_without_network_reload(cfg, host):
     underlay.reconcile_locked(cfg, reconfigure=True)
     host.routes.remove(host.route("10.64.16.0/24"))

@@ -222,6 +222,13 @@ checkout-dependent review or repair. Carry the original grant and returned
 execution manifest through repair/publication handoffs; never require local
 adoption of a repaired PR head. Parent effects retain their separate authority.
 
+## Withdrawn Releases
+
+Publication verification must refuse any `<!-- withdraw-release:` notice,
+including malformed markers, incomplete withdrawals and immutable releases
+whose assets remain. Do not remove that notice or re-upload assets to resume
+publication. Use the separately invoked `withdraw-release` for withdrawal.
+
 ## Learning Loop
 
 When using this skill, capture durable, reusable, public-safe learnings

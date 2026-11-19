@@ -23,6 +23,12 @@ from nebius_vpngw.deploy import repair_remote
             "quiesce",
             "repair_service_inhibition",
         ),
+        (
+            {"action": "prepare-activation"},
+            "Repair underlay ownership is missing or conflicts with retained files",
+            "activate",
+            "repair_underlay_ownership",
+        ),
         ({"action": "stage"}, "private-value-must-not-appear", "stage", "receipt"),
         ({"action": []}, "private-value-must-not-appear", "install", "receipt"),
         ([], "private-value-must-not-appear", "install", "receipt"),

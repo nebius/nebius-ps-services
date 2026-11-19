@@ -79,6 +79,7 @@
     "./test-software-in-container",
     "./troubleshoot",
     "./update-branch",
+    "./withdraw-release",
     "./worktree"
   ],
   "hooks": {

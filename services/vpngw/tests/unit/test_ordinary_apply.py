@@ -28,6 +28,25 @@ from nebius_vpngw.deploy.ssh_push import SSHPush, VMHAAgentArtifact
 pytestmark = pytest.mark.usefixtures("runtime_migration_guest")
 
 
+@pytest.mark.parametrize("ha", [False, True])
+def test_package_manifest_retains_all_canonical_networking_assets(release_wheel, ha):
+    from nebius_vpngw import deployment_assets, runtime_migration
+
+    owner = vm_ha_package if ha else ordinary_apply
+    manifest = owner.artifact(release_wheel, "gateway: {}\nconnections: []\n")
+    canonical = {path for _, path, _ in deployment_assets.entries(ha=ha)}
+    assert set(manifest["assets"]) == canonical
+    assert "/etc/systemd/system/nebius-vpngw-underlay.service" in canonical
+    previous = {
+        "phase": "complete", "operation": "a" * 32,
+        "manifest": {"wheel_sha256": "b" * 64,
+                     "assets": {path: {} for path in canonical}},
+    }
+    assert runtime_migration.asset_retirement(manifest, previous) == {
+        "predecessor": None, "removals": {},
+    }
+
+
 def planning_result(observed):
     observed.setdefault(
         "release_identity",

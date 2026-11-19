@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from nebius_vpngw import ordinary_bootstrap
+from nebius_vpngw import handoff_bootstrap, ordinary_bootstrap, repair_bootstrap
 from nebius_vpngw.deploy import ordinary_remote
 
 
@@ -38,11 +38,15 @@ def test_source_upload_does_not_restart_the_remote_deadline(monkeypatch, capsys)
     alarm.assert_not_called()
 
 
-def test_repair_guard_verifier_is_available_without_installed_package():
-    source = base64.b64decode(ordinary_bootstrap.source_frame()).decode()
-    # Load the real framed helpers in isolated stdlib Python, stopping before
-    # the transaction entry point reads its request or touches the guest.
-    helpers = source.rsplit("exec(compile(base64.b64decode", 1)[0]
+@pytest.mark.parametrize("bundle", ["ordinary", "handoff", "repair"])
+def test_repair_guard_verifier_is_available_without_installed_package(bundle):
+    if bundle == "ordinary":
+        source = base64.b64decode(ordinary_bootstrap.source_frame()).decode()
+        # Stop before the transaction entry point reads or touches the guest.
+        helpers = source.rsplit("exec(compile(base64.b64decode", 1)[0]
+    else:
+        helpers = (handoff_bootstrap.streamed_source() if bundle == "handoff"
+                   else repair_bootstrap.source())
     result = subprocess.run(
         [sys.executable, "-I", "-S"],
         input=helpers
@@ -50,6 +54,7 @@ def test_repair_guard_verifier_is_available_without_installed_package():
         + "assert guard.storage.SCHEMA == 'nebius-vpngw.repair.v1'\n"
         + "assert guard.service_guard().startswith(b'[Unit]\\nRequires=')\n"
         + "assert callable(guard.verify_guard)\n"
+        + "assert callable(guard.underlay_state.decode)\n"
         + "import _vpngw_dependency_scope as scope\n"
         + "assert callable(scope.closure) and callable(scope.check_shared_conflicts)\n",
         text=True,

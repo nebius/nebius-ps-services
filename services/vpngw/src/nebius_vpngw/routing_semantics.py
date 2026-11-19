@@ -207,7 +207,7 @@ def prepare_ha_locked(expected: dict[str, Any], artifact: str) -> None:
     # never relabeled as admitted by a newly installed semantic revision.
     if (ha_repair.STATE / "route-pending.json").exists():
         raise RuntimeError("predecessor route mutation must settle before routing admission")
-    underlay.reconcile_locked(cfg, reconfigure=True)
+    underlay.prepare_network_locked(cfg)
     _protection(cfg).install()
     _publish(
         mode="ha",

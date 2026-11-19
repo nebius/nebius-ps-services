@@ -332,6 +332,19 @@ class PublicationTests(unittest.TestCase):
             with self.assertRaises(pub.Unverifiable):
                 pub.asset_records([asset, asset])
 
+    def test_withdrawal_marker_blocks_before_assets_or_manifest_reuse(self):
+        for body in ("<!-- withdraw-release:v1 -->", "<!-- withdraw-release:malformed",
+                     "<!-- withdraw-release:v1 -->\nDownloads remain available."):
+            api = Mock()
+            api.pages.return_value = [{"tag_name": IDENTITY["tag"], "id": 1,
+                                      "draft": False, "body": body, "immutable": True}]
+            with patch.object(pub, "tag_identity", return_value=IDENTITY), \
+                 patch.object(pub, "trusted_manifests") as manifests:
+                with self.assertRaisesRegex(pub.Conflict, "withdrawn"):
+                    pub.release_state(api, "release.yml", IDENTITY["tag"])
+                manifests.assert_not_called()
+                api.download.assert_not_called()
+
     def test_release_absence_requires_complete_successful_listing(self):
         api = Mock()
         with patch.object(pub, "tag_identity", return_value=IDENTITY):

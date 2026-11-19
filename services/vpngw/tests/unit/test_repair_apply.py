@@ -12,12 +12,21 @@ from nebius_vpngw.deploy import repair_apply
 from nebius_vpngw.deploy.apply_result import ApplyReport
 
 
-@pytest.mark.parametrize("worker_state,observed_at", [
-    ("RUNNING_OWNED", 1801), ("BLOCKED", 1), ("BLOCKED", 1801),
-])
+@pytest.mark.parametrize(
+    "worker_state,observed_at",
+    [
+        ("RUNNING_OWNED", 1801),
+        ("BLOCKED", 1),
+        ("BLOCKED", 1801),
+    ],
+)
 @pytest.mark.parametrize("output_format", ["text", "json"])
 def test_retained_repair_worker_has_specific_public_recovery(
-    monkeypatch, tmp_path, worker_state, observed_at, output_format,
+    monkeypatch,
+    tmp_path,
+    worker_state,
+    observed_at,
+    output_format,
 ):
     from nebius_vpngw.deploy import pair_phases
     from nebius_vpngw.deploy.recovery import Invocation, RepairBlocked, advice
@@ -28,7 +37,9 @@ def test_retained_repair_worker_has_specific_public_recovery(
     coordinator.context = {"guards": {"node-a": {}}}
     coordinator.cloud = SimpleNamespace(start_guarded=lambda *_a, **_k: None)
     coordinator.wait_access = lambda _: None
-    coordinator.journal = SimpleNamespace(load=lambda: {"id": coordinator.operation, "phase": "staged"})
+    coordinator.journal = SimpleNamespace(
+        load=lambda: {"id": coordinator.operation, "phase": "staged"}
+    )
     coordinator.package_request = lambda _: {"identity": "private-worker-sentinel"}
     calls = []
 
@@ -56,9 +67,17 @@ def test_retained_repair_worker_has_specific_public_recovery(
     monkeypatch.setattr(cli, "_apply_impl", fail)
     reports = []
     monkeypatch.setattr(pair_phases, "report", reports.append)
-    result = CliRunner().invoke(cli.app, [
-        "apply", "-c", str(path), "--repair", "--output-format", output_format,
-    ])
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "apply",
+            "-c",
+            str(path),
+            "--repair",
+            "--output-format",
+            output_format,
+        ],
+    )
     assert result.exit_code == 1
     assert len(reports) == 1
     payload = reports[0]
@@ -80,9 +99,13 @@ def test_retained_repair_worker_has_specific_public_recovery(
     else:
         assert result.stdout.count("Reason:") == 1
         assert shlex.join(expected) in result.stdout
-    blocked = advice(Invocation("apply", repair=True), RepairBlocked(
-        "repair-worker-blocked", ownership_established=True,
-    ))
+    blocked = advice(
+        Invocation("apply", repair=True),
+        RepairBlocked(
+            "repair-worker-blocked",
+            ownership_established=True,
+        ),
+    )
     assert blocked.destroy_command is None
 
 
@@ -114,6 +137,96 @@ def test_declining_repair_creates_no_journal_or_effect(monkeypatch, tmp_path):
     monkeypatch.setattr(repair_apply, "Coordinator", lambda *_a, **_k: pytest.fail("effect"))
     repair_apply.execute(SimpleNamespace(root=tmp_path / "absent"), report=ApplyReport())
     assert not (tmp_path / "absent").exists()
+
+
+@pytest.mark.parametrize("hops", [1, 2])
+@pytest.mark.parametrize(
+    "fault", [None, "missing-settlement", "complete", "changed-target", "missing-history"]
+)
+def test_stopped_successor_uses_only_exact_settled_predecessor_guard(
+    tmp_path, monkeypatch, hops, fault
+):
+    import hashlib
+
+    from nebius_vpngw import repair_guest
+
+    intent = {
+        "project": "project",
+        "gateway": "gateway",
+        "configuration": "a" * 64,
+        "artifact": "b" * 64,
+        "ha": False,
+        "targets": [
+            {
+                "name": "node-0",
+                "compute": "vm-0",
+                "disk": "disk-0",
+                "transport": "192.0.2.1",
+                "binding": "c" * 64,
+            }
+        ],
+    }
+    journal = repair_state.Journal(tmp_path / "repair")
+    first = journal.begin(intent)
+    binding = {"compute": "vm-0"}
+    proof = {
+        "operation": first["id"],
+        "guard": hashlib.sha256(repair_guest.GUARD).hexdigest(),
+        "compute": "vm-0",
+        "binding": repair_state.digest(binding),
+        "boot": "boot-a",
+        "predecessor": "d" * 64,
+    }
+    if fault == "missing-settlement":
+        del proof["predecessor"]
+    if fault == "complete":
+        first["phase"] = "complete"
+        repair_state.publish(journal.path, first)
+    repair_state.publish(
+        journal.root / "runs" / first["id"] / "context.json",
+        {"intent": repair_state.digest(intent), "guards": {"node-0": proof}},
+    )
+    current = first
+    for index in range(hops):
+        current = journal.begin(
+            {**intent, "artifact": str(index + 1) * 64}, predecessor_settled=True
+        )
+    if fault == "missing-history":
+        (journal.root / "history" / (first["id"] + ".json")).unlink()
+    admission_intent = current["intent"]
+    if fault == "changed-target":
+        admission_intent = {**admission_intent, "targets": []}
+    coordinator = repair_apply.Coordinator.__new__(repair_apply.Coordinator)
+    coordinator.operation = current["id"]
+    coordinator.journal = journal
+    coordinator.admission = SimpleNamespace(
+        root=journal.root, intent=admission_intent, bindings={"node-0": binding}
+    )
+    calls = []
+    coordinator.cloud = SimpleNamespace(
+        sdk=object(), owner=SimpleNamespace(settle=lambda: calls.append("settle"))
+    )
+
+    class Cloud:
+        def __init__(self, sdk, cloud_journal, bindings):
+            assert cloud_journal.operation == first["id"]
+            assert bindings == coordinator.admission.bindings
+
+        def start_guarded(self, name, *, boot_protection):
+            assert boot_protection == proof
+            calls.append(("start", name, boot_protection["operation"]))
+
+    monkeypatch.setattr(repair_apply, "RetainedCloud", Cloud)
+    if fault in {"missing-settlement", "changed-target", "missing-history"}:
+        with pytest.raises(RuntimeError, match="predecessor boot"):
+            coordinator.start_from_predecessor("node-0")
+        assert not calls
+    elif fault == "complete":
+        assert coordinator.start_from_predecessor("node-0") is False
+        assert not calls
+    else:
+        assert coordinator.start_from_predecessor("node-0") is True
+        assert calls == ["settle", ("start", "node-0", first["id"])]
 
 
 def test_missing_resolver_is_reported_before_reconstruction_effects(monkeypatch, tmp_path):
