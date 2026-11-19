@@ -110,6 +110,13 @@ merge to merge-pr. Agentic SDLC is excluded. Install deterministic trusted-defau
 workflows only; no agent runtime, PR checkout or PAT fallback in privileged jobs.
 Keep the CI workflow inventory, templates and installed helper aligned.
 
+## Withdrawn Releases
+
+Publication verification must refuse any `<!-- withdraw-release:` notice,
+including malformed markers, incomplete withdrawals and immutable releases
+whose assets remain. Do not remove that notice or re-upload assets to resume
+publication. Use the separately invoked `withdraw-release` for withdrawal.
+
 ## Learning Loop
 
 When using this skill, capture durable, reusable, public-safe learnings

@@ -387,6 +387,10 @@ def release_state(api, workflow, tag):
     identity = tag_identity(tag)
     releases = [r for r in api.pages("releases") if r["tag_name"] == tag]
     require(len(releases) <= 1, "Ambiguous release identity")
+    # Keep this wire marker identical to publish-release and withdraw-release.
+    # Unknown/malformed versions also stop publication; assets may be immutable.
+    if releases and "<!-- withdraw-release:" in (releases[0].get("body") or ""):
+        raise Conflict("Release is withdrawn; publication or resume is refused")
     manifests = trusted_manifests(api, workflow, RELEASE_SCHEMA, identity["sha"], tag)
     if not releases:
         return "absent"

@@ -77,7 +77,15 @@ def run():
     # namespaces have no DHCP/networkd deployment. Supply its already-admitted
     # prerequisite before the trial, as with the fixture cloud owner below.
     main.underlay.verify = lambda _cfg: "namespace-underlay-fixture"
-    main.underlay.preflight_reconfigure = lambda _cfg: None
+
+    def namespace_network_preparation(config, *, netplan_path, command):
+        netplan_path.parent.mkdir(parents=True, exist_ok=True)
+        netplan_path.write_text(
+            main.underlay.netplan_content(main.underlay.intent(config).interface)
+        )
+        netplan_path.chmod(0o600)
+
+    main.underlay.prepare_network_locked = namespace_network_preparation
     main.underlay.reconcile_locked = lambda _cfg, *, reconfigure=False: 0
     # Kernel forwarding, VPN routing, XFRM and FRR transitions stay real.
     main.update_firewall_from_config = lambda *a, **kw: None

@@ -395,6 +395,10 @@ def observation(value: dict, github: GitHub, phase: str) -> dict:
             "url": run["html_url"],
         }
     release = github.api(f"releases/tags/{value['tag']}")
+    # Same wire marker as the standalone publication verifier. Reject even an
+    # unknown/malformed marker and immutable releases with all assets present.
+    if "<!-- withdraw-release:" in (release.get("body") or ""):
+        return {"status": "blocked", "reason": "Release is withdrawn; publication or resume is refused"}
     assets = github.api(f"releases/{release['id']}/assets?per_page=100")
     if len(assets) >= 100:
         raise ReleaseError(

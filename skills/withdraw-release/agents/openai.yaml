@@ -1,0 +1,6 @@
+interface:
+  display_name: "Withdraw Release"
+  short_description: "Withdraw a selected GitHub release safely"
+  default_prompt: "Use $withdraw-release --release <version-or-exact-tag> to withdraw this GitHub release."
+policy:
+  allow_implicit_invocation: false

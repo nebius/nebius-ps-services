@@ -13162,6 +13162,198 @@ failed or incomplete trials retain their original disposition.
 
 <!-- /FEATURE: FEAT-045 -->
 
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-046 reqs=REQ-038,REQ-043,REQ-044 status=ready delivery=implemented priority=P1 version=1 -->
+### FEAT-046: Retained repair reconstructs owned networking before activation
+
+#### Requirements Covered
+
+- REQ-038: Reconstruct the software stack on retained gateways.
+- REQ-043: Use ordinary apply for selected-release convergence.
+- REQ-044: Preserve physical paths and exact persistent-route ownership.
+
+#### Context Evidence
+
+Repair archives the managed Netplan override and underlay ownership ledger while
+leaving the dynamic networkd drop-in. HA routing admission runs before the protocol
+renderer recreates Netplan. A stale reported matching filename can therefore fail
+before route reconciliation; ordinary activation also loses persistent ownership.
+The repair unit inventory omits the underlay service.
+
+#### Design Details
+
+One shared fenced networking preparation owner serves ordinary and HA deployment,
+including HA handoff. Separate physical NIC, DHCP and foreign-route observation
+from strict loaded-configuration proof. Recreate the managed Netplan override,
+validate collateral route/rule preservation, apply networking, rediscover the
+active matching file, reconcile exact owned routes and verify destination
+protection before routing admission and service activation. Existing checkpoint
+conversion, predecessor-effect settlement and lock owners remain authoritative.
+
+Keep validated underlay ownership across repair reset without retaining routing
+admission or claiming old boot readiness. A package-independent structural reader
+validates ownership and exact drop-in bytes. A fenced repair owner may recover a
+missing live ledger only from its exact protected archive and operation/resource
+bindings; missing or conflicting evidence blocks. Record new observations without
+inventing an archive content manifest absent from older repairs. Include the
+underlay service in all guard and writer inventories. Strengthen a predecessor
+guard under exact repair authority before requiring the complete current guard.
+
+A successor must preserve access to a stopped guest already protected by a settled
+predecessor. Resolve only the exact `previous` digest chain and unchanged retained
+bindings; intermediate confirmed operations without a member guard may be traversed.
+A settled guard remains bound to its original operation and starts the VM through
+that operation's cloud journal. The successor then performs authenticated guest
+admission and installs its own guard. Never relabel receipts or traverse completed
+cleanup. Missing, conflicting or malformed history blocks this handoff.
+
+Quarantine remains required when no such protection is proven; do not broaden
+stateless firewall rules. Cleanup of partial quarantine creation settles provider
+effects and deletes only exact resources identified by creation receipts, after
+original attachments are restored under verified guard authority. A missing rule
+manifest with recorded rule-create effects is inconsistent and must block cleanup.
+
+#### Selected Option
+
+Reuse the shared underlay owner and existing repair archive/guard owners. No new
+public flags, configuration fields, runtime dependencies or general overlap mode.
+Manual route injection, filename-based adoption, HA-only fixes, blind network
+reload and increased retries are rejected.
+
+#### Alternatives Considered
+
+Reject protocol-specific ordering, blind foreign-route cleanup and readiness
+receipt restoration. Shared preparation keeps one ownership and safety boundary.
+
+#### Implementation Boundaries
+
+Shared agent networking, ordinary/HA activation, package-independent repair
+bootstrap, ownership retention and guarded service inventory. Preserve VM/disk
+identity, foreign state, authenticated access, cloud fencing and immutable
+artifact comparison. No release-workflow redesign. The publication follow-up
+uses the existing commit, review, PR, protected merge and release owners.
+
+#### Test-First Success Criteria
+
+- TDD-001: Stale networkd identity cannot prevent fenced reconstruction of managed
+  configuration; a changed foreign route or drop-in still blocks before effects.
+- TDD-002: Full reset retains exact ownership and clears old routing admission.
+
+#### Validation Plan
+
+Run focused local source regressions, lint and type checks, then freeze one wheel
+and validate the retained HA/BGP pair through final-candidate full repair and
+unchanged apply. Report the clean-upgrade scenario as blocked by the unfinished
+predecessor repair baseline. Independently verify artifacts, physical routes, HA roles, heartbeat,
+IPsec/BGP and bidirectional encrypted traffic, with ten minutes of final steady
+traffic observation. The operator excludes container and interrupted-recovery
+campaigns, additional live modes, renewal/reboot/failover trials and replacement.
+Missing prerequisites or a baseline unsuitable for a genuine upgrade remain
+explicit blockers; do not fabricate prior versions or classify recovery as upgrade.
+
+#### Test Plan
+
+Focused shared networking, guard inventory, ledger preservation and activation
+ordering regressions; the selected live HA/BGP repair and reapply scenarios only.
+
+#### Evaluation Plan
+
+Keep local evidence, installed artifact identity and live data-plane proof
+separate. Retain failures and do not claim unperformed topology qualification.
+
+#### Rollout And Rollback
+
+Ordinary apply installs a newer selected artifact. Full repair remains explicit
+and disruptive without an overall outage cap. Keep fences and evidence on failure;
+never force a downgrade, delete resources or edit authority to obtain a pass.
+The operator delegates PR creation, protected merge, local default-branch update
+and v0.6.9 publication through the existing workflow owners. No further live
+testing is requested; full local `make all` and required CI remain mandatory.
+
+#### Done Definition
+
+The shared fix and complete local checks pass, review findings are resolved, and
+the exact protected merge and published release artifacts are verified. Preserve
+the earlier live repair/reapply evidence, failed zero-loss traffic criterion and
+blocked clean upgrade. Do not claim complete live qualification.
+
+#### Implementation Evidence
+
+Implemented the shared `underlay.prepare_network_locked` prerequisite in ordinary
+rendering and HA checkpoint admission. The stdlib-only `underlay_state` codec is
+bundled into repair bootstrap; reset preserves validated ownership, exact archive
+recovery precedes successor admission, and the underlay service joins repair guard
+and writer inventories. Current and retired drop-ins, orphan files and malformed
+ledgers reject before Netplan effects. Repair succession resolves exact settled
+predecessor guards under their original operation authority; partial quarantine
+cleanup uses creation receipts and preserves canonical provider retry history.
+The shared HA and ordinary asset inventories include the underlay service and
+ordering files, so controller manifests, artifact installation and repair agree
+on required files and do not mistakenly retire them. Ordinary, handoff and repair
+source bundles load the package-independent ownership reader before the guard.
+README and Unreleased changelog are aligned.
+
+#### Verification Evidence
+
+Focused source regressions pass for networking reconstruction, ownership retention,
+archive restoration, guard inventory, admission ordering, repair diagnostics,
+ordinary apply and artifact selection. The reconstruction test covers Single/HA
+and Static/BGP combinations. Scoped Ruff, mypy and whitespace checks pass.
+
+A frozen 0.6.9 wheel builds successfully, installs outside the source checkout,
+resolves its exact recorded artifact and loads its repair bootstrap without site
+packages. Focused tests also pass against the installed wheel. Review findings on
+pre-Netplan ownership checks and malformed ledger acceptance were fixed and closed.
+
+The final frozen candidate completed full retained-pair HA/BGP repair and unchanged
+apply. The latter reported healthy HA and configuration, software and infrastructure
+verified unchanged. Independent guest hashes matched the exact candidate on both
+members. Direct provider observations confirmed retained VM, disk and IP identities
+and exclusive shared allocation ownership. Local routes used the physical interface,
+remote workload routes used XFRM, generated network files existed, owned drop-ins
+matched their ledger, and both members had established IPsec/BGP sessions.
+
+The ten-minute traffic window did not pass its zero-loss criterion: one direction
+received 598 of 600 packets and the other 599 of 600. TCP succeeded in both directions.
+All 21 paired HA samples were healthy, peer heartbeat sequences advanced, exactly
+one owner forwarded throughout, and encrypted counters advanced bidirectionally.
+A separate bounded diagnostic received 300 of 300 packets in one direction and
+299 of 300 in the other. Header-only captures localized the latter missing request
+after the active gateway handed it to XFRM and before the peer workload received it;
+the captures reported no kernel drops. The cause within the IPsec, transport or
+peer path remains unresolved. This evidence does not establish clean traffic or
+complete release qualification, and the diagnostic does not replace the failed
+qualification window.
+
+Earlier failed and stopped trials remain separate evidence. They exposed successor
+boot-guard handoff, controller/guest asset-inventory disagreement and a missing
+ownership-reader dependency in streamed helpers; each source owner was corrected
+and covered by regressions. A dependency-download timeout was resumed through the
+same product journal. The final candidate passes 571 focused installed-package
+tests, including isolated stdlib loading of ordinary, handoff and repair bundles.
+
+The final repair started from a product-supported enrolled checkpoint left by an
+earlier candidate. No manual guest prerequisite or checkpoint edits were used.
+The original unfinished-repair baseline cannot establish a clean upgrade from a
+healthy older release; that scenario remains blocked as selected by the operator.
+Other topology/protocol live combinations remain unqualified. The implementation
+handoff performed no commit, tag or release publication.
+
+The publication follow-up reproduced obsolete networking-preflight mocks and
+incomplete HA runtime bindings in composed test fixtures. Complete secret-free
+runtime identities and explicit simulated networkd prerequisites restore the
+fixture contracts without weakening production validation. The renderer regression
+now asserts that externally modified managed Netplan content blocks before
+network reload or daemon restart. The native namespace fixture declares its
+networking prerequisite at the same shared boundary.
+
+Full local `make all` passes: 8,082 unit tests, Ruff, mypy over 239 source files,
+and the wheel build. All 303 tests in the five originally affected modules pass.
+No additional live gateway or traffic testing was performed in this follow-up;
+previous traffic and upgrade limitations remain as recorded above.
+
+<!-- /FEATURE: FEAT-046 -->
+
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->
 

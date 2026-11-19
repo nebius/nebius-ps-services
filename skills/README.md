@@ -103,7 +103,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Skill Catalog
 
-The catalog contains 77 flat skill folders with shared execution instructions,
+The catalog contains 78 flat skill folders with shared execution instructions,
 native invocation controls, and separate standard, host and distribution checks.
 Stateful workflows use the selected host's private home, identity and hook
 adapters. Read the [executing-agent contract](global-context-management/references/agent-hosts.md)
@@ -210,6 +210,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `merge-pr` | Explicit only | Merge a ready GitHub PR without admin bypass; verify result ancestry, explicit result CI and configured Pages publication. |
 | `publish-helm` | Explicit only | Publish an OCI Helm chart end to end: prepare release changes, PR/merge, tag, wait for workflow, verify the chart, and report the result. |
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
+| `withdraw-release` | Explicit only | Withdraw a selected GitHub release; remove mutable assets or warn that immutable downloads remain, preserving the page and tag. |
 | `publish-release` | Explicit only | Publish a GitHub Release in one resumable invocation: commit current work, locally review/fix its PR, use protected Actions merge, tag and verify assets. |
 | `review-github-issues` | Explicit only | Review current-project or selected issues, save remediation plans and offer a separate implementation approval handoff. |
 | `review-pr` | Explicit only | Review a GitHub pull request, fixing safe issues in generic mode or preserving the exact promoted head in active Agentic SDLC findings-only mode. |
@@ -1692,6 +1693,15 @@ release changes on a feature branch, hands off to `create-pr` and `merge-pr`,
 tags from the default branch, waits for the tag-triggered workflow, verifies
 the image with `docker buildx imagetools inspect`, and returns a publish
 report.
+
+### `withdraw-release`
+
+Use `$withdraw-release --release <version-or-exact-tag>` to withdraw a published
+GitHub release. Optional `--repo`, `--project-dir`, `--reason` and read-only
+`--dry-run` select scope and notice text. Mutable assets are removed; immutable
+releases receive a WITHDRAWN title and explicit downloads-remain warning. Both
+retain the page/tag and are excluded from latest. Repeat to resume or verify.
+See [Withdraw Release](withdraw-release/SKILL.md).
 
 ### `publish-release`
 

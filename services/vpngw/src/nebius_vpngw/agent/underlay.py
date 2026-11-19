@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .. import underlay_state
 from .local_commands import run
 from .vm_ha.store import atomic_write_json
 
@@ -233,7 +234,7 @@ class Network:
     dhcp_routes: tuple[tuple[str, str], ...] = ()
 
 
-def observe(interface: str) -> Network:
+def observe(interface: str, *, configuration: bool = True) -> Network:
     data = _json(["networkctl", "status", "--json=short", "--no-pager", interface])
     if not isinstance(data, dict) or data.get("Name") != interface:
         raise UnderlayError("networkd cannot identify the primary interface")
@@ -265,7 +266,7 @@ def observe(interface: str) -> Network:
     path = Path(data.get("NetworkFile") or "")
     if path.parent not in NETWORK_ROOTS or not re.fullmatch(r"[A-Za-z0-9_.-]+\.network", path.name):
         raise UnderlayError("networkd matching file is missing or unsafe")
-    files = {str(path): hashlib.sha256(_read(path)).hexdigest()}
+    files = {str(path): hashlib.sha256(_read(path)).hexdigest()} if configuration else {}
     for raw in data.get("NetworkFileDropins", []):
         extra = Path(raw)
         if (
@@ -274,7 +275,7 @@ def observe(interface: str) -> Network:
             or extra.suffix != ".conf"
         ):
             raise UnderlayError("networkd drop-in identity is unsafe")
-        if extra.name != DROPIN:
+        if configuration and extra.name != DROPIN:
             files[str(extra)] = hashlib.sha256(_read(extra)).hexdigest()
     routes = _json(["ip", "-j", "-4", "route", "show", "table", "main", "dev", interface])
     if not isinstance(routes, list) or any(not isinstance(row, dict) for row in routes):
@@ -329,7 +330,7 @@ def observe(interface: str) -> Network:
         address,
         gateway,
         str(path),
-        digest(files),
+        digest(files) if configuration else "",
         tuple(routes),
         managed,
         loaded,
@@ -342,11 +343,7 @@ def _dropin(network: Network) -> Path:
 
 
 def render(destinations: tuple[str, ...]) -> str:
-    return "# Managed by nebius-vpngw; edit the gateway YAML instead.\n" + "".join(
-        f"\n[Route]\nDestination={prefix}\nGateway=_dhcp4\nGatewayOnLink=yes\n"
-        f"Table=254\nProtocol=16\nMetric={METRIC}\n"
-        for prefix in destinations
-    )
+    return underlay_state.render(destinations)
 
 
 def _destination(row: dict[str, Any]) -> str:
@@ -396,36 +393,14 @@ def _connected(row: dict[str, Any], prefix: str, network: Network) -> bool:
 
 def _ledger() -> dict[str, Any] | None:
     try:
-        value = json.loads(_read(STATE))
+        return underlay_state.decode(_read(STATE), network_root=NETWORK_ROOTS[0])
     except FileNotFoundError:
         return None
-    if (
-        not isinstance(value, dict)
-        or value.get("schema") != SCHEMA
-        or value.get("phase") not in {"pending", "committed"}
-        or not isinstance(value.get("network"), dict)
-        or not isinstance(value.get("destinations"), list)
-        or any(str(ipaddress.IPv4Network(p, strict=True)) != p for p in value["destinations"])
-    ):
-        raise UnderlayError("underlay ownership ledger is invalid")
-    network = Network(**value["network"])
-    if value.get("dropin") != str(_dropin(network)) or value.get("content") != render(
-        tuple(value["destinations"])
-    ):
-        raise UnderlayError("underlay ownership ledger has an invalid drop-in")
-    for retired in value.get("retire_files", []):
-        path = Path(retired["path"])
-        if (
-            path.name != DROPIN
-            or path.parent.parent != NETWORK_ROOTS[0]
-            or not re.fullmatch(r"[A-Za-z0-9_.-]+\.network\.d", path.parent.name)
-            or not isinstance(retired["content"], str)
-        ):
-            raise UnderlayError("underlay retired drop-in identity is unsafe")
-    return value
+    except (ValueError, KeyError, TypeError) as error:
+        raise UnderlayError("underlay ownership ledger is invalid") from error
 
 
-def preflight_reconfigure(cfg: dict[str, Any]) -> None:
+def preflight_reconfigure(cfg: dict[str, Any], *, configuration: bool = True) -> None:
     """Do not let networkd reconfigure erase foreign physical-interface routes."""
     expected = intent(cfg)
     links = _json(["networkctl", "status", "--json=short", "--no-pager", "--all"])
@@ -439,7 +414,7 @@ def preflight_reconfigure(cfg: dict[str, Any]) -> None:
             "networkd reload would affect another managed interface; "
             "multiple managed interfaces require an explicit routing design"
         )
-    network = observe(expected.interface)
+    network = observe(expected.interface, configuration=configuration)
     previous = _ledger()
     known = set(previous["destinations"]) if previous else set()
     old = Network(**previous["network"]) if previous else network
@@ -489,6 +464,71 @@ def preflight_reconfigure(cfg: dict[str, Any]) -> None:
             "network reconfiguration would affect an unmanaged physical route; "
             "review and persist or remove that route before apply"
         )
+
+
+def netplan_content(interface: str = "eth0") -> str:
+    if not re.fullmatch(r"[a-zA-Z0-9_.-]{1,15}", interface):
+        raise UnderlayError("underlay interface is invalid")
+    return f"""# generated by nebius-vpngw-agent
+# Disable IPv4 link-local (APIPA 169.254/16) to prevent conflicts with VPN inner IPs
+# This is SAFE - it does NOT block DHCP routes (default gateway, DNS, etc.)
+network:
+  version: 2
+  ethernets:
+    {interface}:
+      dhcp4: true
+      dhcp4-overrides:
+        use-dns: true
+        use-routes: true
+      link-local: [ ipv6 ]
+"""
+
+
+def prepare_network_locked(
+    cfg: dict[str, Any], *, netplan_path: Path | None = None, command=None
+) -> None:
+    """Fenced deployment owner: rebuild networking before strict route admission."""
+    expected = intent(cfg)
+    path = netplan_path or Path("/etc/netplan/99-nebius-vpngw.yaml")
+    content = netplan_content(expected.interface)
+    try:
+        previous = _read(path).decode()
+    except FileNotFoundError:
+        previous = None
+    if previous is not None and previous != content:
+        raise UnderlayError("managed Netplan configuration was modified outside its owner")
+    record = _ledger()
+    if record and record["phase"] == "pending" and record["intent"] != expected.identity:
+        raise UnderlayError(
+            "underlay update is pending; resume its original apply before changing intent"
+        )
+    try:
+        underlay_state.verify_files(record, network_root=NETWORK_ROOTS[0])
+    except (OSError, ValueError) as error:
+        raise UnderlayError("underlay drop-in ownership could not be verified") from error
+    if previous == content and ready(cfg):
+        return
+    # The DHCP/NIC/kernel inventory remains authoritative even when networkd
+    # still reports a generated filename removed by the retained-host reset.
+    # It cannot be used as persistence proof: strict observation follows apply.
+    preflight_reconfigure(cfg, configuration=False)
+    _write(path, content)
+    path.chmod(0o600)
+    result = (command or run)(["netplan", "apply"], capture_output=True, text=True, timeout=60)
+    if result.returncode:
+        raise UnderlayError("managed network configuration could not be applied")
+    deadline = time.monotonic() + 30
+    while True:
+        try:
+            observe(expected.interface)
+            break
+        except (FileNotFoundError, LeaseNotReady):
+            if time.monotonic() >= deadline:
+                raise UnderlayError(
+                    "networkd did not load the managed network configuration"
+                ) from None
+            time.sleep(0.2)
+    reconcile_locked(cfg, reconfigure=True)
 
 
 def _check_dropin(previous: dict[str, Any] | None, path: Path, content: str) -> None:

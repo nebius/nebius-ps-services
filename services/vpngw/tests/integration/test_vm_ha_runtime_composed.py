@@ -421,7 +421,12 @@ def test_clean_owner_bootstrap_materializes_passive_before_promotion(
     monkeypatch.setattr(
         frr_module.FRRRenderer, "_ensure_bgpd_enabled", lambda *args, **kwargs: False
     )
-    monkeypatch.setattr(agent_main.underlay, "preflight_reconfigure", lambda cfg: None)
+    # DHCP/networkd are a simulated prerequisite; rendering and runtime receipts stay real.
+    monkeypatch.setattr(agent_main.underlay, "preflight_reconfigure", lambda cfg, **kwargs: None)
+    monkeypatch.setattr(agent_main.underlay, "observe", lambda interface: None)
+    monkeypatch.setattr(agent_main.underlay, "ready", lambda cfg: True)
+    monkeypatch.setattr(agent_main.underlay, "STATE", tmp_path / "underlay.json")
+    monkeypatch.setattr(agent_main.underlay, "NETWORK_ROOTS", (tmp_path / "network",))
     monkeypatch.setattr(agent_main.underlay, "verify", lambda cfg: "underlay-proof")
     monkeypatch.setattr(agent_main.underlay, "reconcile_locked", lambda cfg, **kwargs: None)
     monkeypatch.setattr(

@@ -20,6 +20,7 @@ SOURCES = (
     ("_vpngw_release_identity", "release_identity.py"),
     ("_vpngw_deployment_assets", "deployment_assets.py"),
     ("_vpngw_repair_state", "repair_state.py"),
+    ("_vpngw_underlay_state", "underlay_state.py"),
     ("_vpngw_runtime_migration", "runtime_migration.py"),
     ("_vpngw_package_worker", "package_worker.py"),
     ("_vpngw_prior_package_worker", "package_worker.py"),

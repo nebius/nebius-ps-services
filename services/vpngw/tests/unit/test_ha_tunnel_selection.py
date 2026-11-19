@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 
 import pytest
+from tests.ha_fixtures import runtime_ha
 
 from nebius_vpngw.agent.vm_ha.tunnel_observation import path_health, scoped_ike_ids
 from nebius_vpngw.agent.vm_ha.tunnels import (
@@ -21,7 +22,7 @@ from nebius_vpngw.tunnel_state import collect_tunnel_state
 
 def config(mode="static"):
     return {
-        "vm_ha": {"cluster_id": "cluster"},
+        "vm_ha": runtime_ha(),
         "gateway": {},
         "connections": [
             {

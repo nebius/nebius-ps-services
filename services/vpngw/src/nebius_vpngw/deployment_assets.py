@@ -2,6 +2,18 @@
 
 from __future__ import annotations
 
+UNDERLAY = (
+    ("nebius-vpngw-underlay.service", "/etc/systemd/system/nebius-vpngw-underlay.service", 0o644),
+    *(
+        (
+            "nebius-vpngw-underlay-ordering.conf",
+            f"/etc/systemd/system/{unit}.service.d/20-underlay.conf",
+            0o644,
+        )
+        for unit in ("strongswan", "frr", "nebius-vpngw-agent")
+    ),
+)
+
 HA = (
     ("nebius-vpngw-agent.service", "/etc/systemd/system/nebius-vpngw-agent.service", 0o644),
     (
@@ -87,6 +99,12 @@ HA = (
         "/usr/lib/tmpfiles.d/nebius-vpngw-ufw-lock.conf",
         0o644,
     ),
+    *UNDERLAY,
+    (
+        "nebius-vpngw-underlay-ordering.conf",
+        "/etc/systemd/system/nebius-vpngw-vm-ha.service.d/20-underlay.conf",
+        0o644,
+    ),
 )
 
 ORDINARY = (
@@ -125,6 +143,7 @@ ORDINARY = (
         "/etc/systemd/system/nebius-vpngw-esp4-preflight.service",
         0o644,
     ),
+    *UNDERLAY,
 )
 
 
@@ -132,26 +151,6 @@ def entries(*, ha: bool) -> tuple[tuple[str, str, int], ...]:
     result = tuple(
         ("nebius_vpngw/systemd/" + name, path, mode)
         for name, path, mode in (HA if ha else ORDINARY)
-    )
-    result += (
-        (
-            "nebius_vpngw/systemd/nebius-vpngw-underlay.service",
-            "/etc/systemd/system/nebius-vpngw-underlay.service",
-            0o644,
-        ),
-    )
-    result += tuple(
-        (
-            "nebius_vpngw/systemd/nebius-vpngw-underlay-ordering.conf",
-            f"/etc/systemd/system/{unit}.service.d/20-underlay.conf",
-            0o644,
-        )
-        for unit in (
-            "strongswan",
-            "frr",
-            "nebius-vpngw-agent",
-            *(("nebius-vpngw-vm-ha",) if ha else ()),
-        )
     )
     if not ha:
         result += (

@@ -14,6 +14,7 @@ SOURCES = (
     ("_vpngw_ordinary_operations", "ordinary_operations.py"),
     ("_vpngw_runtime_migration", "runtime_migration.py"),
     ("_vpngw_repair_state", "repair_state.py"),
+    ("_vpngw_underlay_state", "underlay_state.py"),
     ("_vpngw_repair_guest", "repair_guest.py"),
     ("nebius_vpngw.faults", "faults.py"),
     ("nebius_vpngw.apply_lock", "apply_lock.py"),

@@ -494,6 +494,7 @@ class ObservationTests(unittest.TestCase):
         deployments=None,
         assets=None,
         draft=False,
+        body=None,
     ):
         self.value.update(merge=MERGED, tag_object=OBJECT)
         self.github.pr.return_value = pr(state="MERGED")
@@ -513,6 +514,7 @@ class ObservationTests(unittest.TestCase):
                 {
                     "id": 42,
                     "draft": draft,
+                    "body": body,
                     "tag_name": self.value["tag"],
                     "html_url": "https://github.com/example/demo/releases/tag/demo-v1.2.3",
                 },
@@ -521,6 +523,15 @@ class ObservationTests(unittest.TestCase):
                 else [{"id": 1, "name": "demo-1.2.3.whl", "size": 123, "digest": None}],
             ]
         self.github.api.side_effect = replies
+
+    def test_withdrawn_release_blocks_even_with_all_expected_assets(self):
+        for body in ("<!-- withdraw-release:v1 -->", "<!-- withdraw-release:malformed",
+                     "<!-- withdraw-release:v1 -->\nDownloads remain available."):
+            self.release(body=body)
+            result = rs.observation(self.value, self.github, "release")
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn("withdrawn", result["reason"])
+            self.assertFalse(any("/assets" in str(c) for c in self.github.api.call_args_list))
 
     def test_release_ready_still_requires_artifact_verification(self):
         self.release()
