@@ -73,6 +73,10 @@ helper still validates the original merge receipt before any effect.
 
 ## Publication contracts
 
+The release verifier refuses any `<!-- withdraw-release:` notice before asset
+reuse, including immutable releases and incomplete withdrawals. Withdrawal is
+owned by the explicitly invoked `withdraw-release` skill.
+
 This skill is the sole release/image YAML template owner. Its
 `scripts/publication.py` centralizes strict versions, ancestry, changelog notes,
 asset hashes, provenance checks and registry observations. The helper never

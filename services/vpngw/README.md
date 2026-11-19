@@ -273,6 +273,18 @@ It stops VPN traffic across the selected deployment, replaces the
 managed VPNGW, strongSwan and FRR packages even when their versions are unchanged,
 and reconstructs configuration, services and managed HA node certificates.
 Service units and helper scripts are recreated and verified before activation.
+The same networking preparation serves Single and HA gateways with Static or BGP
+routing: it rebuilds the managed Netplan configuration before admitting routes.
+Repair retains the exact persistent physical-route ownership ledger and verifies
+its drop-ins before network reconfiguration. Prior readiness is discarded and
+must be proved again. Missing or modified ownership evidence blocks activation;
+repair does not adopt or delete foreign routes to make the checks pass.
+Apply and repair use the same service-asset inventory, including the underlay
+service and its ordering files, when installing or retiring managed files.
+When a repair is superseded, a stopped gateway may boot through its exact settled
+predecessor guard before authenticated admission installs the new operation's
+guard. This retains the existing firewall policy and does not transfer or relabel
+old activation authority.
 Repair allows normal service shutdown to finish, then independently checks that
 all managed writers have stopped before reconstructing their state.
 Repair preserves writer-lock identities and restores private managed certificate

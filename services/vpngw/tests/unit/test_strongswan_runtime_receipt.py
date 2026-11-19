@@ -5,11 +5,17 @@ from types import SimpleNamespace
 import pytest
 
 from nebius_vpngw.agent import strongswan_renderer as swan
+from nebius_vpngw.agent import underlay
 
 
 @pytest.fixture
 def runtime(tmp_path, monkeypatch, sample_config):
-    monkeypatch.setattr("nebius_vpngw.agent.underlay.preflight_reconfigure", lambda cfg: None)
+    # DHCP/networkd are a simulated prerequisite; rendering and runtime receipts stay real.
+    monkeypatch.setattr(underlay, "preflight_reconfigure", lambda cfg, **kwargs: None)
+    monkeypatch.setattr(underlay, "observe", lambda interface: None)
+    monkeypatch.setattr(underlay, "ready", lambda cfg: True)
+    monkeypatch.setattr(underlay, "STATE", tmp_path / "underlay.json")
+    monkeypatch.setattr(underlay, "NETWORK_ROOTS", (tmp_path / "network",))
     monkeypatch.setattr("nebius_vpngw.agent.underlay.reconcile_locked", lambda cfg, **kwargs: None)
     root = tmp_path / "etc"
     directory = root / "strongswan.d" / "charon"
@@ -329,15 +335,16 @@ def test_runtime_probe_does_not_enter_ordinary_mutation_admission(
     assert not budget.failures
 
 
-def test_changed_network_configuration_keeps_restart_and_netplan(runtime):
+def test_changed_network_configuration_blocks_before_netplan_or_restart(runtime):
     cfg, receipt, root, state, calls = runtime
     renderer = swan.StrongSwanRenderer()
     renderer.render_and_apply(cfg)
     calls.clear()
     (root / "netplan" / "99-nebius-vpngw.yaml").write_text("# changed\n")
-    renderer.render_and_apply({**cfg, "_ha_static_passive": True})
-    assert ["netplan", "apply"] in calls
-    assert ["systemctl", "restart", "strongswan"] in calls
+    with pytest.raises(underlay.UnderlayError, match="modified outside its owner"):
+        renderer.render_and_apply({**cfg, "_ha_static_passive": True})
+    assert ["netplan", "apply"] not in calls
+    assert ["systemctl", "restart", "strongswan"] not in calls
 
 
 @pytest.mark.parametrize("unsafe", ["writable", "symlink"])

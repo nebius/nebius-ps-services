@@ -5967,5 +5967,56 @@ real-checkout, installed-payload and native-discovery evidence separately.
 
 <!-- /REQUIREMENT: REQ-085 -->
 
+<!-- REQUIREMENT: REQ-086 status=satisfied priority=P1 type=feature -->
+### REQ-086: Withdraw a selected GitHub release safely
+
+#### User Story
+
+Maintainers need one explicit invocation to withdraw a selected GitHub release
+while retaining its notice, tag and commit, including immutable releases.
+
+#### Acceptance Criteria
+
+- AC-001: Require `--release` as an exact tag or unambiguously resolved project
+  version; support `--repo`, `--project-dir`, public `--reason`, read-only
+  `--dry-run`, and side-effect-free help. Invocation authorizes scoped effects.
+- AC-002: Freeze repository/release/tag/commit and complete asset identities.
+  Prefix the title WITHDRAWN, preserve notes, add a versioned warning, mark
+  prerelease and exclude latest. Never infer a defect or replacement version.
+- AC-003: Delete only inspected assets of mutable releases. Immutable releases
+  receive metadata changes only and an explicit downloads-remain warning.
+- AC-004: Resume via locked private atomic checkpoints with no stored notes or
+  credentials. Reconcile uncertain effects; stop on conflicting changes.
+- AC-005: Independently verify metadata, tag preservation, latest exclusion and
+  asset removal or preservation; distinguish WITHDRAWN,
+  WITHDRAWN_DOWNLOADS_REMAIN and incomplete outcomes.
+- AC-006: Publication verifier and observer reject marked withdrawn releases
+  regardless of remaining assets. Single-skill installation is self-contained.
+
+#### Negative Criteria
+
+- NC-001: Never delete releases/tags, disable immutability, modify registries,
+  restore assets, recall installed copies, or perform unrelated publication.
+- NC-002: Never guess monorepo prefixes, treat masked private 404 as proof,
+  duplicate notices, or claim global exclusion of independent remote writers.
+
+#### Validation Method
+
+Focused deterministic tests, review/security lanes, portable and host metadata
+validation, disposable npx packaging and scoped Codex source/install parity.
+
+#### Test Method
+
+Cover mutable/immutable outcomes, identity drift, pagination, permissions,
+private repositories, interrupted effects, reruns, caches and publisher refusal.
+
+#### Evaluation Method
+
+Canonical trigger cases and deterministic outcome assertions; help/dry-run smoke
+checks. Live destructive tests require an explicitly designated disposable
+release. Native discovery is separate from installed-byte evidence.
+
+<!-- /REQUIREMENT: REQ-086 -->
+
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

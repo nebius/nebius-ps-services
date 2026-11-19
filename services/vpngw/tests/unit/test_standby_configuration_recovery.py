@@ -5,6 +5,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from tests.ha_fixtures import runtime_ha
 from tests.unit.test_vm_ha_controller import _cloud, _peer, _snapshot
 
 from nebius_vpngw.agent.vm_ha.models import HeartbeatEvidence
@@ -176,7 +177,7 @@ def test_production_tunnel_provider_proves_only_warm_canonical_policy(
     warm.update(name="warm", routing_mode="bgp", remote_prefixes=["172.20.0.0/24"])
     warm["tunnels"][0]["name"] = "warm-path"
     cfg["connections"].append(warm)
-    cfg["vm_ha"] = {"cluster_id": "fixture"}
+    cfg["vm_ha"] = runtime_ha("fixture")
     path = tmp_path / "swanctl.conf"
     monkeypatch.setattr(strongswan_renderer, "SWANCTL_CONF", path)
     config = tmp_path / "config.yaml"
@@ -213,7 +214,7 @@ def test_fenced_static_preparation_is_observable_without_granting_reload(
         warm.update(name="warm", routing_mode="bgp", remote_prefixes=["172.20.0.0/24"])
         warm["tunnels"][0]["name"] = "warm-path"
         cfg["connections"].append(warm)
-    cfg["vm_ha"] = {"cluster_id": "fixture"}
+    cfg["vm_ha"] = runtime_ha("fixture")
     path = tmp_path / "swanctl.conf"
     monkeypatch.setattr(strongswan_renderer, "SWANCTL_CONF", path)
     config = tmp_path / "config.yaml"
@@ -263,7 +264,7 @@ def test_native_observation_does_not_borrow_fenced_candidate_reload_authority(
     from nebius_vpngw.agent.vm_ha.tunnel_runtime import ControllerTunnelRuntime
 
     cfg = deepcopy(sample_config)
-    cfg["vm_ha"] = {"cluster_id": "fixture"}
+    cfg["vm_ha"] = runtime_ha("fixture")
     config = tmp_path / "config.yaml"
     config.write_text(yaml.safe_dump(cfg))
     swanctl = tmp_path / "swanctl.conf"

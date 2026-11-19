@@ -22,8 +22,10 @@ from pathlib import Path
 
 try:
     import _vpngw_repair_state as storage  # type: ignore[import-not-found]
+    import _vpngw_underlay_state as underlay_state  # type: ignore[import-not-found]
 except ModuleNotFoundError:
     from . import repair_state as storage
+    from . import underlay_state
 
 ROOT = Path("/var/lib/nebius-vpngw-repair")
 SYSTEMD = Path("/etc/systemd/system")
@@ -40,6 +42,7 @@ SSH_ORDERING = (
     b"[Unit]\nRequires=nebius-vpngw-ingress.service\nAfter=nebius-vpngw-ingress.service\n"
 )
 UNITS = (
+    "nebius-vpngw-underlay.service",
     "nebius-vpngw-vm-ha-guard.service",
     "nebius-vpngw-vm-ha-rearm.service",
     "nebius-vpngw-vm-ha.service",
@@ -643,6 +646,41 @@ def archive_tree(source: Path, destination: Path, *, preserve: tuple[Path, ...] 
         move(path)
 
 
+def retain_underlay_ownership(operation: str) -> None:
+    """Under writer exclusion, retain exact ownership, never prior readiness."""
+    value = storage.Journal(ROOT).load()
+    if value is None or value["id"] != operation:
+        raise RuntimeError("Underlay ownership requires the exact repair operation")
+    path = PRODUCT_STATE / "underlay.json"
+    archive = ROOT / "archives" / operation / "state" / "underlay.json"
+    try:
+        try:
+            raw = underlay_state.read(path)
+            restored = False
+        except FileNotFoundError:
+            try:
+                raw = underlay_state.read(archive)
+            except FileNotFoundError:
+                underlay_state.verify_files(None, network_root=underlay_state.NETWORK_ROOT)
+                return  # A genuinely fresh predecessor has no owned underlay state.
+            restored = True
+        record = underlay_state.decode(raw, network_root=underlay_state.NETWORK_ROOT)
+        underlay_state.verify_files(record, network_root=underlay_state.NETWORK_ROOT)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise RuntimeError(
+            "Repair underlay ownership is missing or conflicts with retained files"
+        ) from error
+    # Record newly observed bytes, not a nonexistent predecessor content manifest.
+    receipt = {
+        "operation": operation,
+        "intent": storage.digest(value["intent"]),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    storage.publish(ROOT / "underlay-ownership.json", receipt)
+    if restored:
+        publish_file(path, raw, mode=0o644)
+
+
 def reset(operation: str, *, run=command) -> dict:
     journal = storage.Journal(ROOT)
     value = journal.load()
@@ -663,6 +701,7 @@ def reset(operation: str, *, run=command) -> dict:
                     private_parent=relative == Path("vm-ha/mtls/writer.lock"),
                 )
             )
+        retain_underlay_ownership(operation)
         ordinary = not value["intent"]["ha"]
         archive_tree(
             PRODUCT_CONFIG, archive / "config", preserve=ORDINARY_CREDENTIALS if ordinary else ()
@@ -670,7 +709,11 @@ def reset(operation: str, *, run=command) -> dict:
         archive_tree(
             PRODUCT_STATE,
             archive / "state",
-            preserve=(*PRESERVED_LOCKS, *(ORDINARY_AUTHORITY if ordinary else ())),
+            preserve=(
+                *PRESERVED_LOCKS,
+                Path("underlay.json"),
+                *(ORDINARY_AUTHORITY if ordinary else ()),
+            ),
         )
         for filename in GENERATED_FILES:
             source = Path(filename)

@@ -176,3 +176,9 @@ Use `merge-pr --wait-for-result` to wait for full result CI and Pages. Release
 publication instead verifies its exact-commit service/shared publisher profile.
 Additional live/cloud/UAT campaigns are opt-in; required CI, review, recorded
 failures and cleanup remain binding. SDLC retains its accepted delivery boundary.
+
+## Withdrawn releases
+
+Publication observation refuses a `<!-- withdraw-release:` notice even when
+all expected assets remain. Use `withdraw-release --release <tag>` to withdraw;
+resume never authorizes restoring assets or removing the notice.

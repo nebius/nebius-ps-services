@@ -401,7 +401,8 @@ def test_stop_writers_does_not_reset_deadline_or_accept_live_writer(host, monkey
     assert len(stops) == 1 and 7 <= elapsed[0] < 7.21
 
 
-def test_reset_preserves_lock_inodes_and_opaque_predecessor(host):
+@pytest.mark.parametrize("ledger_source", ["live", "exact-archive"])
+def test_reset_preserves_lock_inodes_and_opaque_predecessor(host, monkeypatch, ledger_source):
     journal, operation, _calls, run = host
     guest.install_guard(operation, run=run)
     journal.advance("isolated")
@@ -415,8 +416,48 @@ def test_reset_preserves_lock_inodes_and_opaque_predecessor(host):
         path.touch(mode=0o600)
         inodes[relative] = path.stat().st_ino
     (guest.PRODUCT_STATE / "vm-ha/guard.json").write_bytes(b"malformed old state")
+    network_root = guest.ROOT.parent / "network"
+    monkeypatch.setattr(guest.underlay_state, "NETWORK_ROOT", network_root)
+    dropin = network_root / "10-netplan-eth0.network.d" / guest.underlay_state.DROPIN
+    dropin.parent.mkdir(parents=True)
+    destinations = ["10.64.16.0/24"]
+    content = guest.underlay_state.render(tuple(destinations))
+    dropin.write_text(content)
+    ownership = {
+        "schema": guest.underlay_state.SCHEMA,
+        "phase": "committed",
+        "network": {
+            "interface": "eth0",
+            "index": 2,
+            "address": "10.64.0.5",
+            "gateway": "169.254.169.1",
+            "network_file": "/run/systemd/network/10-netplan-eth0.network",
+            "config_digest": "a" * 64,
+            "routes": [],
+        },
+        "destinations": destinations,
+        "dropin": str(dropin),
+        "content": content,
+        "intent": "b" * 64,
+        "boot": "old-boot",
+    }
+    ledger = guest.PRODUCT_STATE / "underlay.json"
+    ledger.write_text(json.dumps(ownership))
+    ledger_before = ledger.read_bytes()
+    if ledger_source == "exact-archive":
+        archive = guest.ROOT / "archives" / operation / "state/underlay.json"
+        state.directory(archive.parent)
+        ledger.rename(archive)
+    admission = guest.PRODUCT_STATE / "routing-semantics.json"
+    admission.write_text("old readiness")
     receipt = guest.reset(operation, run=run)
     assert receipt["operation"] == operation
+    assert ledger.read_bytes() == ledger_before
+    assert dropin.read_text() == content
+    assert not admission.exists()
+    assert (
+        guest.ROOT / "archives" / operation / "state/routing-semantics.json"
+    ).read_text() == "old readiness"
     assert not (guest.PRODUCT_STATE / "vm-ha/guard.json").exists()
     for relative, inode in inodes.items():
         assert (guest.PRODUCT_STATE / relative).stat().st_ino == inode
@@ -554,6 +595,9 @@ def test_activation_policy_handoff_precedes_planning_and_grant_preserves_new_own
         journal.advance(phase)
     checked = []
     monkeypatch.setattr(guest, "verify_guard", checked.append)
+    monkeypatch.setattr(guest, "install_guard", lambda *args, **kwargs: None)
+    monkeypatch.setattr(guest, "fence", lambda: None)
+    monkeypatch.setattr(guest, "stop_writers", lambda: None)
     # The fixture is unprivileged; only emulate the runtime reader's root UID.
     monkeypatch.setattr(
         runtime_migration,

@@ -194,6 +194,7 @@ class RepairBlocked(DiagnosticFailure):
             "repair-ssh-authority",
             "repair-package-stalled",
             "repair-worker-blocked",
+            "repair-quarantine-access-unproven",
         }:
             raise ValueError("unknown repair blocker")
         self.first = Failure("repair", predicate)
@@ -447,6 +448,11 @@ GUEST_FAILURES = {
         "Inspect the retained repair guard and service state before resuming repair.",
         "Restore verified service inhibition through the retained repair operation first.",
     ),
+    "repair_underlay_ownership": (
+        "Repair cannot prove ownership of the retained physical-route configuration.",
+        "Inspect the exact repair archive and conflicting network drop-in; resolve ownership before retrying.",
+        "Repeating repair cannot replace missing ownership evidence or authorize foreign-route removal.",
+    ),
     "repair_boot_persistence": (
         "Repair's boot protection is not enabled persistently.",
         "Inspect boot protection and resume the retained repair operation after resolving its blocker.",
@@ -557,6 +563,11 @@ SSH_CAUSES = {
 
 
 CAUSES = {
+    "repair-quarantine-access-unproven": (
+        "A stopped gateway lacks verified boot protection and an existing stateful SSH policy for quarantine.",
+        "Inspect the exact predecessor guard evidence and existing security-group policy before retrying.",
+        "Repair cannot broaden stateless firewall rules to establish quarantine access.",
+    ),
     **SSH_CAUSES,
     "gateway-release-newer": (
         "A gateway has a newer VPNGW release than the selected CLI release.",

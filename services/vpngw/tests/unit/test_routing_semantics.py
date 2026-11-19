@@ -96,6 +96,50 @@ def test_failed_preparation_cannot_publish_admission(guest):
     assert not guest.path.exists()
 
 
+@pytest.mark.parametrize("network_fails", [False, True])
+def test_ha_networking_precedes_routing_admission(tmp_path, monkeypatch, network_fails):
+    from nebius_vpngw import ha_repair
+    from nebius_vpngw.schema import VMHARuntimeBinding
+
+    expected = {
+        "cluster_id": "cluster",
+        "generation_id": "generation",
+        "node_id": "node",
+        "operation_id": "operation",
+    }
+    cfg = {"vm_ha": {"runtime_binding": {}, "node": {"node_id": "node"}}}
+    binding = SimpleNamespace(
+        cluster_id="cluster", generation_id="generation", model_dump=lambda **kwargs: {}
+    )
+    calls = []
+    monkeypatch.setattr(ha_repair, "STATE", tmp_path)
+    monkeypatch.setattr(ha_repair, "exact_lock", lambda value: None)
+    monkeypatch.setattr(VMHARuntimeBinding, "model_validate", lambda value: binding)
+    monkeypatch.setattr(semantics, "_configuration", lambda: (b"", cfg))
+    monkeypatch.setattr(semantics.underlay, "_command", lambda argv: "0")
+
+    def prepare(value):
+        assert value is cfg
+        calls.append("network")
+        if network_fails:
+            raise semantics.underlay.UnderlayError("network preparation failed")
+
+    monkeypatch.setattr(semantics.underlay, "prepare_network_locked", prepare)
+    monkeypatch.setattr(
+        semantics,
+        "_protection",
+        lambda value: SimpleNamespace(install=lambda: calls.append("protection")),
+    )
+    monkeypatch.setattr(semantics, "_publish", lambda **kwargs: calls.append("admission"))
+    if network_fails:
+        with pytest.raises(semantics.underlay.UnderlayError):
+            semantics.prepare_ha_locked(expected, "artifact")
+        assert calls == ["network"]
+    else:
+        semantics.prepare_ha_locked(expected, "artifact")
+        assert calls == ["network", "protection", "admission"]
+
+
 def test_pending_intent_cannot_be_adopted_or_replayed_under_another_admission(tmp_path):
     store = SimpleNamespace(
         pending_path=tmp_path / "route-pending.json",

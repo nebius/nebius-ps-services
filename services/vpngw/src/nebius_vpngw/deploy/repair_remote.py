@@ -228,11 +228,21 @@ else:
     print(json.dumps({'status': 'ok'}))
 """
     code, output = guest.command(
-        [sys.executable, "-I", "-S", "-B", "-c", script, json.dumps({
-            "source": base64.b64encode(source).decode(),
-            "paths": sys.path,
-            "desired": desired,
-        })],
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            "-c",
+            script,
+            json.dumps(
+                {
+                    "source": base64.b64encode(source).decode(),
+                    "paths": sys.path,
+                    "desired": desired,
+                }
+            ),
+        ],
         required=False,
     )
     try:
@@ -588,8 +598,10 @@ def control(request: dict) -> dict:
             raise RuntimeError("Prior handoff is outside the confirmed repair")
         results = []
         for reservation in request["reservations"]:
-            if (reservation["host"] not in targets
-                    or reservation["request"]["package"]["host"] != reservation["host"]):
+            if (
+                reservation["host"] not in targets
+                or reservation["request"]["package"]["host"] != reservation["host"]
+            ):
                 raise RuntimeError("Prior handoff is outside the confirmed repair")
             results.append(prior_worker.retire_idle_for_repair(reservation, operation))
         return {"operation": operation, "retirements": results}
@@ -626,6 +638,8 @@ def control(request: dict) -> dict:
                 guest.fence()
                 guest.stop_writers()
                 guest.verify_guard(operation)
+                with guest.lock(guest.ROUTING_LOCK):
+                    guest.retain_underlay_ownership(operation)
                 guest.inhibit_package_starts(operation)
                 receipt = {
                     "boot": guest.BOOT.read_text().strip(),
@@ -669,12 +683,18 @@ def control(request: dict) -> dict:
                 "verified",
             }:
                 raise RuntimeError("Repair startup requires verified installation")
-            guest.verify_guard(operation)
             if action == "prepare-activation":
+                guest.install_guard(operation, preserve_services=True)
+                guest.fence()
+                guest.stop_writers()
+                guest.verify_guard(operation)
+                with guest.lock(guest.ROUTING_LOCK):
+                    guest.retain_underlay_ownership(operation)
                 # Finish the repair worker's policy ownership before the next
                 # owner inspects it. Service startup remains independently gated.
                 guest.restore_package_policy(operation)
                 return {"operation": operation, "boot": guest.BOOT.read_text().strip()}
+            guest.verify_guard(operation)
             units = request["units"]
             if not isinstance(units, list) or not set(units).issubset(guest.UNITS):
                 raise RuntimeError("Repair startup grant exceeds its service footprint")
@@ -712,6 +732,7 @@ def control_main() -> None:
             "Independent repair boot protection is not persistent": "repair_boot_persistence",
             "Independent repair boot protection changed": "repair_boot_protection",
             "Repair service original changed during guard installation": "repair_service_original",
+            "Repair underlay ownership is missing or conflicts with retained files": "repair_underlay_ownership",
             "A product service is still settling": "package_quiescence_unproven",
             "A product service descendant is still running": "package_quiescence_unproven",
             "Prior handoff still has executing children": "package_quiescence_unproven",
@@ -747,8 +768,12 @@ def control_main() -> None:
                     "stage": stage,
                     "error_code": error.code
                     if isinstance(error, python.dependency_scope.DependencyFailure)
-                    else reasons.get(str(error), "repair_handoff_unverified"
-                                     if action == "retire-idle-handoffs" else "receipt"),
+                    else reasons.get(
+                        str(error),
+                        "repair_handoff_unverified"
+                        if action == "retire-idle-handoffs"
+                        else "receipt",
+                    ),
                 }
             )
         )

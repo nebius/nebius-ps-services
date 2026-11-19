@@ -4,6 +4,13 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Add explicit-only `withdraw-release --release` for GitHub releases, with
+  resumable mutable asset removal and immutable metadata-only withdrawal.
+  Preserve notes and tags, verify latest exclusion and download outcomes, and
+  reject withdrawn releases in publication verification and observation.
+  Reject ambiguous workflow metadata during version selection and preserve
+  pending deletion identity across delayed responses and retries.
+
 - Add explicit-only `create-branch` with optional `--branch`, collision-checked
   generated names and safe switching from the freshly fetched origin default.
   Preserve previous feature history, local work, hooks and worktree ownership;

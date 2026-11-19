@@ -15883,5 +15883,134 @@ separately and does not imply fresh model-driven skill discovery.
 
 <!-- /FEATURE: FEAT-084 -->
 
+<!-- FEATURE: FEAT-085 reqs=REQ-086 status=ready delivery=verified priority=P1 version=1 -->
+### FEAT-085: Resumable GitHub release withdrawal
+
+#### Requirements Covered
+
+- REQ-086: Withdraw a selected GitHub release safely.
+
+#### Context Evidence
+
+GitHub allows immutable release title, notes, prerelease and latest edits but
+protects assets and tags. Existing publication integrity checks reject missing
+assets; an explicit marker also covers immutable and partial withdrawals.
+
+#### Design Details
+
+Use a self-contained Python standard-library helper with authenticated GitHub
+CLI for public/private github.com repositories. Resolve exact tags first;
+resolve short versions only from selected-project literal release-workflow
+metadata. Ambiguity requires an exact tag. Freeze numeric identities, tag
+object/peeled commit and paginated asset metadata. Private checkpoints under
+the selected agent home store identifiers, hashes and progress, never authority.
+Use owner-only paths, no-follow reads, atomic replacement and exclusive locks.
+
+Write a versioned warning before asset effects; preserve original notes and
+prefix the title once. Set prerelease and make_latest=false. Mutable releases
+remove inspected assets; immutable releases never issue deletion requests.
+Reconcile uncertain writes through fresh reads before retrying. Recheck frozen
+identity, metadata and inventory around effects; stop on conflicting edits.
+GitHub does not provide a cross-client withdrawal transaction: rechecks detect
+observed drift but cannot reserve the release against independent writers.
+
+Bound API pagination, command timeouts and cache-aware verification. Public
+asset endpoints must be unavailable; private asset removal requires authenticated
+inventory and per-ID evidence. Latest must differ or be absent. Preserve
+immutable inventory and tag/commit. Distinguish WITHDRAWN from
+WITHDRAWN_DOWNLOADS_REMAIN and incomplete results.
+
+Use the same small versioned withdrawal marker predicate in the standalone
+publication verifier and observer; a contract test prevents predicate drift.
+No new shared runtime, hooks, publication coordinator or registry integration.
+
+#### Selected Option
+
+A deterministic helper owns fragile identity, recovery and verification while
+short explicit-only instructions route invocation. Metadata-only immutable
+withdrawal preserves the most useful available mitigation.
+
+#### Alternatives Considered
+
+Deleting the release/tag loses the notice and integrity boundary. Stopping
+unchanged on immutability leaves customers unwarned. Both are rejected.
+
+#### Implementation Boundaries
+
+New skill/resources/evals/tests; two publisher marker checks; skills catalog,
+plugin entries, focused CI discovery and this canonical pair. Install only
+selected changed skills. No commits, publication or live destructive tests.
+
+#### Test-First Success Criteria
+
+Assert exact changed metadata and asset outcomes, preserved notes/tag, inert
+help/dry-run, immutable no-delete requests and interrupted-response reconciliation.
+
+#### Validation Plan
+
+Run focused tests, lint, code-review/apply-security, core/Codex/Claude structure
+validation and npx installation. Finish align on integration surfaces.
+
+#### Test Plan
+
+Cover exact/short/ambiguous targets, permissions, pagination limits, empty assets,
+private evidence, metadata and tag drift, partial deletion, response loss,
+repeated invocation, unsafe checkpoint paths and stale latest responses.
+
+#### Evaluation Plan
+
+Canonical positive/negative triggers plus deterministic outcome fixtures. Report
+model-driven discovery and live mutation qualification independently.
+
+#### Rollout And Rollback
+
+Install canonical source through the scoped Codex installer after checks.
+Incomplete withdrawals retain truthful warnings; never restore deleted assets
+or reverse withdrawal automatically. Existing publisher copies require refresh.
+
+#### Done Definition
+
+Focused checks pass and source/install parity is proven; unrun live/native
+qualification remains explicit.
+
+#### Implementation Evidence
+
+Implemented the explicit-only skill, standard-library Python/GitHub CLI helper,
+private atomic progress store and canonical trigger cases. Checkpoints bind the
+stable repository/tag selector to frozen numeric IDs and tag/commit; directory
+file descriptors and nonblocking no-follow opens preserve the locking boundary.
+Interrupted metadata effects reconcile to one accepted fingerprint before asset
+removal. Pending deletion identity survives processing earlier removed assets
+until the exact outstanding request is reconciled; that asset is processed before
+any other deletion regardless of checkpoint key ordering. Both existing publication consumers reject the withdrawal marker family.
+Catalogs, README, Unreleased notes and focused CI discovery are aligned.
+
+#### Verification Evidence
+
+Thirty-four withdrawal tests, 27 publication-verifier tests and 83 release-session
+suite tests passed (144 total). Independent read-only code/security review and
+changed-scope alignment found six defects, each fixed with focused coverage:
+replacement identity, interrupted-PATCH reversion, FIFO files, directory swaps,
+ambiguous workflow metadata and delayed pending-deletion completion. The last
+two findings have three regressions, including reordered persisted asset IDs;
+all failed before their narrow fixes and passed afterward.
+Final review found no remaining blocker. Ruff, changed Markdown, Actionlint,
+plugin catalog checks and core/Codex/Claude structure checks passed. Claude's
+explicit-only frontmatter extension is intentionally retained.
+
+Pinned npx skills 1.5.26 discovery/copy/repeat/isolation checks passed for all
+three changed skill packages on Codex and Claude. Help and real-target dry-run
+smokes passed without external writes. Short-version resolution matched the
+selected project's existing withdrawn release. Selected Codex installation and
+source/installed parity are checked separately from runtime activation.
+
+Fresh native help-trigger evaluations on both hosts were UNAVAILABLE because
+isolated runners lack authentication; no credentials were copied. Deterministic
+outcomes are verified, but live destructive GitHub/immutable mutation and native
+model-driven activation are not claimed. No commit, push or release mutation was
+performed by this implementation task.
+
+<!-- /FEATURE: FEAT-085 -->
+
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

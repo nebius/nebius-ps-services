@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -366,7 +367,9 @@ def management_rules(rules: tuple[Any, ...]) -> tuple[Any, ...]:
         narrowed.ingress.destination_ports = [22]
         result.append(narrowed)
     if not any(spec.access == RuleAccessAction.ALLOW for spec in result):
-        raise RuntimeError("Stopped repair target has no existing stateful SSH ingress authority")
+        from .recovery import RepairBlocked
+
+        raise RepairBlocked("repair-quarantine-access-unproven", ownership_established=True)
     return tuple(result)
 
 
@@ -626,20 +629,46 @@ class Quarantine:
         value = self.inspect()
         if not value["restored"]:
             raise RuntimeError("Repair quarantine cleanup precedes attachment restoration")
+        self.cloud.owner.settle()
         self._attach(value, restore=True)
         for index, nic in enumerate(value["original"]):
             key = f"{self.name}-{index}"
-            for ordinal, _rule in enumerate(value["rules"][nic["name"]]):
-                identifier = self.cloud.owner.completed(f"quarantine-rule-{key}-{ordinal}")
+            manifest = value["rules"].get(nic["name"], [])
+            prefix = f"quarantine-rule-{key}-"
+            for record in self.cloud.owner.records.values():
+                if record["label"].startswith(prefix):
+                    suffix = record["label"][len(prefix) :]
+                    match = re.fullmatch(r"([0-9]+)(?:-repair-retry-[0-9]+)?", suffix)
+                    if match is None or int(match[1]) >= len(manifest):
+                        raise RuntimeError("Repair quarantine rule effect lacks its manifest")
+            for ordinal, _rule in enumerate(manifest):
+                label = f"quarantine-rule-{key}-{ordinal}"
+                identifier = self.cloud.owner.completed(label)
                 if not identifier:
-                    raise RuntimeError("Repair quarantine rule has no creation receipt")
+                    if any(
+                        record["label"] == label
+                        or record["label"].startswith(label + "-repair-retry-")
+                        for record in self.cloud.owner.records.values()
+                    ):
+                        raise RuntimeError("Repair quarantine rule creation outcome is unproven")
+                    continue  # Manifest publication preceded any create effect.
                 self.cloud.owner.mutate(
                     f"quarantine-delete-rule-{key}-{ordinal}",
                     DeleteSecurityRuleRequest(id=identifier),
                     SecurityRuleServiceClient(self.cloud.sdk).delete,
                 )
-            self.cloud.owner.mutate(
-                "quarantine-delete-group-" + key,
-                DeleteSecurityGroupRequest(id=value["groups"][nic["name"]]),
-                SecurityGroupServiceClient(self.cloud.sdk).delete,
-            )
+            identifier = self.cloud.owner.completed("quarantine-group-" + key)
+            label = "quarantine-group-" + key
+            if not identifier and any(
+                record["label"] == label or record["label"].startswith(label + "-repair-retry-")
+                for record in self.cloud.owner.records.values()
+            ):
+                raise RuntimeError("Repair quarantine group creation outcome is unproven")
+            if value["groups"].get(nic["name"], identifier) != identifier:
+                raise RuntimeError("Repair quarantine group differs from its creation receipt")
+            if identifier:
+                self.cloud.owner.mutate(
+                    "quarantine-delete-group-" + key,
+                    DeleteSecurityGroupRequest(id=identifier),
+                    SecurityGroupServiceClient(self.cloud.sdk).delete,
+                )

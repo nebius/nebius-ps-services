@@ -60,8 +60,90 @@ def test_quarantine_narrows_existing_management_access_and_preserves_denies():
 
 
 def test_quarantine_does_not_broaden_stateless_ssh_policy():
-    with pytest.raises(RuntimeError, match="no existing stateful SSH"):
+    from nebius_vpngw.deploy.recovery import Invocation, RepairBlocked, advice
+
+    with pytest.raises(RepairBlocked) as failure:
         repair_cloud.management_rules((rule(kind=RuleType.STATELESS),))
+    recovery = advice(Invocation("apply", repair=True), failure.value)
+    assert recovery.reason_code == "repair-quarantine-access-unproven"
+    assert "stateless" in recovery.repair_prerequisite
+
+
+@pytest.mark.parametrize("orphan_effect", [False, True, "retry"])
+def test_partial_quarantine_cleanup_uses_exact_created_group_receipt(monkeypatch, orphan_effect):
+    import nebius.api.nebius.vpc.v1 as api
+
+    calls = []
+    key = "node-a-0"
+    records = {"group": {"label": "quarantine-group-" + key}}
+    if orphan_effect is True:
+        records["rule"] = {"label": "quarantine-rule-" + key + "-0"}
+    if orphan_effect == "retry":
+        records["rule"] = {"label": "quarantine-rule-" + key + "-0-repair-retry-1"}
+    owner = SimpleNamespace(
+        records=records,
+        settle=lambda: calls.append("settle"),
+        completed=lambda label: (
+            "owned-group"
+            if label == "quarantine-group-" + key
+            else "owned-rule"
+            if orphan_effect == "retry"
+            else None
+        ),
+        mutate=lambda label, request, invoke: calls.append((label, request.id)),
+    )
+    quarantine = repair_cloud.Quarantine.__new__(repair_cloud.Quarantine)
+    quarantine.name = "node-a"
+    quarantine.cloud = SimpleNamespace(owner=owner, sdk=object())
+    quarantine.inspect = lambda: {
+        "restored": True,
+        "original": [{"name": "eth0"}],
+        "groups": {"eth0": "owned-group"},
+        "rules": {"eth0": [{}]} if orphan_effect == "retry" else {},
+    }
+    quarantine._attach = lambda value, **kwargs: calls.append("verify-original")
+    monkeypatch.setattr(api, "SecurityGroupServiceClient", lambda sdk: SimpleNamespace(delete=None))
+    monkeypatch.setattr(api, "SecurityRuleServiceClient", lambda sdk: SimpleNamespace(delete=None))
+    if orphan_effect is True:
+        with pytest.raises(RuntimeError, match="lacks its manifest"):
+            quarantine.cleanup()
+        assert calls == ["settle", "verify-original"]
+    else:
+        quarantine.cleanup()
+        if orphan_effect == "retry":
+            assert calls.pop(2) == ("quarantine-delete-rule-" + key + "-0", "owned-rule")
+        assert calls == [
+            "settle",
+            "verify-original",
+            ("quarantine-delete-group-" + key, "owned-group"),
+        ]
+
+
+@pytest.mark.parametrize("kind", ["rule", "group"])
+@pytest.mark.parametrize("status", ["failed", "rejected"])
+def test_quarantine_cleanup_never_treats_failed_creation_as_absence(monkeypatch, kind, status):
+    calls = []
+    label = "quarantine-" + kind + "-node-a-0" + ("-0" if kind == "rule" else "")
+    quarantine = repair_cloud.Quarantine.__new__(repair_cloud.Quarantine)
+    quarantine.name = "node-a"
+    quarantine.cloud = SimpleNamespace(
+        owner=SimpleNamespace(
+            records={"attempt": {"label": label, "status": status}},
+            settle=lambda: calls.append("settle"),
+            completed=lambda _: None,
+            mutate=lambda *_: pytest.fail("ambiguous creation must not authorize cleanup"),
+        )
+    )
+    quarantine.inspect = lambda: {
+        "restored": True,
+        "original": [{"name": "eth0"}],
+        "groups": {},
+        "rules": {"eth0": [{}]} if kind == "rule" else {},
+    }
+    quarantine._attach = lambda *_a, **_k: calls.append("verify-original")
+    with pytest.raises(RuntimeError, match=kind + " creation outcome is unproven"):
+        quarantine.cleanup()
+    assert calls == ["settle", "verify-original"]
 
 
 def test_cloud_journal_inspection_does_not_write(tmp_path):

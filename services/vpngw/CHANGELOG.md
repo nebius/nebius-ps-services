@@ -11,6 +11,27 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.6.9] - 2026-11-18
+
+- Rebuild managed networking before route admission during Single/HA activation
+  and full repair, using the shared path for Static and BGP configurations.
+- Preserve persistent physical-route ownership across repair while discarding
+  prior readiness. Recover ownership only from the exact active repair archive,
+  verify retained files before Netplan effects, and guard the underlay service
+  during reconstruction. Conflicting or missing ownership fails closed.
+- Retain exact settled predecessor boot protection across repair succession,
+  including confirmed successors that have not installed their own guards. Clean
+  up partially created quarantine resources using their exact creation receipts.
+- Include underlay services and ordering files in the shared Single/HA package
+  inventory so apply and repair cannot incorrectly retire required networking assets.
+- Align composed HA and strongSwan test fixtures with the current runtime-binding
+  and networking-preparation contracts, including refusal of externally changed
+  managed Netplan files.
+- Further live validation for v0.6.9 is waived by explicit operator decision.
+  Earlier HA/BGP repair and unchanged apply succeeded, but the sustained traffic
+  check observed intermittent packet loss with an unresolved cause. Clean upgrade
+  from a healthy v0.6.7 baseline and other live modes remain unqualified.
+
 ## [nebius-vpngw-v0.6.8] - 2026-11-18
 
 - Establish native BGP fixtures with the real startup table-220 cleanup before

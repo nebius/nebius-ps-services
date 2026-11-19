@@ -1,0 +1,9 @@
+id,should_trigger,prompt
+withdraw-exact,true,"$withdraw-release --release widget-v1.2.3"
+withdraw-immutable,true,"$withdraw-release --release widget-v2.0.0 --repo example/widgets; it is immutable so mark it withdrawn and warn that downloads remain."
+withdraw-preview,true,"$withdraw-release --release 1.2.3 --dry-run --project-dir ./apps/widget"
+withdraw-help,true,"$withdraw-release --help"
+new-release,false,"Publish widget v1.2.4 with corrected assets."
+registry-yank,false,"Yank the broken package version from PyPI."
+withdraw-discuss,false,"Should we withdraw this release or investigate first?"
+delete-draft,false,"Delete the unused draft release and its tag."
