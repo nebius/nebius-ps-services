@@ -19,6 +19,10 @@ from nebius_vpngw.agent.vm_ha.tunnels import Authority, TunnelController, effect
 from nebius_vpngw.ha_tunnel_policy import connection_policies
 from nebius_vpngw.ipsec_observation import command as ipsec_command
 
+# 30s loss + 5s proof separation + 29s mutation + 29s verification, with
+# 27s for bounded native observations and polling. This is a fixture cap, not an SLA.
+OWNER_RECOVERY_TIMEOUT_SECONDS = 120
+
 
 def recover_owner(cfg, config_path, state_dir):
     """Freeze only cloud authority; observe and repair the real native path."""
@@ -121,7 +125,10 @@ def recover_owner(cfg, config_path, state_dir):
         config_path,
         state_dir,
         runtime,
-        SimpleNamespace(routes=SimpleNamespace(), data_plane=SimpleNamespace()),
+        SimpleNamespace(
+            routes=SimpleNamespace(),
+            data_plane=SimpleNamespace(mode=lambda: DataPlaneMode.ACTIVE),
+        ),
     )
     runtime.tunnel_runtime = tunnels
     runtime.tunnel_step = tunnels.step
@@ -133,7 +140,7 @@ def recover_owner(cfg, config_path, state_dir):
         tunnels.effects.run(("ip", "link", "set", "xfrm0", "down"))
         decision = runtime.controller.step()
         assert decision.reasons == ("native-path-recovery",), decision.reasons
-        deadline = time.monotonic() + 35
+        deadline = time.monotonic() + OWNER_RECOVERY_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
             runtime.tunnel_step()
             runtime.controller.step()

@@ -11,6 +11,7 @@ from typing import Any
 from ... import ipsec_observation
 from ...ha_tunnel_policy import ConnectionPolicy, TunnelPath, covers
 from ...ipsec_observation import parse_sas
+from .diagnostics import diagnostic
 from .tunnels import Health
 
 
@@ -125,6 +126,11 @@ def xfrm_records(raw: str, *, policy: bool) -> list[dict[str, Any]]:
     return records
 
 
+def path_scope(policy: ConnectionPolicy, *, selected: bool) -> str:
+    """Name the evidence one observation requires; each keeps its own history."""
+    return "routed" if selected and policy.mode == "static" else "native"
+
+
 def route_destination(route: dict[str, Any]) -> str:
     destination = route["dst"]
     return str(ipaddress.IPv4Network("0.0.0.0/0" if destination == "default" else destination))
@@ -141,15 +147,32 @@ def path_health(
     routes: object,
     require_routes: bool,
 ) -> Health:
+    scope = "routed" if require_routes else "native"
     try:
         required = policy.destinations or frozenset({str(ipaddress.IPv4Network(path.peer + "/32"))})
         ike = parse_sas(sas)
         state = xfrm_records(states, policy=False)
         rules = xfrm_records(policies, policy=True)
         if not isinstance(links, list) or not isinstance(routes, list):
+            diagnostic(
+                "path-health",
+                connection=policy.name,
+                target=path.name,
+                scope=scope,
+                reason="incomplete-links-or-routes",
+                health=Health.UNKNOWN.value,
+            )
             return Health.UNKNOWN
         link = next((x for x in links if x.get("ifname") == path.interface), None)
         if link is None:
+            diagnostic(
+                "path-health",
+                connection=policy.name,
+                target=path.name,
+                scope=scope,
+                reason="xfrm-link-missing",
+                health=Health.DOWN.value,
+            )
             return Health.DOWN
         info = link.get("linkinfo", {})
         if (
@@ -157,6 +180,14 @@ def path_health(
             or _number(info.get("info_data", {}).get("if_id", -1)) != path.if_id
             or "UP" not in link.get("flags", [])
         ):
+            diagnostic(
+                "path-health",
+                connection=policy.name,
+                target=path.name,
+                scope=scope,
+                reason="xfrm-link-kind-id-or-state",
+                health=Health.DOWN.value,
+            )
             return Health.DOWN
         # Any exact installed replacement can establish health during rekey overlap.
         installed = []
@@ -181,6 +212,17 @@ def path_health(
                         ):
                             continue
                         installed.append((child, sa["local-host"], sa["remote-host"]))
+        if not installed:
+            diagnostic(
+                "path-health",
+                connection=policy.name,
+                target=path.name,
+                scope=scope,
+                reason="no-exact-installed-child",
+                health=Health.DOWN.value,
+            )
+            # One final result per observation keeps change-only records exact.
+            return Health.DOWN
         usable = False
         for child, local_host, remote_host in installed:
             reqid = _number(child["reqid"])
@@ -204,6 +246,13 @@ def path_health(
                     ("spi-out", local_host, remote_host),
                 )
             ):
+                diagnostic(
+                    "path-health-candidate-rejected",
+                    connection=policy.name,
+                    target=path.name,
+                    scope=scope,
+                    reason="missing-matching-esp-states",
+                )
                 continue
             matching = [
                 r
@@ -230,9 +279,24 @@ def path_health(
                     ("fwd", remote, local),
                 )
             ):
+                diagnostic(
+                    "path-health-candidate-rejected",
+                    connection=policy.name,
+                    target=path.name,
+                    scope=scope,
+                    reason="missing-policy-coverage",
+                )
                 continue
             usable = True
         if not usable:
+            diagnostic(
+                "path-health",
+                connection=policy.name,
+                target=path.name,
+                scope=scope,
+                reason="no-usable-child",
+                health=Health.DOWN.value,
+            )
             return Health.DOWN
         if require_routes:
             for prefix in required:
@@ -246,9 +310,34 @@ def path_health(
                     or observed[0].get("dev") != path.interface
                     or observed[0].get("nexthops")
                 ):
+                    diagnostic(
+                        "path-health",
+                        connection=policy.name,
+                        target=path.name,
+                        scope=scope,
+                        reason="selected-route-mismatch",
+                        health=Health.DOWN.value,
+                    )
                     return Health.DOWN
+        diagnostic(
+            "path-health",
+            connection=policy.name,
+            target=path.name,
+            scope=scope,
+            reason="native-proof-complete",
+            health=Health.HEALTHY.value,
+        )
         return Health.HEALTHY
-    except (ValueError, KeyError, TypeError, AttributeError):
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
+        diagnostic(
+            "path-health",
+            connection=policy.name,
+            target=path.name,
+            scope=scope,
+            reason="parse-or-evidence-error",
+            health=Health.UNKNOWN.value,
+            error_type=type(error).__name__,
+        )
         return Health.UNKNOWN
 
 
@@ -267,7 +356,7 @@ class NativeTunnelObserver:
                 policies=self.run(("ip", "-j", "xfrm", "policy")),
                 links=json.loads(self.run(("ip", "-d", "-j", "link", "show", "type", "xfrm"))),
                 routes=json.loads(self.run(("ip", "-j", "-4", "route", "show", "table", "main"))),
-                require_routes=selected and policy.mode == "static",
+                require_routes=path_scope(policy, selected=selected) == "routed",
             )
             if health is not Health.HEALTHY or policy.mode == "static":
                 return health

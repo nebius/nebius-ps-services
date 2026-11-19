@@ -8848,6 +8848,35 @@ filesystem and scheduling latency remain subject to measured qualification.
 Focused regression and native Static/BGP VICI/kernel crash counterfactuals pass.
 Installed-artifact and live gateway crash-replay qualification remain pending.
 
+The controller emits key-free `VPNGW_TUNNEL_DIAGNOSTIC` JSON lines to stderr,
+captured by systemd without changing CLI JSON stdout. Each line carries a process
+ID, process-local sequence and real monotonic timestamp. Static recovery records
+continuity resets, delay and retry waits, native backup proof, inner-peer ping
+return code or exception type, confirmations and admission. Authority refusals
+identify boolean gate failures. Per-CHILD kernel proof rejections are
+distinguished from the final path result so rekey overlap cannot be mistaken for
+an aggregate failure. Events contain no raw configuration, command output, key
+material or exception messages. The sink is best effort and never consumes
+injected decision clocks or changes recovery policy.
+
+Decisions that every roughly one-second pass re-evaluates are recorded only when
+they change: authority acceptance or refusal (owner and preparation separately),
+step skip gates, each path's native or route-checked health result, per-CHILD
+rejections, and each connection's Static recovery reset, skip or wait decision.
+Ages, gaps and elapsed times do not count as change, so a delay is recorded when
+it starts with its remaining wait rather than on every waiting pass. Per-CHILD
+rejections are held until their observation's path result and written with it
+only when that combination changed. Probe, ping, confirmation, admission and
+failure events are recorded every time.
+A healthy steady state therefore writes nothing after its first decisions.
+Step and selector-tick start records are deferred until a record inside them is
+written, so only passes that changed a decision, failed, or ran for at least two
+seconds are bracketed by start and finish; the finish carries the original start
+time. Change history is process-local: a restart records current decisions
+afresh, and a failed write is retried rather than remembered. Suppressed records
+consume no sequence numbers, so sequence gaps still expose failed writes and an
+unmatched start still exposes an interrupted pass.
+
 A daemon can automatically restart before the recovery owner observes a failed
 unit. Detect lost loaded configuration using the shared complete VICI
 connection and shared-key identifier inventory, compared with the canonical
@@ -15543,3 +15572,134 @@ update_req = UpdateSubnetRequest(
 
 **Resolution:**
 **Switching to XFRM interfaces completely eliminated this issue.** XFRM's `if_id` binding mechanism provides clean separation between tunnel interfaces and avoids the packet duplication problem that occurred with VTI mode. The current implementation uses XFRM interfaces exclusively and does not experience packet duplication.
+
+
+### VM-HA Static backup recovery after prolonged remote loss
+
+The explicit HA adapter supplies per-connection, process-local Static recovery
+observations to the existing durable `TunnelController`. This ports origin's
+`da868ab` / `b9b739c` usable-backup selection principle without its superseded
+route writer. Observations bind the complete authority and current selected
+path. Confirmed DOWN observations must span thirty monotonic seconds. Health,
+UNKNOWN, clock rollback, process restart or changed authority/selection restart
+that delay. A slow pass or scheduling gap alone does not erase the observed loss
+window. On resumption, admission still needs current selected-path DOWN evidence
+and two fresh alternate-path proofs. The existing
+persisted thirty-second episode is never cleared or extended to grant authority.
+
+One bounded alternate-path probe per connection per poll uses the original
+owner-only native admission. The default requires exact authenticated IKE/CHILD,
+selectors and kernel/XFRM identity, an already assigned local inner source, and
+an interface/source-bound ping to the remote gateway's inner address. No workload
+VM is discovered, provisioned, required or assumed to exist. Reachable inside
+connectivity is the explicitly chosen failover heuristic. It proves gateway
+`tunnel-path-reachable`, not remote workload forwarding or remote active-owner
+status. A remote standby may answer its inner address before enabling forwarding.
+A passive path that cannot answer remains unavailable and is probed again later,
+including after a long remote outage and later UK gateway failover.
+
+Existing explicit `gateway.tunnel_probes` configuration remains optional and
+compatible. When present it retains its configured source, target and hysteresis,
+with an additional distinct native ping per confirmation so a cached hysteresis
+record cannot be counted twice. No configuration delta or new endpoint is needed
+for the default gateway-only behavior. These probes never change Home policy,
+add source aliases, impersonate workload addresses or introduce a cross-site HA
+API. Two healthy proofs at least five seconds apart admit `automatic-recovery`.
+A first healthy alternative keeps the next probe slot for its second proof,
+avoiding stale confirmations in supported larger topologies while retaining
+bounded work per poll. UNKNOWN, failed or stale observations discard that proof.
+Successful backup proofs carry their own completion timestamp and count. The
+next probe starts at least five seconds after completion, and both proofs must
+remain within thirty seconds at admission, including final validation time.
+Selected-path health and active authority are rechecked after synchronous probing.
+A stale confirmation restarts proof counting without restarting the loss window
+or discarding bounded-attempt history. A pause with no sampled health is not
+treated as evidence that the selected path recovered.
+
+The accepted operation uses its own bounded twenty-nine-second mutation deadline
+instead of clipping to an expired episode. It persists selection intent before
+native activation and route changes. Its wall-clock admission time includes
+monotonic elapsed work since tick entry, so slow probing does not consume that
+new budget. Automatic Static recovery enters activation directly. It rechecks
+selected-path DOWN and fresh candidate native/inner-peer health under the routing
+writer. Only proven DOWN sibling paths enter exact IKE/kernel cleanup. Healthy
+and UNKNOWN alternatives stay outside that scope. Candidate checks repeat after
+cleanup and configuration loading, before the authority-guarded route batch.
+The selected backup SA is not explicitly unloaded or terminated. Configuration
+loading retains the established initiation/DPD/retry policy for the selected
+path. Native integration qualification checks preservation of the original
+IKE/CHILD identities, not an assumed fixed number of CHILDs after loading.
+
+After activation, the existing `attempt_deadline` records a fixed 29-second
+read-only verification window, capped at the original mutation deadline plus
+29 seconds. It is saved once on entry, survives controller restart, and is not
+renewed by later verification passes. The mutation deadline is unchanged. Two
+post-switch confirmations require fresh inner-peer probes. Confirmed DOWN enters
+existing restoration; UNKNOWN cannot commit success. Health can change after any
+probe or route write, so verification and normal later health sampling remain
+required. No atomic health guarantee or workload-forwarding proof is implied.
+Manual requests, ordinary Static switching and BGP keep their existing sequence.
+Writer exclusion, ownership checks before route writes and durable cleanup
+remain enforced. No VM/cloud transfer, global forwarding or service restart
+port is added. Native effect failure records the sanitized result
+`native-effect-failed-restoring`. Pending cleanup is never replaced or replayed.
+
+A transient effect failure permits re-admission only after terminal rollback,
+fresh original-authority restoration proof, a thirty-second first or sixty-second
+second cooldown and two new path proofs. At most three attempts per candidate
+are admitted in a continuous process-local observed loss window. A scope
+rejection (`suspension-scope-unproven`) is retried under the same cooldown,
+restoration proof, fresh path proofs and attempt cap. Its proof fails before the
+first native mutation and cannot tell a stalled native read from real ownership
+ambiguity. Without the retry, one stalled read disabled recovery for the whole
+loss window, leaving a one-active, one-backup connection with no backup. Real
+ambiguity therefore spends at most three read-only promotion checks, each a
+pending operation for about one pass, before its candidate is skipped. Unknown
+rollback never admits a retry. Exact terminal operation states
+are retained in their existing checksummed envelope under operation-ID-named
+`static-recovery-results` files before replacement with a new operation. Restart
+retains accepted-operation resume and conservatively starts a new observation
+delay. This is separate from renewing an exhausted episode or replaying a request.
+The restoration proof has its own bounded ten-second observation allowance under
+the current routing writer and revalidated authority. The terminal operation's
+expired mutation deadline cannot make this proof permanently unavailable.
+Configuration equality, loaded connection names and previous-path route coverage
+remain required. This allowance runs observations only and is not inherited by
+any later activation or route write.
+
+Thirty seconds begins after confirmed DOWN, including existing health hysteresis
+and native detection time. It is not a packet-loss detection SLA or recovery
+exactly thirty seconds after first loss. A fifteen-second fault that heals before
+confirmed loss persists for thirty seconds does not admit backup selection.
+Ordinary single-VM, BGP and explicit manual request behavior are unchanged.
+Live gateway reachability, independent campaign traffic and Home/owner continuity
+still require separate qualification before claiming S01 recovery is fixed.
+
+### Former-owner Stop progress across controller passes
+
+VM-HA Stop fencing yields a typed pending result while the former Compute owner
+is STOPPING or its accepted Stop operation remains nonterminal. The existing
+checkpoint retains the same action identity. Each later controller pass reads
+fresh state and checks any accepted operation once through its exact Instance
+operation service, including resource identity. No synchronous completion waiter,
+six-poll sleep loop, Stop replay, or generic controller restart is used for this
+expected progress. A one-second service-loop delay avoids busy polling while
+heartbeat and status work continue. This shared path applies to Static and BGP.
+The production effect adapter reports this result as deferred, without calling
+the failure reporter or writing a completed-effect receipt.
+
+Accepted-operation settlement precedes checkpoint acknowledgment, even when
+Compute already reports STOPPED. Unknown, foreign, failed, or unavailable operation
+evidence retains the receipt and the existing fail-closed behavior. Existing
+synchronous cloud helpers remain available to other bounded workflows. The
+controller checkpoint, accepted-operation record and configuration shapes do not
+change.
+
+Attachment geometry is defined once by `non_owner_attachment_exact()`. Healthy
+passive readiness additionally requires a Running peer through
+`passive_attachment_exact()`. Only fenced inactive Static cleanup uses the
+geometry-only predicate, retaining its current action, boot, generation, epoch,
+guard, configuration-scope and physical forwarding-off checks. It therefore
+remains possible to clean the backup's local state after its attached former
+owner stops. Candidate preparation, ownership transfer and forwarding retain
+their existing stopped-former-owner and exclusive-allocation requirements.

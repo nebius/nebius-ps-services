@@ -3163,6 +3163,15 @@ roles. VM ownership failback remains separate from tunnel failback.
   incarnation. Peer grace requires fresh authenticated exact-owner bounded-episode
   evidence; missing heartbeats get no extra grace. Unready standby promotion remains
   forbidden and former Compute owner must be Stopped before allocation transfer.
+- A former owner observed STOPPING leaves the backup fenced with its Stop action
+  pending across controller passes. Stop acceptance and exact-operation polling
+  are bounded single requests, with durable receipt reuse and no duplicate Stop
+  submission while work is accepted. Expected progress does not restart the
+  controller or drain heartbeat publication. A fresh authoritative STOPPED read
+  and terminal successful accepted operation remain prerequisites for transfer.
+  Fenced local Static cleanup uses exact non-owner attachment geometry without
+  requiring the attached former owner to be Running. Healthy standby readiness
+  and promotion keep their existing stronger proofs.
 - An existing exact cloud-route receipt remains separate from confirmed temporary
   BGP path availability; readiness still requires actual usable selected routes.
   The existing persisted five-second owner repair may clear only a confirmed
@@ -3800,6 +3809,49 @@ REQ-033 where they conflict; their remaining safety obligations remain active.
   number of destination prefixes. Admit a bounded native route batch under the
   routing writer and recheck authority after it. Replaying already restored
   policy and routes retains native IKE recovery rather than suspending it again.
+  For explicit VM-HA automatic Static selection, confirmed selected-path loss
+  instead starts a per-connection 30-second monotonic observation delay. Require
+  continuous current-authority DOWN evidence and two fresh usable alternate-path
+  confirmations at least five seconds apart before selection. Default admission
+  uses authenticated native SA/kernel identity plus assigned-source/interface-bound
+  inner gateway reachability. This is a tunnel-path heuristic, not workload or
+  remote-owner proof. No workload VM or configured workload probe is required.
+  Existing explicit probes remain optional. UNKNOWN, health, clock rollback,
+  process restart, or changed authority/selection reset the delay. Elapsed poll
+  time alone does not reset the observed loss window. Backup proof freshness is
+  independent: require two successful proofs at least five seconds apart and
+  within thirty seconds at admission. Recheck selected-path DOWN health and
+  active authority after synchronous probe work. A stale proof restarts only
+  confirmation counting. Start the new operation's execution budget at admission,
+  excluding time already spent observing and probing. The existing persisted exhausted episode
+  is retained as evidence and never renewed. A late usable remote backup may
+  admit a new bounded 29-second connection-only mutation operation after that
+  episode, including after a 180-second remote outage. Automatic Static promotion
+  preserves the proven backup SA instead of suspending the whole connection.
+  Under the routing writer, recheck selected-path loss and fresh candidate native
+  bindings and inside-peer reachability. Suspend and remove only paths with proven
+  DOWN evidence, preserving healthy and unknown alternatives and unrelated
+  connections. Recheck candidate health after cleanup and configuration loading
+  before the guarded route batch. A recovered selected path cancels promotion.
+  The subsequent two selected-path confirmations include fresh inner-peer probes
+  and have one separately persisted, nonrenewable 29-second observation window,
+  capped at admission plus 58 seconds. It grants no mutation extension. Preserve
+  exact kernel scope, writer locks, ownership and route guards, durable effect
+  resumption, bounded cleanup and healthy unrelated forwarding. After terminal proven rollback,
+  require fresh restoration proof, a 30s/60s cooldown and two new path proofs for
+  bounded re-admission, at most three attempts per candidate in a continuous
+  observed loss window. Preserve terminal receipts and never replace pending
+  cleanup. Retry a pre-mutation scope rejection within those same bounds, because
+  a stalled native read must not disable recovery for the whole loss window; real
+  ownership ambiguity still never mutates. Fresh read-only rollback-authority checks
+  receive a bounded observation allowance independent of the failed operation's
+  expired effect deadline. They still require exact configuration, loaded names,
+  routes and current authority, and grant no new mutation authority. A backup may
+  fail after a route write; subsequent observation must withhold success or enter
+  existing restoration on confirmed DOWN, without fencing the serving gateway.
+  Confirmation scheduling must support all
+  supported path counts without topology-sized proof expiry.
+  Ordinary gateways, manual tunnel requests and BGP retain the existing policy.
 - AC-006: At path-episode expiry, transfer only with fresh candidate coverage
   for every required destination, rechecked before transfer. Cold Static
   readiness is insufficient. Without such proof keep the safe owner and native

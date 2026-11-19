@@ -19,6 +19,7 @@ from nebius_vpngw.deploy.vm_ha_cloud import (
     InstanceCloudState,
     MissingHAComputeError,
     NebiusSDKCloudClient,
+    PendingHACloudOperation,
     PermanentHACloudError,
     VMHACloudAdapter,
     VMHACloudOperationJournal,
@@ -285,6 +286,287 @@ def _accepted_operation() -> AcceptedCloudOperation:
 
 def _request_error(code: StatusCode) -> RequestError:
     return RequestError(SimpleNamespace(code=code))  # type: ignore[arg-type]
+
+
+def test_nonblocking_stop_journals_before_status_and_survives_restart(tmp_path: Path) -> None:
+    journal = VMHACloudOperationJournal(tmp_path / "accepted.json")
+    accepted = _accepted_operation()
+    operation = SimpleNamespace(
+        id=accepted.cloud_operation_id,
+        resource_id="instance-a",
+        done=MagicMock(),
+        successful=MagicMock(return_value=True),
+        sync_wait=MagicMock(),
+    )
+
+    def pending_after_journal() -> bool:
+        assert journal.load() == accepted
+        return False
+
+    operation.done.side_effect = pending_after_journal
+    service = MagicMock()
+    service.stop.return_value.wait.return_value = operation
+    client = NebiusSDKCloudClient(object(), operation_journal=journal)
+    with (
+        patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
+        patch("nebius_vpngw.deploy.vm_ha_cloud.wait_vm_ha_operation") as wait,
+        pytest.raises(PendingHACloudOperation),
+    ):
+        client.request_stop_instance("instance-a", accepted.action_operation_id)
+
+    service.stop.assert_called_once()
+    assert service.stop.call_args.args[0].id == "instance-a"
+    assert service.stop.call_args.kwargs["metadata"] == (
+        ("x-idempotency-key", vm_ha_idempotency_key(accepted.action_operation_id)),
+    )
+    wait.assert_not_called()
+    operation.sync_wait.assert_not_called()
+    operation.successful.assert_not_called()
+
+    restarted = NebiusSDKCloudClient(object(), operation_journal=journal)
+    service.operation_service.return_value.get.return_value.wait.return_value = operation
+    with (
+        patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
+        pytest.raises(PendingHACloudOperation),
+    ):
+        restarted.request_stop_instance("instance-a", accepted.action_operation_id)
+
+    service.stop.assert_called_once()
+    lookup = service.operation_service.return_value.get
+    lookup.assert_called_once()
+    assert lookup.call_args.args[0].id == accepted.cloud_operation_id
+    assert journal.load() == accepted
+
+    operation.done.side_effect = None
+    operation.done.return_value = True
+    with patch.object(restarted, "_resume_operation", return_value=operation) as resume:
+        restarted.poll_pending_action(
+            accepted.action_operation_id, accepted.kind, expected_resource_id="instance-a"
+        )
+        restarted.poll_pending_action(
+            accepted.action_operation_id, accepted.kind, expected_resource_id="instance-a"
+        )
+
+    resume.assert_called_once_with(accepted.cloud_operation_id)
+    operation.sync_wait.assert_not_called()
+    operation.successful.assert_called_once_with()
+    assert journal.load() is None
+
+
+def test_nonblocking_stop_accepts_immediate_terminal_success(tmp_path: Path) -> None:
+    journal = VMHACloudOperationJournal(tmp_path / "accepted.json")
+    accepted = _accepted_operation()
+    operation = SimpleNamespace(
+        id=accepted.cloud_operation_id,
+        resource_id="instance-a",
+        done=lambda: True,
+        successful=lambda: True,
+    )
+    service = MagicMock()
+    service.stop.return_value.wait.return_value = operation
+    client = NebiusSDKCloudClient(object(), operation_journal=journal)
+    with (
+        patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
+        patch("nebius_vpngw.deploy.vm_ha_cloud.wait_vm_ha_operation") as wait,
+    ):
+        client.request_stop_instance("instance-a", accepted.action_operation_id)
+
+    assert journal.load() is None
+    wait.assert_not_called()
+
+
+def test_nonblocking_stop_retains_terminal_receipt_without_resource_identity(
+    tmp_path: Path,
+) -> None:
+    journal = VMHACloudOperationJournal(tmp_path / "accepted.json")
+    accepted = _accepted_operation()
+    operation = SimpleNamespace(
+        id=accepted.cloud_operation_id,
+        done=lambda: True,
+        successful=MagicMock(return_value=True),
+    )
+    service = MagicMock()
+    service.stop.return_value.wait.return_value = operation
+    client = NebiusSDKCloudClient(object(), operation_journal=journal)
+    with (
+        patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
+        patch("nebius_vpngw.deploy.vm_ha_cloud.wait_vm_ha_operation") as wait,
+        pytest.raises(AmbiguousHACloudError, match="resource identity"),
+    ):
+        client.request_stop_instance("instance-a", accepted.action_operation_id)
+
+    service.stop.assert_called_once()
+    operation.successful.assert_not_called()
+    wait.assert_not_called()
+    assert journal.load() == accepted
+
+
+@pytest.mark.parametrize(
+    ("operation_id", "resource_id", "done", "successful", "error"),
+    (
+        ("foreign-operation", "instance-a", True, True, AmbiguousHACloudError),
+        ("cloud-operation-1", "foreign-instance", False, True, AmbiguousHACloudError),
+        ("cloud-operation-1", "foreign-instance", True, True, AmbiguousHACloudError),
+        ("cloud-operation-1", None, False, True, AmbiguousHACloudError),
+        ("cloud-operation-1", None, True, True, AmbiguousHACloudError),
+        ("cloud-operation-1", "instance-a", "unknown", True, AmbiguousHACloudError),
+        ("cloud-operation-1", "instance-a", True, False, PermanentHACloudError),
+    ),
+)
+def test_nonblocking_poll_retains_receipt_on_failed_or_ambiguous_operation(
+    tmp_path: Path,
+    operation_id: str,
+    resource_id: str | None,
+    done: object,
+    successful: bool,
+    error: type[Exception],
+) -> None:
+    journal = VMHACloudOperationJournal(tmp_path / "accepted.json")
+    accepted = _accepted_operation()
+    journal.save(accepted)
+    client = NebiusSDKCloudClient(object(), operation_journal=journal)
+    operation = SimpleNamespace(
+        id=operation_id,
+        resource_id=resource_id,
+        done=lambda: done,
+        successful=lambda: successful,
+    )
+    with (
+        patch.object(client, "_resume_operation", return_value=operation) as resume,
+        pytest.raises(error),
+    ):
+        client.poll_pending_action(
+            accepted.action_operation_id, accepted.kind, expected_resource_id="instance-a"
+        )
+
+    resume.assert_called_once_with(accepted.cloud_operation_id)
+    assert journal.load() == accepted
+
+
+def test_nonblocking_stop_never_replays_an_unsupported_operation_lookup(tmp_path: Path) -> None:
+    journal = VMHACloudOperationJournal(tmp_path / "accepted.json")
+    accepted = _accepted_operation()
+    journal.save(accepted)
+    client = NebiusSDKCloudClient(object(), operation_journal=journal)
+    service = MagicMock()
+    with (
+        patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
+        patch.object(
+            client, "_resume_operation", side_effect=_request_error(StatusCode.UNIMPLEMENTED)
+        ) as resume,
+        pytest.raises(RequestError),
+    ):
+        client.request_stop_instance("instance-a", accepted.action_operation_id)
+
+    resume.assert_called_once_with(accepted.cloud_operation_id)
+    service.stop.assert_not_called()
+    assert journal.load() == accepted
+
+
+@pytest.mark.parametrize(
+    ("action_id", "kind"),
+    (("b" * 64, "stop-instance"), ("a" * 64, "set-alias-present")),
+)
+def test_nonblocking_poll_rejects_controller_receipt_mismatch(
+    tmp_path: Path, action_id: str, kind: str
+) -> None:
+    journal = VMHACloudOperationJournal(tmp_path / "accepted.json")
+    accepted = _accepted_operation()
+    journal.save(accepted)
+    client = NebiusSDKCloudClient(object(), operation_journal=journal)
+    with (
+        patch.object(client, "_resume_operation") as resume,
+        pytest.raises(PermanentHACloudError, match="does not match"),
+    ):
+        client.poll_pending_action(action_id, kind, expected_resource_id="instance-a")
+
+    resume.assert_not_called()
+    assert journal.load() == accepted
+
+
+def test_nonblocking_stop_requires_a_durable_journal_before_submission() -> None:
+    client = NebiusSDKCloudClient(object())
+    service = MagicMock()
+    with (
+        patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
+        pytest.raises(PermanentHACloudError, match="durable action journal"),
+    ):
+        client.request_stop_instance("instance-a", "a" * 64)
+
+    service.stop.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("state", "stopped", "submit_count"),
+    (
+        (InstanceCloudState.STOPPED, True, 0),
+        (InstanceCloudState.RUNNING, False, 1),
+        (InstanceCloudState.STOPPING, False, 0),
+        (InstanceCloudState.TRANSITIONAL, False, 0),
+    ),
+)
+def test_adapter_request_stop_observes_once_without_polling(
+    state: InstanceCloudState, stopped: bool, submit_count: int
+) -> None:
+    stopper = MagicMock()
+    sleeper = MagicMock()
+    adapter = VMHACloudAdapter(
+        instance_reader=MagicMock(),
+        instance_stopper=stopper,
+        allocation_reader=MagicMock(),
+        alias_allocation_setter=MagicMock(),
+        sleeper=sleeper,
+    )
+    with patch.object(adapter, "_read_instance", return_value=SimpleNamespace(state=state)) as read:
+        assert adapter.request_stop("instance-a", "a" * 64) is stopped
+
+    read.assert_called_once_with("instance-a")
+    assert stopper.call_count == submit_count
+    if submit_count:
+        stopper.assert_called_once_with("instance-a", "a" * 64)
+    sleeper.assert_not_called()
+
+
+@pytest.mark.parametrize("state", (InstanceCloudState.ERROR, InstanceCloudState.UNKNOWN))
+def test_adapter_request_stop_refuses_ambiguous_state(state: InstanceCloudState) -> None:
+    stopper = MagicMock()
+    adapter = VMHACloudAdapter(
+        instance_reader=MagicMock(),
+        instance_stopper=stopper,
+        allocation_reader=MagicMock(),
+        alias_allocation_setter=MagicMock(),
+    )
+    with (
+        patch.object(adapter, "_read_instance", return_value=SimpleNamespace(state=state)),
+        pytest.raises(AmbiguousHACloudError),
+    ):
+        adapter.request_stop("instance-a", "a" * 64)
+
+    stopper.assert_not_called()
+
+
+def test_adapter_request_stop_preserves_typed_pending_without_repeating() -> None:
+    stopper = MagicMock(side_effect=PendingHACloudOperation("accepted"))
+    sleeper = MagicMock()
+    adapter = VMHACloudAdapter(
+        instance_reader=MagicMock(),
+        instance_stopper=stopper,
+        allocation_reader=MagicMock(),
+        alias_allocation_setter=MagicMock(),
+        sleeper=sleeper,
+    )
+    with (
+        patch.object(
+            adapter,
+            "_read_instance",
+            return_value=SimpleNamespace(state=InstanceCloudState.RUNNING),
+        ),
+        pytest.raises(PendingHACloudOperation),
+    ):
+        adapter.request_stop("instance-a", "a" * 64)
+
+    stopper.assert_called_once_with("instance-a", "a" * 64)
+    sleeper.assert_not_called()
 
 
 def test_operation_status_lookup_unsupported_is_exact() -> None:

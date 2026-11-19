@@ -32,6 +32,11 @@ def main() -> None:
     parser.add_argument("--package-migration-only", action="store_true")
     parser.add_argument("--underlay-only", action="store_true")
     parser.add_argument("--historical-package-upgrades", action="store_true")
+    parser.add_argument("--static-recovery-only", action="store_true")
+    parser.add_argument("--static-recovery-timing-only", action="store_true")
+    parser.add_argument("--static-start-action-only", action="store_true")
+    parser.add_argument("--static-recovery-traffic-only", action="store_true")
+    parser.add_argument("--case-filter", help="Run only cases matching this pytest -k expression")
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--candidate-wheel", type=Path)
     parser.add_argument("--release-wheels", type=Path)
@@ -50,6 +55,10 @@ def main() -> None:
             args.modernization_only,
             args.package_migration_only,
             args.historical_package_upgrades,
+            args.static_recovery_only,
+            args.static_recovery_timing_only,
+            args.static_start_action_only,
+            args.static_recovery_traffic_only,
         )
     ):
         parser.error("underlay qualification is a separate fixture lane")
@@ -60,6 +69,11 @@ def main() -> None:
             args.modernization_only,
             args.package_migration_only,
             args.historical_package_upgrades,
+            args.static_recovery_only,
+            args.static_recovery_timing_only,
+            args.static_start_action_only,
+            args.static_recovery_traffic_only,
+            args.case_filter,
         )
     ):
         parser.error("support-bundle qualification is a separate fixture lane")
@@ -72,6 +86,11 @@ def main() -> None:
                 args.ingress_only,
                 args.modernization_only,
                 args.package_migration_only,
+                args.static_recovery_only,
+                args.static_recovery_timing_only,
+                args.static_start_action_only,
+                args.static_recovery_traffic_only,
+                args.case_filter,
             )
         ):
             parser.error("historical qualification is a separate fixture lane")
@@ -81,12 +100,24 @@ def main() -> None:
         return
     project = Path(__file__).resolve().parents[2]
     tests = ["/workspace/tests/integration/test_ssh_bootstrap.py"]
+    static_recovery_lane = (
+        args.static_recovery_only
+        or args.static_recovery_timing_only
+        or args.static_start_action_only
+        or args.static_recovery_traffic_only
+    )
     if args.underlay_only:
         tests = ["/workspace/tests/integration/test_underlay_native.py"]
     elif args.support_bundle_only:
         if not args.candidate_wheel or not args.candidate_wheel.is_file():
             parser.error("support-bundle qualification requires an existing --candidate-wheel")
         tests = ["/workspace/tests/integration/test_support_bundle_native.py"]
+    elif args.static_start_action_only:
+        tests = ["/workspace/tests/integration/test_static_start_action.py"]
+    elif args.static_recovery_timing_only:
+        tests = ["/workspace/tests/integration/test_static_recovery_timing.py"]
+    elif args.static_recovery_only or args.static_recovery_traffic_only:
+        tests = ["/workspace/tests/integration/test_static_recovery_lifecycle.py"]
     elif args.package_migration_only:
         tests = ["/workspace/tests/integration/test_runtime_modernization.py"]
     elif args.modernization_only:
@@ -226,6 +257,12 @@ def main() -> None:
             "qualification_plugin",
             *tests,
         ]
+        if static_recovery_lane:
+            command.remove("-x")  # Retain every declared recovery case.
+        if args.case_filter:
+            command.extend(("-k", args.case_filter))
+        if args.static_recovery_traffic_only:
+            command[2:2] = ["-e", "VPNGW_STATIC_RECOVERY_OBSERVE_CONTRACT=1"]
         with evidence.with_suffix(".collection.log").open("x") as log:
             run(*command, "--collect-only", stdout=log, stderr=subprocess.STDOUT, timeout=60)
         declared = json.loads(
@@ -257,9 +294,37 @@ def main() -> None:
             )
         with evidence.with_suffix(".log").open("x") as log:
             # Keep the entire diagnostic stream, including subprocess timeouts.
-            run(*command, stdout=log, stderr=subprocess.STDOUT, timeout=2400)
+            run(
+                *command,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=3600 if static_recovery_lane else 2400,
+            )
     finally:
         if created:
+            if static_recovery_lane:
+                try:
+                    packets = subprocess.run(
+                        [
+                            "docker",
+                            "exec",
+                            name,
+                            "tar",
+                            "-C",
+                            "/tmp",
+                            "-czf",
+                            "-",
+                            "static-recovery-evidence",
+                        ],
+                        capture_output=True,
+                        timeout=60,
+                    )
+                    if packets.returncode == 0:
+                        with evidence.with_suffix(".packets.tar.gz").open("xb") as archive:
+                            archive.write(packets.stdout)
+                except (OSError, subprocess.SubprocessError) as error:
+                    # Evidence export failure must not prevent container cleanup.
+                    evidence.with_suffix(".packets-error.txt").write_text(type(error).__name__)
             captured = subprocess.run(
                 ["docker", "exec", name, "cat", "/tmp/qualification.json"],
                 check=False,

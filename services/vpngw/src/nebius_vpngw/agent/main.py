@@ -126,6 +126,7 @@ from .vm_ha_controller import (
     ControllerResult,
     ControllerSnapshot,
     DataPlaneMode,
+    FormerOwnerStopPending,
     HAState,
     LocalReadiness,
     RecoverableController,
@@ -2090,6 +2091,12 @@ class VMHAEffectAdapter:
                 },
             )
         except Exception as error:
+            if (
+                isinstance(error, FormerOwnerStopPending)
+                and action.kind is ActionKind.STOP_FORMER_OWNER
+            ):
+                self._event(action, event="deferred", started_at=started_at)
+                raise
             try:
                 self.effect_failed(action)
             except Exception:
@@ -5423,7 +5430,9 @@ def _run_vm_ha_controller(
                 return
             state = str(status.get("state") or "")
             pending = status.get("pending_operation_id")
-            if pending:
+            if "former-owner-stop-pending" in status.get("reasons", ()):
+                delay = 1.0
+            elif pending:
                 delay = 0.05
             elif state in {
                 HAState.SUSPECT.value,

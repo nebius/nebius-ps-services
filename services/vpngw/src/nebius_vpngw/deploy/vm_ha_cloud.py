@@ -331,6 +331,10 @@ class RetryableHACloudError(HACloudError):
     """A bounded operation did not reach its required postcondition."""
 
 
+class PendingHACloudOperation(RetryableHACloudError):
+    """One durably accepted operation is pending without a synchronous wait."""
+
+
 class PermanentHACloudError(HACloudError):
     """The request or observed resource conflicts with the HA contract."""
 
@@ -553,8 +557,14 @@ class NebiusSDKCloudClient:
         action_operation_id: str | None,
         kind: str,
         submit: t.Callable[[], t.Any],
+        wait_for_completion: bool = True,
+        expected_resource_id: str | None = None,
     ) -> None:
         journal = self.operation_journal
+        if not wait_for_completion and (journal is None or not action_operation_id):
+            raise PermanentHACloudError(
+                "nonblocking VM-HA mutation requires a durable action journal"
+            )
         accepted = None if journal is None else journal.load()
         if accepted is not None:
             assert journal is not None
@@ -566,6 +576,11 @@ class NebiusSDKCloudClient:
                 raise PermanentHACloudError(
                     "a different accepted VM-HA cloud operation is still pending"
                 )
+            if not wait_for_completion:
+                self.poll_pending_action(
+                    action_operation_id, kind, expected_resource_id=expected_resource_id
+                )
+                return
             try:
                 operation = self._resume_operation(accepted.cloud_operation_id)
             except Exception as error:
@@ -592,10 +607,67 @@ class NebiusSDKCloudClient:
                 cloud_operation_id=cloud_operation_id,
             )
             journal.save(accepted)
+        if not wait_for_completion:
+            self._require_nonblocking_operation(
+                operation, cloud_operation_id, expected_resource_id=expected_resource_id
+            )
+            assert journal is not None and accepted is not None
+            journal.clear(accepted)
+            return
         wait_vm_ha_operation(operation)
         self._require_operation_success(operation)
         if journal is not None and accepted is not None:
             journal.clear(accepted)
+
+    def _require_nonblocking_operation(
+        self,
+        operation: t.Any,
+        cloud_operation_id: str,
+        *,
+        expected_resource_id: str | None,
+    ) -> None:
+        if str(getattr(operation, "id", "") or "") != cloud_operation_id:
+            raise AmbiguousHACloudError("VM-HA cloud operation identity changed")
+        done = getattr(operation, "done", None)
+        if not callable(done):
+            raise AmbiguousHACloudError("VM-HA cloud operation exposed no completion status")
+        try:
+            completed = done()
+        except Exception as error:
+            raise AmbiguousHACloudError(
+                "VM-HA cloud operation completion status is unavailable"
+            ) from error
+        if type(completed) is not bool:
+            raise AmbiguousHACloudError("VM-HA cloud operation completion status is invalid")
+        resource_id = getattr(operation, "resource_id", None)
+        if expected_resource_id is not None and resource_id != expected_resource_id:
+            raise AmbiguousHACloudError("VM-HA cloud operation resource identity changed")
+        if not completed:
+            raise PendingHACloudOperation("accepted VM-HA cloud operation is still pending")
+        self._require_operation_success(operation)
+
+    def poll_pending_action(
+        self,
+        operation_id: str | None,
+        kind: str | None,
+        *,
+        expected_resource_id: str | None = None,
+    ) -> None:
+        """Read one exact accepted operation once, without waiting or resubmitting."""
+        journal = self.operation_journal
+        accepted = None if journal is None else journal.load()
+        if accepted is None:
+            return
+        assert journal is not None
+        if accepted.action_operation_id != operation_id or accepted.kind != kind:
+            raise PermanentHACloudError(
+                "accepted cloud receipt does not match the pending controller action"
+            )
+        operation = self._resume_operation(accepted.cloud_operation_id)
+        self._require_nonblocking_operation(
+            operation, accepted.cloud_operation_id, expected_resource_id=expected_resource_id
+        )
+        journal.clear(accepted)
 
     def settle_pending_action(self, operation_id: str | None, kind: str | None) -> None:
         """Settle acceptance before a controller can acknowledge cloud postconditions."""
@@ -649,6 +721,21 @@ class NebiusSDKCloudClient:
                 StopInstanceRequest(id=instance_id),
                 **self._request_kwargs(operation_id),
             ),
+        )
+
+    def request_stop_instance(self, instance_id: str, operation_id: str) -> None:
+        """Submit one Stop and retain its acceptance until a later terminal read."""
+        from nebius.api.nebius.compute.v1 import InstanceServiceClient, StopInstanceRequest
+
+        self._mutate(
+            action_operation_id=operation_id,
+            kind="stop-instance",
+            submit=lambda: InstanceServiceClient(self.sdk).stop(
+                StopInstanceRequest(id=instance_id),
+                **self._request_kwargs(operation_id),
+            ),
+            wait_for_completion=False,
+            expected_resource_id=instance_id,
         )
 
     def start_instance(self, instance_id: str, operation_id: str | None = None) -> None:
@@ -1038,6 +1125,22 @@ class VMHACloudAdapter:
             former_owner=former_owner,
             candidate_owner=candidate,
         )
+
+    def request_stop(self, instance_id: str, operation_id: str) -> bool:
+        """Observe once and request Stop only for a freshly RUNNING instance."""
+        observation = self._read_instance(instance_id)
+        if observation.state is InstanceCloudState.STOPPED:
+            return True
+        if observation.state in {InstanceCloudState.ERROR, InstanceCloudState.UNKNOWN}:
+            raise AmbiguousHACloudError(
+                f"Compute instance {instance_id} is {observation.state.value}, not authoritatively stopped"
+            )
+        if observation.state is InstanceCloudState.RUNNING:
+            self._call(
+                f"cannot stop Compute instance {instance_id}",
+                lambda: self._instance_stopper(instance_id, operation_id),
+            )
+        return False
 
     def require_stopped(
         self,

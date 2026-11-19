@@ -1,5 +1,86 @@
 # Isolated systemd and networkd regressions
 
+## Static recovery lifecycle contract
+
+Run `python3 tests/systemd/run.py --static-recovery-only --report /tmp/static-recovery.json`
+from the service directory for the seven lifecycle cases. They use
+exactly two sites: site A runs the product tunnel controller and native effects;
+site B runs a plain strongSwan responder, independently configured without the
+product renderer or any peer-side gateway controller. Two addresses at site B
+represent primary and backup tunnel endpoints. These tests qualify one gateway's
+Static behavior, not a vendor's remote failover policy or cloud ownership.
+Admission uses the default interface-bound inner-peer probe. Independent workload
+ICMP measures actual packet recovery. No optional workload tunnel probe is configured.
+
+The cases cover primary return before backup qualification, SA-preserving backup
+promotion, both-path failure with either path returning first, both returning,
+neither returning, and remote initiation of the preferred path followed by the
+existing 60-second failback qualification. Promotion retains `trap|start`, preserves
+the previously validated SA identities while allowing additional native CHILDs,
+and applies selected-path recovery settings. Automatic failback retains the
+existing suspension and activation sequence; SA preservation applies to backup
+promotion. Unselected paths retain `none`, `clear`, and bounded initiation. Demotion must
+stop the losing attempt and leave it locally cold. Later bounded qualification
+of the preferred path remains allowed. Duplicate initiation while a negotiation
+is pending is rejected. Tests never install traps or move routes on behalf of
+the product. Missing implementation is a failure, not an expected-failure mark.
+Configuration contract violations are recorded and asserted after the behavioral
+sequence where possible. An unavailable selected path still stops dependent
+phases, and its last reached milestone remains in the packet summary.
+
+Continuous timestamped bidirectional ICMP runs through faults without the `-w`
+option that can stop ping at its first ICMP error. Reports retain final counters,
+individual reply gaps, controller commands, SA identities and transition times.
+The JSON report includes per-case packet summaries, and a sibling
+`.packets.tar.gz` retains the raw evidence even on failure. It excludes generated
+credential/configuration files. This focused lane has a one-hour execution bound
+and uses accelerated fixture retransmission timing, with no change to product
+timing. Ordinary runs skip it unless the disposable fixture is explicitly enabled.
+
+Offline tests cover controller and native-command behavior. They do not establish
+native SA preservation or packet recovery. Record all seven native case results
+before claiming that qualification. Docker must run on a Linux kernel with the
+XFRM support described below.
+
+Run `python3 tests/systemd/run.py --static-recovery-timing-only --report /tmp/static-timing.json`
+for a separate native timing regression. The fixture inserts eleven seconds of
+synchronous work before a real backup proof. The test requires the following
+controller pass to retain the freshly successful proof and original loss window.
+It substitutes no health result or controller clock. This models slow work, not
+actual cloud snapshot performance. The seven ordinary lifecycle cases use no
+injected delay. Cloud authority remains frozen in both lanes. The timing case
+also captures the backup's installed IKE/CHILD identities before admission and
+requires those identities to survive successful promotion and traffic recovery.
+Additional native CHILDs are reported without confusing them with preservation
+of the originally proven SA.
+
+Offline coverage is in `tests/unit/test_static_backup_promotion.py`. Its composed
+native-effects model rejects any deletion or unload outside the failed path and
+checks fresh health, authority races, post-route failure, slow controller passes,
+bounded verification and terminal retry observation. It exercises command and
+state boundaries without Docker. It does not replace real StrongSwan/kernel
+qualification of configuration reload semantics.
+
+Run `python3 tests/systemd/run.py --static-start-action-only --report /tmp/start-action.json`
+for an exploratory native A/B comparison. Two interleaved trials per setting
+reload an established SA from `none` to either `trap` or `trap|start`, observe
+bidirectional ICMP, block the active outer path for twenty seconds, then measure
+recovery. Both variants retain `dpd_action=restart` and `keyingtries=0`.
+No product controller runs in this lane. It isolates strongSwan reload behavior
+from controller qualification, scoped teardown and route movement. SA changes
+are measured rather than rejected. Traffic must recover. Each archived
+`start-action-comparison.json` retains exact SA identities and separate reload
+and fault-window packet measurements. Loss windows include the adjacent bounding
+replies, and an unrecovered window cannot be reported as zero loss.
+
+Use `--static-recovery-traffic-only` instead of `--static-recovery-only` to
+qualify traffic recovery while recording SA-preservation and configuration
+contract checks as observations. The same native faults, qualification gates, packet windows,
+losing-path cleanup and stability checks still run. Contract deviations remain
+in the evidence as observations. This mode does not qualify the full lifecycle contract.
+`--case-filter test_case_7` selects only that case in either lane and records the
+filtered collection, so a partial trial cannot be presented as all seven cases.
+
 Run `python3 tests/systemd/run.py` from the service directory. This explicitly
 builds and starts a disposable Ubuntu 24.04 container with systemd as PID 1,
 then removes its uniquely named container and image. Docker and a Linux kernel
@@ -93,7 +174,14 @@ release, bounded recovery, repeated reconciliation, and bidirectional packets.
 Mixed-mode cases check that switching a Static connection preserves an unrelated
 BGP session, its routes and traffic under both owner bindings. Production systemd
 filesystem and capability restrictions cover XFRM preparation and FRR policy writes.
-Cloud ownership is a frozen fixture input; these tests do not prove Compute
+Cloud ownership is a frozen fixture input. The late-loss owner-recovery driver
+also declares its active data-plane mode through the runtime adapter, so recovery
+uses the production authority predicate while observing the real native path.
+Its 120-second convergence cap covers the 30-second loss threshold, five-second
+proof separation, 29-second mutation and 29-second verification windows, and
+fixture overhead. The outer process has 150 seconds for setup and cleanup.
+These fixture limits do not change product timers or establish a recovery SLA.
+These tests do not prove Compute
 fencing, allocation transfer or peer-provider return routing.
 
 BGP restart cases persist an operation at activate, verify or release, or hold a

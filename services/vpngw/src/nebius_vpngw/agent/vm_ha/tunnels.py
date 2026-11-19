@@ -9,21 +9,33 @@ from __future__ import annotations
 
 import hashlib
 import math
+import time
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from enum import Enum
 from pathlib import Path
 from time import monotonic
-from typing import Any, Generic, Protocol, TypeVar
+from typing import Any, Generic, Protocol, TypeVar, cast
 
 from ...ha_tunnel_policy import ConnectionPolicy, connection_policies, selections
+from .diagnostics import diagnostic
 from .models import canonical_json
 from .store import CorruptStateError, _envelope, _unwrap, atomic_write_json
 
 CAPABILITY = "connection-tunnel-selection-v1"
 STATE_NAME = "tunnel-selection.json"
 SCHEMA = "nebius-vpngw/ha-tunnel-selection-v1"
+STATIC_VERIFICATION_SECONDS = 29
+# Terminal automatic-recovery results that may be admitted again after the
+# cooldown, within the per-candidate attempt cap, and only after fresh proof that
+# the previous path's configuration, loaded names and routes are intact. A
+# scope-unproven result failed its proof before the first native mutation. That
+# proof cannot tell a stalled native read from real ownership ambiguity, so both
+# get the same bounded retries rather than disabling recovery for the whole loss.
+RETRYABLE_RECOVERY_RESULTS = frozenset(
+    {"native-recovery-retained", "previous-path-restored", "suspension-scope-unproven"}
+)
 
 
 class Health(str, Enum):
@@ -244,6 +256,9 @@ class TunnelController(Generic[AuthorityT]):
         *,
         preferred_probe: Callable[[ConnectionPolicy, str, AuthorityT], Health] | None = None,
         preferred_observations: dict[str, Any] | None = None,
+        backup_probe: Callable[[ConnectionPolicy, str, AuthorityT], Health] | None = None,
+        static_recovery_observations: dict[str, Any] | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.cfg = cfg
         self.policies: dict[str, ConnectionPolicy] = {p.name: p for p in connection_policies(cfg)}
@@ -260,6 +275,12 @@ class TunnelController(Generic[AuthorityT]):
             preferred_observations if preferred_observations is not None else {}
         )
 
+        self.backup_probe: Callable[[ConnectionPolicy, str, AuthorityT], Health] | None = (
+            backup_probe
+        )
+        self.static_recovery_observations = static_recovery_observations
+        self.monotonic = monotonic
+
     def _save(self) -> None:
         atomic_write_json(self.path, _envelope(self.state))
         self.after_persist()
@@ -268,6 +289,7 @@ class TunnelController(Generic[AuthorityT]):
         previous = self.state["authority"]
         if previous == asdict(authority):
             return
+        self._retain_terminal_recovery()
         same_owner = previous is not None and _authority(previous).owner_key == authority.owner_key
         if not same_owner:
             self.state["episode"] = None
@@ -439,6 +461,30 @@ class TunnelController(Generic[AuthorityT]):
         )
         return str(self.state["operation"]["id"])
 
+    def _retain_terminal_recovery(self) -> None:
+        operation = self.state["operation"]
+        if (
+            operation is None
+            or operation["requested_verb"] != "automatic-recovery"
+            or operation["phase"] not in {"failed", "succeeded"}
+            or operation["result"] == "authority-changed"
+        ):
+            return
+        operation_id = operation["id"]
+        if len(operation_id) != 64 or any(c not in "0123456789abcdef" for c in operation_id):
+            raise CorruptStateError("Static recovery operation identity is malformed")
+        receipt = self.path.parent / "static-recovery-results" / f"{operation_id}.json"
+        if receipt.is_symlink() or receipt.parent.is_symlink():
+            raise CorruptStateError("Static recovery receipt path is unsafe")
+        if receipt.exists():
+            saved = read_state(receipt)
+            if saved["authority"] != self.state["authority"] or saved["operation"] != operation:
+                raise CorruptStateError("Static recovery terminal receipt changed")
+            return
+        # Same strict envelope, immutable operation identity and exact terminal
+        # state. Retain the actual result before a new operation can replace it.
+        atomic_write_json(receipt, _envelope(self.state))
+
     def _begin(
         self,
         policy: ConnectionPolicy,
@@ -451,6 +497,7 @@ class TunnelController(Generic[AuthorityT]):
         requested_target: str | None = None,
         unchanged: bool = False,
     ) -> None:
+        self._retain_terminal_recovery()
         self.state["sequence"] += 1
         operation_id = (
             operation_id
@@ -477,7 +524,7 @@ class TunnelController(Generic[AuthorityT]):
             "phase": "verify-unchanged"
             if unchanged
             else "suspend"
-            if policy.mode == "static"
+            if policy.mode == "static" and verb != "automatic-recovery"
             else "activate",
             "deadline": now + 29,
             "attempt_deadline": now + 10,
@@ -492,7 +539,11 @@ class TunnelController(Generic[AuthorityT]):
         if not math.isfinite(now):
             raise ValueError("tunnel clock must be finite")
         started = monotonic()
+        tick_started_at = self.monotonic()
         if not self.effects.revalidate(authority):
+            if self.static_recovery_observations is not None:
+                diagnostic("static-recovery-reset", reason="tick-authority-revalidation")
+                self.static_recovery_observations.clear()
             return
         self.bind(authority)
         health: dict[str, str] = {}
@@ -533,6 +584,14 @@ class TunnelController(Generic[AuthorityT]):
             else:
                 health[policy.name] = self.effects.observe(policy, target, selected=True).value
         self.state["health"] = health
+        if self.static_recovery_observations is not None:
+            # Reset sampled loss evidence before either effect/admission path
+            # can return early. Only a pending operation owns retry history
+            # that must survive its transient health observations.
+            pending_connection = self.state["operation"]["connection"] if self._pending() else None
+            for name, health_state in health.items():
+                if name != pending_connection and health_state != Health.DOWN.value:
+                    self.static_recovery_observations.pop(name, None)
         static = list(self.policies.values())
         loss = any(health[p.name] == Health.DOWN.value for p in static)
         healthy = bool(static) and all(health[p.name] == Health.HEALTHY.value for p in static)
@@ -575,7 +634,7 @@ class TunnelController(Generic[AuthorityT]):
                     if policy.mode == "bgp":
                         self.state["selected"].pop(policy.name, None)
                         op.update(verb="release", phase="activate", successes=0)
-                    else:
+                    elif op["requested_verb"] != "automatic-recovery":
                         op.update(phase="restore", successes=0)
                 self._save()
         self._save()
@@ -583,6 +642,9 @@ class TunnelController(Generic[AuthorityT]):
             self.preferred_observations.clear()
             self._advance(authority, now, elapsed_seconds=monotonic() - started)
             return
+        if self.static_recovery_observations is not None:
+            if self._recover_static(authority, health, now, tick_started_at):
+                return
         if episode is not None and episode["exhausted"]:
             return
         for policy in self.policies.values():
@@ -598,7 +660,10 @@ class TunnelController(Generic[AuthorityT]):
                     # the VM policy can repair a path under the stale override.
                     self._advance(authority, now, elapsed_seconds=monotonic() - started)
                     return
-            elif health[policy.name] == Health.DOWN.value:
+            elif (
+                health[policy.name] == Health.DOWN.value
+                and self.static_recovery_observations is None
+            ):
                 self.preferred_observations.pop(policy.name, None)
                 current = self.state["selected"].get(policy.name, policy.preferred)
                 alternatives = [p.name for p in policy.paths if p.name != current]
@@ -608,6 +673,249 @@ class TunnelController(Generic[AuthorityT]):
             elif self._preferred_ready(policy, authority, now, health[policy.name]):
                 self._begin(policy, policy.preferred, "automatic-failback", authority, now)
                 return
+
+    def _recover_static(
+        self, authority: AuthorityT, health: dict[str, str], now: float, tick_started_at: float
+    ) -> bool:
+        """Admit a fresh usable backup after 30s of continuous selected-path loss.
+
+        Observation is process-local and monotonic. Restart, unknown evidence,
+        explicit health changes and any authority/selection change restart the delay.
+        The accepted operation remains durable and uses its own bounded deadline.
+        No exhausted episode is renewed, and no VM/cloud effect is available here.
+        """
+        records = self.static_recovery_observations
+        assert records is not None
+        observed_at = self.monotonic()
+        if not math.isfinite(observed_at) or not math.isfinite(tick_started_at):
+            diagnostic("static-recovery-reset", reason="nonfinite-clock")
+            records.clear()
+            return False
+        if observed_at < tick_started_at:
+            diagnostic("static-recovery-reset", reason="clock-backwards-during-observation")
+            records.clear()
+            return False
+        for policy in self.policies.values():
+            if policy.mode != "static" or not policy.eligible:
+                diagnostic("static-recovery-skip", connection=policy.name, reason="ineligible")
+                records.pop(policy.name, None)
+                continue
+            if health[policy.name] != Health.DOWN.value:
+                diagnostic(
+                    "static-recovery-reset",
+                    connection=policy.name,
+                    reason="selected-not-down",
+                    health=health[policy.name],
+                )
+                records.pop(policy.name, None)
+                continue
+            if not self.effects.active(authority):
+                diagnostic(
+                    "static-recovery-reset", connection=policy.name, reason="inactive-authority"
+                )
+                records.pop(policy.name, None)
+                continue
+            selected = self.state["selected"].get(policy.name, policy.preferred)
+            binding = (asdict(authority), selected)
+            record = records.get(policy.name)
+            reset = None
+            if record is None:
+                reset = "first-observation"
+            elif record["binding"] != binding:
+                reset = "binding-changed"
+            elif observed_at < record["last"]:
+                reset = "clock-backwards"
+            if reset is not None:
+                diagnostic(
+                    "static-recovery-reset",
+                    connection=policy.name,
+                    selected=selected,
+                    reason=reset,
+                    gap=0 if record is None else observed_at - record["last"],
+                    decision_monotonic=observed_at,
+                )
+                record = {
+                    "binding": binding,
+                    "since": observed_at,
+                    "last": observed_at,
+                    "probe_at": observed_at - 5,
+                    "healthy": {},
+                    "attempted": {},
+                    "next_path": 0,
+                }
+                records[policy.name] = record
+            record = cast(dict[str, Any], record)
+            record["last"] = observed_at
+            if observed_at - record["since"] < 30:
+                diagnostic(
+                    "static-recovery-wait",
+                    connection=policy.name,
+                    selected=selected,
+                    reason="continuous-loss-delay",
+                    age=observed_at - record["since"],
+                    wait_seconds=30 - (observed_at - record["since"]),
+                )
+                continue
+            if self.backup_probe is None or observed_at - record["probe_at"] < 5:
+                diagnostic(
+                    "static-recovery-wait",
+                    connection=policy.name,
+                    selected=selected,
+                    reason="probe-unavailable" if self.backup_probe is None else "probe-interval",
+                    age=observed_at - record["probe_at"],
+                )
+                continue
+            record["probe_at"] = observed_at
+            alternatives = [path for path in policy.paths if path.name != selected]
+            path = alternatives[record["next_path"] % len(alternatives)]
+            attempt = record["attempted"].get(path.name)
+            if attempt is not None:
+                operation = self.state["operation"]
+                if operation is None or operation["id"] != attempt["operation"]:
+                    receipt = (
+                        self.path.parent
+                        / "static-recovery-results"
+                        / f"{attempt['operation']}.json"
+                    )
+                    operation = read_state(receipt)["operation"]
+                if (
+                    operation is None
+                    or operation["phase"] != "failed"
+                    or operation["result"] not in RETRYABLE_RECOVERY_RESULTS
+                    or attempt["count"] >= 3
+                ):
+                    diagnostic(
+                        "static-recovery-skip",
+                        connection=policy.name,
+                        target=path.name,
+                        reason="prior-attempt-not-retryable",
+                        count=attempt["count"],
+                    )
+                    record["next_path"] += 1
+                    continue
+                if attempt["terminal_at"] is None:
+                    attempt["terminal_at"] = observed_at
+                    record["healthy"].pop(path.name, None)
+                if observed_at - attempt["terminal_at"] < 30 * attempt["count"]:
+                    diagnostic(
+                        "static-recovery-wait",
+                        connection=policy.name,
+                        target=path.name,
+                        reason="retry-backoff",
+                        age=observed_at - attempt["terminal_at"],
+                        wait_seconds=30 * attempt["count"] - (observed_at - attempt["terminal_at"]),
+                    )
+                    record["next_path"] += 1
+                    continue
+                if not self.effects.authority_restored(policy, operation["previous"], authority):
+                    diagnostic(
+                        "static-recovery-skip",
+                        connection=policy.name,
+                        target=path.name,
+                        reason="previous-authority-not-restored",
+                    )
+                    record["healthy"].pop(path.name, None)
+                    record["next_path"] += 1
+                    continue
+            # One bounded probe per connection per poll prevents a dead remote
+            # with several alternatives from monopolizing the controller tick.
+            diagnostic(
+                "static-recovery-probe-started",
+                connection=policy.name,
+                target=path.name,
+                selected=selected,
+                age=observed_at - record["since"],
+            )
+            candidate = self.backup_probe(policy, path.name, authority)
+            proof_at = self.monotonic()
+            if not math.isfinite(proof_at) or proof_at < observed_at:
+                diagnostic(
+                    "static-recovery-reset",
+                    connection=policy.name,
+                    target=path.name,
+                    reason="invalid-probe-clock",
+                )
+                records.pop(policy.name, None)
+                continue
+            record["probe_at"] = proof_at
+            record["last"] = proof_at
+            diagnostic(
+                "static-recovery-probe-result",
+                connection=policy.name,
+                target=path.name,
+                health=candidate.value,
+            )
+            if candidate is not Health.HEALTHY:
+                record["healthy"].pop(path.name, None)
+                record["next_path"] += 1
+                continue
+            previous = record["healthy"].get(path.name)
+            confirmations = 1
+            if previous is not None and 0 <= proof_at - previous["at"] <= 30:
+                confirmations = previous["count"] + 1
+            record["healthy"][path.name] = {"at": proof_at, "count": confirmations}
+            diagnostic(
+                "static-recovery-confirmation",
+                connection=policy.name,
+                target=path.name,
+                confirmations=confirmations,
+            )
+            if confirmations < 2:
+                # Confirm this path next, instead of waiting a topology-sized
+                # rotation that can outlive every admissible proof window.
+                continue
+            selected_health = self.effects.observe(policy, selected, selected=True)
+            if selected_health is not Health.DOWN:
+                diagnostic(
+                    "static-recovery-reset",
+                    connection=policy.name,
+                    reason="selected-changed-before-admission",
+                    health=selected_health.value,
+                )
+                health[policy.name] = selected_health.value
+                records.pop(policy.name, None)
+                self._save()
+                continue
+            if not self.effects.active(authority):
+                diagnostic(
+                    "static-recovery-reset",
+                    connection=policy.name,
+                    target=path.name,
+                    reason="authority-lost-before-admission",
+                )
+                records.pop(policy.name, None)
+                return False
+            admitted_at = self.monotonic()
+            if not math.isfinite(admitted_at) or admitted_at < proof_at:
+                records.pop(policy.name, None)
+                continue
+            if previous is None or admitted_at - previous["at"] > 30:
+                record["healthy"][path.name]["count"] = 1
+                diagnostic(
+                    "static-recovery-wait",
+                    connection=policy.name,
+                    target=path.name,
+                    reason="confirmation-expired-before-admission",
+                )
+                continue
+            admission_now = now + admitted_at - tick_started_at
+            self._begin(policy, path.name, "automatic-recovery", authority, admission_now)
+            diagnostic(
+                "static-recovery-admitted",
+                connection=policy.name,
+                target=path.name,
+                selected=selected,
+                confirmations=confirmations,
+            )
+            record["attempted"][path.name] = {
+                "count": 1 if attempt is None else attempt["count"] + 1,
+                "operation": self.state["operation"]["id"],
+                "terminal_at": None,
+            }
+            record["healthy"].pop(path.name, None)
+            record["next_path"] += 1
+            return True
+        return False
 
     def _preferred_ready(
         self, policy: ConnectionPolicy, authority: AuthorityT, now: float, selected_health: str
@@ -697,10 +1005,14 @@ class TunnelController(Generic[AuthorityT]):
             return
         if policy.mode == "bgp" and not self.effects.active(authority):
             return
-        if policy.mode == "static":
+        if policy.mode == "static" and op["requested_verb"] != "automatic-recovery":
             episode = self._episode(now, authority)
             op["deadline"] = min(op["deadline"], episode["deadline"] - 1)
-        if current_time() >= op["deadline"]:
+        preserving = policy.mode == "static" and op["requested_verb"] == "automatic-recovery"
+        verification_deadline = (
+            op["attempt_deadline"] if preserving and op["phase"] == "verify" else op["deadline"]
+        )
+        if current_time() >= verification_deadline:
             self._expire_selection(policy)
         if policy.mode == "bgp" and op["verb"] == "failback":
             # A restart or delayed retry must not reuse old preferred-path proof.
@@ -720,6 +1032,8 @@ class TunnelController(Generic[AuthorityT]):
             elif op["phase"] in {"activate", "restore"}:
                 restore = op["phase"] == "restore"
                 target = op["previous"] if restore else target
+                if preserving and not restore:
+                    op["effects_started"] = True
                 if target is None:
                     self.state["selected"].pop(policy.name, None)
                 else:
@@ -727,6 +1041,13 @@ class TunnelController(Generic[AuthorityT]):
                 self._save()  # All render/repair paths see intent before activation.
                 self.effects.activate(policy, target, authority)
                 op["phase"] = "verify-restore" if restore else "verify"
+                if preserving and not restore:
+                    # Route mutation keeps its original deadline. Only the
+                    # subsequent observations receive a separate fixed window.
+                    # A replay cannot push this past admission + 58 seconds.
+                    op["attempt_deadline"] = (
+                        min(current_time(), op["deadline"]) + STATIC_VERIFICATION_SECONDS
+                    )
             else:
                 restoring = op["phase"] == "verify-restore"
                 if (
@@ -746,7 +1067,11 @@ class TunnelController(Generic[AuthorityT]):
                     op["successes"] = 0
                     self._save()
                     return
-                if not restoring and op["verb"] != "release" and current_time() >= op["deadline"]:
+                if (
+                    not restoring
+                    and op["verb"] != "release"
+                    and current_time() >= verification_deadline
+                ):
                     self._expire_selection(policy)
                     return
                 op["successes"] = op["successes"] + 1 if observed is Health.HEALTHY else 0
@@ -763,22 +1088,30 @@ class TunnelController(Generic[AuthorityT]):
                     if not restoring:
                         self.state["reasons"][policy.name] = op["verb"]
                 elif (
-                    current_time() >= op["attempt_deadline"]
-                    and not restoring
+                    not restoring
                     and observed is Health.DOWN
+                    and (preserving or current_time() >= op["attempt_deadline"])
                 ):
                     # Pending probe hysteresis or unavailable evidence cannot
                     # prove candidate failure. The original request deadline
                     # still bounds waiting and retains its expiry cleanup.
                     self._failed_attempt(policy, current_time())
         except TunnelScopeError:
-            if op["phase"] == "suspend":
+            if op["phase"] == "suspend" or (preserving and op["phase"] == "activate"):
                 # The initial scope check preceded every native mutation. Do
                 # not convert a rejected local request into gateway suspension.
                 op.update(phase="failed", result="suspension-scope-unproven")
+                if preserving:
+                    op["effects_started"] = False
+                    if op["previous"] == policy.preferred:
+                        self.state["selected"].pop(policy.name, None)
+                    else:
+                        self.state["selected"][policy.name] = op["previous"]
             else:
                 self._failed_attempt(policy, current_time())
         except RuntimeError:
+            if op["requested_verb"] == "automatic-recovery":
+                op["result"] = "native-effect-failed-restoring"
             self._failed_attempt(policy, current_time())
         self._save()
 

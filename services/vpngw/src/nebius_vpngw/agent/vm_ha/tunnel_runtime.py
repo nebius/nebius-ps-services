@@ -38,6 +38,8 @@ from ..strongswan_renderer import (
 from ..vm_ha_checkpoint import controller_checkpoint_from_dict
 from ..vm_ha_controller import ActionKind, ControllerAction, DataPlaneMode
 from . import kernel_teardown
+from .diagnostics import diagnostic
+from .diagnostics import scope as diagnostic_scope
 from .runtime import (
     CommandRunner,
     _advertised_bgp_prefixes,
@@ -50,6 +52,7 @@ from .runtime import (
 from .store import atomic_write_json
 from .tunnel_observation import (
     NativeTunnelObserver,
+    path_scope,
     route_destination,
     scoped_ike_ids,
     xfrm_records,
@@ -64,6 +67,10 @@ from .tunnels import (
     effective_config,
     read_state,
 )
+
+# The controller polls about once per second. A pass at least this long is
+# recorded even when it changed no decision, because it delays recovery timing.
+SLOW_STEP_SECONDS = 2.0
 
 
 def _selection_context(
@@ -286,14 +293,78 @@ class NativeTunnelEffects(Generic[AuthorityT]):
     def _path_health(self, policy: ConnectionPolicy, target: str, *, selected: bool) -> Health:
         try:
             return self.observer.observe(self._observed_policy(policy), target, selected=selected)
-        except (OSError, RuntimeError, ValueError, KeyError, TypeError):
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
+            diagnostic(
+                "path-health",
+                connection=policy.name,
+                target=target,
+                scope=path_scope(policy, selected=selected),
+                reason="observer-unavailable",
+                health=Health.UNKNOWN.value,
+                error_type=type(error).__name__,
+            )
             return Health.UNKNOWN
+
+    def probe_backup(self, policy: ConnectionPolicy, target: str, authority: AuthorityT) -> Health:
+        """Prove tunnel-path reachability, not remote workload forwarding.
+
+        The default uses the existing assigned-source/interface-bound inner-peer
+        ping after exact native SA/kernel proof. A reachable inner peer is the
+        selected failover heuristic, including when no workload VM exists.
+        """
+        observed = self.probe_preferred(policy, target, authority)
+        if observed is not Health.HEALTHY:
+            diagnostic(
+                "backup-confirmation-result",
+                connection=policy.name,
+                target=target,
+                reason="initial-probe-not-healthy",
+                health=observed.value,
+            )
+            return observed
+        probe = self.cfg.get("gateway", {}).get("tunnel_probes", {}).get(target)
+        if probe is None:
+            # The default inner-peer path already issued a fresh native ping.
+            active = self.active(authority)
+            diagnostic(
+                "backup-confirmation-result",
+                connection=policy.name,
+                target=target,
+                reason="fresh-inner-peer" if active else "authority-after-probe",
+                health=observed.value if active else Health.UNKNOWN.value,
+            )
+            return observed if active else Health.UNKNOWN
+        # Optional configured probes have hysteresis that can be cached for the
+        # configured interval. Every confirmation additionally needs a distinct
+        # source/interface-bound ping, never two counts of that cached result.
+        observed = self.observe_readonly(policy, target, selected=False)
+        active = self.active(authority)
+        diagnostic(
+            "backup-confirmation-result",
+            connection=policy.name,
+            target=target,
+            reason="fresh-configured-probe" if active else "authority-after-probe",
+            health=observed.value if active else Health.UNKNOWN.value,
+        )
+        return observed if active else Health.UNKNOWN
 
     def probe_preferred(
         self, policy: ConnectionPolicy, target: str, authority: AuthorityT
     ) -> Health:
         """Bounded owner-only initiation/probe; never change workload route selection."""
-        if policy.mode != "static" or not self.active(authority):
+        diagnostic("backup-probe-started", connection=policy.name, target=target)
+        if policy.mode != "static":
+            diagnostic(
+                "backup-probe-refused", connection=policy.name, target=target, reason="not-static"
+            )
+            return Health.UNKNOWN
+        if not self.active(authority):
+            diagnostic(
+                "backup-probe-refused",
+                connection=policy.name,
+                target=target,
+                reason="inactive-authority-before-lock",
+            )
             return Health.UNKNOWN
         descriptor = (
             None
@@ -304,10 +375,22 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             if descriptor is not None:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if not self.active(authority):
+                diagnostic(
+                    "backup-probe-refused",
+                    connection=policy.name,
+                    target=target,
+                    reason="inactive-authority-under-lock",
+                )
                 return Health.UNKNOWN
             cfg = self._effective(authority)
             inventory = authorized_configuration(cfg)
             if target not in inventory.connections:
+                diagnostic(
+                    "backup-probe-refused",
+                    connection=policy.name,
+                    target=target,
+                    reason="target-not-authorized",
+                )
                 return Health.UNKNOWN
             tunnel = next(
                 tunnel
@@ -319,30 +402,77 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             source, peer = tunnel.get("inner_local_ip"), tunnel.get("inner_remote_ip")
             if probe is None:
                 if not source or not peer or not tunnel.get("inner_cidr"):
+                    diagnostic(
+                        "backup-probe-refused",
+                        connection=policy.name,
+                        target=target,
+                        reason="missing-inner-addresses",
+                    )
                     return Health.UNKNOWN
                 network = ipaddress.ip_network(tunnel["inner_cidr"], strict=False)
                 if (
                     ipaddress.ip_address(source) not in network
                     or ipaddress.ip_address(peer) not in network
                 ):
+                    diagnostic(
+                        "backup-probe-refused",
+                        connection=policy.name,
+                        target=target,
+                        reason="inner-addresses-outside-network",
+                    )
                     return Health.UNKNOWN
             self.effect_deadline = self.clock() + 5
             health = self._path_health(policy, target, selected=False)
+            diagnostic(
+                "backup-native-health",
+                connection=policy.name,
+                target=target,
+                health=health.value,
+                reason="before-initiation",
+            )
             if health is Health.DOWN:
                 if not self.active(authority):
+                    diagnostic(
+                        "backup-probe-refused",
+                        connection=policy.name,
+                        target=target,
+                        reason="authority-before-initiation",
+                    )
                     return Health.UNKNOWN
                 # keyingtries=1 and start_action=none bound the explicit attempt;
                 # no trap or native autonomous restart is enabled for this path.
                 self.run(("swanctl", "--initiate", "--child", target, "--timeout", "1"))
                 health = self._path_health(policy, target, selected=False)
+                diagnostic(
+                    "backup-native-health",
+                    connection=policy.name,
+                    target=target,
+                    health=health.value,
+                    reason="after-initiation",
+                )
             if health is not Health.HEALTHY:
+                diagnostic(
+                    "backup-probe-result",
+                    connection=policy.name,
+                    target=target,
+                    reason="native-health-not-healthy",
+                    health=health.value,
+                )
                 return health
             if probe is not None:
                 # Managed VPN peers need not answer their synthetic inner IP.
                 # The configured probe already enforces assigned source, exact
                 # XFRM interface, timeout and existing health hysteresis.
                 health = self.observe(policy, target, selected=False)
-                return health if self.active(authority) else Health.UNKNOWN
+                active = self.active(authority)
+                diagnostic(
+                    "backup-probe-result",
+                    connection=policy.name,
+                    target=target,
+                    reason="configured-probe" if active else "authority-after-configured-probe",
+                    health=health.value if active else Health.UNKNOWN.value,
+                )
+                return health if active else Health.UNKNOWN
             path = next(path for path in policy.paths if path.name == target)
             addresses = json.loads(
                 self.run(("ip", "-j", "-4", "address", "show", "dev", path.interface))
@@ -350,14 +480,43 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             if not any(
                 a.get("local") == source for row in addresses for a in row.get("addr_info", [])
             ):
+                diagnostic(
+                    "backup-probe-refused",
+                    connection=policy.name,
+                    target=target,
+                    reason="inner-source-not-assigned",
+                )
                 return Health.UNKNOWN
+            diagnostic("inner-ping-started", connection=policy.name, target=target)
             self.run(("ping", "-n", "-c", "1", "-I", path.interface, "-I", source, "-W", "1", peer))
-            return (
-                self.observe(policy, target, selected=False)
-                if self.active(authority)
-                else Health.UNKNOWN
+            diagnostic("inner-ping-returned", connection=policy.name, target=target)
+            # Preserve the existing authority-before-final-observation order.
+            if self.active(authority):
+                health = self.observe(policy, target, selected=False)
+                diagnostic(
+                    "backup-probe-result",
+                    connection=policy.name,
+                    target=target,
+                    reason="after-inner-ping",
+                    health=health.value,
+                )
+                return health
+            diagnostic(
+                "backup-probe-refused",
+                connection=policy.name,
+                target=target,
+                reason="authority-after-inner-ping",
             )
-        except (RuntimeError, OSError, ValueError, TypeError, KeyError, StopIteration):
+            return Health.UNKNOWN
+        except (RuntimeError, OSError, ValueError, TypeError, KeyError, StopIteration) as error:
+            diagnostic(
+                "backup-probe-result",
+                connection=policy.name,
+                target=target,
+                reason="exception",
+                error_type=type(error).__name__,
+                health=Health.UNKNOWN.value,
+            )
             return Health.UNKNOWN
         finally:
             self.effect_deadline = None
@@ -384,12 +543,21 @@ class NativeTunnelEffects(Generic[AuthorityT]):
         limit = 3.0
         if self.effect_deadline is not None:
             limit = min(limit, self.effect_deadline - self.clock())
+        ping = bool(argv) and argv[0] == "ping"
         if limit <= 0:
+            if ping:
+                diagnostic("inner-ping-command", reason="deadline-exhausted")
             raise RuntimeError("HA tunnel effect deadline exhausted")
         try:
             result = (self.command_runner or _run_command)(argv, limit)
-        except (OSError, subprocess.SubprocessError, TimeoutError):
+        except (OSError, subprocess.SubprocessError, TimeoutError) as error:
+            if ping:
+                diagnostic(
+                    "inner-ping-command", reason="exception", error_type=type(error).__name__
+                )
             raise RuntimeError("HA tunnel native observation or effect is unavailable") from None
+        if ping:
+            diagnostic("inner-ping-command", reason="returned", returncode=result.returncode)
         if result.returncode != 0:
             raise RuntimeError("HA tunnel native command failed")
         return result.stdout
@@ -418,12 +586,18 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             )
             if policy.mode == "bgp" and state["operation"]["verb"] == "release":
                 self.effect_deadline = self.clock() + 10
-            if policy.mode == "static" and state["episode"] is not None:
+            if (
+                policy.mode == "static"
+                and state["episode"] is not None
+                and state["operation"]["requested_verb"] != "automatic-recovery"
+            ):
                 self.effect_deadline = min(self.effect_deadline, state["episode"]["deadline"] - 1)
-                if state["operation"]["phase"] in {"restore", "verify-restore"}:
-                    # Cleanup can resume after reboot/expiry without admitting
-                    # another candidate or renewing the persisted episode.
-                    self.effect_deadline = self.clock() + 10
+            if policy.mode == "static" and state["operation"]["phase"] in {
+                "restore",
+                "verify-restore",
+            }:
+                # Cleanup resumes after expiry without new candidate authority.
+                self.effect_deadline = self.clock() + 10
             yield
         finally:
             self.effect_deadline = None
@@ -563,6 +737,8 @@ class NativeTunnelEffects(Generic[AuthorityT]):
         _write_secret_file(SWANCTL_CONF, content)
 
     def _swan_config(self, cfg: dict[str, Any]) -> None:
+        if self.effect_deadline is not None and self.clock() >= self.effect_deadline:
+            raise RuntimeError("HA tunnel effect deadline exhausted")
         self._write_swan_config(cfg)
         # Upstream loads credentials before connections on the same VICI
         # session; a daemon restart cannot split those loads across processes.
@@ -570,21 +746,28 @@ class NativeTunnelEffects(Generic[AuthorityT]):
 
     def suspend(self, policy: ConnectionPolicy, authority: AuthorityT) -> None:
         with self.locked(authority):
-            names = {p.name for p in policy.paths}
-            # Prove the complete termination scope before unloading or terminating.
-            try:
-                scoped_ike_ids(self.run(ipsec_observation.command()), names)
-            except (ValueError, RuntimeError):
-                raise TunnelScopeError("HA connection suspension scope is unproven") from None
-            try:
-                self._kernel_deletions(policy)
-            except RuntimeError:
-                raise TunnelScopeError("HA kernel suspension scope is unproven") from None
-            cfg = self._effective(authority)
+            self._suspend_paths(policy, authority, connection_wide=True)
+
+    def _suspend_paths(
+        self, policy: ConnectionPolicy, authority: AuthorityT, *, connection_wide: bool
+    ) -> None:
+        """The caller holds the routing writer and supplies the complete scope."""
+        names = {path.name for path in policy.paths}
+        try:
+            scoped_ike_ids(self.run(ipsec_observation.command()), names)
+            self._kernel_deletions(policy)
+        except (ValueError, RuntimeError):
+            raise TunnelScopeError("HA connection suspension scope is unproven") from None
+        cfg = self._effective(authority)
+        if connection_wide:
             cfg["_ha_suspended_connections"] = [policy.name]
-            self._swan_config(cfg)
-            self._terminate_unloaded(policy, authority)
-            self._remove_orphan_kernel_objects(policy, authority)
+        else:
+            cfg["_ha_suspended_tunnels"] = sorted(names)
+        if not self.revalidate(authority):
+            raise TunnelScopeError("HA tunnel authority changed before suspension")
+        self._swan_config(cfg)
+        self._terminate_unloaded(policy, authority)
+        self._remove_orphan_kernel_objects(policy, authority)
 
     def _terminate_unloaded(self, policy: ConnectionPolicy, authority: AuthorityT) -> None:
         names = {path.name for path in policy.paths}
@@ -670,6 +853,10 @@ class NativeTunnelEffects(Generic[AuthorityT]):
         """Verify persisted policy and daemon/route authority without requiring an SA."""
         try:
             with self.locked(authority):
+                # This is a fresh read-only proof, not permission to repeat the
+                # failed mutation. A terminal operation's expired deadline must
+                # not make every subsequent retry proof fail before it runs.
+                self.effect_deadline = self.clock() + 10
                 rendered: dict[Path, str | None] = {}
                 with contextlib.redirect_stdout(io.StringIO()):
                     StrongSwanRenderer().render_and_apply(
@@ -696,6 +883,22 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             return False
 
     def activate(self, policy: ConnectionPolicy, target: str | None, authority: AuthorityT) -> None:
+        state = read_state(self.state_dir / STATE_NAME)
+        operation = state["operation"]
+        if (
+            policy.mode == "static"
+            and operation is not None
+            and operation["requested_verb"] == "automatic-recovery"
+            and operation["phase"] == "activate"
+        ):
+            if (
+                state["authority"] != asdict(authority)
+                or operation["connection"] != policy.name
+                or operation["target"] != target
+            ):
+                raise TunnelScopeError("HA preserved path does not match the accepted operation")
+            self._promote_static(policy, str(target), authority)
+            return
         if policy.mode == "static":
             if target is not None and self.authority_restored(policy, target, authority):
                 # A completed native effect can precede its state-machine save.
@@ -707,19 +910,7 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             cfg = self._effective(authority)
             if policy.mode == "static":
                 self._swan_config(cfg)
-                path = next(p for p in policy.paths if p.name == target)
-                # One bounded native effect under the routing writer. A full
-                # authority snapshot per prefix can exhaust restoration's 10s
-                # budget before even a small route set is installed.
-                with tempfile.NamedTemporaryFile(mode="w", dir=self.state_dir) as batch:
-                    for destination in sorted(policy.destinations):
-                        batch.write(f"route replace {destination} dev {path.interface}\n")
-                    batch.flush()
-                    if not self.revalidate(authority):
-                        raise RuntimeError("HA tunnel route authority changed")
-                    self.run(("ip", "-batch", batch.name))
-                if not self.revalidate(authority):
-                    raise RuntimeError("HA tunnel route authority changed after installation")
+                self._install_static_routes(policy, str(target), authority)
             else:
                 if not self.active(authority):
                     raise RuntimeError("BGP tunnel policy requires active forwarding authority")
@@ -750,9 +941,102 @@ class NativeTunnelEffects(Generic[AuthorityT]):
                         raise RuntimeError("BGP tunnel authority changed before route refresh")
                     self.run(("vtysh", "-c", f"clear bgp ipv4 unicast {path.peer} soft"))
 
+    def _require_healthy_static_path(self, policy: ConnectionPolicy, target: str) -> None:
+        """Refresh native and inside-peer evidence without initiating or replacing an SA."""
+        try:
+            self._check_healthy_static_path(policy, target)
+        except (OSError, ValueError, TypeError, KeyError, StopIteration):
+            raise RuntimeError("HA preserved backup observation is unavailable") from None
+
+    def _check_healthy_static_path(self, policy: ConnectionPolicy, target: str) -> None:
+        if self._path_health(policy, target, selected=False) is not Health.HEALTHY:
+            raise RuntimeError("HA preserved backup native health is unproven")
+        path = next(path for path in policy.paths if path.name == target)
+        probe = self.cfg.get("gateway", {}).get("tunnel_probes", {}).get(target)
+        tunnel = None
+        for connection in self.cfg["connections"]:
+            for configured_tunnel in connection["tunnels"]:
+                if configured_tunnel["name"] == target:
+                    tunnel = configured_tunnel
+                    break
+            if tunnel is not None:
+                break
+        if tunnel is None:
+            raise TunnelScopeError("HA preserved backup is outside the configuration")
+        source = probe["source_ip"] if probe else tunnel.get("inner_local_ip")
+        peer = probe["target_ip"] if probe else tunnel.get("inner_remote_ip")
+        if not source or not peer:
+            raise RuntimeError("HA preserved backup inner addresses are missing")
+        address_command = (
+            ("ip", "-j", "-4", "address", "show")
+            if probe
+            else ("ip", "-j", "address", "show", "dev", path.interface)
+        )
+        addresses = json.loads(self.run(address_command))
+        assigned = set()
+        for row in addresses:
+            for address in row.get("addr_info", []):
+                assigned.add(address.get("local"))
+        if source not in assigned:
+            raise RuntimeError("HA preserved backup inner source is not assigned")
+        timeout = str(probe.get("timeout_seconds", 1) if probe else 1)
+        self.run(("ping", "-n", "-c", "1", "-I", path.interface, "-I", source, "-W", timeout, peer))
+
+    def _promote_static(self, policy: ConnectionPolicy, target: str, authority: AuthorityT) -> None:
+        with self.locked(authority):
+            operation = read_state(self.state_dir / STATE_NAME)["operation"]
+            if self.observe(policy, operation["previous"], selected=True) is not Health.DOWN:
+                raise TunnelScopeError("HA selected path is no longer confirmed down")
+            self._require_healthy_static_path(policy, target)
+            unhealthy = []
+            for path in policy.paths:
+                if path.name == target:
+                    continue
+                if self.observe(policy, path.name, selected=False) is Health.DOWN:
+                    unhealthy.append(path)
+            if unhealthy:
+                self._suspend_paths(
+                    replace(policy, paths=tuple(unhealthy)), authority, connection_wide=False
+                )
+            # Cleanup may be slow. The admission proofs do not authorize a
+            # route write after the candidate or ownership has changed.
+            self._require_healthy_static_path(policy, target)
+            if not self.revalidate(authority):
+                raise RuntimeError("HA tunnel authority changed before promotion")
+            self._swan_config(self._effective(authority))
+            self._require_healthy_static_path(policy, target)
+            self._install_static_routes(policy, target, authority)
+
+    def _install_static_routes(
+        self, policy: ConnectionPolicy, target: str, authority: AuthorityT
+    ) -> None:
+        path = next(path for path in policy.paths if path.name == target)
+        with tempfile.NamedTemporaryFile(mode="w", dir=self.state_dir) as batch:
+            for destination in sorted(policy.destinations):
+                batch.write(f"route replace {destination} dev {path.interface}\n")
+            batch.flush()
+            if not self.revalidate(authority):
+                raise RuntimeError("HA tunnel route authority changed")
+            self.run(("ip", "-batch", batch.name))
+        if not self.revalidate(authority):
+            raise RuntimeError("HA tunnel route authority changed after installation")
+
     def verify(self, policy: ConnectionPolicy, target: str | None) -> Health:
         if policy.mode == "static":
-            return self.observe(policy, target or policy.preferred, selected=True)
+            static_target = target or policy.preferred
+            health = self.observe(policy, static_target, selected=True)
+            operation = read_state(self.state_dir / STATE_NAME)["operation"]
+            if (
+                health is Health.HEALTHY
+                and operation is not None
+                and operation["requested_verb"] == "automatic-recovery"
+                and operation["phase"] == "verify"
+            ):
+                try:
+                    self._require_healthy_static_path(policy, static_target)
+                except (RuntimeError, OSError, ValueError, KeyError, TypeError, StopIteration):
+                    return Health.UNKNOWN
+            return health
         try:
             policy = self._observed_policy(policy)
             summary = json.loads(self.run(("vtysh", "-c", "show bgp summary json")))
@@ -861,9 +1145,12 @@ class ControllerTunnelRuntime:
         controller: Any,
         ports: Any,
         clock: Callable[[], float] = time.time,
+        *,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.config_path, self.state_dir = config_path, state_dir
         self.controller, self.ports, self.clock = controller, ports, clock
+        self.monotonic = monotonic
         self.cfg = yaml.safe_load(config_path.read_text())
         self.effects = NativeTunnelEffects(
             self.cfg, state_dir, self.revalidate, active_revalidate=self.active, clock=clock
@@ -892,6 +1179,7 @@ class ControllerTunnelRuntime:
 
         self.restart_pending = True
         self.preferred_observations: dict[str, Any] = {}
+        self.static_recovery_observations: dict[str, Any] = {}
 
     def prepare_daemon_reload(self, action: ControllerAction, deadline: float) -> None:
         """Complete one admitted component repair without entering selector authority."""
@@ -1136,6 +1424,8 @@ class ControllerTunnelRuntime:
         return self._authority(preparation=False)
 
     def _authority(self, *, preparation: bool) -> Authority | None:
+        # Owner and fenced-preparation checks keep separate change histories.
+        authority_scope = "preparation" if preparation else "owner"
         checkpoint = self.controller.controller.checkpoints.load()
         try:
             snapshot = self.controller.snapshots.observe()
@@ -1219,6 +1509,46 @@ class ControllerTunnelRuntime:
                 )
             )
         ):
+            try:
+                reasons = []
+                for reason, failed in (
+                    ("apply-locked", snapshot.apply_locked),
+                    ("service-unhealthy", not preparing and not snapshot.readiness.service_healthy),
+                    ("sample-incomplete", not preparing and not snapshot.readiness.sample_complete),
+                    ("local-defects", not preparing and bool(snapshot.readiness.local_defects)),
+                    ("transfer-inhibited", snapshot.transfer_inhibited),
+                    ("transfer-intent", snapshot.transfer_intent is not None),
+                    ("emergency-active-only", snapshot.emergency_active_only),
+                    ("standby-replacement-inhibited", snapshot.standby_replacement_inhibited),
+                    ("pending-action", pending is not None and not activation_retry),
+                    (
+                        "not-active-mode",
+                        snapshot.data_plane_mode is not DataPlaneMode.ACTIVE
+                        and not resuming_fenced
+                        and not preparing,
+                    ),
+                    (
+                        "attachment-not-exact",
+                        not snapshot.cloud.local_attachment_exact(snapshot.local_node_id),
+                    ),
+                    (
+                        "preparation-continuity-invalid",
+                        preparation and checkpoint.ownership_continuity_invalidated,
+                    ),
+                    (
+                        "preparation-boot-mismatch",
+                        preparation and snapshot.guard_boot_id != snapshot.boot_id,
+                    ),
+                ):
+                    if failed:
+                        reasons.append(reason)
+                diagnostic("authority-refused", scope=authority_scope, reasons=reasons)
+            except Exception:
+                diagnostic(
+                    "authority-refused",
+                    scope=authority_scope,
+                    reason="diagnostic-flags-unavailable",
+                )
             return None
         peer = snapshot.peer_heartbeat
         if (
@@ -1228,6 +1558,19 @@ class ControllerTunnelRuntime:
             or snapshot.peer_received_at is None
             or not 0 <= snapshot.now - snapshot.peer_received_at < 10
         ):
+            reasons = []
+            if peer is None:
+                reasons.append("peer-unavailable")
+            else:
+                if not peer.tunnel_capability:
+                    reasons.append("peer-no-tunnel-capability")
+                if peer.generation_id != snapshot.local_generation_id:
+                    reasons.append("peer-generation-mismatch")
+            if snapshot.peer_received_at is None:
+                reasons.append("peer-receipt-unavailable")
+            elif not 0 <= snapshot.now - snapshot.peer_received_at < 10:
+                reasons.append("peer-receipt-stale")
+            diagnostic("authority-refused", scope=authority_scope, reasons=reasons)
             return None
         authority = Authority(
             snapshot.cluster_id,
@@ -1238,7 +1581,13 @@ class ControllerTunnelRuntime:
             snapshot.local_generation_id,
         )
         if preparation and (not preparing or state["authority"] != asdict(authority)):
+            diagnostic(
+                "authority-refused",
+                scope=authority_scope,
+                reason="preparation-authority-mismatch",
+            )
             return None
+        diagnostic("authority-accepted", scope=authority_scope)
         return authority
 
     def revalidate(self, authority: Authority) -> bool:
@@ -1286,12 +1635,24 @@ class ControllerTunnelRuntime:
         return True
 
     def step(self) -> None:
+        # A quiet pass writes nothing. A pass that changes a decision, fails or
+        # runs slowly is bracketed by step-started and step-finished.
+        with diagnostic_scope("step-started", "step-finished", slow_seconds=SLOW_STEP_SECONDS):
+            try:
+                self._step()
+            except Exception as error:
+                diagnostic("step-failed", error_type=type(error).__name__)
+                raise
+
+    def _step(self) -> None:
         from ..vm_ha_rearm import REARM_LOCK_PATH, _acquire_rearm_lock
 
         if not connection_policies(self.cfg):
+            diagnostic("step-skipped", reason="no-policies")
             return
         descriptor = _acquire_rearm_lock(self.state_dir / REARM_LOCK_PATH.name, timeout_seconds=0.0)
         if descriptor is None:
+            diagnostic("step-skipped", reason="rearm-lock-busy")
             return
         try:
             # Apply owns generation adoption and passive materialization. A
@@ -1300,6 +1661,7 @@ class ControllerTunnelRuntime:
             # strict inhibition under the lock; never infer authority from a
             # cached status or bypass the snapshot's retirement checks.
             if self.controller.snapshots.providers.apply_lock_operation_id() is not None:
+                diagnostic("step-skipped", reason="apply-locked")
                 return
             selector = TunnelController(
                 self.cfg,
@@ -1307,6 +1669,9 @@ class ControllerTunnelRuntime:
                 self.effects,
                 preferred_probe=self.effects.probe_preferred,
                 preferred_observations=self.preferred_observations,
+                backup_probe=self.effects.probe_backup,
+                static_recovery_observations=self.static_recovery_observations,
+                monotonic=self.monotonic,
             )
             prepare_bgp = any(
                 policy.mode == "bgp"
@@ -1333,6 +1698,7 @@ class ControllerTunnelRuntime:
             authority = self.authority()
             self._consume_request(selector, authority)
             if authority is None:
+                diagnostic("step-skipped", reason="authority-unavailable")
                 snapshot = self.controller.snapshots.last_snapshot
                 if (
                     snapshot is not None
@@ -1354,7 +1720,9 @@ class ControllerTunnelRuntime:
                     selector.state["episode"]["healthy_since"] = None
                     selector._save()
                 self.restart_pending = False
-            selector.tick(authority, self.clock())
+            diagnostic("step-admitted")
+            with diagnostic_scope("selector-tick-started", "selector-tick-finished"):
+                selector.tick(authority, self.clock())
             effective = effective_config(self.cfg, selector.state, authority)
             # Export expectations follow exactly the rendered operational policy.
             exports = dict(self.base_exports)
