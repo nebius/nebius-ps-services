@@ -589,8 +589,8 @@ class TunnelController(Generic[AuthorityT]):
             # can return early. Only a pending operation owns retry history
             # that must survive its transient health observations.
             pending_connection = self.state["operation"]["connection"] if self._pending() else None
-            for name, observed in health.items():
-                if name != pending_connection and observed != Health.DOWN.value:
+            for name, health_state in health.items():
+                if name != pending_connection and health_state != Health.DOWN.value:
                     self.static_recovery_observations.pop(name, None)
         static = list(self.policies.values())
         loss = any(health[p.name] == Health.DOWN.value for p in static)
