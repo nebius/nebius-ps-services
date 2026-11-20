@@ -8,7 +8,8 @@ import re
 from pathlib import Path
 
 
-def observe() -> dict:
+def observe_installation() -> dict:
+    """Fingerprint installed release evidence independently of transaction state."""
     versions = []
     try:
         for distribution in importlib.metadata.distributions():
@@ -19,14 +20,20 @@ def observe() -> dict:
             return {"state": "present", "version": versions[0]}
         if versions or importlib.util.find_spec("nebius_vpngw") is not None:
             return {"state": "unknown", "version": None}
-        if any(
-            path.exists()
-            for path in (
-                Path("/etc/nebius-vpngw/config-resolved.yaml"),
-                Path("/var/lib/nebius-vpngw/runtime-migration/operation.json"),
-            )
-        ):
+        if Path("/etc/nebius-vpngw/config-resolved.yaml").exists():
             return {"state": "unknown", "version": None}
     except (ValueError, TypeError, KeyError, AttributeError, OSError, ImportError):
         return {"state": "unknown", "version": None}
     return {"state": "absent", "version": None}
+
+
+def observe() -> dict:
+    """Keep an incomplete transaction fail-closed at release admission."""
+    installed = observe_installation()
+    if installed["state"] == "absent":
+        try:
+            if Path("/var/lib/nebius-vpngw/runtime-migration/operation.json").exists():
+                return {"state": "unknown", "version": None}
+        except OSError:
+            return {"state": "unknown", "version": None}
+    return installed

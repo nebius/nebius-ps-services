@@ -93,7 +93,7 @@ passed a review-only implementation-quality gate before deeper behavior tests.
 
 ## Writes
 
-- `evidence/FEAT-*/validate.md`.
+- `evidence/<execution-id>/validate.md`.
 - Code review summary and decision in validation evidence.
 - Validation status.
 - Failure classification if needed.

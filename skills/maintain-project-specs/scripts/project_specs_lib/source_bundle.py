@@ -12,11 +12,47 @@ import stat
 from .contracts import ProjectSpecError, inspect_pair_bytes
 
 
-SCHEMA = "maintain-project-specs/source-bundle-v1"
+SCHEMA = "maintain-project-specs/source-bundle-v2"
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9._:-]{0,127}\Z")
 MAX_FILE = 8 * 1024 * 1024
 MAX_BUNDLE = 64 * 1024 * 1024
+
+
+def validate_planning(value, sources, coverage):
+    """Validate reviewed provenance, not semantic interpretation of source prose."""
+    if value is None:
+        return None  # Early inventory is usable before design settles the plan.
+    if (not isinstance(value, dict)
+            or set(value) != {"mode", "sources", "rationale", "phases"}
+            or not isinstance(value["mode"], str)
+            or value["mode"] not in {"supplied", "derived"}
+            or not isinstance(value["rationale"], str)
+            or not value["rationale"].strip() or len(value["rationale"]) > 4096
+            or not isinstance(value["sources"], list) or not value["sources"]
+            or any(not isinstance(path, str) or path not in sources for path in value["sources"])
+            or len(value["sources"]) != len(set(value["sources"]))
+            or not isinstance(value["phases"], list) or not value["phases"]):
+        fail("phase planning requires supplied/derived provenance and inventoried sources")
+    required = {row["source_id"] for row in coverage if row["disposition"] == "required"}
+    identities = set()
+    for phase in value["phases"]:
+        if (not isinstance(phase, dict) or set(phase) != {"id", "depends_on", "exit_criteria"}
+                or not isinstance(phase["id"], str)
+                or re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]{0,79}", phase["id"]) is None
+                or phase["id"] in identities):
+            fail("reviewed phase identities must be unique and valid")
+        identities.add(phase["id"])
+        for field in ("depends_on", "exit_criteria"):
+            entries = phase[field]
+            if (not isinstance(entries, list) or any(not isinstance(item, str) for item in entries)
+                    or len(entries) != len(set(entries))):
+                fail("reviewed phase dependencies and exits must be unique identifiers")
+        if not phase["exit_criteria"] or not set(phase["exit_criteria"]) <= required:
+            fail("reviewed phase exits must name required source obligations")
+    if any(not set(phase["depends_on"]) <= identities for phase in value["phases"]):
+        fail("reviewed phase dependency is unknown")
+    return value
 
 
 def fail(message):
@@ -90,7 +126,7 @@ def validate_bundle(project: Path, manifest_path: str, expected_sha256: str, *, 
     if hashlib.sha256(data).hexdigest() != expected_sha256:
         fail("source manifest changed; accept a new objective revision")
     value = json.loads(data)
-    if (not isinstance(value, dict) or set(value) != {"schema", "sources", "coverage", "conflicts"}
+    if (not isinstance(value, dict) or set(value) != {"schema", "sources", "coverage", "conflicts", "planning"}
             or value["schema"] != SCHEMA or value["conflicts"] != []
             or not isinstance(value["sources"], list) or not value["sources"]
             or not isinstance(value["coverage"], list)):
@@ -166,9 +202,11 @@ def validate_bundle(project: Path, manifest_path: str, expected_sha256: str, *, 
             fail("source mapping disagrees with canonical requirements/design")
     if seen != identifiers:
         fail("every normative identifier needs an explicit coverage disposition")
+    planning = validate_planning(value["planning"], paths, value["coverage"])
     obligation_basis = {row["source_id"]: {"source_sha256": obligation_sources[row["source_id"]],
                         "coverage_sha256": hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest()}
                         for row in value["coverage"]}
     return {"sha256": expected_sha256, "coverage": value["coverage"], "obligation_basis": obligation_basis,
+            "planning": planning,
             "paths": sorted(paths | {manifest_path}),
             "source_count": len(paths), "obligation_count": len(seen)}

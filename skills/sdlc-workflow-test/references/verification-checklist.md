@@ -4,6 +4,21 @@ Use this checklist as the durable test plan for `sdlc-workflow-test`.
 
 ## Required SDLC Skills
 
+Document-program checks must exercise supplied milestones and an unphased
+acceptance source with a reviewed derived plan. Require multiple slices per
+phase, exact frozen phase matching, provenance, null-planning rejection before
+admission, contradictory dependencies, missing future obligations and accepted
+manifest revision on planning changes. These are deterministic contract checks;
+native phase derivation and multi-slice delivery remain distinct evidence lanes.
+
+Three-tier checks additionally require frozen normative acceptance provenance,
+explicit local slice receipts, aggregation blocked by unfinished slices, scoped
+revision/slice history, preserved completed work across accepted changes, and
+native continuation command/hook correlation. Test omitted or deferred fixture
+obligations, foreign source hashes, cross-slice supersession, failed or unrelated
+continuation commands and tampered evidence. Both planning origins require their
+own live result; deterministic observer tests cannot substitute for either.
+
 - `align`
 - `sdlc-auto-steering`
 - `sdlc-classify-failure`

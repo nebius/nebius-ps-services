@@ -228,6 +228,33 @@ def copying(tmp_path, monkeypatch, request):
     return state, journal, plan, observe
 
 
+@pytest.mark.parametrize("defer_bgp", [True, False])
+def test_empty_bgp_selection_still_prepares_private_runtime_table(copying, defer_bgp):
+    from nebius_vpngw.deploy.ordinary_route_command import _observe_plan
+
+    state, journal, original, observe = copying
+    policy = Policy((Connection("peer", "bgp", 0, (), (), 1),), ("10.0.0.0/16",))
+    discovery = NS(journal=journal, force_copy=False, learned=lambda policy: {"peer": ()})
+    observation = {
+        **observe(),
+        "policy": policy,
+        "active_tables": ("source",),
+        "conversion_requests": original["conversions"],
+    }
+    plan, unknown = _observe_plan(discovery, observation, defer_bgp=defer_bgp)
+    assert not unknown
+    assert {item["type"] for item in plan["requests"].values()} == {
+        "CreateRouteTableRequest", "CreateRouteRequest", "UpdateSubnetRequest"
+    }
+    source = message_digest(state.routes["foreign"])
+    execute(object(), journal, plan, approval="a" * 64, observe=observe)
+    private_table = state.subnets["selected"].spec.route_table_id
+    assert private_table != "source"
+    assert state.subnets["unrelated"].spec.route_table_id == "source"
+    assert message_digest(state.routes["foreign"]) == source
+    assert len(state.effects) == 3
+
+
 def test_complete_copy_precedes_exact_subnet_attachment_and_source_is_preserved(copying):
     state, journal, plan, observe = copying
     source = message_digest(state.routes["foreign"])

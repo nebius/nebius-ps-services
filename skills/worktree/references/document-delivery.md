@@ -30,11 +30,19 @@ The accepted objective uses `workflow/accepted-objective-v3` and binds:
 }
 ```
 
-The public manifest schema is `maintain-project-specs/source-bundle-v1`:
+Read [phase planning](phase-planning.md) to preserve supplied milestones or derive
+missing ones before freezing the program. The public manifest schema is
+`maintain-project-specs/source-bundle-v2`:
 
 ```json
 {
-  "schema": "maintain-project-specs/source-bundle-v1",
+  "schema": "maintain-project-specs/source-bundle-v2",
+  "planning": {
+    "mode": "derived",
+    "sources": ["docs/contracts/acceptance.json"],
+    "rationale": "One coherent accepted outcome requires one milestone.",
+    "phases": [{"id": "Core", "depends_on": [], "exit_criteria": ["AC-001"]}]
+  },
   "sources": [{
     "path": "docs/contracts/acceptance.json", "sha256": "<source digest>",
     "authority": "normative", "role": "acceptance", "ids": ["AC-001"],
@@ -83,6 +91,10 @@ and regression criterion to nonempty IDs in the frozen required wave checks.
 Campaign selection never removes a required implementation check. Declare
 slices in topological delivery order, respecting phase barriers. Plan every
 required obligation, but elaborate detailed tasks only for upcoming slices.
+The phase definitions must exactly match the manifest's reviewed `planning`
+record on admission and revalidation. Early source inventory may use null
+planning; it cannot admit a program. Finalizing or changing planning requires
+an accepted manifest revision. No old-manifest compatibility path is provided.
 
 Task plans retain `Requirements:` and add `Features:`. Every slice requirement
 and feature must be mapped by its tasks. Freeze membership before dispatch;
@@ -117,7 +129,7 @@ canonical design/contract snapshot, not copied into every worker prompt.
 
 Default completion is `reviewed-pr`, with optional accepted `live_operations`
 and `allow_nonruntime_na`. A cluster supplies a target, not merge authority.
-Automatic completion requires this accepted run-level policy:
+Remote automatic completion requires this accepted run-level policy:
 
 ```json
 {
@@ -144,6 +156,25 @@ implementation criterion through `implementation_coverage`, with executed check
 IDs, outcomes, source tree, objective and basis. This is implementation evidence;
 it has no invented runtime artifact/environment fields. Phase-only implementation
 checks use `admit-phase` with frozen `checks`. Preserve all failed core attempts.
+
+An explicitly local program uses `completion: {"boundary": "local-promoted",
+"live_operations": [], "allow_nonruntime_na": true}`. Add only the accepted
+local runtime operations when needed. This policy requires an automatic managed
+outer; reject unsupported ownership at program admission before execution.
+After each slice's promotion and cleanup,
+call private `admit-delivery`, then `complete-local` with a candidate containing
+that exact `admission` reference. The owner binds the clean promoted commit/tree,
+finished coordinator, frozen execution basis, accepted revision and executed
+checks into `workflow/local-delivery-completion-v1`. It grants no remote effects.
+Remote attest/submit rejects this policy before contacting a service.
+
+The next local slice reuses the managed outer and starts from its verified prior
+promotion. Do not aggregate or release the outer between slices. Historical
+receipts remain verifiable after later accepted revisions and checkout cleanup;
+completed slice definitions remain immutable. Changed obligations require a new
+corrective slice. `phase-exit` consumes the same admission references for either
+completion boundary. Aggregate preparation and whole-program completion require
+every scheduled slice, every phase exit, and current source coverage.
 
 Only requested ready UAT uses a separately frozen
 `workflow/qualification-plan-v3` and `qualify --execution OBJECTIVE`. Its reviewed

@@ -578,6 +578,9 @@ interface.
 
 ### Verification principles
 
+Deterministic fixtures preserve the seeded source package and restore temporary
+owner mocks, including cleanup callbacks, before subsequent real-Git checks.
+
 The design document is the workflow contract. The verifier must compare source
 and installed SDLC skills, hook configuration and payload parity, disposable
 run state, deterministic capability results, and validated private live
@@ -685,6 +688,12 @@ exact portable source admission, phase/slice ordering, immutable delivered
 slices, current completion evidence, 2,100-task graphs, indexed handoffs and
 the configurable retained-worker-worktree budget. Missing tests fail; skipped tests remain
 partial. Shared semantic and delivery owners participate in installed parity.
+The [phase-planning contract](../worktree/references/phase-planning.md) preserves
+supplied milestones or derives missing ones from outcomes and dependencies.
+Source-bundle-v2 freezes reviewed provenance and exact phase definitions;
+early null planning cannot admit a program. Supplied and derived multi-slice
+fixtures reject drift, contradictions and missing future obligations. These
+tests qualify deterministic admission, not autonomous planning quality.
 Dispatch and task-wave suites run once, outside the execution aggregate.
 Current live profiles do not qualify native multi-slice document delivery or
 real remote merging; those boundaries remain explicit in every report.
@@ -906,9 +915,19 @@ Worker observations consume assignment leases but never certify acceptance;
 canonical inventory binds a clean target and matching build. Cleanup retains
 safe predicate summaries and digests; earlier failures remain immutable.
 
-Lifecycle state uses `agentic-sdlc/three-tier-lifecycle-v9`; semantic evidence
-uses `agentic-sdlc/three-tier-results-v4` and phase receipts use
-`agentic-sdlc/phase-result-v5` bound to the objective and execution basis.
+Lifecycle state uses `agentic-sdlc/three-tier-lifecycle-v10`; semantic evidence
+uses `agentic-sdlc/three-tier-results-v5` and phase receipts use
+`agentic-sdlc/phase-result-v6` bound to the objective and execution basis.
+Phased trials freeze supplied or unphased sources and require the native
+coordinator to admit a complete program. Local-promoted slices retain the same
+automatic outer until all slice completions and phase exits pass. Observations
+are scoped to objective revision and execution, with startup observed once.
+Historical checks of an unfinished slice retain the target owner's named
+read-only classifier or TDD observation purpose at unsealed checkpoints.
+The final program evidence independently verifies a quiescent native interruption,
+public continuation and accepted refinement of remaining slices; every earlier
+completed slice stays immutable. See
+[native phased qualification](../sdlc-workflow-test/references/phased-live-qualification.md).
 Phase input files live at `<run-root>/evidence/phases/<phase>.json`; only the
 recorder creates immutable attempt archives. Its help and rejected-path errors
 name this input boundary. Ordered digest-bound browser stage receipts
@@ -1017,6 +1036,10 @@ verified fresh run at `sdlc-start`/`running` through the canonical checkpoint wr
 order. Existing or partial history follows reconciliation, preserving counters
 and evidence. Intake helpers, hooks and verifier observers never perform that
 phase transition; an active pointer alone is not initialized phase state.
+First initialization admits intake-owned committed input declarations only after
+validating their current manifest, immutable archive and captured source commit.
+It preserves valid declaration history and rejects orphaned, changed or unsafe
+records without publishing partial phase state.
 Select the highest-priority incomplete feature whose dependencies are satisfied;
 route material steering through `sdlc-auto-steering` and preserve its fence until
 settlement. Return exactly one next recommended skill with a durable checkpoint.
@@ -1858,6 +1881,11 @@ The external verifier consumes the existing SDLC and Worktree owners. Shared
 deterministic fixtures use current result contracts and explicit coordinator
 identity. A private suite catalog owns commands, bounded execution and capability
 dependencies; reports retain elapsed time, progress and prerequisite attribution.
+Failed cases additionally retain bounded exception types and catalog-relative
+file/line locations in the private observation. Messages, source text, local
+values and external paths are excluded; diagnostic metadata never changes the
+recorded outcome or acceptance decision. Composed fixtures execute their own
+registered cleanups before later cases reuse shared runtime modules.
 
 A private workspace owner admits both fixture classes and delegates live-resource
 cleanup to the existing lifecycle. Aggregate destroy preserves sanitized reports

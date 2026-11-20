@@ -473,6 +473,51 @@ GUEST_FAILURES = {
         "Restore VM DNS, outbound access and repository configuration, then resume repair.",
         "The gateway must reach its signed package repositories before repair can proceed.",
     ),
+    "apt_repository_timeout": (
+        "The Ubuntu package metadata refresh exceeded its 180-second limit.",
+        "Check repository access and latency from the gateway, then resume the same command.",
+        "The signed metadata refresh must complete within its bounded allowance.",
+    ),
+    "package_observation_deadline": (
+        "The enclosing package inspection or staging time budget expired.",
+        "Inspect the bounded stage and its prerequisites, then resume the same command.",
+        "The remaining request or phase budget may be shorter than the 180-second APT limit.",
+    ),
+    "package_observation_interrupted": (
+        "The bounded package control request was interrupted.",
+        "Resume the same command after the interruption is resolved.",
+        "Existing durable package workers retain their original lifecycle and authority.",
+    ),
+    "apt_repository_dns": (
+        "APT reported a repository or proxy DNS resolution failure.",
+        "Check the gateway's configured DNS and repository/proxy resolution, then resume.",
+        "Repository and proxy names must resolve from the gateway.",
+    ),
+    "apt_repository_transport": (
+        "APT reported a connection failure while accessing package metadata.",
+        "Check gateway routing, outbound policy and repository/proxy access, then resume.",
+        "The configured package sources must be reachable from the gateway.",
+    ),
+    "apt_repository_tls": (
+        "APT reported a TLS validation or handshake failure.",
+        "Check gateway time, trusted CAs and repository/proxy TLS configuration; keep verification enabled.",
+        "The configured TLS connection must pass verification.",
+    ),
+    "apt_repository_signature": (
+        "APT could not authenticate repository metadata with its configured signing keys.",
+        "Review repository signing keys and metadata integrity; do not bypass signature verification.",
+        "Package metadata must pass the configured signature checks.",
+    ),
+    "apt_repository_metadata_time": (
+        "APT reported repository metadata outside its validity dates.",
+        "Check both gateway time and repository freshness, then resume.",
+        "Valid metadata dates are required; this error alone does not prove the VM clock is wrong.",
+    ),
+    "apt_repository_configuration": (
+        "APT reported invalid repository configuration or unavailable release metadata.",
+        "Review the configured sources, distribution and release metadata, then resume.",
+        "Configured package sources must provide valid signed release metadata.",
+    ),
     "repair_handoff_authority": (
         "The interrupted package worker differs from its original approved identity.",
         "Reconcile the original package reservation and exact VM identity, then resume repair.",

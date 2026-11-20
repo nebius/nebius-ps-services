@@ -88,7 +88,7 @@ Seal and promote one completed feature locally without pushing.
 - One final integration commit when validation/docs/alignment left changes.
 - Fast-forward-only promotion of the named project feature branch.
 - Non-force removal of the verified integration worktree and branch.
-- `evidence/FEAT-*/commit.md`.
+- `evidence/<execution-id>/commit.md`.
 - `permissions/commit-authorization.json`, immediately before the commit, with
   a short expiry and branch scope.
 - State transition to `committed`.
@@ -139,6 +139,11 @@ supplied outer, final alignment, UAT and documentation permit lease release;
 `sdlc-start` then returns the primary path and `$worktree integrate <generated-name>`
 for the existing explicit external integration owner. Never turn inner promotion
 or lease release into unobserved source-integration proof.
+
+For a document program with accepted `local-promoted` completion, return the
+finished slice to `sdlc-start` for `admit-delivery` and `complete-local`. This
+receipt permits the next local slice; it does not finish the whole program or
+release the outer lease. Remote completion retains its protected delivery owner.
 
 `permissions/commit-authorization.json` remains the guard for an explicitly
 operator-visible raw `git commit`. Normal Agentic SDLC sealing and promotion use

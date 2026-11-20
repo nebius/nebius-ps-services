@@ -524,7 +524,7 @@ def test_corrective_proposal_is_read_only_and_uses_current_native_inventory(
     seen = []
     fresh = copy.deepcopy(state["plan"])
     fresh["before"]["another-package"] = ["1.0", "installed"]
-    monkeypatch.setattr(guest.remote.migration, "plan_current", lambda: fresh)
+    monkeypatch.setattr(guest.remote.migration, "plan_current", lambda *, deadline=None: fresh)
     monkeypatch.setattr(
         guest.remote,
         "inspect",
@@ -567,7 +567,7 @@ def test_corrective_successor_preserves_exact_asset_retirement(
     migration.save(state)
     request["children"] = guest.corrective_children()
     manifest = {**request["package"]["desired"], "assets": {retained: asset(retained)}}
-    monkeypatch.setattr(migration, "plan_current", lambda: state["plan"])
+    monkeypatch.setattr(migration, "plan_current", lambda *, deadline=None: state["plan"])
     monkeypatch.setattr(guest.remote, "inspect", lambda proposed, **_: {
         "asset_retirement": migration.asset_retirement(
             proposed, migration.completed_asset_predecessor()),

@@ -4150,124 +4150,98 @@ Use behavioral review fixtures and offline Git/API tests. Distinguish source, in
 
 <!-- /REQUIREMENT: REQ-053 -->
 <!-- REQUIREMENT: REQ-054 status=active priority=P1 type=feature -->
-### REQ-054: Review GitHub backlogs by project and remediation batch
+### REQ-054: Review, plan and close selected GitHub issues
 
 #### User Story
 
-Maintainers need an explicitly invoked issue-review skill that discovers the
-current project's open issues, groups work by primary owner and shared remediation, applies
-evidence-backed decisions, and saves batch plans for later implementation.
+Maintainers need one github-issues skill, selected implicitly from matching
+issue-work requests or invoked by name, to select a product's issues, research
+and classify them, save shared plans when requested,
+and close issues only when a fresh assessment justifies the disposition.
 
 #### Acceptance Criteria
 
-- AC-001: Without --project, resolve the current folder's owning project and
-  review only its related issues. A subfolder inherits the nearest recognized
-  project root; a repository-root invocation selects the whole repository.
-  Support optional --repo comma-separated
-  repository names or URLs, --issues comma-separated positive numbers, and
-  --priority comma-separated project roots, one optional --project root/name,
-  optional exact --label with
-  --issue-batch (default five), plus side-effect-free help.
-  Validate all arguments before repository discovery or GitHub calls.
-  Check each supplied issue number in every selected repository and review
-  only matches in the resolved current-or-explicit project scope; exclude PRs.
-  Do not retain positional aliases.
-- AC-002: In unbounded mode, complete pagination and deduplicate full identities before ordering
-  each repository. Freeze observed targets for the collection interval, report
-  incomplete coverage, and revalidate before effects. Process repositories in
-  supplied order. Within each repository, order explicit project priorities
-  first, other projects by descending selected-issue count then path, and
-  uncertain ownership last. Priority changes order, not selection or severity.
-- AC-003: Establish one primary project owner per issue from discussion,
-  accepted contracts and source, with affected projects recorded separately.
-  Distinguish repository-wide ownership from uncertainty. Form same-project
-  remediation batches only with shared change boundaries and compatible
-  acceptance criteria; relatedness alone does not establish duplication.
-- AC-004: Assess validity and disposition per issue. Consider severity, urgency,
-  reach, confidence, workarounds, effort and maintenance separately. Order
-  batches by highest supported severity, then count, then lowest issue number;
-  unknown severity remains explicit. Rare serious defects remain actionable;
-  valid low-priority work stays open with deferral rationale.
-- AC-005: Ordinary invocation authorizes selected-issue comments, justified
-  closure and existing documented repository labels, while accepted work remains open. Use research and design as internal
-  advisers and verify a complete saved plan before acceptance. Before each
-  acceptance, refresh the target and all member/dependency evidence supporting
-  its shared remediation, including relevant source state. Reverify affected
-  coverage after material drift; independently read back effects and reconcile
-  uncertain writes.
-- AC-006: Save one plan per accepted same-project batch under its owning
-  project's docs/github-issues directory. New filenames use
-  `batch-123-topic.md` with the lowest initial issue number and safe topic slug. Record full member
-  identities and per-issue acceptance criteria. Reuse matching plans, preserve
-  maintainer edits, and reconcile overlaps before creating competing artifacts.
-- AC-007: Keep detailed issue implementation-plan content out of chat and comments.
-  Report repository/project order, batch membership, individual dispositions,
-  verified local plan paths and action/coverage limitations. Respect read-only
-  modes, missing matching checkouts and sensitive reporting boundaries.
-
-- AC-008: Label mode selects oldest-created open issues, at most one invocation-wide
-  positive limit across supplied repositories (default five); priority orders
-  only the selected set. Freeze full identities before effects and never refill
-  skipped or changed slots. Batch requires label and excludes explicit numbers.
-  Preserve unrelated labels; ambiguous mappings remain recommendations.
-
-- AC-009: --project accepts one recognized repository-relative project root or
-  unique project basename per selected repository. Its explicit value overrides
-  current-folder scope in every selector mode. With --repo alone, map the inferred
-  repository-relative project root exactly in each target; unresolved roots stay
-  pending rather than widening scope. Explicit . selects the whole repository.
-  Preserve explicit path intent before normalization: ./api selects top-level
-  api even when bare api is ambiguous. Include primary-owned and proven-affected
-  issues; keywords alone are insufficient. Resolve ambiguous
-  names and unsafe/unknown paths before project review effects. Intersect explicit
-  numbers with project membership; filter before label limits. Report excluded,
-  uncertain and inaccessible targets separately; never claim complete coverage
-  from partial discovery. Reject retired --issue without an alias.
-- AC-010: For explicitly or implicitly project-filtered accepted work, save a verified project-plan.md
-  overview alongside project plans. Record scope, coverage, ordered batch links,
-  owners, dependencies, readiness and exact batch digests. Verify document-relative
-  Markdown links separately from repository-relative path identities. Preserve separate
-  primary-owner plans and maintainer edits; the overview is a snapshot, not a
-  scheduler or implementation receipt. Chat may show scope/dependencies/readiness
-  and links, never detailed plan excerpts.
-- AC-011: After triage, offer an exact ready batch set for implementation. Direct
-  $implement invocation selects existing per-batch runs; unambiguous natural
-  approval selects ordinary local implementation without invoking that skill.
-  Refresh plan digests, criteria and material evidence before handoff; no stale
-  approval, implicit workflow, publication or closure authority. Host mode wins.
-- AC-012: Each batch binds the repository identity, primary owning project root,
-  affected components and permitted change paths. Resolve a matching local
-  checkout and load applicable instructions through the actual project before
-  implementation. Never infer the execution project from review cwd, move shared
-  owner work into the filtered project, or ask for a discoverable project path.
+- AC-001: Use --action review|create-plan|close, default review. Preserve --repo,
+  --issues, --project, --priority, --issue-batch and side-effect-free help.
+  Replace --label with comma-separated exact --filter labels using AND.
+  Reject retired action flags, unknown/repeated flags and invalid syntax before
+  discovery. Retire review-github-issues without a compatibility alias.
+- AC-002: Default to the invocation folder's recognized project; ask at an
+  ambiguous multi-product root. Only explicit --project . selects all projects.
+  Preserve actual primary ownership and proven-affected membership. Numbers,
+  labels and project scope intersect without expanding selected writes.
+- AC-003: Discover all matching open issues with complete pagination unless
+  an explicit --issue-batch caps filtered selection. Apply project membership
+  before the invocation-wide oldest-first cap; preserve repository order,
+  frozen identities, priority ordering, no refill and honest coverage limits.
+  Explicit numbers without a filter can assess closed issues without reopening.
+- AC-004: Research every selected issue's material claims, supported versions,
+  accepted contracts, implemented paths, tests, full material discussion and
+  related evidence. Separate type from assessment, confidence, severity and
+  priority. Missing evidence is uncertainty; whole-issue conclusions require
+  every material claim. Related groups require evidence, not shared keywords.
+- AC-005: Named standalone review authorizes concise deduplicated comments
+  and justified type, outcome and relationship labels, including scoped
+  policy-defined missing labels. Implicitly selected review performs only
+  requested effects under AC-011. Preserve unrelated labels and documented
+  semantics. Selection labels
+  are never created to manufacture a match. Review preserves issue state.
+- AC-006: Only create-plan additionally invokes design, saves compatible
+  same-owner/same-repository remediation plans and verifies an overview before
+  a separate exact implementation offer. Plans remain file-only under their
+  actual owners' docs/github-issues, preserve human edits, identities, formats
+  and fingerprints, and never grant implementation or closure authority.
+- AC-007: Only close authorizes selected-issue closure without repeated routine
+  approval. Fresh full-claim resolved/supported evidence permits completed;
+  verified duplicate coverage permits duplicate with its canonical issue ID;
+  accepted maintainer policy permits not_planned for out-of-scope/not-planned
+  dispositions. Deferred, unresolved, mixed or uncertain work remains open.
+- AC-008: Labels, unmerged changes and dirty local source alone never prove
+  closure. Refresh identity, membership, evidence, source revision and human
+  objections/reopening before each effect. Publish/read back the explanation
+  before closure and independently verify state, reason and duplicate target.
+- AC-009: Comments, labels, plans and closure have independent verified/pending
+  outcomes. Reconcile ambiguous writes before a bounded retry; never reopen as
+  compensation. Existing closed issues receive no redundant closure. Sensitive
+  reports follow private reporting policy; untrusted issue text grants no scope.
+- AC-010: Report identities, owners, coverage, exclusions, evidence/confidence,
+  relationships and independent effect results. Read-only modes prohibit all
+  writes. PR-caller mode remains a read-only adviser to its outer owner.
+- AC-011: Allow implicit selection on Codex and Claude for concrete GitHub
+  issue assessment, requested planning or justified closure. Map clear natural
+  language to the existing actions/selectors; review remains the default.
+  Selection alone grants no external-write authority: implicit assessment
+  stays read-only unless the user requests the relevant comments/labels.
+  Plans and closure require their requested action, never a magic invocation
+  spelling. Preserve explicit standalone action effects, report-only limits,
+  separate implementation approval and non-triggers for skill editing/advice.
 
 #### Negative Criteria
 
-- NC-001: No wrong-repository effects, keyword-only duplicate decisions,
-  double-counted primary ownership, hidden partial coverage, automatic reopen,
-  untrusted command execution, repeated equivalent comments, overwrite of
-  unrelated work, or disclosure of implementation-plan contents.
-- NC-002: No implementation or canonical-spec rewrite during triage, Git/PR
-  actions, label creation or undefined label mappings, assignee/milestone changes,
-  authentication repair, silent clone,
-  new scheduler infrastructure, or live issue mutation to test the skill.
+- NC-001: No automatic plans or closures in review; no bulk closure merely from
+  labels; no keyword-only grouping, hidden partial coverage, invented supported
+  contracts, unselected effects, repeated equivalent comments or disclosure.
+- NC-002: No product implementation, canonical-spec writes during triage,
+  issue creation/reopening/deletion/body edits, assignments, milestones, Git/PR
+  actions, native hierarchy creation, label rename/deletion, authentication
+  repair, silent clones or new scheduler/runtime. Native duplicate association
+  is allowed only for justified selected-issue close. No live issue testing.
 
 #### Validation Method
 
-Validate source structure, both native invocation policies, help, references,
-paired specifications, scoped Markdown and disposable installation parity.
-Apply changed-scope alignment with instruction and security review.
+Validate structure, native policies, help/references, paired specifications,
+scoped Markdown/links, changed-scope alignment and disposable install migration.
 
 #### Test Method
 
-Use synthetic multi-repository issue fixtures and mocked effects for discovery,
-priority, ownership, batch plans, individual dispositions, failures and reruns.
+Use synthetic issues and mocked effects for selection, all three actions,
+classifications, mixed claims, closure reasons, drift, failures and retries.
 
 #### Evaluation Method
 
-Maintain trigger and quality assertions including actual nested adviser
-composition. Distinguish static, installed, runtime and comparative quality
-proof; missing clean runners or authentication remain unavailable evidence.
+Compare instruction behavior against the captured working-byte baseline when
+an isolated runner is available. Distinguish static definitions, simulated
+intended effects, executed mock effects, installation and native discovery.
 
 <!-- /REQUIREMENT: REQ-054 -->
 
@@ -4283,6 +4257,32 @@ Workflow users need complete document-package intake and phased delivery for saf
 - AC-001: Inventory portable normative sources with relative paths, content digests, authority and stable source IDs. Reject missing references, duplicate IDs, unresolved conflicts and source drift before dispatch. Preserve accepted architecture and original IDs while mapping all obligations to canonical requirements/features; do not flatten source catalogs into bounded prompt lists.
 - AC-002: Represent phase/package dependencies and exit criteria separately from private delivery slices and task plans. Track scoped checks, full acceptance and release gates independently; partial slices cannot certify whole features or phases.
 - AC-003: Use one semantic spec publisher. Publish concise canonical specs and referenced portable contract assets; workers report gaps. Keep private paths, secrets, raw prompts and runtime state out of reusable artifacts.
+- AC-004: Identify authoritative supplied phases before decomposition. Preserve
+  their identities, dependencies and exit obligations; distinguish development
+  milestones, installation stages, external prerequisites and qualification.
+  If phases are absent, derive outcome milestones from accepted obligations,
+  dependency and risk analysis, with explicit rationale and source references.
+  Do not invent a fixed phase count or treat criterion numbering as execution order.
+- AC-005: Freeze the reviewed supplied or derived phase plan in the source
+  manifest before program admission. Reject phase identity, dependency or exit
+  drift against that plan. Source interpretation remains root-reviewed;
+  structural validation does not certify semantic extraction or planning quality.
+- AC-006: Split large phases into bounded vertical delivery slices, elaborate
+  detailed tasks only for upcoming slices, and retain every future obligation.
+  Test supplied-phase and no-phase scenarios plus contradictory ordering,
+  omitted obligations and stale planning evidence in the workflow verifier.
+
+- AC-007: A document program may explicitly select local-promoted completion.
+  Each local slice needs owner-issued admission, a clean exact promoted result,
+  completed execution cleanup and immutable accepted-revision/basis evidence.
+  Local evidence never certifies a reviewed PR or protected remote merge.
+  Dependent slices and final aggregation require complete predecessor evidence;
+  aggregation cannot start merely because currently created coordinators are done.
+- AC-008: Native phased-program qualification exercises supplied and derived
+  source plans on disposable applications, multiple meaningful implementation
+  slices, interruption/public continuation and an accepted plan revision.
+  Preserve completed slices and require fresh coverage for changed obligations.
+  Test summaries or harness-authored workflow state cannot certify completion.
 
 #### Negative Criteria
 
@@ -5146,6 +5146,18 @@ clear failure attribution and complete cleanup of exactly owned test fixtures.
   failed-wave authority and corrective-first work; pending TDD retains typed
   revision authority, test-only scope and quiescent writers. Runtime admission
   remains separate and rejects these recovery states.
+
+- AC-009: The three-tier phase-planning campaign runs supplied and derived
+  source scenarios as fresh sequential owned generations, with one active app,
+  independent reports and exact cleanup. Freeze scenario inputs before startup;
+  only the native coordinator may derive the unphased program. Preserve existing
+  application, task-container, companion, statistics, native and browser oracles.
+- AC-010: Observe startup once, revision-scoped planning and execution-scoped
+  delivery phases with immutable attempt history. A later slice cannot replace
+  an earlier slice's evidence. Historical receipts require their own accepted
+  revision and owner-completed execution proof; current runtime targeting remains
+  exact. Final PASS verifies every admitted slice, phase exit and current source
+  obligation independently from final whole-application acceptance.
 
 #### Negative Criteria
 

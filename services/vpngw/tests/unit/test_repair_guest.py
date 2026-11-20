@@ -468,6 +468,40 @@ def test_reset_preserves_lock_inodes_and_opaque_predecessor(host, monkeypatch, l
 
 
 @pytest.mark.parametrize("prior_mode", [None, 0o755, 0o700])
+def test_reset_leaves_ordinary_operation_store_ready_for_route_handoff(
+    host, monkeypatch, prior_mode
+):
+    import os
+    import time
+
+    from nebius_vpngw import ordinary_operations
+
+    journal, operation, _calls, run = host
+    guest.install_guard(operation, run=run)
+    journal.advance("isolated")
+    journal.advance("staged")
+    root = guest.PRODUCT_STATE / "ordinary"
+    previous_inode = None
+    if prior_mode is not None:
+        root.mkdir(parents=True, mode=prior_mode)
+        root.chmod(prior_mode)
+        (root / "operation.lock").touch(mode=0o600)
+        previous_inode = (root / "operation.lock").stat().st_ino
+    previous_umask = os.umask(0o022)
+    try:
+        guest.reset(operation, run=run)
+    finally:
+        os.umask(previous_umask)
+    monkeypatch.setattr(ordinary_operations, "JOURNAL", root / "operation.json")
+    monkeypatch.setattr(ordinary_operations, "ROUTING_LOCK", guest.ROUTING_LOCK)
+    with ordinary_operations.mutation_lock(deadline=time.monotonic() + 1):
+        assert ordinary_operations.Journal().read() is None
+    assert root.stat().st_mode & 0o777 == 0o700
+    if previous_inode is not None:
+        assert (root / "operation.lock").stat().st_ino == previous_inode
+
+
+@pytest.mark.parametrize("prior_mode", [None, 0o755, 0o700])
 def test_ordinary_reset_leaves_private_mtls_storage_ready_for_conversion(host, prior_mode):
     import os
     import stat

@@ -165,6 +165,102 @@ class InitializePhaseTests(unittest.TestCase):
         self.assertEqual(self.initialize()["status"], "ALREADY_INITIALIZED")
         self.assertEqual(before, self.snapshot())
 
+    def declare_inputs(self, claims=None):
+        import workflow_inputs
+        value = {"schema": workflow_inputs.SCHEMA,
+                 "base_head": read(self.run / "run.json")["source_head"],
+                 "complete": True,
+                 "claims": claims if claims is not None else [{"kind": "prefix", "path": "."}]}
+        workflow_inputs.declare(self.run, value)
+        return value
+
+    def test_intake_input_declarations_are_preserved_through_initialization(self):
+        self.declare_inputs()
+        self.declare_inputs([{"kind": "exact", "path": "README.md"}])
+        inputs = {name: data for name, data in self.snapshot().items()
+                  if name.startswith(("input-dependencies", "input-declarations/"))}
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--project-root", str(self.project)],
+            text=True, capture_output=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(json.loads(result.stdout)["status"], "INITIALIZED")
+        self.assert_publication(read(self.run / "current-state.json"))
+        for name, data in inputs.items():
+            self.assertEqual((self.run / name).read_bytes(), data)
+        before = self.snapshot()
+        self.assertEqual(self.initialize()["status"], "ALREADY_INITIALIZED")
+        self.assertEqual(before, self.snapshot())
+
+    def test_input_manifest_requires_its_immutable_archive(self):
+        import workflow_inputs
+        value = self.declare_inputs()
+        (self.run / "input-declarations" / (workflow_inputs.fingerprint(value) + ".json")).unlink()
+        self.assert_blocked_unchanged()
+
+    def test_orphaned_input_archive_blocks_initialization(self):
+        self.declare_inputs()
+        (self.run / "input-dependencies.json").unlink()
+        self.assert_blocked_unchanged()
+
+    def test_input_declarations_require_the_captured_source_head(self):
+        import workflow_inputs
+        value = {**self.declare_inputs(), "base_head": "f" * 40}
+        workflow_inputs.archive(self.run, value)
+        write(self.run / "input-dependencies.json", value)
+        self.assert_blocked_unchanged()
+
+    def test_changed_input_archive_blocks_initialization(self):
+        import workflow_inputs
+        value = self.declare_inputs()
+        path = self.run / "input-declarations" / (workflow_inputs.fingerprint(value) + ".json")
+        write(path, {**value, "claims": []})
+        self.assert_blocked_unchanged()
+
+    def test_changed_current_inputs_require_an_immutable_archive(self):
+        value = self.declare_inputs()
+        write(self.run / "input-dependencies.json", {**value, "claims": []})
+        self.assert_blocked_unchanged()
+
+    def test_unknown_input_archive_content_blocks_initialization(self):
+        value = self.declare_inputs()
+        write(self.run / "input-declarations" / "unrecognized.json", value)
+        self.assert_blocked_unchanged()
+
+    def test_symlinked_input_archive_blocks_initialization(self):
+        import workflow_inputs
+        value = self.declare_inputs()
+        path = self.run / "input-declarations" / (workflow_inputs.fingerprint(value) + ".json")
+        outside = self.root / "outside.json"
+        path.rename(outside)
+        path.symlink_to(outside)
+        self.assert_blocked_unchanged()
+
+    def assert_sanitized_cli_rejection(self):
+        before = self.snapshot()
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--project-root", str(self.project)],
+            text=True, capture_output=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stdout)["status"], "BLOCKED")
+        self.assertEqual(json.loads(result.stdout)["code"], "UNCOMMITTED_INPUT")
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(before, self.snapshot())
+
+    def test_malformed_current_input_claim_is_rejected_without_traceback(self):
+        value = self.declare_inputs()
+        value["claims"] = [{"kind": [], "path": "README.md"}]
+        write(self.run / "input-dependencies.json", value)
+        self.assert_sanitized_cli_rejection()
+
+    def test_malformed_archived_input_claim_is_rejected_without_traceback(self):
+        import workflow_inputs
+        value = self.declare_inputs()
+        value["claims"] = [{"kind": {}, "path": "README.md"}]
+        write(self.run / "input-declarations" / (workflow_inputs.fingerprint(value) + ".json"), value)
+        self.assert_sanitized_cli_rejection()
+
     def test_concurrent_initialization_has_one_authoritative_snapshot(self):
         self.helper()
         with ThreadPoolExecutor(max_workers=2) as pool:

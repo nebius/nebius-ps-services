@@ -11,7 +11,129 @@ import unittest
 from unittest import mock
 
 import workflow_delivery as d
-from workflow_state import WorkflowError, digest, read
+from workflow_state import WorkflowError, digest, read, write
+
+
+class LocalDeliveryTests(unittest.TestCase):
+    """Real Git result/ancestry with isolated upstream admission dependencies."""
+
+    def setUp(self):
+        from test_workflow_fixture import seed
+        from workflow_impact import canonical_digest
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.project = self.root / "project"
+        self.project.mkdir()
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.name", "Test")
+        self.git("config", "user.email", "test@example.invalid")
+        (self.project / "README.md").write_text("local slice\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "slice")
+        self.head = self.git("rev-parse", "HEAD")
+        self.tree = self.git("rev-parse", "HEAD^{tree}")
+        self.run = self.root / "home/sdlc-runs/project/run-test"
+        seed(self.run, self.project, "project", "local-delivery")
+        write(self.run / "run.json", {**read(self.run / "run.json"), "automatic_outer": True})
+        objective = read(self.run / "objectives/r0001.json")
+        objective["completion"]["boundary"] = "local-promoted"
+        self.set_objective(objective)
+        basis = {"execution_id": "SLICE-001", "objective_sha256": digest(objective)}
+        key = canonical_digest(basis)
+        pointer = {"schema": "workflow/execution-basis-pointer-v2", "sha256": key,
+                   "path": f"bases/SLICE-001/{key}.json"}
+        write(self.run / pointer["path"], basis)
+        write(self.run / "objective-impact/execution/SLICE-001.json", pointer)
+        write(self.run / "execution/SLICE-001/coordinator.json", {
+            "status": "done", "final_evidence": "executed", "promoted_head": self.head})
+        self.ref = {"receipt": "admission.json", "sha256": "a" * 64}
+        self.receipt = {"execution_id": "SLICE-001", "head": self.head, "tree": self.tree,
+                        "objective_sha256": digest(objective), "basis_sha256": digest(basis), "inputs": None}
+        self.expected = {"project": self.project, "head": self.head, "completion": objective["completion"]}
+        for patch in (mock.patch.object(d, "_authorize"),
+                      mock.patch.object(d, "target", return_value=self.expected),
+                      mock.patch.object(d, "verify_receipt", side_effect=lambda *a, **k: dict(self.receipt)),
+                      mock.patch("workflow_task_acceptance.repository", return_value=self.project),
+                      mock.patch("workflow_objectives._writers_quiescent")):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def git(self, *args):
+        return subprocess.check_output(["git", "-C", str(self.project), *args], text=True).strip()
+
+    def set_objective(self, snapshot, *, revise=False):
+        binding = read(self.run / "objective.json")
+        revisions = binding["revisions"]
+        index = len(revisions) + 1 if revise else 1
+        name = f"r{index:04d}"
+        revision = {"revision": name, "snapshot": f"objectives/{name}.json",
+                    "sha256": digest(snapshot), "parent_sha256": revisions[-1]["sha256"] if revise else None,
+                    "intent_sha256": digest({k: v for k, v in snapshot.items() if k != "provenance"})}
+        write(self.run / revision["snapshot"], snapshot)
+        binding["revisions"] = revisions + [revision] if revise else [revision]
+        write(self.run / "objective.json", binding)
+
+    def test_local_completion_is_repeatable_and_survives_later_revision_and_head(self):
+        value = d.complete_local(self.run, "SLICE-001", self.ref)
+        self.assertEqual(value["status"], "local-promoted")
+        self.assertEqual(d.complete_local(self.run, "SLICE-001", self.ref), value)
+        next_objective = read(self.run / "objectives/r0001.json")
+        next_objective["clarifications"] = ["Add another slice"]
+        self.set_objective(next_objective, revise=True)
+        (self.project / "next.txt").write_text("next\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "later slice")
+        self.assertEqual(d.verify_completion(self.run, value), value)
+        self.assertEqual(d.completion_candidate(value), self.head)
+        self.assertEqual(d.completion_admission(value), self.ref)
+        self.assertFalse((self.run / "aggregation").exists())
+
+    def test_completion_requires_explicit_local_policy_and_done_cleanup(self):
+        self.expected["completion"]["boundary"] = "reviewed-pr"
+        with self.assertRaisesRegex(WorkflowError, "does not authorize local"):
+            d.complete_local(self.run, "SLICE-001", self.ref)
+        self.expected["completion"]["boundary"] = "local-promoted"
+        run_path = self.run / "run.json"
+        original_run = read(run_path)
+        write(run_path, {**original_run, "automatic_outer": False})
+        with self.assertRaisesRegex(WorkflowError, "automatic managed outer"):
+            d.complete_local(self.run, "SLICE-001", self.ref)
+        write(run_path, original_run)
+        path = self.run / "execution/SLICE-001/coordinator.json"
+        write(path, {**read(path), "status": "cleanup"})
+        with self.assertRaisesRegex(WorkflowError, "finished promotion"):
+            d.complete_local(self.run, "SLICE-001", self.ref)
+
+    def test_local_policy_cannot_access_remote(self):
+        with mock.patch.object(d, "_git") as git:
+            with self.assertRaisesRegex(WorkflowError, "does not authorize remote"):
+                d._scope(self.expected, "SLICE-001", "owner/repo")
+            git.assert_not_called()
+
+    def test_local_receipt_tampering_and_foreign_admission_fail(self):
+        self.receipt["execution_id"] = "SLICE-002"
+        with self.assertRaisesRegex(WorkflowError, "another candidate"):
+            d.complete_local(self.run, "SLICE-001", self.ref)
+        self.receipt["execution_id"] = "SLICE-001"
+        value = d.complete_local(self.run, "SLICE-001", self.ref)
+        with self.assertRaisesRegex(WorkflowError, "immutable owner-produced"):
+            d.verify_completion(self.run, {**value, "result_sha": "f" * 40})
+        pointer = value["basis"]
+        write(self.run / pointer["path"], {"execution_id": "SLICE-002"})
+        with self.assertRaisesRegex(WorkflowError, "frozen basis changed"):
+            d.verify_completion(self.run, value)
+
+    def test_interrupted_completion_publication_reuses_exact_producer(self):
+        original = d.write
+        def interrupted(path, value, **kwargs):
+            if path.name == "completion.json":
+                raise RuntimeError("interrupted")
+            original(path, value, **kwargs)
+        with mock.patch.object(d, "write", side_effect=interrupted):
+            with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                d.complete_local(self.run, "SLICE-001", self.ref)
+        self.assertEqual(d.complete_local(self.run, "SLICE-001", self.ref)["result_sha"], self.head)
 
 
 class Blocked(RuntimeError):
@@ -435,6 +557,7 @@ class PhaseEvidenceTests(unittest.TestCase):
                     "workflow_program.verify_inputs",
                     return_value={"bundle": {"obligation_basis": basis}},
                 ),
+                mock.patch("workflow_program.completion_project", return_value=run),
                 mock.patch.object(d, "verify_receipt", side_effect=receipt),
             ):
                 d.verify_phase_exit(run, records[2], phases[2])

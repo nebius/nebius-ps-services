@@ -150,15 +150,40 @@ def _admit(project, home, session, run_dir):
     return run, objective
 
 
+def _admit_initial_inputs(run_dir, run, entries):
+    from workflow_inputs import fingerprint, frozen, validate
+
+    if "input-dependencies.json" not in entries:
+        if "input-declarations" in entries:
+            _blocked()
+        return
+    value = read(run_dir / "input-dependencies.json")
+    validate(value, run["source_head"])
+    declarations = _entries(run_dir / "input-declarations")
+    current = fingerprint(value)
+    if current + ".json" not in declarations:
+        _blocked()
+    for name, metadata in declarations.items():
+        _regular(metadata)
+        if re.fullmatch(r"[0-9a-f]{64}\.json", name) is None:
+            _blocked()
+        archived = frozen(run_dir, name.removesuffix(".json"))
+        validate(archived, run["source_head"])
+        if name == current + ".json" and archived != value:
+            _blocked()
+
+
 def _admit_registration_only(run_dir, run, objective):
     allowed = {"run.json", "objective.json", "objectives", "git-promotion.json",
-               "history", "checkpoints", "current-state.json", "execution", "statistics"}
+               "history", "checkpoints", "current-state.json", "execution", "statistics",
+               "input-dependencies.json", "input-declarations"}
     entries = _entries(run_dir)
     if set(entries) - allowed:
         _blocked()
     for name, metadata in entries.items():
-        if name not in {"objectives", "history", "checkpoints", "execution", "statistics"}:
+        if name not in {"objectives", "history", "checkpoints", "execution", "statistics", "input-declarations"}:
             _regular(metadata)
+    _admit_initial_inputs(run_dir, run, entries)
     from workflow_statistics import admit_initial_storage
     admit_initial_storage(run_dir)
     if set(_entries(run_dir / "objectives")) != {Path(objective["revisions"][0]["snapshot"]).name}:

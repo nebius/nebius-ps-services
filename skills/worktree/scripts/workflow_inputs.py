@@ -27,6 +27,7 @@ def validate(value: dict, base: str | None = None) -> dict:
         raise WorkflowError("UNCOMMITTED_INPUT", "complete input dependencies must match the captured source commit")
     for claim in value["claims"]:
         if (not isinstance(claim, dict) or set(claim) != {"kind", "path"}
+                or not isinstance(claim["kind"], str)
                 or claim["kind"] not in {"exact", "prefix"}
                 or not isinstance(claim["path"], str) or not claim["path"]):
             raise WorkflowError("UNCOMMITTED_INPUT", "invalid input dependency claim")

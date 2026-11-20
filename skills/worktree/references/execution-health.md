@@ -74,6 +74,13 @@ exclusive. One parent owns aggregation and reports. A required failure stops
 queued work, interrupts owned peers with cleanup grace, and retains completed,
 interrupted and not-run outcomes. Partial groups cannot qualify a gate.
 
+Each failed case retains its first exception diagnostic in the group's private
+observation: at most four chained exceptions and eight catalog-relative Python
+file/line locations per exception. Built-in exception types are named; custom
+types use a fixed marker. Messages, source text, local values and external paths
+are never retained. The event reader validates these bounds and rejects malformed
+diagnostics. This evidence supports diagnosis without changing test outcomes.
+
 Record actual collection, setup, execution, cleanup and observation-finalization
 durations, byte counts and outcomes. Parallel group durations may overlap; their
 sum is not campaign wall time. Timing is diagnostic and never acceptance authority.

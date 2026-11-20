@@ -7,11 +7,13 @@ group never becomes successful through an early passing capability test.
 from __future__ import annotations
 
 import argparse
+import builtins
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from dataclasses import dataclass
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 import threading
 import time
@@ -19,6 +21,9 @@ import unittest
 
 
 PREFIX = b"WORKFLOW_TEST_EVENT "
+CATALOG = Path(__file__).resolve().parents[2]
+EXCEPTION_NAMES = {value: value.__name__ for value in vars(builtins).values()
+                   if isinstance(value, type) and issubclass(value, BaseException)}
 AUDITED = frozenset({
     "implement-test/scripts/test_app_objective.py",
     "implement-test/scripts/test_implement_reporting.py",
@@ -107,11 +112,54 @@ def _emit(value):
     sys.__stdout__.flush()
 
 
+def failure_diagnostic(error):
+    """Retain locations and built-in types, never messages, source or locals."""
+    chain, seen = [], set()
+    current, trace = error[1], error[2]
+    while current is not None and id(current) not in seen and len(chain) < 4:
+        seen.add(id(current))
+        frames = []
+        while trace is not None:
+            try:
+                path = Path(trace.tb_frame.f_code.co_filename).resolve(strict=True)
+                relative = path.relative_to(CATALOG).as_posix()
+                if (path.is_file() and path.suffix == ".py" and len(relative) <= 512
+                        and re.fullmatch(r"[A-Za-z0-9_./-]+", relative)):
+                    frames.append({"path": relative, "line": trace.tb_lineno})
+            except (OSError, ValueError):
+                pass  # External/generated frames are not safe source references.
+            trace = trace.tb_next
+        chain.append({"exception": EXCEPTION_NAMES.get(type(current), "custom"), "frames": frames[-8:]})
+        current = current.__cause__ or (None if current.__suppress_context__ else current.__context__)
+        trace = current.__traceback__ if current is not None else None
+    return chain
+
+
+def valid_diagnostic(value):
+    if not isinstance(value, list) or not 1 <= len(value) <= 4:
+        return False
+    for entry in value:
+        if (not isinstance(entry, dict) or set(entry) != {"exception", "frames"}
+                or not isinstance(entry["exception"], str)
+                or entry["exception"] not in {*EXCEPTION_NAMES.values(), "custom"}
+                or not isinstance(entry["frames"], list) or len(entry["frames"]) > 8):
+            return False
+        for frame in entry["frames"]:
+            if (not isinstance(frame, dict) or set(frame) != {"path", "line"}
+                    or not isinstance(frame["path"], str) or len(frame["path"]) > 512
+                    or re.fullmatch(r"[A-Za-z0-9_./-]+\.py", frame["path"]) is None
+                    or Path(frame["path"]).is_absolute() or ".." in Path(frame["path"]).parts
+                    or type(frame["line"]) is not int or not 1 <= frame["line"] <= 10_000_000):
+                return False
+    return True
+
+
 class EventResult(unittest.TestResult):
     def __init__(self, identities):
         super().__init__()
         self.identities = identities
         self.outcomes = {}
+        self.diagnostics = {}
 
     def addSuccess(self, test):
         super().addSuccess(test)
@@ -120,10 +168,12 @@ class EventResult(unittest.TestResult):
     def addFailure(self, test, error):
         self.failures.append((test, None))
         self.outcomes[self.identities[id(test)]] = "failed"
+        self.diagnostics.setdefault(self.identities[id(test)], failure_diagnostic(error))
 
     def addError(self, test, error):
         self.errors.append((test, None))
         self.outcomes[self.identities[id(test)]] = "error"
+        self.diagnostics.setdefault(self.identities[id(test)], failure_diagnostic(error))
 
     def addSkip(self, test, reason):
         super().addSkip(test, reason)
@@ -132,6 +182,7 @@ class EventResult(unittest.TestResult):
     def addExpectedFailure(self, test, error):
         self.expectedFailures.append((test, None))
         self.outcomes[self.identities[id(test)]] = "expected_failure"
+        self.diagnostics.setdefault(self.identities[id(test)], failure_diagnostic(error))
 
     def addUnexpectedSuccess(self, test):
         super().addUnexpectedSuccess(test)
@@ -141,11 +192,13 @@ class EventResult(unittest.TestResult):
         super().addSubTest(test, subtest, error)
         if error is not None:
             self.outcomes[self.identities[id(test)]] = "failed"
+            self.diagnostics.setdefault(self.identities[id(test)], failure_diagnostic(error))
 
     def stopTest(self, test):
         super().stopTest(test)
         identity = self.identities.pop(id(test))
-        _emit({"event": "test", "id": identity, "outcome": self.outcomes.get(identity, "error")})
+        _emit({"event": "test", "id": identity, "outcome": self.outcomes.get(identity, "error"),
+               "diagnostic": self.diagnostics.get(identity)})
 
 
 class EventRunner:
@@ -175,6 +228,7 @@ class Events:
         self.discard = False
         self.inventory = None
         self.outcomes = {}
+        self.diagnostics = {}
         self.complete = None
         self.invalid = False
 
@@ -208,8 +262,15 @@ class Events:
                 self.inventory = ids
             elif value["event"] == "test":
                 name, outcome = value["id"], value["outcome"]
+                diagnostic = value["diagnostic"]
                 if (self.complete is not None or self.inventory is None or name not in self.inventory or name in self.outcomes
                         or outcome not in {"passed", "failed", "error", "skipped", "expected_failure", "unexpected_success"}):
+                    raise ValueError()
+                if outcome in {"failed", "error", "expected_failure"}:
+                    if not valid_diagnostic(diagnostic):
+                        raise ValueError()
+                    self.diagnostics[name] = diagnostic
+                elif diagnostic is not None:
                     raise ValueError()
                 self.outcomes[name] = outcome
             elif value["event"] == "complete":
@@ -237,7 +298,8 @@ def _run(group, env, *, inventory=False, cancel=None):
         status = ("EXECUTION_UNPROVEN" if not result.get("local_group_quiescent")
                   else "START_FAILED" if isinstance(error, OSError) else "INTERRUPTED" if isinstance(error, KeyboardInterrupt) else "FAIL")
         return {"id": group.id, "suite": group.suite, "status": status,
-                "inventory": events.inventory, "outcomes": events.outcomes, "observation": result}
+                "inventory": events.inventory, "outcomes": events.outcomes,
+                "diagnostics": events.diagnostics, "observation": result}
     valid = not events.invalid and not events.buffer and events.inventory is not None
     if not inventory:
         valid = (valid and events.complete is not None and events.complete["successful"]
@@ -250,7 +312,8 @@ def _run(group, env, *, inventory=False, cancel=None):
             and all(result.get(key, {}).get("complete") is True for key in ("stdout", "stderr"))):
         status = "EXECUTION_UNPROVEN"
     return {"id": group.id, "suite": group.suite, "status": status,
-            "inventory": events.inventory, "outcomes": events.outcomes, "observation": result}
+            "inventory": events.inventory, "outcomes": events.outcomes,
+            "diagnostics": events.diagnostics, "observation": result}
 
 
 def schedule(groups, env, *, on_result=None, admission=None, validate_inventory=None, memory_probe=None,
@@ -375,7 +438,8 @@ def schedule(groups, env, *, on_result=None, admission=None, validate_inventory=
             raise
     for group in groups:
         results.setdefault(group.id, {"id": group.id, "suite": group.suite, "status": "NOT_RUN",
-                                      "inventory": frozen.get(group.id), "outcomes": {}, "observation": None})
+                                      "inventory": frozen.get(group.id), "outcomes": {},
+                                      "diagnostics": {}, "observation": None})
         results[group.id]["collection_observation"] = collection.get(group.id)
         results[group.id]["queue_wait_seconds"] = queue_waits.get(group.id)
         results[group.id]["timing_clock"] = "time.monotonic; same-process durations"

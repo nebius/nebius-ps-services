@@ -1,6 +1,0 @@
-interface:
-  display_name: "Review GitHub Issues"
-  short_description: "Group GitHub issues and save shared batch plans"
-  default_prompt: "Use $review-github-issues to review the current folder's project by default; override with --project root/name or . for the whole repository. Select --issues CSV or exact-label batches after project filtering, assess primary/shared ownership, apply justified decisions and save complete batch plans plus an overview. Offer an exact ready set for separate approval: explicit $implement uses existing per-batch runs, natural approval uses ordinary local implementation. Verify actual checkout/project bindings before work. Preserve file-only detailed plans, unrelated labels, host limits and read-only PR-caller assessment."
-policy:
-  allow_implicit_invocation: false

@@ -1,5 +1,6 @@
 # Project issue review: <repository-relative selected root>
 
+- Planning requested: --action create-plan
 - Artifact kind: project-review-overview
 - Repository: <verified host and repository identity>
 - Selected project: <recognized root or . for whole repository>
@@ -11,9 +12,9 @@
 
 ## Review dispositions
 
-| Issue identity | Primary owner | Why in scope | Disposition and evidence limits |
+| Issue identity | Primary owner | Why in scope | Type / outcome, relationships and evidence limits |
 | --- | --- | --- | --- |
-| <full identity> | <project root> | <owned or proven affected> | <individual outcome> |
+| <full identity> | <project root> | <owned or proven affected> | <types; review outcome; related groups; evidence limits> |
 
 <State exclusions and uncertainty separately. A partial or bounded review is not
 the entire backlog. Keep confidential evidence out of this public-safe snapshot.>

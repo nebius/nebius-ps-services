@@ -46,6 +46,32 @@
         "An isolated counterfactual preserves test assertions and does not mutate product-owned state.",
         "The failed trial remains failed; runtime or delivery is not claimed from offline controls."
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "Use $sdlc-workflow-test to plan a disposable three-tier qualification with supplied phases, interruption/resume and an accepted change to remaining work. Plan only; do not execute or change files.",
+      "expected_output": "A plan uses the existing native workflow and frozen generic source fixture, distinguishes planning origin, retains slice and revision evidence, and preserves full application and cleanup gates.",
+      "files": [],
+      "assertions": [
+        "The plan requires all frozen fixture obligations from their original source; contextual inclusion or deferred required behavior cannot qualify.",
+        "Supplied phases remain exact; a derived plan is authored by the native coordinator and reviewed for outcome, dependency and risk choices.",
+        "A fresh native session successfully invokes public continuation, with same-run hook correlation; a new PID alone is not proof.",
+        "Completed slice definitions and receipts survive accepted future-plan changes, and missing or stale evidence cannot become PASS.",
+        "Both origins need separate disposable trials; full application, companion, aggregate and cleanup checks remain required."
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Use $sdlc-workflow-test to plan a disposable three-tier qualification with derived phases, interruption/resume and an accepted change to remaining work. Plan only; do not execute or change files.",
+      "expected_output": "A plan uses the existing native workflow and frozen generic source fixture, distinguishes planning origin, retains slice and revision evidence, and preserves full application and cleanup gates.",
+      "files": [],
+      "assertions": [
+        "The plan requires all frozen fixture obligations from their original source; contextual inclusion or deferred required behavior cannot qualify.",
+        "Supplied phases remain exact; a derived plan is authored by the native coordinator and reviewed for outcome, dependency and risk choices.",
+        "A fresh native session successfully invokes public continuation, with same-run hook correlation; a new PID alone is not proof.",
+        "Completed slice definitions and receipts survive accepted future-plan changes, and missing or stale evidence cannot become PASS.",
+        "Both origins need separate disposable trials; full application, companion, aggregate and cleanup checks remain required."
+      ]
     }
   ]
 }

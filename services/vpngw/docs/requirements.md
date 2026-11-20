@@ -231,11 +231,11 @@ Make `nebius-vpngw status` the only public status interface and render one conci
   while preserving structured values and readable no-color output. Reuse observed
   operator SSH and authenticated inter-gateway mTLS evidence without active probes.
 
-- Explicit VM HA renders exactly one table titled `VM-HA Status — <OVERALL>` with the columns `Gateway`, `Role`, `mTLS`, and `Ready`, plus exactly one row for each configured member; non-HA status performs no HA observation and renders no HA section.
+- Explicit VM HA renders exactly one table titled `VM-HA Status — <OVERALL>` with the columns `Gateway`, `Role`, `mTLS credentials`, and `Ready`, plus exactly one row for each configured member; non-HA status performs no HA observation and renders no HA section.
 - `Role` reports only the current operational relationship to authoritative cloud ownership: the exact owner is `active`, the other member is `standby`, and every member is `unknown` when no owner is proven. Configured active/passive preference is not rendered in this column and never overrides current ownership.
 - Cloud and lifecycle evidence select the authoritative owner. Member records are validated as supporting evidence and cannot report healthy redundancy when they disagree with cloud ownership, aliases, identities, generations, required digests, locks, or forwarding authority. Every exact route target must expose the same non-empty managed-prefix set exactly once through the shared allocation; missing, duplicate, partial, or foreign-next-hop coverage blocks exact authority.
 - Overall state uses conservative precedence: proven unsafe contradiction is `BLOCKED`; missing required evidence is `UNKNOWN`; an exact expected lifecycle, transfer, repair, rearm, or standby-policy operation is `TRANSITIONING`; an exact committed operator maintenance inhibition is `MAINTENANCE`; a safely serving owner without ready redundancy is `DEGRADED`; and only an exact ready owner/standby pair with enabled standby restoration is `HEALTHY`. A pending controller effect qualifies as expected only when its generated identity names a configured member and its encoded action kind is valid for the reported controller state.
-- The aggregate title is green only for `HEALTHY` and yellow for `MAINTENANCE` or `TRANSITIONING`; `DEGRADED`, `BLOCKED`, and `UNKNOWN` are red. Per-member `mTLS` is green only for an uninhibited `healthy` state, and `Ready` is green only for `yes`; every other semantic value is red. Gateway and Role remain neutral, and literal values remain visible without color.
+- The aggregate title is green only for `HEALTHY` and yellow for `MAINTENANCE` or `TRANSITIONING`; `DEGRADED`, `BLOCKED`, and `UNKNOWN` are red. Per-member `mTLS credentials` is green only for an uninhibited `healthy` state, and `Ready` is green only for `yes`; every other semantic value is red. Gateway and Role remain neutral, and literal values remain visible without color.
 - `Ready=yes` requires exact authority, role-specific safe readiness, and an aggregate state of `HEALTHY` or `DEGRADED`. `BLOCKED` and `TRANSITIONING` render `no`; unavailable evidence renders `unknown`. Missing member IP, trust, SSH, JSON, or valid status produces one sanitized unavailable row rather than omitting the member.
 - Every status SSH probe uses the configured management username and private key. Explicit VM HA additionally resolves one immutable exact-pin policy per member, so a missing pin affects only that member's sanitized semantic row and never falls back to trust-on-first-use or disabled host verification.
 - Cloud route authority distinguishes an inexact target set, malformed or duplicate managed records, missing or inconsistent prefix coverage, and a managed next hop that does not equal the shared allocation. Authority is scoped by the complete product-managed label set for the current cluster: a well-formed foreign-cluster record is ignored, while partial, malformed, current-cluster, target, kind, or allocation-label drift fails closed and prevents a healthy aggregate projection.
@@ -439,11 +439,35 @@ Keep the primary `VPN Gateway Status` table compact and temporally truthful, dis
 - Status buffers primary observations until one final reconciliation pass. When an exact standby tunnel or service probe failed and later VM-HA evidence indicates expected restoration or current readiness, status re-runs only that exact failed command once within its existing timeout. A tunnel retry replaces the stale aggregate error only when the identical command succeeds and returns recognizable established-SA evidence; empty, no-SA, connecting-only, or malformed output leaves the original failure visible. A service retry requires the expected active result. Only that semantically valid same-probe success may emit `Recovered during this status check`, while the independent VM-HA aggregate retains its own conservative state.
 - Runtime role differences remain visible through the existing `Traffic Override` panel even though the per-row Traffic State value is removed.
 
+- Label managed mTLS credentials separately from the TCP 9443 peer channel. Use
+  the native current-boot freshness verdict, computed in the gateway monotonic clock
+  domain, and preserve that observed assessment through delayed rendering. Show only
+  concise channel status and any failure reason under `Peer channel · TCP 9443`,
+  without direction, timestamp or age in table cells. Preserve direction in support
+  bundle diagnostics. Keep green verified communication, red classified failures,
+  and yellow unverified evidence. Never compare wall time with native monotonic timestamps.
+  No extra refresh calls, generic closed-port inference, or changes to HA authority
+  and machine-readable assessment codes. Verify the repaired status path live.
+
 #### Negative Criteria
 
 - No additional negative criterion was recorded before migration.
 
 #### Validation Method
+
+- The subsequent status-cell simplification on 2026-11-19 passed 171 focused
+  release, archive and native-freshness tests plus Ruff. Colored/plain rendering
+  passed at widths 60, 80, 120 and 160. The requested live status command exited
+  successfully: both peer cells were green Open / mTLS verified without direction,
+  time or age; the header was unchanged, HA HEALTHY and all six packet checks PASS.
+  Support-bundle direction remained covered by existing archive regressions.
+
+- The 2026-11-19 peer-channel correction passed 794 focused tests, including native
+  freshness projection into the classifier, status collection/rendering and support
+  archives; Ruff and all-source mypy passed. The requested read-only live status
+  command exited successfully in plain and terminal modes. Both members displayed
+  green Open / mTLS verified with direction and no timestamp/age; HA was HEALTHY
+  and all six packet-check rows passed. No gateway mutation or upgrade was needed.
 
 - Run focused table-construction, long-name rendering, preferred/fallback row, Traffic Override, and no-color tests, followed by Ruff, mypy, full unit and isolated CLI integration suites, Markdown lint, canonical-spec validation, security review, and diff-integrity checks. Live cloud or gateway execution is not required.
 - Offline implementation evidence on 2026-08-20: the pure table constructor
@@ -2793,8 +2817,14 @@ unrelated cumulative counters. Existing ordinary and HA configurations stay vali
 - Normal status adds a compact packet-health table after the existing tunnel table,
   using a fresh three-second observation. Show effective inbound window and concise
   late/duplicate/integrity drop reasons, idle, mismatch or incomplete evidence.
-  `--packet-details` reveals scoped supporting counters. Existing status exit behavior,
-  primary columns and HA readiness semantics are unchanged.
+  `--packet-details` replaces the compact packet table and verbose counter dump with
+  gateway-grouped tunnel delta checks and one gateway sequence check per host.
+  Fixed zero-error thresholds produce green PASS at zero and yellow WARN above zero;
+  accepted packets are informational. Missing, reset or partial evidence is never zero
+  or PASS; preserve confirmed increases and distinguish idle and proven cold standby.
+  Interface counters remain labelled context, including shared bindings; never sum
+  overlapping scopes. Narrow terminals split SA and interface checks without omission.
+  Existing status exit behavior, primary columns and HA readiness remain unchanged.
 - Collection uses trusted SSH and a CLI-bundled standard-library probe on older and
   newer agents. Collect only key-free XFRM data; do not read configuration or credentials,
   import the installed agent, change state, retry with key-bearing output, or expose
@@ -2840,6 +2870,11 @@ correction does not add a new live deployment or HA health qualification.
 Follow-up alignment covers unavailable ordinary replay-window wheels with the same
 safe diagnostic before provisioning, including dry-run and recreation. Local regression
 and packaging checks pass; no additional live deployment is claimed.
+
+The packet-report presentation amendment is verified locally on 2026-11-19:
+all 8,305 unit tests pass, including scoped counter classification, reset/rekey and
+partial evidence, shared interfaces, gateway sequence checks, responsive tables and
+no-color output. Ruff and mypy pass. No new live traffic qualification is claimed.
 
 <!-- /REQUIREMENT: REQ-019 -->
 <!-- REQUIREMENT: REQ-021 status=active priority=P1 type=bugfix -->
@@ -4355,6 +4390,19 @@ preserve explicit operator trust sources and exact publication recovery.
   provider effects remain explicit genuine blockers, never fake success.
   Unavailable signed package repositories report their DNS, outbound-access or
   repository prerequisites rather than a misleading checkpoint failure.
+- APT metadata refresh uses a shared 180-second maximum, shortened by the
+  remaining bounded inspection/staging request or phase deadline with ten seconds
+  reserved for cleanup. Do not reset deadlines after input transfer or change
+  durable installation-worker lifetimes. Keep other command limits unchanged.
+- Report metadata timeout, enclosing-budget exhaustion and recognizable DNS,
+  transport, TLS, signing/key, metadata-time and repository-configuration failures
+  through allowlisted diagnostics. Mixed, truncated and unrecognized evidence
+  remains unknown. Bound captured stderr to 64 KiB in memory and never expose
+  raw output or repository identities. Preserve CLI/JSON shape and generic fallbacks.
+- Bounded repair-control cancellation must stop owned observation subprocesses,
+  reap their direct children and remove temporary APT metadata. Preserve staging
+  before disruption, verified archive reuse, signatures and ownership. Do not
+  add retries, mutate external network/trust settings or trigger VM replacement.
 - Archive old bytes securely without requiring them to parse. Retain a minimal
   durable repair record outside the reset footprint. Resume interrupted repair;
   changed intent requires a freshly confirmed successor after effect settlement.
@@ -4764,6 +4812,12 @@ maintenance policy, strict host identity and independently verified ownership.
   journal stop/disable/remove/reload effects and verify absence. Unknown ownership
   blocks required retirement, not an independently safe additive upgrade. Never
   remove shared third-party packages merely because a dependency is retired.
+- Fresh ordinary provisioning must distinguish installed release evidence from
+  its own transaction journal during quiescence. Unknown or partial pre-existing
+  installations remain blocked without exact operation-owned resume authority.
+- A subsequent ordinary apply must admit its exact product-owned underlay service
+  dependency, retain its hash in environment identity, and reject altered or
+  unrelated management dependency drop-ins.
 - Cover interrupted initial activation as well as retained upgrades through the
   existing settlement and successor owners. Keep unknown writers pending, preserve
   predecessor pins/history and require fresh review for expanded effects.

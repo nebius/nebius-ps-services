@@ -134,7 +134,7 @@ describes the exact lifecycle.
 ## Issue resolution across delivery
 
 The [shared handoff contract](../worktree/references/issue-resolution.md) assigns
-review and saved plans to review-github-issues, local implementation and individual
+review and saved plans to github-issues, local implementation and individual
 acceptance evidence to Implement, concise comments and verified closing references
 to create-pr, and merge/issue-state verification to merge-pr. GitHub performs
 native issue closure on default-branch merge when enabled. A partial fix or mere

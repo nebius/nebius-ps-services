@@ -3,6 +3,10 @@
 Use this process only after explicit `--create-live-test`, `--create-live-test --keep`, or
 `--resume`:
 
+Use the [phased qualification contract](phased-live-qualification.md) for every
+generation. Preserve supplied milestones or derive them from the frozen source;
+observe slice completion, native continuation and accepted future-plan changes.
+
 1. Read `references/three-tier-live.md`. Confirm Docker, Compose, Git, Node.js
    20+, npm, installed Chrome and source-installed skill parity. Preparation
    freezes the independent Playwright Test bundle; `run-browser-stage --stage
@@ -195,7 +199,7 @@ Use this process only after explicit `--create-live-test`, `--create-live-test -
    failed trial. Browser cleanup validates the exact owned process identity;
    ambiguity is `CLEANUP_FAILED`.
 8. Persist semantic results incrementally using
-   `agentic-sdlc/three-tier-results-v4`. Failed runs retain validated partial
+   `agentic-sdlc/three-tier-results-v5`. Failed runs retain validated partial
    layer/test status; the lifecycle helper derives PASS from
    required phases, tests, Git identity, GUI actions, API/database correlation,
    restart persistence, and distinct artifacts. Record canonical per-phase JSON

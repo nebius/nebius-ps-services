@@ -284,9 +284,11 @@ def inspect(expected: dict[str, Any], *, inhibited: bool = False) -> dict[str, A
     }
 
 
-def stage_package(plan: dict[str, Any], payload: dict[str, Any]) -> Path:
+def stage_package(
+    plan: dict[str, Any], payload: dict[str, Any], *, deadline: float | None = None
+) -> Path:
     manifest = plan["desired"]
-    remote.migration.stage_payload(manifest, payload)
+    remote.migration.stage_payload(manifest, payload, deadline=deadline)
     directory = STAGING / ops.digest(plan)
     staged = remote.migration.ROOT / remote.migration.digest(manifest["runtime_plan"]) / "payload"
     items = {manifest["wheel_name"]: manifest["wheel_sha256"], **manifest["dependency_wheels"]}
@@ -1047,33 +1049,39 @@ def settle_replan(request: dict) -> dict:
         os.close(descriptor)
 
 
-def corrective_plan(request: dict) -> dict:
+def corrective_plan(request: dict, *, deadline: float | None = None) -> dict:
     """Propose a closure without changing the predecessor or its pending phase."""
-    current = corrective_inspect(request)
-    if current["reservation"] is not None or current["children"] != request["children"]:
-        raise RuntimeError("corrective package proposal predecessor changed")
-    children = current["children"]
-    if not (
-        children["runtime"]["phase"] in {"installed", "activating", "complete"}
-        and children["ordinary"]["state"] == "complete"
-        and children["runtime"]["operation"] == children["ordinary"]["id"]
-        and (children["conversion"] is None or children["conversion"]["phase"] == "completed")
-    ):
-        raise RuntimeError("corrective package work is incomplete")
-    runtime = remote.migration.state()
-    remote.migration.verify_packages(runtime["plan"])
-    manifest = {**request["manifest"], "runtime_plan": remote.migration.plan_current()}
-    remote.migration.corrective_policy(runtime, manifest["runtime_plan"])
-    if manifest.get("ha_parent") != request["operation"]:
-        raise RuntimeError("corrective package proposal parent differs")
-    manifest.pop("asset_retirement", None)
-    manifest["asset_retirement"] = remote.migration.asset_retirement(
-        manifest, runtime, superseded_sha256=children["runtime"]["digest"]
-    )
-    inspection = remote.inspect_for_plan(manifest, runtime_admission=False)
-    if corrective_inspect(request) != current:
-        raise RuntimeError("corrective package proposal changed during observation")
-    return inspection
+    with remote.migration.observation_budget(remote.DEADLINE if deadline is None else deadline):
+        current = corrective_inspect(request)
+        if current["reservation"] is not None or current["children"] != request["children"]:
+            raise RuntimeError("corrective package proposal predecessor changed")
+        children = current["children"]
+        if not (
+            children["runtime"]["phase"] in {"installed", "activating", "complete"}
+            and children["ordinary"]["state"] == "complete"
+            and children["runtime"]["operation"] == children["ordinary"]["id"]
+            and (children["conversion"] is None or children["conversion"]["phase"] == "completed")
+        ):
+            raise RuntimeError("corrective package work is incomplete")
+        runtime = remote.migration.state()
+        remote.migration.verify_packages(runtime["plan"])
+        manifest = {
+            **request["manifest"],
+            "runtime_plan": remote.migration.plan_current(
+                deadline=remote.DEADLINE if deadline is None else deadline
+            ),
+        }
+        remote.migration.corrective_policy(runtime, manifest["runtime_plan"])
+        if manifest.get("ha_parent") != request["operation"]:
+            raise RuntimeError("corrective package proposal parent differs")
+        manifest.pop("asset_retirement", None)
+        manifest["asset_retirement"] = remote.migration.asset_retirement(
+            manifest, runtime, superseded_sha256=children["runtime"]["digest"]
+        )
+        inspection = remote.inspect_for_plan(manifest, runtime_admission=False)
+        if corrective_inspect(request) != current:
+            raise RuntimeError("corrective package proposal changed during observation")
+        return inspection
 
 
 def corrective_fence(expected: dict, *, installed_generation: str | None = None) -> None:
@@ -1336,7 +1344,14 @@ def completed_receipt(request: dict, action: dict) -> dict | None:
     return {"complete": True}
 
 
-def main(*, durable: bool = False) -> None:
+def main(*, durable: bool = False, observation_deadline: float | None = None) -> None:
+    request_deadline = float("inf") if durable else time.monotonic() + 600
+    package_deadline = (
+        min(request_deadline, observation_deadline)
+        if observation_deadline is not None
+        else request_deadline
+    )
+
     def expired(_signum, _frame):
         raise TimeoutError("HA handoff deadline")
 
@@ -1346,7 +1361,7 @@ def main(*, durable: bool = False) -> None:
         signal.alarm(630)
     request = receive()
     remote.DURABLE_PACKAGES = durable
-    remote.DEADLINE = float("inf") if durable else time.monotonic() + 600
+    remote.DEADLINE = request_deadline
     if request["action"].startswith("worker-"):
         from nebius_vpngw import package_worker
 
@@ -1362,7 +1377,7 @@ def main(*, durable: bool = False) -> None:
         reply(settle_replan(request))
         return
     if request["action"] == "corrective-plan":
-        reply(corrective_plan(request))
+        reply(corrective_plan(request, deadline=package_deadline))
         return
     if request["action"] == "corrective-reserve":
         reply(reserve_corrective(request))
@@ -1425,7 +1440,9 @@ def main(*, durable: bool = False) -> None:
                 not resuming and package_observation(package["desired"]) != package["predecessor"]
             ):
                 raise RuntimeError("HA handoff package approval changed before reservation")
-            directory = stage_package(package, request["staged_package"])
+            directory = stage_package(
+                package, request["staged_package"], deadline=min(package_deadline, manager.deadline)
+            )
             remote.migration.begin(
                 package["desired"]["runtime_plan"], operation_id, package["desired"]
             )

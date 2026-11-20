@@ -286,7 +286,10 @@ class SdlcContractPreparationTests(unittest.TestCase):
         from workflow_state import digest
         body = b'[{"id":"AC-001"}]\n'
         manifest = {
-            "schema": "maintain-project-specs/source-bundle-v1", "conflicts": [],
+            "schema": "maintain-project-specs/source-bundle-v2", "conflicts": [],
+            "planning": {"mode": "derived", "sources": ["docs/contracts/acceptance.json"],
+                         "rationale": "One observable outcome needs one milestone",
+                         "phases": [{"id": "P1", "depends_on": [], "exit_criteria": ["AC-001"]}]},
             "sources": [{"path": "docs/contracts/acceptance.json", "sha256": hashlib.sha256(body).hexdigest(),
                          "authority": "normative", "role": "acceptance", "ids": ["AC-001"],
                          "references": [], "id_field": "id"}],

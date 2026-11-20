@@ -698,7 +698,8 @@ def reset(operation: str, *, run=command) -> dict:
             held.enter_context(
                 lock(
                     PRODUCT_STATE / relative,
-                    private_parent=relative == Path("vm-ha/mtls/writer.lock"),
+                    private_parent=relative
+                    in {Path("vm-ha/mtls/writer.lock"), Path("ordinary/operation.lock")},
                 )
             )
         retain_underlay_ownership(operation)

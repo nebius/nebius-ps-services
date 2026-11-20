@@ -54,11 +54,15 @@ def _acyclic(rows):
         reject("program dependency cycle")
 
 
-def validate_definition(value, coverage):
+def validate_definition(value, coverage, planning):
     if (not isinstance(value, dict) or set(value) != {"schema", "phases", "slices", "uat_criteria"}
             or value["schema"] != SCHEMA or not isinstance(value["phases"], list)
             or not value["phases"] or not isinstance(value["slices"], list) or not value["slices"]):
         reject("program must contain explicit phases and delivery slices")
+    if planning is None:
+        reject("program admission requires a reviewed supplied or derived phase plan")
+    if value["phases"] != planning["phases"]:
+        reject("program phases differ from the reviewed source phase plan")
     obligations = {r["source_id"]: r for r in coverage if r["disposition"] == "required"}
     if (not isinstance(value["uat_criteria"], list) or any(c not in obligations for c in value["uat_criteria"])
             or len(value["uat_criteria"]) != len(set(value["uat_criteria"]))):
@@ -173,6 +177,8 @@ def admit_inputs(run_dir):
 
 def admit(run_dir: Path, candidate: dict):
     run, _latest, snapshot = accepted(run_dir)
+    if snapshot["completion"]["boundary"] == "local-promoted" and not run.get("automatic_outer"):
+        reject("local document programs require an automatic managed outer")
     if run.get("status") in {"done", "cancelled"} or run.get("fence") not in {None, "steering"}:
         reject("terminal or cancelled programs cannot be admitted")
     if run.get("fence"):
@@ -184,7 +190,7 @@ def admit(run_dir: Path, candidate: dict):
     from workflow_impact import spec_checkout
     project = spec_checkout(run_dir, Path(run["project_root"]))
     bundle = validate_bundle(project, inputs["manifest"], inputs["manifest_sha256"])
-    validate_definition(candidate, bundle["coverage"])
+    validate_definition(candidate, bundle["coverage"], bundle["planning"])
     _preserve_delivered_slices(run_dir, candidate)
     if digest(candidate) != inputs["program_sha256"]:
         reject("program differs from the accepted objective; revise and replan")
@@ -198,12 +204,12 @@ def admit(run_dir: Path, candidate: dict):
 
 
 def _preserve_delivered_slices(run_dir, candidate):
-    """Historical merges cannot be relabeled as delivery of a changed contract."""
-    from workflow_delivery import verify_completion
+    """Completed slices cannot be relabeled as delivery of a changed contract."""
+    from workflow_delivery import verify_completion, completion_admission
     from workflow_delivery_admission import verify_receipt
     for path in (run_dir / "delivery").glob("*/completion.json"):
         completed = verify_completion(run_dir, read(path))
-        receipt = verify_receipt(run_dir, completed["review"]["admission"], current=False)
+        receipt = verify_receipt(run_dir, completion_admission(completed), current=False)
         prior_digest = receipt["inputs"]["program_sha256"]
         prior = read(run_dir / "program" / (prior_digest + ".json"))
         if digest(prior) != prior_digest:
@@ -227,15 +233,15 @@ def _verify_inputs(run_dir: Path, project: Path, inputs, *, specs=True):
     value = read(run_dir / "program" / (inputs["program_sha256"] + ".json"))
     if digest(value) != inputs["program_sha256"]:
         reject("immutable program definition changed")
-    validate_definition(value, bundle["coverage"])
+    validate_definition(value, bundle["coverage"], bundle["planning"])
     _preserve_delivered_slices(run_dir, value)
     return {"definition": value, "bundle": bundle, "inputs": inputs}
 
 
 def _delivery(run_dir, slice_id):
     value = read(run_dir / "delivery" / slice_id / "completion.json")
-    if value.get("schema") != "workflow/delivery-completion-v1" or value.get("execution_id") != slice_id or value.get("status") != "result-verified":
-        raise WorkflowError("DELIVERY_PENDING", "prior slice is not independently merge-verified")
+    if value.get("execution_id") != slice_id:
+        raise WorkflowError("DELIVERY_PENDING", "prior slice completion belongs to another execution")
     from workflow_delivery import verify_completion
     verify_completion(run_dir, value)
     return digest(value)
@@ -284,15 +290,35 @@ def _slice_basis(run_dir: Path, execution_id: str, inputs, tasks=None):
     return {"inputs": inputs["inputs"], "slice": selected, "predecessor_evidence": proofs}
 
 
+def completion_project(run_dir):
+    """Resolve current program bytes, including a verified cleaned aggregate."""
+    from workflow_objectives import _git
+    run = accepted(run_dir)[0]
+    if run.get("automatic_outer"):
+        from workflow_projects import get
+        row = get(run_dir)
+        if row is not None and row["state"] == "cleaned":
+            from workflow_automatic import verify_delivery
+            proof = verify_delivery(run_dir)
+            project = Path(proof["project_root"])
+            repo = Path(row["source_root"])
+            suffix = "^{tree}" if row["scope"] == "." else ":" + row["scope"]
+            if (_git(repo, "rev-parse", "HEAD" + suffix) != _git(repo, "rev-parse", proof["delivered_head"] + suffix)
+                    or _git(repo, "status", "--porcelain", "--untracked-files=all", "--", row["scope"])):
+                reject("delivered program source differs from the verified aggregate snapshot")
+            return project
+    from workflow_impact import spec_checkout
+    return spec_checkout(run_dir, Path(run["project_root"]))
+
+
 def require_complete(run_dir):
     run, _latest, snapshot = accepted(run_dir)
     if snapshot["inputs"] is None:
         return
-    from workflow_impact import spec_checkout
-    program = verify_inputs(run_dir, spec_checkout(run_dir, Path(run["project_root"])))
+    program = verify_inputs(run_dir, completion_project(run_dir))
     for selected in program["definition"]["slices"]:
         _delivery(run_dir, selected["id"])
-    from workflow_delivery import verify_phase_exit
+    from workflow_delivery import verify_phase_exit, completion_admission
     for phase in program["definition"]["phases"]:
         record = read(run_dir / "program" / "phase-exits" / (phase["id"] + ".json"))
         verify_phase_exit(run_dir, record, phase)
@@ -303,7 +329,7 @@ def require_complete(run_dir):
     covered = set()
     for selected in program["definition"]["slices"]:
         completion = read(run_dir / "delivery" / selected["id"] / "completion.json")
-        receipt = verify_receipt(run_dir, completion["review"]["admission"], current=False)
+        receipt = verify_receipt(run_dir, completion_admission(completion), current=False)
         covered.update(c for c in receipt["criteria"] if receipt["obligation_basis"].get(c) == current_basis.get(c))
     required = {c for s in program["definition"]["slices"] for c in s["criteria"] + s["regression_criteria"]}
     required -= set(program["definition"]["uat_criteria"])

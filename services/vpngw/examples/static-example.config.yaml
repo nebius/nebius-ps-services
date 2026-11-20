@@ -49,8 +49,8 @@ defaults:
     mode: "static"
 
 connections:
-  # On one ordinary VM, identical static destinations use the last enabled tunnel
-  # in configuration order; active/passive labels do not assign route metrics.
+  # Redundant paths in one connection must cover every required destination.
+  # The selector starts on the active path; the passive path stays responder-ready.
   - name: "onprem-static"
     vendor: "generic"
     routing_mode: "static"

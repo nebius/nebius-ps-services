@@ -15,6 +15,9 @@ Accepted registration and initialized phase state are separate. After fresh
 intake, the bound coordinator invokes the private `initialize_phase.py` helper
 to create its first `sdlc-start` checkpoint and current state before observation
 or routing. The helper validates native ownership and any managed outer lease.
+Intake-owned input declarations are preserved after their captured source commit,
+current manifest and immutable archive are verified. Orphaned, altered or unsafe
+declarations block initialization without changing retained evidence.
 Known hook audit files remain intact and do not count as completed phases.
 Existing or partial phase history follows reconciliation; an active pointer
 never justifies resetting evidence or counters.

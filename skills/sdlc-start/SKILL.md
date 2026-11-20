@@ -173,7 +173,8 @@ in the original project so automatic cleanup can remove owned checkouts.
    impact do not invent documents. Optional live environments are useful but
    absence alone does not block requirements.
 5. After requirements publication, use private `refinement-ready`. After design
-   and before planning, use private `settle-objective` with a complete owner
+   and before planning, first freeze and admit the reviewed program for accepted
+   document inputs, then use private `settle-objective` with a complete owner
    impact claim. Requirement/design mappings, execution-only changes and justified
    no-effect outcomes remain explicit. The claim grants no execution authority.
 6. Resume phase routing below using the exact bound run. A feature queue is only
@@ -202,7 +203,8 @@ in the original project so automatic cleanup can remove owned checkouts.
   admission when files are new: only the selected pair and exact validated snapshot paths may be dirty, guarded
   repo-root staging makes them tracked, and HEAD remains unchanged. Do not
   advance untracked specs or move the preparation phase's commit earlier.
-- After design is ready and before planning, write the complete private impact claim
+- After design is ready and before planning, first freeze and admit the reviewed
+  program for accepted document inputs. Write the complete private impact claim
   and invoke private `workflow_intake.py --owner agentic-sdlc settle-objective`. Require the shared
   owner to bind the latest accepted identity and every extracted statement
   occurrence to the exact current canonical specs and publish the immutable impact receipt.
@@ -215,8 +217,12 @@ in the original project so automatic cleanup can remove owned checkouts.
   Do not create, edit, retire, or reload project instructions automatically.
   A user-invoked project-instruction workflow remains separately responsible
   for its own mutation safety and cannot become an SDLC prerequisite.
-- Build or refresh the private program from source obligations and `docs/design.md`;
-  admit its frozen digest before planning. Elaborate upcoming slices only.
+- For accepted document inputs, build or refresh the private program from source
+  obligations and `docs/design.md`; admit its frozen digest before objective
+  settlement and planning. Elaborate upcoming slices only.
+  Follow `../worktree/references/phase-planning.md`: preserve supplied phases;
+  derive missing phases from outcomes and prerequisites. Freeze the reviewed
+  plan in the source manifest and revise accepted identity when it changes.
 - Check `STEERING.md` and `steering/auto-steering.json` before every
   iteration.
 - If there are new or unresolved steering entries, stale steering fingerprints,
@@ -297,7 +303,14 @@ in the original project so automatic cleanup can remove owned checkouts.
   terminal release. Preserve completed execution;
   require fresh documentation, alignment, promotion and implementation admission
   before handoff; rerun requested UAT only when its scope is ready.
-- For an automatic outer, complete inner final gates and use the shared
+- For accepted `local-promoted` document programs, finish each slice through
+  implementation admission and private `complete-local`, then record its phase
+  exit when all phase members finish. Select the next admitted slice while
+  retaining the automatic outer lease. Never route this boundary into PR work.
+  Preserve completed slice receipts through continuation and accepted changes;
+  replan future work or add a corrective slice without reopening completed work.
+- For an automatic outer, complete all scheduled slices and phase exits, then
+  finish whole-scope final gates and use the shared
   `aggregate-prepare`, `aggregate-validate`, `aggregate-record-gates`,
   `aggregate-finish` lifecycle before
   completion. The original aggregate is the delivery/publication target. Follow

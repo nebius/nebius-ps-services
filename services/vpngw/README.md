@@ -223,6 +223,15 @@ identities and unfinished writers still require reconciliation. Handoff failures
 retain their specific reason and repair prerequisites through nested recovery
 errors, including the affected member and safe package-preparation detail.
 
+Fresh ordinary deployment compares installed release evidence independently of
+its own pending transaction journal. Creating that journal cannot trigger a
+false guest identity change; unknown or partial installations still require
+exact owned recovery before installation can proceed.
+
+Subsequent ordinary applies recognize the exact product-owned underlay service
+dependency. Its contents remain part of environment identity; altered or unrelated
+management dependency drop-ins still block changes.
+
 First conversion initializes the canonical HA lock directories after excluding
 existing writers. Package verification can then use the same locks as HA repair,
 without creating controller state or activating certificates ahead of activation.
@@ -287,9 +296,10 @@ guard. This retains the existing firewall policy and does not transfer or relabe
 old activation authority.
 Repair allows normal service shutdown to finish, then independently checks that
 all managed writers have stopped before reconstructing their state.
-Repair preserves writer-lock identities and restores private managed certificate
-storage, including when a single gateway is later converted to HA. Unsafe or
-foreign-owned directories remain blockers with actionable recovery guidance.
+Repair preserves writer-lock identities and restores private ordinary-operation
+and managed certificate storage, including when a single gateway is later
+converted to HA. Unsafe or foreign-owned directories remain blockers with
+actionable recovery guidance.
 Ubuntu, VM and disk identities, IP allocations, SSH access and external peer
 credentials are retained. Repair has no overall outage limit. VPN traffic can
 remain interrupted for the entire rebuild; the two-minute target applies to
@@ -377,9 +387,28 @@ The admission changes apply across the routing and deployment combinations:
 | Settle incomplete repair during explicit destroy | Yes | Yes | Yes | Yes |
 | Preserve a specific HA preparation cause and recovery action | N/A | N/A | Yes | Yes |
 
-Signed Ubuntu package repositories must remain reachable. A repository refresh
-failure reports DNS, outbound access and repository configuration as prerequisites;
-it does not imply that a checkpoint or digest is invalid.
+Signed Ubuntu package repositories must remain reachable from the retained Ubuntu
+installation. Each fresh APT metadata refresh has a 180-second maximum, shared by
+ordinary apply, HA package preparation and repair. Inspection and staging can each
+refresh metadata. A shorter enclosing request or phase deadline takes precedence,
+with ten seconds reserved for cleanup; this is not a whole-repair outage limit.
+Ubuntu and Python package preparation share the enclosing budget; the 180-second
+maximum applies only to each APT metadata refresh.
+
+Repair reports refresh timeouts separately from exhausted request budgets. Clear
+APT diagnostics identify DNS, connectivity, TLS, signing-key/signature, metadata
+time-validity or repository-configuration failures. Ambiguous or truncated output
+keeps a generic repository error. Raw repository diagnostics and URLs are never
+included in these messages. Restore the reported prerequisite and resume the same
+repair command; repair does not automatically alter DNS, routes, repositories or
+trust settings. A repository failure does not imply an invalid checkpoint/digest.
+
+For running gateways, repair stages and verifies packages before deliberately
+stopping them. Previously stopped or quarantined members can require guarded
+startup and network restoration before package preparation. Installation uses
+the verified frozen payload without resolving or downloading replacement packages.
+Increasing the refresh limit accommodates slow repositories; it cannot fix
+inaccessible or untrusted package sources.
 
 `pair apply --repair` applies this workflow to both regional sides with one
 confirmation and the existing regional activation barriers. Repair completion
@@ -847,7 +876,9 @@ only after runtime verification releases package-start inhibition.
 can satisfy coverage, but names and labels alone never grant permission to change
 them. New managed routes require exact creation receipts in a private ownership
 ledger. A Single-VM BGP deployment publishes an exact runtime binding and protected
-credential reference to the existing agent. Its bounded periodic reconciliation
+credential reference to the existing agent. It prepares private workload route
+tables even when no BGP prefixes have been learned yet, so a peer can come online
+after deployment. Its bounded periodic reconciliation
 adds admitted learned prefixes and withdraws owned routes only after three complete,
 consistent absence observations. Unknown observations retain routes and reset the
 absence count. Withdrawn BGP prefixes retain plaintext-drop protection, but optional
@@ -1054,13 +1085,15 @@ the remaining policy plan. It preserves the original operation and checks
 approval again under the deployment lock. A changed owner or conflicting
 recovery record cannot authorize policy effects.
 
-For ordinary static tunnels sharing an identical remote prefix on the same VM,
-the last enabled tunnel in resolved configuration order remains the forwarding
-owner. The `active` and `passive` labels do not introduce static-route metrics or
-ECMP. Verification checks that selected owner and rejects stale remote routes on
-superseded interfaces; legitimate kernel-connected inner subnets remain allowed.
-Distinct overlapping prefixes keep their separate routes. Historical claims are
-retained for safe cleanup and recovery even when a tunnel is not the selected owner.
+For an eligible ordinary static connection with redundant tunnels covering every
+required destination, the shared selector starts on the configured preferred
+(`active`) tunnel. Unselected alternatives remain responder-ready without selected
+workload routes; automatic or explicit tunnel selection can change the forwarding
+path. The `active` and `passive` labels do not introduce route metrics or ECMP.
+Put redundant paths in one connection; overlapping destination ownership across
+connections is rejected. Verification checks the selected path and rejects stale
+remote routes on superseded interfaces while allowing legitimate kernel-connected
+inner subnets. Historical claims remain available for safe cleanup and recovery.
 
 For ordinary static tunnels, preview lists obsolete IPv4 remote routes that apply
 can safely retire. Approval binds the saved configuration, exact route and current
@@ -1524,7 +1557,8 @@ Use the explicit HA candidate for subsequent HA operations. Repeating
 `apply --convert-to-ha` against the unchanged original YAML follows its protected
 `<source>.ha-conversion.json` locator to the same candidate, including a custom
 output path and subsequent legitimate HA edits. Repeating it against HA YAML is
-also idempotent. The locator records provenance; lifecycle and cloud evidence
+also idempotent. The locator is local operational metadata and is ignored by Git.
+It records provenance; lifecycle and cloud evidence
 remain authoritative for resource ownership. A changed original source or
 conflicting deployment scope stops with recovery guidance. `--force` may repair
 permissions on an exact verified candidate; it never overwrites foreign intent.
@@ -2453,7 +2487,7 @@ same-version `apply` and controller-verification guidance; it cannot authorize
 an automatic upgrade.
 
 For an explicit VM-HA configuration, ordinary `status` includes one concise
-`VM-HA Status — <OVERALL>` table with `Gateway`, `Role`, `mTLS`, and `Ready`
+`VM-HA Status — <OVERALL>` table with `Gateway`, `Role`, `mTLS credentials`, and `Ready`
 columns and one row for each configured gateway. The authoritative current
 owner is `active`, the non-owner is `standby`, and both roles are `unknown`
 without proven ownership; configured active/passive preference is intentionally
@@ -2896,12 +2930,41 @@ confirmed increases. Established warm-standby SAs are sampled normally; only
 fresh authoritative cold-standby evidence explains an absent SA. Multiple
 gateways are identified underneath their tunnel names.
 
-`--packet-details` adds sample timing and before/after/deltas for inbound-SA
-window, duplicate and integrity counters, XFRM-interface RX errors/drops, and
-gateway-wide `XfrmInStateSeqError`. These scopes overlap: matching increases
-support correlation, but equality is not required and the counts are not added
-together. Packet health is read-only and does not change HA readiness, trigger
-restarts/failover, or alter status exit codes. Collection uses key-free kernel
+`--packet-details` replaces that compact table with packet receive checks grouped
+by gateway. All counts are deltas during the measured interval, not historical
+error totals. For example:
+
+```text
+Packet receive checks — 3s observation
+Error/drop threshold: 0 per sample; >0 = WARN. Received is traffic, not an error.
+gateway-0 · measured interval: 3.01s
+Tunnel           Window Received Late Duplicate Integrity IF errors IF drops Result
+site-a-tunnel-1   1024   3        0    0         0         0         0        PASS
+site-a-tunnel-2   1024   4        2    0         0         0         0        WARN
+
+Gateway-wide checks
+Gateway    Check            Delta Allowed Result
+gateway-0  Sequence errors   0     0       PASS
+```
+
+Zero new error/drop events produce green `PASS`; any positive delta produces
+yellow `WARN`. A warning identifies an observed anomaly, not a VPN outage.
+Received packets are informational: `3` means three additional accepted packets.
+Complete zero-error observations with no received traffic show `PASS · idle`.
+Missing/reset/rekeyed evidence shows `INCOMPLETE`, never zero or PASS; confirmed
+increases in partial observations remain visible as `>=N` and `WARN · incomplete`.
+Proven cold standby shows `N/A · cold standby` with unavailable measurements.
+
+Below 120 columns, the report splits tunnel/SA counters and interface checks.
+The tunnel result includes all associated checks; the interface result covers
+only interface errors/drops. `Win`, `RX`, `Dup`, and `Intg` abbreviate replay window,
+received, duplicate, and integrity. `IF` counters describe the named interface;
+shared interfaces are explicitly labelled context, not tunnel-attributed drops.
+Gateway-wide sequence errors (`XfrmInStateSeqError`) appear once per gateway.
+Normal status also shows gateway warnings or incomplete sequence evidence once.
+Counters overlap and are not additive. Source reads are sequential; PASS covers
+only this sample, not end-to-end traffic delivery. Packet health is read-only and
+does not change HA readiness, trigger restarts/failover, or alter status exit codes. Collection uses key-free kernel
 output, size-limited SSH stdout, discarded stderr, bounded commands, at most
 four concurrent gateways and a 30-second deadline per packet probe. Older
 agents can be observed before upgrading.
@@ -2912,6 +2975,20 @@ reordering. Drops inside a larger window are not automatically authentication
 failures, and an integrity failure alone does not identify an attacker. See
 the [strongSwan CHILD configuration reference](https://docs.strongswan.org/docs/5.9/swanctl/swanctlConf.html)
 and the [Linux XFRM counter reference](https://docs.kernel.org/networking/xfrm/xfrm_proc.html).
+
+The release/access table distinguishes **mTLS credentials** from **Peer channel ·
+TCP 9443**. Fresh authenticated heartbeat evidence displays green `Open · mTLS
+verified`. Cells contain only status and any failure reason, without direction,
+timestamp or age. Direction remains available in support-bundle diagnostics.
+Refused connections, timeouts, unreachable networks and TLS failures display their
+specific red labels. Missing, stale-at-collection or wrong-boot evidence displays
+yellow `Unverified` with a reason. A listener alone never proves reachability or
+mTLS authentication; a timeout or TLS failure is not labelled a closed port.
+The native agent validates freshness using the gateway's monotonic clock and
+current boot/mode. The CLI preserves that verdict while subsequent checks complete;
+it never compares native monotonic timestamps with wall time. No additional refresh
+call is needed. This is an observation, not a continuous port probe. No-color output
+retains every label and value.
 
 ### Provider-neutral VM-HA peer credential rotation
 
@@ -5126,8 +5203,9 @@ Additional evidence includes:
   diagnostic text still omitted.
 - Authenticated operator SSH collection evidence and directional peer-channel
   observations derived from existing heartbeat snapshots. Heartbeat freshness is
-  evaluated at the gateway's recorded collection time, so archive assembly delays
-  do not discard valid historical evidence.
+  evaluated by native status in the gateway's monotonic clock domain; archive
+  capture timestamps remain provenance, and assembly delays do not discard valid
+  historical evidence.
 
 - Journal severity, PID, boot/invocation identity, UTC/monotonic timestamps,
   recognized exception/errno facts and canonical product traceback frames.

@@ -95,6 +95,12 @@ architecture does not depend on completed task planning.
 
 ## Process
 
+- For a document program, inventory supplied implementation phases, package
+  dependencies and exit/qualification gates under
+  `../worktree/references/phase-planning.md`. Distinguish installer stages and
+  external prerequisites. If implementation phases are absent, report that
+  fact and the outcome/dependency evidence needed by the design adapter.
+
 - Use `assets/templates/context-pack.md.template` when creating a context pack.
 - Identify technologies and vendors used by the feature.
 - Read local code, contracts and tests first. Use connected organizational context

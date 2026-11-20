@@ -48,7 +48,7 @@ class VerifierImportTests(unittest.TestCase):
                 timeout=30, check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), "agentic-sdlc/three-tier-results-v4")
+            self.assertEqual(result.stdout.strip(), "agentic-sdlc/three-tier-results-v5")
 
 
 def git(cwd: Path, *arguments: str) -> str:

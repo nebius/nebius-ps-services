@@ -1200,6 +1200,45 @@ def test_quiescence_drift_prevents_install_and_publication(transaction, monkeypa
     assert ordinary_remote.CONFIG.read_bytes() == previous
 
 
+def test_fresh_install_owns_transaction_state_without_release_identity_drift(
+    transaction, monkeypatch
+):
+    from nebius_vpngw import release_identity, runtime_migration
+
+    tx = transaction
+    tx.state.update(package_version=None, dependencies={})
+    monkeypatch.setattr(
+        release_identity.importlib.metadata,
+        "distributions",
+        lambda: [
+            SimpleNamespace(metadata={"Name": "nebius-vpngw"}, version=tx.state["package_version"])
+        ] if tx.state["package_version"] else [],
+    )
+    monkeypatch.setattr(release_identity.importlib.util, "find_spec", lambda _: None)
+    monkeypatch.setattr(
+        release_identity, "Path",
+        lambda value: runtime_migration.STATE
+        if str(value).endswith("runtime-migration/operation.json")
+        else ordinary_remote.CONFIG.parent / "absent-config",
+    )
+    observations = []
+
+    def inspect(manifest, **kwargs):
+        value = tx.inspect(manifest, **kwargs)
+        value["release_identity"] = release_identity.observe()
+        value["installed_release_identity"] = release_identity.observe_installation()
+        observations.append(value["release_identity"]["state"])
+        return value
+
+    monkeypatch.setattr(ordinary_remote, "inspect", inspect)
+    tx.request["predecessor"] = ordinary_remote.canonical(inspect(tx.request["manifest"]))
+    result = ordinary_remote.execute(tx.request)
+    assert observations[0] == "absent"
+    assert "unknown" in observations  # The command published its own runtime journal.
+    assert result["status"] == "applied", result
+    assert tx.state["package_version"] == tx.request["manifest"]["version"]
+
+
 @pytest.mark.parametrize("fault", ["config", "dependencies", "proof", "service", "permissions"])
 def test_final_race_cannot_produce_success(transaction, monkeypatch, fault):
     tx = transaction

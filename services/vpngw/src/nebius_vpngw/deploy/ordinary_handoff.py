@@ -33,7 +33,16 @@ from .ssh_policy import configure_paramiko_host_verification
 from .vm_ha_package import VMHAAgentPackageError
 
 # Source is embedded so a 0.6.0 ordinary guest can participate before installation.
-_REMOTE = "import _vpngw_handoff_remote as handoff; handoff.main()"
+_REMOTE = """
+import _vpngw_handoff_remote as handoff
+try:
+    handoff.main(observation_deadline=_handoff_observation_deadline)
+except Exception as error:
+    code = handoff.remote.migration.observation_code(error)
+    if code is None:
+        raise
+    handoff.reply({"status": "failed", "stage": "inspect", "error_code": code})
+"""
 DETACH: ContextVar[threading.Event | None] = ContextVar("ha_package_observer_detach", default=None)
 REPAIR: ContextVar[bool] = ContextVar("ha_package_admitted_repair", default=False)
 
@@ -267,7 +276,8 @@ def _start(client: Any, request: dict) -> tuple[Any, Any]:
     stdin, stdout, _stderr = client.exec_command(
         "sudo -n /usr/bin/python3 -B -c "
         + shlex.quote(
-            "import base64,sys; raw=sys.stdin.readline(4194305); "
+            f"import base64,sys,time; _handoff_observation_deadline=time.monotonic()+{timeout!r}; "
+            "raw=sys.stdin.readline(4194305); "
             "assert len(raw)<=4194304 and raw.endswith('\\n'); "
             "exec(compile(base64.b64decode(raw.strip(),validate=True),'<ha-bootstrap>','exec'))"
         ),
@@ -294,6 +304,13 @@ def _receive(stdout: Any) -> dict:
     value = json.loads(raw)
     if not isinstance(value, dict):
         raise ValueError("Ordinary-to-HA admission response invalid")
+    if value.get("status") == "failed":
+        from .recovery import GUEST_FAILURES, GuestFailure
+
+        code = value.get("error_code")
+        if isinstance(code, str) and code in GUEST_FAILURES:
+            raise GuestFailure(code, "inspect", GUEST_FAILURES[code][0])
+        raise ValueError("HA handoff failure predicate is unavailable")
     return value
 
 

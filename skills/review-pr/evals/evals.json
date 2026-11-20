@@ -281,7 +281,7 @@
     },
     {
       "id": "batch-linked-composition",
-      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Requires a composition harness with actual review-pr AND review-github-issues instructions, credential-free mock GitHub and recorded tool effects; otherwise report UNAVAILABLE. Explicit closure scope exists. Selected PR11/12 share issue alpha#7; PR12 also closes beta#7 and merely mentions alpha#9. Default code resolves alpha#7; beta#7 still has an unmet criterion. Both matching labels have documented mappings. Simulate a lost successful comment response then readback.",
+      "prompt": "Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. Requires a composition harness with actual review-pr AND github-issues instructions, credential-free mock GitHub and recorded tool effects; otherwise report UNAVAILABLE. Explicit closure scope exists. Selected PR11/12 share issue alpha#7; PR12 also closes beta#7 and merely mentions alpha#9. Default code resolves alpha#7; beta#7 still has an unmet criterion. Both matching labels have documented mappings. Simulate a lost successful comment response then readback.",
       "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
       "files": [],
       "assertions": [
@@ -314,7 +314,7 @@
     },
     {
       "id": "batch-linked-before-dispatch",
-      "prompt": "Offline composition scenario; use actual review-pr and review-github-issues instructions with mock tools only. Explicit review-and-merge batch selects PR11 and PR12. Both close issue7, and PR12 has material evidence about an unresolved criterion. The first PR is otherwise ready. Record mock discovery and dispatch order; without actual mocked tools report UNAVAILABLE, not execution proof.",
+      "prompt": "Offline composition scenario; use actual review-pr and github-issues instructions with mock tools only. Explicit review-and-merge batch selects PR11 and PR12. Both close issue7, and PR12 has material evidence about an unresolved criterion. The first PR is otherwise ready. Record mock discovery and dispatch order; without actual mocked tools report UNAVAILABLE, not execution proof.",
       "expected_output": "Shared issue scope precedes every per-PR dispatch and dependent effects.",
       "files": [],
       "assertions": [

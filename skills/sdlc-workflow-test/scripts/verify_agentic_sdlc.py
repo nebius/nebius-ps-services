@@ -421,7 +421,7 @@ EVIDENCE_PROFILES = {
 }
 PROFILE_SOURCE_SCHEMAS = {
     "lightweight": "workflow/accepted-objective-v3",
-    "three-tier": "agentic-sdlc/three-tier-results-v4",
+    "three-tier": "agentic-sdlc/three-tier-results-v5",
 }
 SKILL_REQUIRED_PROFILES = {
     skill: [
@@ -3846,7 +3846,7 @@ def report(ctx: Context) -> str:
         f"- Selected nested project: `{ctx.selected_project}`",
         f"- Live evidence manifest: `{ctx.live_evidence_path}`",
         "- Mode: deterministic preflight plus optional, machine-validated private live evidence.",
-        "- Coverage boundary: document packages, phased delivery, large task graphs and protected merge recovery have deterministic regression evidence. Current live profiles do not qualify native multi-slice document delivery or a real remote merge.",
+        "- Coverage boundary: passing deterministic checks establish document/program contracts, task scaling and protected-delivery regressions. Native phased delivery requires a passing three-tier profile for its recorded planning mode; local trials do not qualify a real remote merge.",
         "",
         "## Readiness Matrix",
         "",

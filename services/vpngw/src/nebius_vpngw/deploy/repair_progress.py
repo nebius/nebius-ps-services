@@ -15,15 +15,17 @@ from typing import Any, TextIO
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
+from ..runtime_migration import APT_REFRESH_TIMEOUT
+
 
 class Phase(str, Enum):
     ADMIT = "opening the confirmed repair transaction"
     SETTLE = "settling the previous repair transaction"
     PREPARE = "preparing retained gateways for repair"
     ACCESS = "checking release identity and authenticated SSH access"
-    INSPECT = "inspecting repair package prerequisites"
+    INSPECT = f"inspecting repair package prerequisites (APT refresh max {APT_REFRESH_TIMEOUT}s)"
     RESOLVE = "resolving and downloading repair dependencies"
-    STAGE = "uploading and verifying repair packages"
+    STAGE = f"uploading and verifying repair packages (each APT refresh max {APT_REFRESH_TIMEOUT}s)"
     GUARD = "installing and verifying the repair boot guard"
     STOP = "stopping retained gateways and verifying isolation"
     START = "starting the gateway under its repair boot guard"
