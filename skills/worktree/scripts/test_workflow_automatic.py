@@ -191,6 +191,20 @@ class AutomaticTests(unittest.TestCase):
         continued = objectives.continue_run(self.repo, self.home, "implement", "automatic-test")
         self.assertEqual(continued["run_dir"], str(self.run))
         self.assertEqual(automatic.finish_aggregation(self.run, "automatic-test"), result)
+        from workflow_program import completion_project
+        self.assertEqual(completion_project(self.run), self.repo)
+        self.assertEqual(automatic.prepare_aggregation(self.run, "automatic-test")["status"], "DELIVERED")
+        (self.repo / "README.md").write_text("unverified change\n")
+        with self.assertRaisesRegex(WorkflowError, "verified aggregate snapshot"):
+            completion_project(self.run)
+
+    def test_missing_future_program_slice_blocks_before_aggregate_state_change(self):
+        before = projects.get(self.run)
+        with mock.patch("workflow_program.require_complete", side_effect=WorkflowError("DELIVERY_PENDING", "future slice")):
+            with self.assertRaisesRegex(WorkflowError, "future slice"):
+                automatic.prepare_aggregation(self.run, "automatic-test")
+        self.assertEqual(projects.get(self.run), before)
+        self.assertFalse((self.run / "aggregation/candidate.json").exists())
 
     def test_manual_integration_cannot_use_automatic_ready_lease(self):
         candidate = self.prepare()

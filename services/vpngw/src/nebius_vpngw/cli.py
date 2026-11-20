@@ -165,7 +165,7 @@ from .deploy.vm_manager import PublicAllocationCandidate, VMManager
 from .ingress_policy import IngressCapabilityError, IngressPolicyError
 from .nebius_auth import error_chain_has_cli_authentication_failure
 from .nebius_pagination import collect_nebius_pages, nebius_resource_id
-from .operational_diagnostics import health_text
+from .operational_diagnostics import PeerChannelObservation, health_text, observe_peer_channel
 from .pair_cli import EXAMPLES as PAIR_EXAMPLES
 from .pair_cli import app as pair_app
 from .replay_window import (
@@ -15237,6 +15237,7 @@ class _VMHAMemberEvidence:
     condition: str
     reason: str
     record: t.Mapping[str, t.Any] | None = None
+    peer_channel: PeerChannelObservation | None = None
 
 
 @dataclass(frozen=True)
@@ -16428,6 +16429,7 @@ def _collect_vm_ha_status_snapshot(
                     condition="exact",
                     reason="",
                     record=vm_ha,
+                    peer_channel=observe_peer_channel(vm_ha),
                 )
             )
         except Exception as error:
@@ -16669,7 +16671,7 @@ def _render_vm_ha_status(console: t.Any, view: _VMHAStatusView) -> None:
     )
     title = Text.assemble("VM-HA Status — ", (view.overall, title_style))
     member_table = Table(title=title, show_header=True, header_style="bold cyan")
-    for column in ("Gateway", "Role", "mTLS", "Ready"):
+    for column in ("Gateway", "Role", "mTLS credentials", "Ready"):
         member_table.add_column(column, style="white")
     for member_row in view.member_rows:
         gateway, role, mtls, ready = member_row
@@ -16917,8 +16919,7 @@ def _render_packet_health(
     details: bool,
     refresh_ha: t.Callable[[], _VMHAStatusSnapshot] | None = None,
 ) -> None:
-    from rich.table import Table
-    from rich.text import Text
+    from .packet_report import render
 
     expected_by_host: dict[str, dict[str, int | None]] = {}
     jobs: dict[str, tuple[list[str], dict[str, int | None]]] = {}
@@ -16952,15 +16953,14 @@ def _render_packet_health(
             ha_snapshot = refresh_ha() if refresh_ha is not None else None
         except Exception:
             ha_snapshot = None
-    table = Table(title="Packet health — 3s observation", header_style="bold cyan")
-    table.add_column("Tunnel", overflow="fold")
-    table.add_column("RX window")
-    table.add_column("Receive health", overflow="fold")
-    detail_lines = []
+    reports: dict[str, list[tuple[str, packet_health.TunnelReport]]] = {}
+    gateways: dict[str, packet_health.GatewayReport] = {}
     for hostname, expected in expected_by_host.items():
         observation = observations.get(
             hostname, {"schema": packet_health.SCHEMA, "samples": [None, None]}
         )
+        gateways[hostname] = packet_health.summarize_gateway(observation)
+        reports[hostname] = []
         second = observation["samples"][1]
         cold = False
         if ha_snapshot is not None and ha_snapshot.authority.condition == "exact":
@@ -16982,18 +16982,8 @@ def _render_packet_health(
                     )
         for name, window in expected.items():
             row = packet_health.summarize(observation, name, window, cold_standby=cold)
-            label = f"{name}\n{hostname}" if len(expected_by_host) > 1 else name
-            table.add_row(Text(label), Text(row["window"]), health_text(row["health"]))
-            if details:
-                detail_lines.extend([f"{name} ({hostname})", *row["details"]])
-    console.print(table)
-    if details:
-        console.print(Text("\n".join(detail_lines)))
-        console.print(
-            "Counters have different scopes and are not additive. Matching increases support "
-            "correlation; equality is not required. Late means outside the replay window. "
-            "Integrity failures do not identify an attacker."
-        )
+            reports[hostname].append((name, row))
+    render(console, reports, gateways, details=details)
 
 
 @app.command(epilog=_command_help_epilog("support-bundle"))
@@ -17084,7 +17074,9 @@ def status(
     project_id: str | None = typer.Option(None, help="Nebius project/folder identifier"),
     region: str | None = typer.Option(None, help=_NEBIUS_REGION_HELP),
     packet_details: bool = typer.Option(
-        False, "--packet-details", help="Show scoped receive-counter samples and deltas."
+        False,
+        "--packet-details",
+        help="Show scoped packet checks, deltas, and zero-error thresholds.",
     ),
 ):
     """Show status of VPN tunnels and gateway health."""
@@ -18213,7 +18205,7 @@ def _render_release_access(console, plan, ssh_context, targets, snapshot=None) -
 
     from . import release_identity
     from .deploy.release_policy import classify
-    from .operational_diagnostics import peer_channel
+    from .operational_diagnostics import peer_channel_text
 
     table = Table(title=f"Release and access (CLI {__version__})")
     for column in (
@@ -18221,15 +18213,14 @@ def _render_release_access(console, plan, ssh_context, targets, snapshot=None) -
         "Installed release",
         "Alignment",
         "SSH 22: operator → gateway",
-        "mTLS 9443: peer channel",
+        "Peer channel · TCP 9443",
     ):
         table.add_column(column, overflow="fold")
-    records = {member.name: member.record for member in snapshot.members} if snapshot else {}
+    channels = {member.name: member.peer_channel for member in snapshot.members} if snapshot else {}
     source = (
         Path(release_identity.__file__).read_text()
         + "\nimport json\nprint(json.dumps(observe()))\n"
     )
-    observed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     for instance in plan.iter_instance_configs():
         release, access = {"state": "unknown", "version": None}, "unknown"
         try:
@@ -18265,12 +18256,14 @@ def _render_release_access(console, plan, ssh_context, targets, snapshot=None) -
             Text(str(version or "unknown")),
             Text(assessment, style="green" if assessment == "matched" else "yellow"),
             Text(access),
-            Text(peer_channel(records.get(instance.hostname)) if snapshot else "not-applicable"),
+            peer_channel_text(channels.get(instance.hostname))
+            if snapshot
+            else Text("not-applicable", style="dim"),
         )
     console.print(table)
     console.print(
         Text(
-            f"Observed {observed_at}: installed metadata over authenticated SSH; peer channel from the HA heartbeat snapshot. "
+            "Installed metadata over authenticated SSH; peer channel reflects the observed HA heartbeat (not a continuous port probe). "
             "Release alignment does not verify installed file hashes or the identity loaded by running services. "
             "Peer SSH is not required; listener presence alone does not prove reachability or mTLS authentication.",
             style="dim",

@@ -46,10 +46,29 @@ _FAILURES = {
     "HA package writer is not stopped": "package-writer-not-stopped",
     "HA asset identity changed": "package-asset-identity-changed",
 }
-FAILURE_CODES = frozenset((*_FAILURES.values(), "package-worker-failed"))
+
+
+def observation_module():
+    module = sys.modules.get("_vpngw_runtime_migration")
+    if module is None:
+        from . import runtime_migration as module
+    return module
+
+
+FAILURE_CODES = frozenset(
+    (
+        *_FAILURES.values(),
+        "package-worker-failed",
+        *("guest-" + code.replace("_", "-") for code in observation_module().OBSERVATION_CODES),
+    )
+)
 
 
 def failure_code(error: BaseException) -> str:
+    if isinstance(error, Exception):
+        code = observation_module().observation_code(error)
+        if code is not None:
+            return "guest-" + code.replace("_", "-")
     return _FAILURES.get(str(error), "package-worker-failed")
 
 

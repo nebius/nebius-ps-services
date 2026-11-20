@@ -291,8 +291,16 @@ def _validate_historical_basis(
         require_clean=False,
     )
     _, _, _, _, run_dir, current, _ = _registration(state, agent)
-    boundary = Path(state["run_root"])
     feature = current["current_execution"]
+    _validate_basis_lineage(state, run_dir, feature, recorded, current_target["basis_sha256"],
+                            phase=phase, recorded_head=recorded_head,
+                            promoted_head=state["git"].get("promoted_sha"))
+
+
+def _validate_basis_lineage(state, run_dir, feature, recorded, latest_fingerprint, *,
+                            phase, recorded_head, promoted_head):
+    """Narrow within-execution lineage, with an independently verified endpoint."""
+    boundary = Path(state["run_root"])
 
     def canonical(value):
         return hashlib.sha256(json.dumps(
@@ -307,7 +315,7 @@ def _validate_historical_basis(
         return value
 
     prior = basis(recorded)
-    latest = basis(current_target["basis_sha256"])
+    latest = basis(latest_fingerprint)
     settlement_fields = {"impact_sha256", "spec_receipt_sha256", "spec_transition_sha256", "plan_action"}
     changed_plan = prior.get("plan_digest") != latest.get("plan_digest")
     if changed_plan and phase == "sdlc-tdd":
@@ -320,7 +328,7 @@ def _validate_historical_basis(
         raise TargetError("Historical execution basis has a material identity change.")
     if changed_plan:
         _validate_original_tdd_replan(
-            state, run_dir, boundary, prior, latest, recorded, recorded_head,
+            state, run_dir, boundary, prior, latest, recorded, recorded_head, promoted_head,
         )
 
     # Follow immutable owner receipts, never a caller assertion or arbitrary basis file.
@@ -374,7 +382,7 @@ def _validate_historical_basis(
         raise TargetError("Historical specification ancestry is incomplete.")
 
 
-def _validate_original_tdd_replan(state, run_dir, boundary, prior, latest, recorded, recorded_head):
+def _validate_original_tdd_replan(state, run_dir, boundary, prior, latest, recorded, recorded_head, promoted_head):
     """Observe existing execution-owner records; never create historical authority."""
     with workflow_imports(Path(__file__).resolve().parents[2]):
         import workflow_execution as execution
@@ -382,8 +390,8 @@ def _validate_original_tdd_replan(state, run_dir, boundary, prior, latest, recor
         feature = latest["execution_id"]
         coordinator = _private_json(execution.coordinator_path(run_dir, feature), boundary)
         if (coordinator.get("status") != "done"
-                or coordinator.get("promoted_head") != state["git"].get("promoted_sha")
-                or not state["git"].get("promoted_sha")):
+                or coordinator.get("promoted_head") != promoted_head
+                or not promoted_head):
             raise TargetError("Historical original TDD requires completed clean promotion.")
         for value in (prior, latest):
             if value["assignment_plan_sha256"] != value["plan_digest"]:

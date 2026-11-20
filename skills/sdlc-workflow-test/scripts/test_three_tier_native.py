@@ -143,8 +143,8 @@ class NativeActivationTests(unittest.TestCase):
 
     def test_foreign_session_and_unsupported_version_are_rejected(self):
         original = self.trace.read_text()
-        for old, new in ((SESSION, "foreign-session"), ("0.167.0", "unsupported"),
-                         ("0.167.0", "0.166.0")):
+        for old, new in ((SESSION, "foreign-session"), ("0.170.0", "unsupported"),
+                         ("0.170.0", "0.166.0")):
             with self.subTest(new=new):
                 self.trace.write_text(original.replace(old, new))
                 with self.assertRaises(native.NativeEvidenceError):
@@ -210,6 +210,79 @@ class NativeActivationTests(unittest.TestCase):
         ).hexdigest()
         with self.assertRaises(native.NativeEvidenceError):
             native.validate(self.state, skills_root=ROOT)
+
+
+class NativeContinuationTests(unittest.TestCase):
+    """A new process/owner alone cannot certify a public continuation."""
+
+    write = NativeActivationTests.write
+
+    def setUp(self):
+        NativeActivationTests.setUp(self)
+        from unittest import mock
+        self.state["selected_project_root"] = str(self.run / "project/project-a")
+        self.resumed_session = "resumed-native-session"
+        owner = hashlib.sha256(self.resumed_session.encode()).hexdigest()
+        self.enterContext(mock.patch.object(native.target, "_registration",
+                          return_value=(None, None, None, {"owner_session_hash": owner})))
+        self.command = ["python3", "-B", str(ROOT / "worktree/scripts/workflow_intake.py"),
+                        "--owner", "agentic-sdlc", "continue", "--project-root",
+                        self.state["selected_project_root"]]
+        self.records = [{"type": "session_meta", "payload": {
+            "id": self.resumed_session, "source": "cli", "cli_version": "0.170.0"}}]
+        for identity, command in (("continue-call", self.command), ("status-call", ["python3", "-V"])):
+            self.records.append({"type": "event_msg", "payload": {
+                "type": "item_completed", "thread_id": self.resumed_session, "turn_id": "resume-turn",
+                "item": {"type": "CommandExecution", "id": identity, "status": "completed",
+                         "source": "unified_exec_startup", "exit_code": 0, "command": command}}})
+        self.resumed_trace = self.trace.parent / "rollout-resumed.jsonl"
+        self.write_trace()
+        with self.hooks.open("a") as stream:
+            stream.write(json.dumps({"event": "PreToolUse", "project_id": self.startup["project_id"],
+                "run_id": self.startup["run_id"], "turn_id": "resume-turn",
+                "tool_use_id": "status-call", "decision": "allow"}) + "\n")
+
+    def write_trace(self):
+        self.resumed_trace.write_text("".join(json.dumps(r) + "\n" for r in self.records))
+        self.resumed_trace.chmod(0o600)
+
+    def test_successful_native_continuation_has_bounded_correlated_receipt(self):
+        value = native.observe_continuation(self.state, skills_root=ROOT, agent="codex")
+        native.validate_continuation(self.state, value, skills_root=ROOT, agent="codex")
+        self.assertEqual(value["operation"]["tool_use_id"], "continue-call")
+        self.assertEqual(value["operation"]["followup"]["tool_use_id"], "status-call")
+        self.assertNotIn("command", json.dumps(value))
+        native.validate(self.state, skills_root=ROOT)
+
+    def test_failed_unrelated_or_compound_continue_cannot_qualify(self):
+        import copy
+        original = copy.deepcopy(self.records)
+        for mutation in ("failed", "wrong-project", "wrong-action", "compound", "foreign-thread"):
+            with self.subTest(mutation=mutation):
+                self.records = copy.deepcopy(original)
+                payload = self.records[1]["payload"]
+                item = payload["item"]
+                if mutation == "failed":
+                    item.update(status="failed", exit_code=2)
+                elif mutation == "wrong-project":
+                    item["command"][-1] += "-foreign"
+                elif mutation == "wrong-action":
+                    item["command"][5] = "status"
+                elif mutation == "compound":
+                    item["command"] = ["/bin/zsh", "-c", native.shlex.join(self.command) + "; true"]
+                else:
+                    payload["thread_id"] = SESSION
+                self.write_trace()
+                with self.assertRaises(native.NativeEvidenceError):
+                    native.observe_continuation(self.state, skills_root=ROOT, agent="codex")
+
+    def test_direct_shell_continuation_is_supported_but_tampering_fails(self):
+        self.records[1]["payload"]["item"]["command"] = ["/bin/zsh", "-c", native.shlex.join(self.command)]
+        self.write_trace()
+        value = native.observe_continuation(self.state, skills_root=ROOT, agent="codex")
+        value["operation"]["native_line"] += 1
+        with self.assertRaisesRegex(native.NativeEvidenceError, "correlation changed"):
+            native.validate_continuation(self.state, value, skills_root=ROOT, agent="codex")
 
 
 if __name__ == "__main__":

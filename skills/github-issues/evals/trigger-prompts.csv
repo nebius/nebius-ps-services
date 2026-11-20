@@ -1,0 +1,48 @@
+id,should_trigger,prompt
+explicit-current,true,$github-issues
+explicit-numbers,true,"$github-issues --issues 17,23 --repo example-org/widget"
+explicit-url,true,$github-issues --repo https://github.com/example-org/widget --issues 17
+explicit-help,true,$github-issues --help
+explicit-report,true,"$github-issues --issues 17 --repo example-org/widget; report only, do not change files or GitHub."
+pr-review,false,Review GitHub pull request 17 and its patch.
+local-code,false,Review my local changes for correctness bugs.
+create-issue,false,Create a GitHub issue describing this error.
+implement-issue,false,Implement GitHub issue 17 and open a PR.
+general-prioritization-advice,false,What are sensible ways to prioritize GitHub issues?
+other-tracker,false,Review the selected Jira tickets and prioritize them.
+explicit-backlogs,true,"$github-issues --repo example-org/alpha,example-org/beta"
+explicit-priorities,true,"$github-issues --priority services/vpngw,services/cli"
+explicit-multi-numbers,true,"$github-issues --repo example-org/alpha,example-org/beta --issues 12,34"
+skill-design-only,false,Design changes to the github-issues skill interface; do not run issue triage.
+github-issues-issue-workflow-explanation,false,Explain how $github-issues participates in saved issue plans and closure after merge; do not execute the workflow.
+explicit-filter-batch,true,$github-issues --filter being-fixed --issue-batch 10
+explicit-filter-default,true,$github-issues --filter bug
+explicit-filter-claude,true,/github-issues --filter needs-information --issue-batch 2
+filter-pr-review,false,Review the pull requests labeled being-fixed and their diffs.
+pr-caller-unmerged,true,$github-issues Assess linked issues in read-only PR-caller mode after another merged PR superseded the selected PR.
+pr-close-owner,false,Use review-pr to review and close only PR42 and complete its independently resolved linked issues.
+explicit-project-name,true,$github-issues --project vpngw
+explicit-project-path,true,"$github-issues --project services/vpngw --issues 12,13"
+explicit-current-subfolder,true,"From services/vpngw/src, run $github-issues with current-project scope."
+explicit-project-filter,true,$github-issues --project vpngw --filter bug --issue-batch 3
+approval-ordinary-implementation,false,Implement the exact batch plans I just approved; do not run another issue review.
+project-folder-explanation,false,Explain how the issue-review project selector maps a folder; do not execute triage.
+github-board-management,false,Organize cards on our GitHub Projects board.
+explicit-create-plan,true,"$github-issues --project api --issues 10,11 --action create-plan"
+explicit-filter-create-plan,true,/github-issues --project api --filter bug --action create-plan
+default-review-classification,true,Use $github-issues to research this product and label findings without plans.
+refactor-skill-not-triage,false,Implement the agreed refactor of github-issues defaults and its --action create-plan workflow; do not run issue triage.
+explicit-review-action,true,$github-issues --action review
+explicit-filter-and,true,"$github-issues --filter ""bug,review:confirmed"""
+explicit-close-action,true,"$github-issues --filter ""review:already-resolved"" --action close"
+explicit-claude-close,true,"/skills:github-issues --issues 10,11 --action close"
+closure-design-only,false,Design the github-issues close policy; do not act on issues.
+explain-filters,false,Explain AND versus OR label matching without running GitHub actions.
+implicit-assessment,true,Assess GitHub issue 17 in example-org/widget against the current implementation and report whether it is still valid. Do not change GitHub.
+implicit-triage,true,"Triage the open GitHub issues for this product, add justified assessment labels and post concise findings."
+implicit-filter,true,Review all open GitHub issues in example-org/widget carrying both bug and review:confirmed labels; report findings here only.
+implicit-create-plan,true,Research GitHub issues 10 and 11 in example-org/widget and save a shared remediation plan if they belong together. Do not implement it or post to GitHub.
+implicit-close,true,Review GitHub issue 17 in example-org/widget and close it if every reported defect is resolved; post the explanation and apply justified labels.
+implicit-review-no-plans,true,"Investigate this product GitHub backlog and label confirmed bugs. Do not post comments, create plans or close anything."
+implicit-source-refactor,false,Fix the github-issues skill so its implicit invocation metadata and validator expectations agree; do not triage issues.
+implicit-advice-only,false,Explain how GitHub issue labels can help organize a backlog without assessing or changing any real issues.

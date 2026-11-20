@@ -54,7 +54,7 @@ web binding, not only the configured mapping.
 
 ## Ownership and private state
 
-The private lifecycle schema is `agentic-sdlc/three-tier-lifecycle-v9` under:
+The private lifecycle schema is `agentic-sdlc/three-tier-lifecycle-v10` under:
 
 ```text
 <verification-root>/three-tier-live/
@@ -118,7 +118,8 @@ ownership from a name prefix alone.
 4. Run `three_tier_lifecycle.py prepare`. It serializes lifecycle mutation,
    destroys the previous active environment through the exact ownership-checked
    standalone cleanup path, and creates a fresh lifecycle only after cleanup
-   succeeds. Preparation creates the marker-only Git baseline and its one owned
+   succeeds. Preparation creates the marker, frozen planning sources and domain
+   harness in the Git baseline, together with its one owned
    local bare origin before direct objective intake. Orphaned state, a changed
    project boundary, an external or extra Git remote, dirty
    kept work, a resource-label mismatch, or incomplete cleanup blocks the new
@@ -188,7 +189,7 @@ ownership from a name prefix alone.
    tests, evaluation, documents, alignment, commit, local ship, UAT, and the
    final document pass. Do not push, publish, create a PR, or merge a PR.
 7. After each phase, record a concise sanitized summary and one canonical
-   `agentic-sdlc/phase-result-v5` JSON result with `record-phase`. Write it at
+   `agentic-sdlc/phase-result-v6` JSON result with `record-phase`. Write it at
    the exact input path `<run-root>/evidence/phases/<phase>.json`, supplied by
    `--evidence`; no alternate directory is accepted. The recorder alone writes
    the immutable attempt archive. Read its installed subcommand help first.
@@ -197,12 +198,14 @@ ownership from a name prefix alone.
    impersonating that session in the outer environment. Later phases reject it.
    Bind the result to
    the lifecycle verification ID, immutable baseline SHA, phase-time
-   `recorded_head`, `objective_sha256`, the current `basis_sha256` for prepared
+   `recorded_head`, `objective_sha256`, nullable `execution_id`, the current `basis_sha256` for prepared
    phases (null before preparation), and the exact phase-specific assertion list.
    Conditional `troubleshoot` returns `diagnosis-v3` to the classifier and is
    not a recordable canonical phase; retain its private diagnostic evidence.
    `record-phase` retains immutable attempts; prior failures and superseded passes
-   remain in the ledger. Final ingestion rechecks the admitted current attempt.
+   remain in the ledger. Final ingestion rechecks the admitted attempt for every
+   required revision and slice under the [phased qualification contract](phased-live-qualification.md).
+   Startup is observed once; a later slice cannot replace an earlier slice's evidence.
    At the running classifier checkpoint, a pending design or test revision is observable
    only after the Worktree owner validates its active authority, immutable
    preparation and retained quiescent writers. After native `wave-fail`, the

@@ -6,6 +6,12 @@ source reads within one checked observation; execution authority and evidence
 remain freshly checked at effect boundaries. This source update does not activate
 installed catalogs or convert active frozen runs.
 
+Document-driven SDLC preserves supplied implementation phases or derives
+missing milestones through [phase planning](worktree/references/phase-planning.md).
+A reviewed plan in the source manifest binds phase identity, dependencies and
+exits before slice admission. Source-bundle-v2 rejects old manifests without
+conversion; synthetic planning tests remain separate from native delivery proof.
+
 SDLC worker runtime verification also supports counted same-assignment validation
 recovery through the shared owner's read-only authority check. Exact worker,
 termination, scope and exclusive runtime lease checks remain required.
@@ -212,7 +218,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 | `publish-image` | Explicit only | Publish a container image end to end: prepare release changes, PR/merge, tag, wait for workflow, verify image tags/digest, and report the result. |
 | `withdraw-release` | Explicit only | Withdraw a selected GitHub release; remove mutable assets or warn that immutable downloads remain, preserving the page and tag. |
 | `publish-release` | Explicit only | Publish a GitHub Release in one resumable invocation: commit current work, locally review/fix its PR, use protected Actions merge, tag and verify assets. |
-| `review-github-issues` | Explicit only | Review current-project or selected issues, save remediation plans and offer a separate implementation approval handoff. |
+| `github-issues` | Implicit or explicit | Assess/triage product issues; save requested plans or close justified issues within requested effect authority. |
 | `review-pr` | Explicit only | Review a GitHub pull request, fixing safe issues in generic mode or preserving the exact promoted head in active Agentic SDLC findings-only mode. |
 | `update-branch` | Explicit only | Merge origin’s live default into the clean current feature branch without switching or pushing; block linked registrations for this branch, not unrelated worktrees or container folders. |
 | `worktree` | Explicit only | Create full-repository children from the exact clean local feature branch, integrate committed child work through a recoverable validated merge, and remove only with exact local proof. |
@@ -372,7 +378,7 @@ $worktree integrate project-fix-trigger-validation-a7c2f9 from the primary check
 
 $worktree remove project-fix-trigger-validation-a7c2f9 after verifying its exact local integration proof.
 
-$review-github-issues --issues 123,124 --repo example-org/example-repo
+$github-issues --issues 123,124 --repo example-org/example-repo
 
 $review-pr Review PR #110 against the base branch, fix safe issues on the branch, and tell me whether it is ready to merge.
 
@@ -1749,33 +1755,37 @@ history or pagination remain explicit coverage limits. The skill is company-neut
 read-only and does not configure connectors or save reports automatically. See
 [usage and evidence boundaries](jira-report/README.md).
 
-### `review-github-issues`
+### `github-issues`
 
-Run `$review-github-issues` from a project such as `services/vpngw` to review
-only its owned and proven-affected issues. Subfolders inherit their owning
-project. `--project vpngw` or `--project services/vpngw` overrides that scope;
-`--project .` or invocation at the repository root selects the whole repository.
-`--issues 123,124` selects numbers within that scope; retired `--issue` is rejected.
-`--repo` accepts comma-separated repository identities in processing order.
-`--priority` only orders admitted project groups; it never widens selection.
+Describe a concrete GitHub issue task or run `$github-issues` from a product
+folder to research its owned and proven-affected issues. Natural requests map
+to the same actions/selectors; assessment alone stays read-only, while comments,
+labels, saved plans and closure follow the requested effect authority. Named
+standalone invocations retain the effects below. Use `--project vpngw` or an exact recognized root to
+select one product; ambiguous multi-product roots ask for a choice. Explicit
+`--project .` selects all projects. Use --filter "bug,review:confirmed" for
+issues carrying every listed label. Numbers and filters intersect project scope.
+All matching open issues are selected unless --issue-batch explicitly caps them;
+project priorities change processing order only.
 
-Exact-label batches use `--label being-fixed --issue-batch 10`, defaulting to
-five matching issues after project filtering. No automatic refill or next batch
-is introduced. Shared-remediation batches retain individual criteria and their
-actual primary project owners, including shared components affecting the filter.
+Default review investigates discussion, contracts, source/tests/docs and relevant
+external evidence, distinguishes bug/gap/new-feature/enhancement claims, and
+publishes concise findings with type, review-outcome and related-group labels.
+Scoped missing labels may be created; issue state stays unchanged. Related
+labels and direct links do not imply duplicate status or shared-plan membership.
 
-Explicit invocation applies justified existing labels, comments and closures;
-valid low-priority issues stay open. Accepted batches use internal `research`
-and `design`, save verified batch plans under their primary projects, and save
-`docs/github-issues/project-plan.md` under the selected project as an overview.
-Chat shows links, scope, dependencies and readiness; detailed plans stay in files.
+Only `--action create-plan` invokes design and saves eligible compatible batch plans
+and a verified project overview for separate implementation approval. Default
+review creates no artifacts or implementation proposal. Detailed plans remain
+file-only; every member retains its own criteria and actual owning project.
+Natural approval of the exact proposal uses ordinary local implementation;
+explicit `$implement` selects that workflow. Neither review nor planning grants
+publication or closure authority. Only --action close permits fresh, fully
+justified closure with a verified explanation and independent state/reason
+readback. Deferred, unresolved and uncertain issues remain open. Read-only PR
+callers retain their outer owner; no standalone effects flow into that adviser.
 
-After triage, the root offers an exact ready set for approval. Explicit
-`$implement` uses existing per-batch runs; natural approval uses ordinary local
-implementation without invoking that skill. Both verify actual checkout/project
-bindings and plan fingerprints before execution. Publication, closure authority,
-read-only limits and unrelated work remain protected.
-See [usage and boundaries](review-github-issues/README.md).
+See [usage and boundaries](github-issues/README.md).
 
 ### `review-pr`
 
@@ -2276,6 +2286,11 @@ requirements before reconciling supplied designs; preserve accepted contracts.
 The default stops at a reviewed PR. Opted-in protected direct merge additionally
 requires executed qualification, exact review/CI identity and merged-result checks.
 A cluster alone grants no merge authority. Queue configurations are unsupported.
+An explicitly accepted `local-promoted` policy supports successive local slices
+inside an automatic managed project. Each slice still needs executed admission,
+promotion and cleanup; the outer project stays leased until the whole program
+finishes. The [phased three-tier test](sdlc-workflow-test/references/phased-live-qualification.md)
+qualifies supplied and derived plans in separate disposable native runs.
 
 ```mermaid
 flowchart LR

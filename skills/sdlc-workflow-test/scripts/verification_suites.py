@@ -291,6 +291,7 @@ def suite_catalog(skills_root: Path) -> dict[str, SuiteSpec]:
                 "-v",
                 "sdlc-workflow-test/scripts/test_three_tier_objective.py",
                 "sdlc-workflow-test/scripts/test_three_tier_task_acceptance.py",
+                "sdlc-workflow-test/scripts/test_three_tier_program.py",
                 "sdlc-workflow-test/scripts/test_three_tier_statistics.py",
                 "sdlc-workflow-test/scripts/test_three_tier_browser.py",
                 "sdlc-workflow-test/scripts/test_three_tier_lifecycle.py",
@@ -386,6 +387,16 @@ def capability_catalog() -> dict[str, tuple[str, tuple[tuple[str, str], ...]]]:
                 ("execution", test)
                 for test in (
                     "test_external_phase_and_full_obligation_plan",
+                    "test_supplied_phases_split_into_multiple_bounded_slices",
+                    "test_unphased_source_accepts_reviewed_derived_milestones",
+                    "test_supplied_phase_identity_dependency_and_exit_drift_rejected",
+                    "test_missing_planning_allows_inventory_but_not_program_admission",
+                    "test_phase_planning_rejects_missing_provenance_and_unknown_sources",
+                    "test_contradictory_reviewed_phase_order_is_not_silently_repaired",
+                    "test_derived_plan_cannot_drop_future_obligations",
+                    "test_changed_planning_requires_new_accepted_manifest_digest",
+                    "test_phase_plan_is_enforced_on_admission_and_revalidation",
+                    "test_obsolete_source_manifest_is_rejected_without_conversion",
                     "test_future_slice_and_phase_dependencies_rejected",
                     "test_all_source_obligations_remain_scheduled",
                     "test_phase_only_exit_without_a_runner_route_is_rejected",
@@ -416,8 +427,26 @@ def capability_catalog() -> dict[str, tuple[str, tuple[tuple[str, str], ...]]]:
                     "test_completed_slice_cannot_acquire_new_obligations_or_move",
                     "test_full_completion_requires_current_evidence_beyond_phase_exit_subset",
                     "test_transitive_phase_barrier_and_changed_source_invalidate_exit",
+                    "test_local_completion_is_repeatable_and_survives_later_revision_and_head",
+                    "test_completion_requires_explicit_local_policy_and_done_cleanup",
+                    "test_local_receipt_tampering_and_foreign_admission_fail",
+                    "test_missing_future_program_slice_blocks_before_aggregate_state_change",
                 )
             ),
+        ),
+        "program.native-observers": (
+            "Frozen fixture provenance and scoped native continuation observers",
+            tuple(("three-tier", test) for test in (
+                "test_derived_fixture_contains_obligations_without_a_phase_answer",
+                "test_program_requires_normative_frozen_sources_and_all_obligations",
+                "test_all_slices_and_both_revisions_are_validated",
+                "test_later_slice_does_not_mask_missing_first_slice",
+                "test_cross_slice_supersession_is_rejected",
+                "test_final_status_cannot_replace_changed_plan_and_preserved_completion",
+            )) + tuple(("verifier", test) for test in (
+                "test_successful_native_continuation_has_bounded_correlated_receipt",
+                "test_failed_unrelated_or_compound_continue_cannot_qualify",
+            )),
         ),
         "execution.bounded-scale": (
             "Large task graphs and bounded cross-feature batches",

@@ -45,11 +45,20 @@ discovery in a `workflow-startup-v3` receipt. This is not native hook activation
 After naturally emitted tool/hook events exist, collect `record-native-activation`
 with the immutable verification ID; the separate native receipt correlates the
 owned Codex session and executed-command item IDs with installed hook events without copying prompt bodies.
-The current adapter supports Codex CLI 0.167.0; unavailable host/event formats
+The current adapter supports Codex CLI 0.170.0; unavailable host/event formats
 remain a qualification gap. Full three-tier PASS requires both receipts. Every later phase PASS and
 final semantic ingestion require that receipt. Empty or mismatched ownership
 also blocks runtime targeting. A late ownership repair requires a fresh trial;
 it cannot restore full-workflow validity to earlier evidence.
+
+The pinned adapter follows the tagged Codex
+[rollout payload](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/history/src/rollout_payload.rs),
+[command items](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/protocol/src/items.rs)
+and [rollout recorder](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/rollout/src/recorder.rs).
+Fixture agreement with these formats is not proof of native activation.
+Continuation has its own receipt: a successful direct public continuation
+command in the new session, followed by naturally emitted hooks for the same
+workflow run. Final ingestion revalidates the retained prefixes and correlation.
 
 Pre-commit runtime testing may select a worker only through the private helper's
 `run-compose --worker-task TASK-NNN --assignment-digest DIGEST -- <action>`.

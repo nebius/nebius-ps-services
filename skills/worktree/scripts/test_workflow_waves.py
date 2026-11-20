@@ -64,6 +64,7 @@ class ValidationInvocationTests(unittest.TestCase):
 class CandidateCheckpointTests(unittest.TestCase):
     def setUp(self):
         self.fixture = fixture_module.GitLifecycleTests()
+        self.addCleanup(self.fixture.doCleanups)
         self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
         self.run = self.fixture.run_dir
@@ -223,6 +224,7 @@ class CandidateCheckpointTests(unittest.TestCase):
 class WaveContractTests(unittest.TestCase):
     def setUp(self):
         self.fixture = fixture_module.GitLifecycleTests()
+        self.addCleanup(self.fixture.doCleanups)
         self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
         self.run = self.fixture.run_dir

@@ -16,7 +16,7 @@ from agent_runtime import agent_name
 
 
 SCENARIO = "three-tier-task-board-v1"
-RESULTS_SCHEMA = "agentic-sdlc/three-tier-results-v4"
+RESULTS_SCHEMA = "agentic-sdlc/three-tier-results-v5"
 REQUIRED_SDLC_PHASES = (
     "sdlc-start",
     "sdlc-create-requirements",
@@ -142,6 +142,7 @@ def summarize_semantic_results(state: dict[str, Any]) -> dict[str, Any] | None:
             "tests",
             "sdlc_phases",
             "gui_uat",
+            "program",
         }
         or not isinstance(value.get("git"), dict)
         or set(value["git"]) != {"baseline_sha", "promoted_sha", "aggregate_sha", "clean"}
@@ -239,6 +240,7 @@ def validate_semantic_results(state: dict[str, Any], *, keep: bool) -> dict[str,
         "tests",
         "sdlc_phases",
         "gui_uat",
+        "program",
     }:
         raise SemanticEvidenceError("Semantic three-tier results fields are invalid.")
     if value.get("schema") != RESULTS_SCHEMA or value.get("scenario") != SCENARIO:
@@ -248,6 +250,12 @@ def validate_semantic_results(state: dict[str, Any], *, keep: bool) -> dict[str,
     if not state["git"].get("aggregate_sha") or not state.get("multi_project"):
         raise SemanticEvidenceError("Both automatic projects and final aggregate acceptance are required.")
     import three_tier_lifecycle as lifecycle
+    import three_tier_program
+    try:
+        if value["program"] != three_tier_program.qualify(state, agent=lifecycle.agent_name()):
+            raise SemanticEvidenceError("Submitted program summary differs from owner evidence.")
+    except (RuntimeError, OSError, ValueError, KeyError) as error:
+        raise SemanticEvidenceError("Native phased-program evidence is incomplete or changed.") from error
     try:
         if lifecycle.observe_aggregate(state) != state["multi_project"]:
             raise SemanticEvidenceError("Frozen aggregate or companion proof changed.")

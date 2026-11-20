@@ -16,7 +16,7 @@ MAX_INPUT_FILES = 256
 MAX_TRAVERSAL_ENTRIES = 4096
 _CLOCK_FIELDS = {"created_at", "updated_at", "observed_at", "completed_at", "started_at", "timestamp", "started_ns", "completed_ns", "deadline_ns", "received_at"}
 _METADATA_SCHEMAS = {
-    "agentic-sdlc/phase-result-v5", "agentic-sdlc/failure-event-v2",
+    "agentic-sdlc/phase-result-v6", "agentic-sdlc/failure-event-v2",
     "agentic-sdlc/diagnosis-v3", "agentic-sdlc/failure-classification-v2",
     "agentic-sdlc/repair-control-v3", "agentic-sdlc/repair-journal-event-v2",
     "agentic-sdlc/design-approval-v2", "agentic-sdlc/revalidation-evidence-v2",

@@ -5,6 +5,9 @@
 ## Scope
 
 - Delivery slice: SLICE-<id>
+- Program phase: <admitted phase identity, or N/A for a standalone FEAT>
+- Source criteria: <accepted source identifiers>
+- Slice boundary: <one observable result and why its scope is reviewable>
 - Features: FEAT-<id>
 - Requirements: REQ-<id>
 - Plan status: locked when matching `.lock` exists

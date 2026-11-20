@@ -84,7 +84,7 @@ Answer whether the code behaves correctly against the feature tests and acceptan
 
 ## Writes
 
-- `evidence/FEAT-*/tests.md`.
+- `evidence/<execution-id>/tests.md`.
 - Coverage notes if available.
 - Failure classification.
 

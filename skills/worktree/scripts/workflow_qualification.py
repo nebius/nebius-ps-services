@@ -47,11 +47,11 @@ def _promoted_candidate(run_dir, project, coordinators):
         heads = {row["promoted_head"]}
         completion_path = run_dir / "delivery" / row["execution_id"] / "completion.json"
         if row["execution_id"].startswith("SLICE-") and completion_path.exists():
-            from workflow_delivery import verify_completion
+            from workflow_delivery import verify_completion, completion_candidate
             completion = verify_completion(run_dir, read(completion_path))
             require(completion["execution_id"] == row["execution_id"]
-                    and completion["intent"]["head"] == row["promoted_head"],
-                    "merged output differs from the selected promoted implementation")
+                    and completion_candidate(completion) == row["promoted_head"],
+                    "completed output differs from the selected promoted implementation")
             # Squash/rebase delivery changes commit ancestry. Only the existing
             # protected delivery owner's verified result may stand for its tip.
             heads.add(completion["result_sha"])

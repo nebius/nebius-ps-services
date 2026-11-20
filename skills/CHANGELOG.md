@@ -4,6 +4,53 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Allow implicit `github-issues` selection for concrete issue assessment,
+  triage, planning and closure requests. Align the description, invocation
+  policy, Claude frontmatter and trigger evals with the existing Codex policy;
+  preserve the validator's contract checks. Natural-language selection grants
+  no unrequested comments, labels, plans, closure or implementation authority.
+
+- Rename `review-github-issues` to `github-issues` without an alias. Select one
+  action with `--action review|create-plan|close` (review default); replace
+  `--label` with comma-separated AND `--filter` labels. Filter all matching open
+  issues unless `--issue-batch` explicitly caps selection, and intersect labels
+  with issue numbers/project scope. Close only freshly justified whole issues,
+  with verified explanations, accurate reasons/duplicate targets and independent
+  readback. Preserve file-only plans and read-only PR advisers; migrate managed
+  installations without retaining the old skill or standalone action flags.
+
+- Make `github-issues` review research and classify one product by default,
+  applying type/outcome labels and evidenced related groups with concise review
+  comments. Permit scoped missing labels, preserve state in review/planning, and require
+  explicit `--project .` for whole-repository scope at multi-product roots.
+  Gate design, shared batch plans, overviews and separate implementation offers
+  behind `--action create-plan`; preserve independent review results on planning failure.
+  Align fixtures with explicit whole-repository scope and separate type/outcome
+  labels; cover relationship creation retries and repository/owner boundaries.
+
+- Add explicit local-promoted document slice completion backed by immutable
+  owner admission and Git evidence. Require every program slice and phase exit
+  before aggregation. Extend the three-tier verifier with frozen supplied/derived
+  source scenarios, revision/slice-scoped observations and native continuation
+  and accepted-plan-change evidence; keep final application acceptance intact.
+  Pin native activation parsing to the verified Codex 0.170.0 event contract.
+  Preserve seeded document directories in readiness fixtures and isolate
+  phase-observer mocks and nested fixture cleanup across real-Git tests.
+  Retain phase-specific read-only targeting when rechecking unsealed history.
+  Preserve bounded exception types and source locations for deterministic
+  failures without retaining messages or local values; restore nested execution
+  fixture patches between cases.
+  Admit valid intake-owned input declarations during initial phase publication,
+  preserving their immutable history and rejecting altered or orphaned records.
+  Reject malformed claim types through the input owner without traceback output.
+
+- Define supplied-phase preservation and outcome-based phase derivation for
+  large document-driven SDLC programs. Freeze reviewed planning provenance in
+  source-bundle-v2 and reject program phase drift on admission and revalidation.
+  Keep detailed planning bounded to upcoming slices and source interpretation
+  explicitly reviewed. Add required supplied/derived multi-slice regressions;
+  retain native planning and remote delivery qualification as separate evidence.
+
 - Add explicit-only `withdraw-release --release` for GitHub releases, with
   resumable mutable asset removal and immutable metadata-only withdrawal.
   Preserve notes and tags, verify latest exclusion and download outcomes, and
@@ -18,13 +65,14 @@ All notable changes to the reusable Agent Skills are tracked here.
   Support a missing local default with narrow origin tracking; preserve existing
   mappings and reject default exclusions or conflicting tracking destinations.
 
-- Default `review-github-issues` to the current folder's owning project; add
+- Default `github-issues` to the current folder's owning project; add
   explicit `--project` root/name override and `.` for whole-repository scope.
-  Replace `--issue` with canonical `--issues`, filter before label batch limits,
+  Replace `--issue` with canonical `--issues`, filter before explicit batch limits,
   and retain evidence-based primary/shared ownership. Clarify that selected
   closed issues are assessed without reopening.
-- Save project overviews with exact batch fingerprints and offer operator
-  approval. Explicit `$implement` uses existing per-batch runs; natural approval
+- With `github-issues --action create-plan`, save project overviews with exact
+  batch fingerprints and offer operator approval. Explicit `$implement` uses
+  existing per-batch runs; natural approval
   uses ordinary local implementation. Verify actual checkout/project targets,
   scoped paths and current evidence; preserve file-only detailed plans and
   separate publication/closure authority.

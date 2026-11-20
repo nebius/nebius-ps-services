@@ -24,6 +24,10 @@ sys.path.insert(0, str(MODULE_PATH.parent))
 import three_tier_lifecycle as lifecycle  # noqa: E402
 
 
+def fixture_phase_execution(phase):
+    return None if phase == "sdlc-start" or phase in lifecycle.three_tier_program.REVISION_PHASES else "FEAT-001"
+
+
 def png_bytes(red: int) -> bytes:
     def chunk(kind: bytes, data: bytes) -> bytes:
         body = kind + data
@@ -271,6 +275,12 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             ("a"*64, "d"*64 if phase in lifecycle.EXECUTION_PHASES else None))
         self.phase_identity.start()
         self.addCleanup(self.phase_identity.stop)
+        self.enterContext(mock.patch.object(lifecycle.three_tier_program, "execution_for_phase",
+            side_effect=lambda state, phase, **kw: fixture_phase_execution(phase)))
+        self.enterContext(mock.patch.object(lifecycle.three_tier_program, "historical_identity"))
+        self.program = {"mode": "supplied", "slices": [{"id": "FEAT-001", "objective_sha256": "a" * 64}]}
+        self.enterContext(mock.patch.object(lifecycle.three_tier_program, "observe", return_value=self.program))
+        self.enterContext(mock.patch.object(lifecycle.three_tier_program, "qualify", return_value=self.program))
         self.preflight = mock.patch.multiple(
             lifecycle,
             require_command=mock.DEFAULT,
@@ -424,6 +434,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
                 )
             },
             "sdlc_phases": {phase: "PASS" for phase in lifecycle.REQUIRED_SDLC_PHASES},
+            "program": self.program,
             "gui_uat": {
                 "harness": "playwright-test",
                 "headless": True,
@@ -479,7 +490,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             artifact.parent.mkdir(parents=True, exist_ok=True)
             artifact.write_text(
                 json.dumps(
-                    {
+                    {"execution_id": fixture_phase_execution(phase),
                         "schema": lifecycle.PHASE_RESULT_SCHEMA,
                         "phase": phase,
                         "status": "PASS",
@@ -503,6 +514,9 @@ class ThreeTierLifecycleTests(unittest.TestCase):
             state["phases"].append(
                 {
                     "attempt": 1,
+                    "supersedes_attempt": None,
+                    "objective_sha256": "a" * 64,
+                    "execution_id": fixture_phase_execution(phase),
                     "artifact_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
                     "phase": phase,
                     "status": "PASS",
@@ -1814,7 +1828,7 @@ class ThreeTierLifecycleTests(unittest.TestCase):
         artifact.parent.mkdir(parents=True, exist_ok=True)
         artifact.write_text(
             json.dumps(
-                {
+                {"execution_id": fixture_phase_execution("sdlc-create-requirements"),
                     "schema": lifecycle.PHASE_RESULT_SCHEMA,
                     "phase": "sdlc-create-requirements",
                     "status": "PASS",
@@ -2684,6 +2698,15 @@ class ClassifierPhaseIdentityTests(unittest.TestCase):
         self.enterContext(mock.patch.object(lifecycle.three_tier_target, "_registration", return_value=registration))
         self.enterContext(mock.patch.object(lifecycle.three_tier_target, "current_objective", return_value="a" * 64))
         self.target = self.enterContext(mock.patch.object(lifecycle, "execution_target", return_value={"basis_sha256": "b" * 64}))
+        with lifecycle.three_tier_target.workflow_imports(Path(__file__).resolve().parents[2]):
+            import workflow_objectives
+            # Historical observation imports this owner. Load its dependency
+            # aliases before replacing validate_run with a synthetic fixture.
+            import workflow_delivery  # noqa: F401
+        self.enterContext(mock.patch.object(workflow_objectives, "validate_run", return_value=(
+            {}, {"revisions": [{"sha256": "a" * 64}]})))
+        self.enterContext(mock.patch.object(lifecycle.three_tier_target, "resolve_target",
+            side_effect=lambda *a, **kw: {**self.target.return_value, "execution_id": "FEAT-001"}))
 
     def test_classifier_before_preparation_has_no_execution_basis(self):
         self.assertEqual(lifecycle.phase_identity(self.state, "sdlc-classify-failure"), ("a" * 64, None))
@@ -2695,7 +2718,7 @@ class ClassifierPhaseIdentityTests(unittest.TestCase):
                           git={'baseline_sha': 'd' * 40, 'promoted_sha': None})
         phase = 'sdlc-classify-failure'
         relative = f'evidence/phases/{phase}.json'
-        result = {'schema': lifecycle.PHASE_RESULT_SCHEMA, 'phase': phase, 'status': 'PASS',
+        result = {"execution_id": fixture_phase_execution(phase), 'schema': lifecycle.PHASE_RESULT_SCHEMA, 'phase': phase, 'status': 'PASS',
                   'verification_id': self.state['verification_id'], 'baseline_sha': 'd' * 40,
                   'recorded_head': 'd' * 40, 'objective_sha256': 'a' * 64,
                   'basis_sha256': None, 'assertions': lifecycle.PHASE_REQUIRED_ASSERTIONS[phase]}
@@ -2707,8 +2730,9 @@ class ClassifierPhaseIdentityTests(unittest.TestCase):
         archive = f'evidence/phases/attempts/{phase}/{digest}.json'
         lifecycle.private_json(self.run_dir / archive, result)
         entry = {'phase': phase, 'status': 'PASS', 'evidence': [archive],
+                 'execution_id': 'FEAT-001', 'objective_sha256': 'a' * 64,
                  'artifact_sha256': digest, 'attempt': 1, 'supersedes_attempt': None}
-        self.state['phases'] = [entry, {'phase': 'sdlc-prepare-execution', 'status': 'PASS'}]
+        self.state['phases'] = [entry, {'phase': 'sdlc-prepare-execution', 'status': 'PASS', 'execution_id': 'FEAT-001'}]
         self.prepare()
         self.target.return_value = {'basis_sha256': 'b' * 64, 'head': 'c' * 40}
         return phase, archive, entry, result
@@ -2736,7 +2760,7 @@ class ClassifierPhaseIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(lifecycle.LifecycleError, 'Immutable phase attempt changed'):
             lifecycle.validate_phase_pass_artifact(self.state, phase, [archive], historical_entry=entry)
         lifecycle.private_json(path, {**result, 'objective_sha256': 'e' * 64})
-        with self.assertRaisesRegex(lifecycle.LifecycleError, 'basis is stale'):
+        with self.assertRaisesRegex(lifecycle.LifecycleError, 'receipt for its scope'):
             lifecycle.validate_phase_pass_artifact(self.state, phase, [archive], historical_entry=entry)
 
     def prepare(self):
@@ -2756,7 +2780,7 @@ class ClassifierPhaseIdentityTests(unittest.TestCase):
                           git={"baseline_sha": "d" * 40, "promoted_sha": None})
         phase = "sdlc-classify-failure"
         relative = "evidence/phases/" + phase + ".json"
-        result = {"schema": lifecycle.PHASE_RESULT_SCHEMA, "phase": phase, "status": "PASS",
+        result = {"execution_id": fixture_phase_execution(phase), "schema": lifecycle.PHASE_RESULT_SCHEMA, "phase": phase, "status": "PASS",
                   "verification_id": self.state["verification_id"], "baseline_sha": "d" * 40,
                   "recorded_head": "d" * 40, "objective_sha256": "a" * 64,
                   "basis_sha256": None, "assertions": lifecycle.PHASE_REQUIRED_ASSERTIONS[phase]}
@@ -2785,6 +2809,7 @@ class ClassifierPhaseIdentityTests(unittest.TestCase):
         self.state["phases"] = [{"phase": "sdlc-prepare-execution", "status": "PASS"}]
         for feature in (None, "FEAT-001"):
             self.current["current_execution"] = feature
+            self.state["phases"][0]["execution_id"] = feature
             with self.subTest(feature=feature), self.assertRaisesRegex(
                 lifecycle.LifecycleError, "Previously observed execution"
             ):
@@ -2829,7 +2854,7 @@ class ClassifierPhaseIdentityTests(unittest.TestCase):
             self.state.update(run_root=str(root), project_root=str(root / "source"), git={"baseline_sha": "d" * 40, "promoted_sha": None})
             phase = "sdlc-classify-failure"
             relative = "evidence/phases/" + phase + ".json"
-            result = {"schema": lifecycle.PHASE_RESULT_SCHEMA, "phase": phase, "status": "PASS",
+            result = {"execution_id": fixture_phase_execution(phase), "schema": lifecycle.PHASE_RESULT_SCHEMA, "phase": phase, "status": "PASS",
                       "verification_id": self.state["verification_id"], "baseline_sha": "d" * 40,
                       "recorded_head": "c" * 40, "objective_sha256": "a" * 64,
                       "basis_sha256": "b" * 64, "assertions": lifecycle.PHASE_REQUIRED_ASSERTIONS[phase]}

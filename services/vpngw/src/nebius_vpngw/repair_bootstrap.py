@@ -9,7 +9,10 @@ from pathlib import Path
 SOURCE_LIMIT = 4 * 1024 * 1024
 DISPLAY_NAME = "Repair"
 LOADER = (
-    "import base64,signal,sys;signal.alarm(600);"
+    "import base64,signal,sys,time;_repair_bootstrap_deadline=time.monotonic()+600;"
+    "\ndef _repair_expired(_signum,_frame):\n raise TimeoutError('repair_request_interrupted')\n"
+    "for _sig in (signal.SIGALRM,signal.SIGTERM,signal.SIGHUP): signal.signal(_sig,_repair_expired)\n"
+    "signal.alarm(600);"
     f"_source=sys.stdin.buffer.readline({SOURCE_LIMIT + 1});"
     f"\nif len(_source)>{SOURCE_LIMIT} or not _source.endswith(b'\\n'):"
     "\n raise RuntimeError('repair_source_limit')\n"
@@ -53,7 +56,10 @@ def worker_source() -> str:
 
 
 def source_frame() -> bytes:
-    code = source() + "sys.modules['_vpngw_repair_remote'].control_main()\n"
+    code = (
+        source()
+        + "sys.modules['_vpngw_repair_remote'].control_main(deadline=_repair_bootstrap_deadline)\n"
+    )
     frame = base64.b64encode(code.encode()) + b"\n"
     if len(frame) > SOURCE_LIMIT:
         raise RuntimeError("Repair source bundle exceeds limit")

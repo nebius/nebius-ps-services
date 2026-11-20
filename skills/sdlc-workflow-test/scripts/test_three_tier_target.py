@@ -30,6 +30,10 @@ import workflow_execution as execution  # noqa: E402
 from project_specs_lib.transaction import publish_spec_pair  # noqa: E402
 from test_workflow_execution import REQUIREMENTS, DESIGN, PLAN, finish_task as fixture_finish  # noqa: E402
 import three_tier_lifecycle as lifecycle  # noqa: E402
+
+
+def fixture_phase_execution(phase):
+    return None if phase == "sdlc-start" or phase in lifecycle.three_tier_program.REVISION_PHASES else "FEAT-001"
 import three_tier_target as target  # noqa: E402
 from git_fixture_environment import isolated_git_configuration  # noqa: E402
 import initialize_phase  # noqa: E402
@@ -54,6 +58,7 @@ class BrowserRepairAuthorityTests(unittest.TestCase):
         self.owner = repair_control
         self.helpers = test_repair_control
         self.fixture = test_repair_control.RepairControlTests()
+        self.addCleanup(self.fixture.doCleanups)
         self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
         self.run = self.fixture.run_dir.resolve()
@@ -182,7 +187,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         relative = "evidence/phases/sdlc-start.json"
         private_json(
             Path(self.state["run_root"]) / relative,
-            {
+            {"execution_id": fixture_phase_execution("sdlc-start"),
                 "schema": lifecycle.PHASE_RESULT_SCHEMA,
                 "phase": "sdlc-start",
                 "status": "PASS",
@@ -267,7 +272,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         self.assertEqual(observed["source_state_discovery"], "MATCH")
         self.state.pop("workflow_startup")
         lifecycle.update_state(self.root, self.state)
-        with self.assertRaisesRegex(lifecycle.LifecycleError, "after other phase"):
+        with self.assertRaisesRegex(lifecycle.LifecycleError, "exactly once"):
             lifecycle.record_phase(
                 self.root, "sdlc-start", "PASS", "Late observation.",
                 ["evidence/phases/sdlc-start.json"],
@@ -356,7 +361,7 @@ class ThreeTierTargetTests(unittest.TestCase):
                        if phase in {"sdlc-classify-failure", "sdlc-tdd", "sdlc-prepare-execution"} else {})
         selected = self.resolve(**observation)
         relative = f"evidence/phases/{phase}.json"
-        private_json(Path(self.state["run_root"]) / relative, {
+        private_json(Path(self.state["run_root"]) / relative, {"execution_id": fixture_phase_execution(phase),
             "schema": lifecycle.PHASE_RESULT_SCHEMA, "phase": phase, "status": "PASS",
             "verification_id": self.state["verification_id"], "baseline_sha": self.base,
             "recorded_head": selected["head"], "objective_sha256": self.startup_observation["objective_sha256"],
@@ -1009,7 +1014,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         phase = "sdlc-tdd"
         objective, basis = lifecycle.phase_identity(self.state, phase)
         relative = f"evidence/phases/{phase}.json"
-        private_json(Path(self.state["run_root"]) / relative, {
+        private_json(Path(self.state["run_root"]) / relative, {"execution_id": fixture_phase_execution(phase),
             "schema": lifecycle.PHASE_RESULT_SCHEMA,
             "phase": phase,
             "status": "PASS",
@@ -1097,7 +1102,7 @@ class ThreeTierTargetTests(unittest.TestCase):
             self.state, require_clean=False, phase_observation="sdlc-classify-failure"
         )
         relative = f"evidence/phases/{phase}.json"
-        private_json(Path(self.state["run_root"]) / relative, {
+        private_json(Path(self.state["run_root"]) / relative, {"execution_id": fixture_phase_execution(phase),
             "schema": lifecycle.PHASE_RESULT_SCHEMA,
             "phase": phase,
             "status": "PASS",
@@ -1180,7 +1185,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         phase = "sdlc-prepare-execution"
         prior_basis = self.resolve()["basis_sha256"]
         relative = f"evidence/phases/{phase}.json"
-        private_json(Path(self.state["run_root"]) / relative, {
+        private_json(Path(self.state["run_root"]) / relative, {"execution_id": fixture_phase_execution(phase),
             "schema": lifecycle.PHASE_RESULT_SCHEMA, "phase": phase, "status": "PASS",
             "verification_id": self.state["verification_id"], "baseline_sha": self.base,
             "recorded_head": coordinator["integration_head"],
@@ -1280,7 +1285,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         observed = self.resolve(require_clean=False, phase_observation="sdlc-tdd")
         phase = "sdlc-tdd"
         relative = f"evidence/phases/{phase}.json"
-        private_json(Path(self.state["run_root"]) / relative, {
+        private_json(Path(self.state["run_root"]) / relative, {"execution_id": fixture_phase_execution(phase),
             "schema": lifecycle.PHASE_RESULT_SCHEMA, "phase": phase, "status": "PASS",
             "verification_id": self.state["verification_id"], "baseline_sha": self.base,
             "recorded_head": observed["head"],
@@ -1665,7 +1670,7 @@ class ThreeTierTargetTests(unittest.TestCase):
         relative = f"evidence/phases/{phase}.json"
         private_json(
             Path(self.state["run_root"]) / relative,
-            {
+            {"execution_id": fixture_phase_execution(phase),
                 "schema": lifecycle.PHASE_RESULT_SCHEMA,
                 "phase": phase,
                 "status": "PASS",
@@ -2006,7 +2011,7 @@ class StartupObservationTests(unittest.TestCase):
         initialize_phase.initialize(self.project)
         objective = json.loads((self.run / "objective.json").read_text())
         relative = "evidence/phases/sdlc-start.json"
-        private_json(Path(self.state["run_root"]) / relative, {
+        private_json(Path(self.state["run_root"]) / relative, {"execution_id": fixture_phase_execution("sdlc-start"),
             "schema": lifecycle.PHASE_RESULT_SCHEMA, "phase": "sdlc-start", "status": "PASS",
             "verification_id": self.state["verification_id"], "baseline_sha": self.state["git"]["baseline_sha"],
             "recorded_head": self.state["git"]["baseline_sha"],

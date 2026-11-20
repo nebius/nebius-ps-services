@@ -127,6 +127,7 @@ The default report path is:
   `assets/three-tier-results.schema.json`, and
   `scripts/three_tier_lifecycle.py` help for the needed private action. Read
   `scripts/three_tier_semantics.py` before changing PASS derivation.
+- For phased three-tier qualification, read `references/phased-live-qualification.md`.
 
 ## Writes
 
@@ -158,6 +159,9 @@ necessary authentication in that home's protected native store.
 ## Process
 
 1. Parse the invocation mode before any mutation.
+   A direct natural-language request to implement the disposable three-tier
+   test application selects create mode; do not require the user to repeat a
+   flag. Retention still requires an explicit keep request.
    With no lifecycle flag, run steps 2-6, including the conditional full-runtime
    reference in step 5, as the existing lightweight
    verifier and do not create or inspect a Docker or browser application. With
@@ -192,8 +196,12 @@ necessary authentication in that home's protected native store.
    phase/slice ordering, current completion evidence, large task graphs and
    bounded retained worktrees. Shared semantic and delivery owners participate
    in installed parity. Missing required tests fail; skipped tests stay partial.
-   Current live profiles do not qualify native multi-slice document delivery
-   or a real remote merge; report those limits explicitly.
+   Supplied-phase and unphased-source fixtures exercise reviewed planning,
+   multiple slices, source-plan drift, missing future coverage and contradictory
+   dependencies. They validate admission, not autonomous model planning quality.
+   Native phased qualification requires the separate live process and its
+   owner-derived program evidence. Deterministic fixtures alone do not qualify
+   native planning or execution. A local trial never qualifies a remote merge.
    The disposable fixture is a nested selected folder in a local
    monorepo-shaped Git repository. Obsolete flat fixtures and unknown,
    unowned, dirty, externally connected, or non-canonical directories and repositories
@@ -233,7 +241,7 @@ acceptance. Multiple exact launcher registrations share one cleanup owner.
 Before startup, phase collection or runtime targeting, read
 [live runtime ownership](references/live-runtime-ownership.md).
 
-For each phase observation, write its private `phase-result-v5` JSON at
+For each phase observation, write its private `phase-result-v6` JSON at
 `<run-root>/evidence/phases/<phase>.json` and pass that exact file to
 `record-phase --evidence`. Read the installed helper's subcommand help before
 invocation. The recorder owns immutable attempt archives; callers never write

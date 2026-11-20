@@ -1,9 +1,11 @@
 # Batch <anchor-number>: <shared topic>
 
+- Planning requested: --action create-plan
 - Artifact kind: remediation-batch-plan
 - Repository: <verified repository identity>
 - Batch identity: <stable initial anchor number and shared remediation identity>
 - Accepted members: <full repository/issue identities and permitted URLs>
+- Relationship groups: <labels and evidenced relationships; not plan membership>
 - Related nonmembers: <deferred, unresolved or other related issues; not accepted here>
 - Owning project: <repository-relative project path>
 - Affected projects: <repository-relative paths>
@@ -25,14 +27,15 @@ cwd or store machine-specific absolute paths in this plan.>
 
 ## Member decisions and acceptance
 
-| Issue identity | Supported problem and evidence | Severity / acceptance rationale | Acceptance criteria and validation |
+| Issue identity | Type / review outcome and evidence | Severity / planning rationale | Acceptance criteria and validation |
 | --- | --- | --- | --- |
 | <repository and issue> | <verified facts, source and confidence> | <individual assessment> | <observable criteria and checks for this member> |
 
-<Include every accepted member once. State material dependencies; do not present
+<Accepted members are eligible scope for this proposed plan, not implementation
+authorization. Include every accepted member once. State material dependencies; do not present
 unresolved or deferred issues as accepted members. For each member, identify the
 sibling discussions, source state and other material evidence that must be
-refreshed before acceptance; explicitly establish any independent coverage.>
+refreshed before planning readiness; explicitly establish any independent coverage.>
 
 ## Problem and evidence
 

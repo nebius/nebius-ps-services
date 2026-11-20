@@ -110,6 +110,13 @@ disagreements; this observational refresh grants no execution authority.
 
 ## Process
 
+For document programs, follow `../worktree/references/phase-planning.md` before
+finalizing the design. Preserve supplied milestones or derive missing ones from
+outcomes, prerequisite edges and risk. Supply the reviewed phase definitions,
+source references and rationale to the root for the manifest's planning record;
+the root accepts its changed digest before program admission. This adapter does
+not start another coordinator or claim automatic semantic extraction.
+
 Check unpublished candidates through the canonical `project_specs.py check-candidates`
 helper. The bounded input-correction contract supplied by `sdlc-classify-failure`
 precedes failure classification only for owner-proven structural rejection without

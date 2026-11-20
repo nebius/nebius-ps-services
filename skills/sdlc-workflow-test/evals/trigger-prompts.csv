@@ -47,3 +47,6 @@ optional-uat-no-verifier,false,Implement the application and leave UAT for me af
 explicit-three-tier-catalog,true,Run $sdlc-workflow-test and bind its required container-testing owner before preparing the three-tier test plans.
 sdlc-workflow-test-validation-recovery,true,$sdlc-workflow-test Verify runtime testing during a counted same-assignment validation repair using the recovery owner's current proof and the worker's exclusive lease.
 healthy-long-execution,true,$sdlc-workflow-test --create-live-test Qualify healthy long-running SDLC execution and complete evidence.
+three-tier-phased-natural-request,true,Use $sdlc-workflow-test to implement its disposable three-tier application and qualify supplied and derived phases. Proceed and adjust the skill as needed.
+three-tier-phases-not-real-app,false,Implement my production agent application directly from its design package without running a disposable workflow test.
+three-tier-resume-proof,true,Use $sdlc-workflow-test to verify native continuation and preserve completed slices after an accepted change to the remaining plan.

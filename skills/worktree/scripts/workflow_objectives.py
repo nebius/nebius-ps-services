@@ -78,7 +78,7 @@ def normalize(value: object) -> dict:
     if completion == {"boundary": "reviewed-pr"}:
         completion = {"boundary": "reviewed-pr", "live_operations": [], "allow_nonruntime_na": True}
     if (isinstance(completion, dict) and set(completion) == {"boundary", "live_operations", "allow_nonruntime_na"}
-            and completion["boundary"] == "reviewed-pr" and type(completion["allow_nonruntime_na"]) is bool
+            and completion["boundary"] in {"reviewed-pr", "local-promoted"} and type(completion["allow_nonruntime_na"]) is bool
             and isinstance(completion["live_operations"], list)
             and all(isinstance(v, str) and v.strip() for v in completion["live_operations"])):
         result["completion"] = completion
@@ -93,7 +93,7 @@ def normalize(value: object) -> dict:
           and all(re.fullmatch(r"SLICE-[0-9]{3,}", v) for v in completion["delivery_scope"])):
         result["completion"] = completion
     else:
-        raise WorkflowError("OBJECTIVE_INVALID", "completion policy must declare bounded merge authority")
+        raise WorkflowError("OBJECTIVE_INVALID", "completion policy must declare a supported boundary and bounded authority")
     if "issue_resolution" in value:
         from workflow_issue_resolution import metadata
         result["issue_resolution"] = metadata(value["issue_resolution"])

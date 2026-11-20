@@ -10,9 +10,11 @@ import json
 import os
 import platform
 import re
+import signal
 import stat
 import sys
 import sysconfig
+import time
 import zipfile
 from pathlib import Path
 
@@ -714,14 +716,49 @@ def control(request: dict) -> dict:
         raise RuntimeError("Unknown repair guest action")
 
 
-def control_main() -> None:
-    raw = sys.stdin.buffer.read(worker.LIMIT + 1)
+@contextlib.contextmanager
+def control_deadline(deadline: float):
+    def interrupted(signum, _frame):
+        if signum == signal.SIGALRM:
+            raise runtime.migration.ObservationDeadline()
+        raise runtime.migration.ObservationInterrupted()
+
+    signals = (signal.SIGALRM, signal.SIGTERM, signal.SIGHUP)
+    previous = {signum: signal.getsignal(signum) for signum in signals}
+    timer = signal.getitimer(signal.ITIMER_REAL)
+    started = time.monotonic()
+    try:
+        for signum in signals:
+            signal.signal(signum, interrupted)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise runtime.migration.ObservationDeadline()
+        # Keep the original absolute cutoff, including bootstrap/input time.
+        signal.setitimer(signal.ITIMER_REAL, min(remaining, timer[0]) if timer[0] else remaining)
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+        remaining = timer[0] - (time.monotonic() - started)
+        if remaining > 0:
+            signal.setitimer(signal.ITIMER_REAL, remaining, timer[1])
+
+
+def control_main(*, deadline: float | None = None) -> None:
+    deadline = time.monotonic() + 600 if deadline is None else deadline
     request: dict = {}
     try:
-        if len(raw) > worker.LIMIT:
-            raise RuntimeError("Repair request exceeds its limit")
-        request = json.loads(raw)
-        result = control(request)
+        with control_deadline(deadline):
+            raw = sys.stdin.buffer.read(worker.LIMIT + 1)
+            if len(raw) > worker.LIMIT:
+                raise RuntimeError("Repair request exceeds its limit")
+            request = json.loads(raw)
+            if isinstance(request, dict) and request.get("action") in {"inspect", "stage"}:
+                with runtime.migration.observation_budget(deadline):
+                    result = control(request)
+            else:
+                result = control(request)
     except Exception as error:
         # Child/package stderr and config values never cross the public boundary.
         reasons = {
@@ -768,7 +805,8 @@ def control_main() -> None:
                     "stage": stage,
                     "error_code": error.code
                     if isinstance(error, python.dependency_scope.DependencyFailure)
-                    else reasons.get(
+                    else runtime.migration.observation_code(error)
+                    or reasons.get(
                         str(error),
                         "repair_handoff_unverified"
                         if action == "retire-idle-handoffs"

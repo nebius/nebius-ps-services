@@ -11,6 +11,39 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Increase the shared APT metadata-refresh maximum from 120 to 180 seconds while
+  respecting shorter enclosing deadlines and reserving ten seconds for cleanup.
+  Distinguish refresh timeout, request expiry and clear repository failures using
+  bounded, private diagnostics. Unwind repair subprocesses and temporary metadata
+  on ALRM/TERM/HUP. Preserve package staging before gateway shutdown, authenticated
+  repositories, frozen archive reuse and durable installation-worker lifetimes.
+  Protect subprocess startup and process-identity registration from cancellation,
+  and apply the preparation budget to Python projection and complete HA corrective
+  package checks, including the final observation.
+- Keep ordinary operation storage private during retained-VM repair so route
+  handoff can proceed after rebuilding a predecessor without an operation journal.
+- Prepare private workload route tables for Single-VM BGP even when the initial
+  learned-prefix set is empty, allowing the runtime route handoff to complete.
+- Align ordinary Static routing guidance with the shared preferred-path selector
+  and responder-ready alternatives, including the static configuration example.
+- Ignore generated HA conversion locators alongside other local lifecycle state.
+- Admit the exact product-owned underlay dependency during ordinary updates,
+  preserving environment identity and rejection of unknown management dependencies.
+- Fix fresh ordinary deployment rejecting its own runtime journal as guest
+  identity drift. Preserve fail-closed admission for unknown installations and
+  compare installed release evidence independently during quiescence.
+
+- Replace verbose `status --packet-details` counters with gateway-grouped delta
+  tables, visible zero-error thresholds, green PASS and yellow WARN results,
+  conservative incomplete/idle/cold-standby handling, and independent gateway
+  sequence checks. Preserve all metrics on narrow terminals and in no-color output.
+- Separate mTLS credentials from the TCP 9443 peer channel. Use the native
+  current-boot freshness verdict instead of comparing monotonic heartbeat time
+  with wall time, fixing false Unverified results in status and support bundles.
+  Show concise status and colored connection failures without direction, timestamps
+  or age in table cells; retain direction in support-bundle diagnostics. Preserve
+  malformed-status rejection and direct native reads.
+
 - Recover HA Static traffic after thirty seconds of confirmed selected-path loss,
   with fresh backup probes, scoped cleanup, bounded retries and recovery diagnostics.
   Preserve configured probe sources on any assigned local interface and reset
@@ -109,8 +142,8 @@ All notable changes to this project are tracked here. This changelog follows
   status; render healthy labels consistently in green.
 - Retain typed safe checkpoint diagnostics in support bundles and clarify
   incomplete evidence and automatic, non-exhaustive credential redaction.
-- Assess archived peer-channel freshness at gateway collection time, preserving
-  valid evidence across log-collection delays while rejecting stale snapshots.
+- Preserve the native gateway freshness verdict in archived peer-channel
+  observations across log-collection delays while rejecting stale snapshots.
 - Preserve fixed asset-retirement failure predicates in support bundles without
   exporting arbitrary error details.
 

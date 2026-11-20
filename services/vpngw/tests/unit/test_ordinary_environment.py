@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import time
+from pathlib import Path
 
 import pytest
 
@@ -131,6 +133,31 @@ def test_other_activation_dependencies_remain_blocked(field):
     manager.units["frr.service"][field] = [name]
     with pytest.raises(ops.OperationBlocked, match="service_scope_unknown"):
         manager.environment()
+
+
+@pytest.mark.parametrize("fault", [None, "content", "extra", "unit", "path"])
+def test_product_underlay_dependency_is_exact_and_bound(monkeypatch, fault):
+    manager = EnvironmentManager()
+    name = "nebius-vpngw-agent.service"
+    path = f"/etc/systemd/system/{name}.d/20-underlay.conf"
+    raw = (Path(ops.__file__).parent / "systemd/nebius-vpngw-underlay-ordering.conf").read_bytes()
+    if fault == "content":
+        raw = raw.replace(b"nebius-vpngw-underlay.service", b"unowned.service")
+    elif fault == "extra":
+        raw += b"Wants=unowned.service\n"
+    elif fault == "unit":
+        name = "nebius-vpngw-health-monitor.service"
+        path = f"/etc/systemd/system/{name}.d/20-underlay.conf"
+    elif fault == "path":
+        path = f"/run/systemd/system/{name}.d/20-underlay.conf"
+    manager.units[name]["DropInPaths"] = [path]
+    original = Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes", lambda self: raw if str(self) == path else original(self))
+    if fault:
+        with pytest.raises(ops.OperationBlocked, match="ordinary_service_scope_unknown"):
+            manager.environment()
+    else:
+        assert manager.environment()["unit_files"][path] == hashlib.sha256(raw).hexdigest()
 
 
 def test_known_manager_transition_is_retryable_but_unknown_or_unsupported_is_not(monkeypatch):

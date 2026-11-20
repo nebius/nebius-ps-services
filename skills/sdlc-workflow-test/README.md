@@ -1,5 +1,14 @@
 # SDLC Workflow Test
 
+The live three-tier fixture qualifies supplied and derived phase planning through
+separate native runs, local slice completion, interruption/continuation and an
+accepted change to remaining work. See [phased qualification](references/phased-live-qualification.md).
+Full application, companion, aggregate and cleanup evidence remains mandatory.
+Deterministic fixtures preserve seeded source documents and restore mocked
+workflow owners before subsequent real-Git checks in the same process.
+Historical phase checks retain the target owner's named read-only observation
+purpose for unsealed classifier and TDD checkpoints.
+
 Browser runner stdout and stderr are drained incrementally into bounded
 `runner-output.json` byte-count and digest metadata, without retaining raw logs.
 Complete EOF and owner cleanup remain required; assertion and trace artifacts
@@ -238,6 +247,10 @@ acceptance failure requires a fresh trial, even if it was recorded by mistake.
   Dedicated capability rows require full document coverage, exact source
   admission, phase/slice barriers, current completion evidence, 2,100-task
   graphs, indexed handoffs and real-Git configurable worktree retention and independent acceptance receipts.
+  Supplied-phase and unphased-source fixtures cover reviewed phase provenance,
+  multiple slices per phase, phase drift, contradictory dependencies and missing
+  future obligations. They do not qualify model-generated phase discovery or
+  native multi-slice delivery. See [phase planning](../worktree/references/phase-planning.md).
   Source admission also requires actual first canonical publication from a
   committed baseline, exact contract-commit recovery, managed lease ordering,
   publication-race rejection and rejection of unjournaled commits. Three-tier
@@ -298,7 +311,7 @@ acceptance failure requires a fresh trial, even if it was recorded by mistake.
 - Keeps real repositories, installed skills, hooks, and agent configuration
   unchanged.
 - For explicit create modes, requires a semantic
-  `agentic-sdlc/three-tier-results-v4` manifest, loopback-only dynamic web port,
+  `agentic-sdlc/three-tier-results-v5` manifest, loopback-only dynamic web port,
   an internal-only database endpoint, exact labelled Docker ownership, five
   independently captured PNG/JPEG GUI checkpoints, unit/API/database/migration/
   vertical/GUI evidence, API/database correlation, and restart persistence.
@@ -542,7 +555,7 @@ observations use the immutable receipt and reject unused selectors. Startup also
 requires a clean unchanged baseline. A separate native activation
 receipt correlates naturally emitted Codex turn/execution-item IDs with installed hook
 events and the exact startup session. The bounded adapter currently supports
-Codex CLI 0.167.0; other event formats remain unqualified. Raw prompts and tool
+Codex CLI 0.170.0; other event formats remain unqualified. Raw prompts and tool
 arguments are never copied into receipts. Source discovery alone cannot qualify
 three-tier PASS. Complete normal hook review in the disposable native home before
 the frozen trial, then use the generation-fenced `record-native-activation`
@@ -576,9 +589,13 @@ Recovery regressions also preserve peak observed worker counts across process-on
 clocks and zero-duration samples. Independent live observations compare this count
 with coherent running states, separately from measurable overlap duration.
 
-Deterministic unittest suites buffer output from passing tests so automatic
-summaries do not obscure named outcomes. Failed-test diagnostics remain in the
-captured output; the outcome parser and acceptance rules are unchanged.
+Deterministic suites retain exact case outcomes and bounded failure diagnostics
+in the private verification observation. Diagnostics contain exception types and
+catalog-relative file/line locations, excluding messages, source text, local
+values and external paths. Raw output remains represented by stream metadata;
+diagnostics never change acceptance or turn a failed run into a passing run.
+Composed test fixtures also run their registered cleanups so temporary patches
+cannot leak into later cases.
 
 Verifier unit fixtures control memory observations so result assertions are
 independent of runner host visibility. Separate regressions require unknown or

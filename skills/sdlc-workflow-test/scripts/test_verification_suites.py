@@ -44,7 +44,7 @@ class Collect(unittest.TestProgram):
         print(json.dumps(names(self.test)))
 Collect(module=None, argv=['unittest', *sys.argv[1:]], exit=False)
 """
-        for suite_id in ("execution", "three-tier"):
+        for suite_id in ("execution", "three-tier", "verifier"):
             with self.subTest(suite=suite_id):
                 spec = suites.suite_catalog(root)[suite_id]
                 result = subprocess.run(

@@ -798,13 +798,9 @@ def collect(
 
             sample = last_record if isinstance(last, dict) else first_record
             captured_at = record_metadata(sample).get("observed_at")
-            # Both timestamps come from the gateway. Log collection and a slower
-            # peer must not age a valid observation while the archive is assembled.
-            assessment = (
-                peer_channel(sample.get("data"), now=captured_at)
-                if captured_at is not None
-                else "unknown"
-            )
+            # Capture time is archive provenance. Native status owns freshness
+            # in its gateway monotonic clock; assembly delays do not re-age it.
+            assessment = peer_channel(sample.get("data")) if captured_at is not None else "unknown"
 
             add(
                 f"nodes/{index}/network/peer-channel",

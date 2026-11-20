@@ -56,7 +56,7 @@ class GitEnvironmentTests(unittest.TestCase):
 
         project = self.project / "project-a"
         docs = project / "docs"
-        docs.mkdir()
+        docs.mkdir(exist_ok=True)
         (docs / "requirements.md").write_text(REQUIREMENTS)
         (docs / "design.md").write_text(DESIGN)
         self.git("add", "project-a/docs")

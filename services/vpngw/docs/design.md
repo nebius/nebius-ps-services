@@ -718,7 +718,7 @@ No independent verification evidence was recorded before migration.
 <!-- /FEATURE: FEAT-006 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-007 reqs=REQ-005,REQ-007,TI-REQ-006,TI-REQ-011,TI-REQ-016 status=ready delivery=implemented priority=P1 version=1 -->
+<!-- FEATURE: FEAT-007 reqs=REQ-005,REQ-007,TI-REQ-006,TI-REQ-011,TI-REQ-016 status=ready delivery=implemented priority=P1 version=2 -->
 ### FEAT-007: Authoritative integrated VM-HA status
 
 #### Requirements Covered
@@ -751,7 +751,7 @@ Remove the public `vm-ha-recover` callback and the duplicate private agent flag,
 
 #### Implementation Boundaries
 
-`cli.py` owns structured authority collection, complete display validation, conservative classification, and one `Gateway`/`Role`/`mTLS`/`Ready` renderer. The Role projection consumes only the already-proven authoritative owner identity; configured role remains validated internal evidence and is not a fallback label. One status SSH context carries the configured management username and private key into every subprocess. Product-managed trust is resolved once against the complete deployment member set and the resulting immutable policy is shared by the member probes; an explicit operator known-hosts override remains independently resolved per member so one missing override pin becomes only that member's sanitized unavailable evidence. No status path enrolls trust or permits a permissive fallback. Its status-only loader policy preserves exact unresolved tunnel-PSK environment references because no status branch consumes them, while `config_loader.py` continues to reject every unresolved non-PSK placeholder and leaves mutating callers on the strict path. With resolved PSKs, status retains full local generation comparison. With unresolved PSKs, the status validator instead requires each agent's generation to equal its configuration digest, requires exact generation/digest parity between both available members, and still compares the locally derivable static-route and BGP-policy digests; it never hashes placeholder text as if it were the deployed secret-bearing generation. It always materializes both configured members and converts missing transport or invalid status into sanitized availability evidence. Exact cloud route authority requires the same non-empty managed-prefix set once per route target, all through the shared allocation. Authenticated controller reasons remain behind a closed identity-free normalization boundary. Pending controller effects are transitional only when their generated identity names a configured member and their encoded action kind matches the reported state; this includes an authoritative owner entering passive mode. Starting rearm or an incomplete policy transaction is transitional, while a committed disabled policy with no accepted start is maintenance and terminal successful `running` rearm can participate in healthy evidence only when policy is enabled. The classifier derives the public Auto-healing value only from the already-validated two-member policy projection. For disabled maintenance, the existing shell-quoted config-bound rearm command becomes the exact enable Action; only that Action may disclose the current invocation's config path, while other config-bearing actions retain `<file>`. The renderer uses literal Rich text for all footer cells so path markup remains inert, neutral identity/role cells, green only for proven healthy aggregate/mTLS/readiness, yellow for maintenance and transitions, and red for blocked or unavailable semantic state. Raw payloads, exceptions, resource identities, revisions, generations, digests, locks, operations, epochs, fingerprints, timings, reasons, and recovery actions stay behind the projection boundary. Non-HA status and unrelated mutation paths remain unchanged.
+`cli.py` owns structured authority collection, complete display validation, conservative classification, and one `Gateway`/`Role`/`mTLS credentials`/`Ready` renderer. The Role projection consumes only the already-proven authoritative owner identity; configured role remains validated internal evidence and is not a fallback label. One status SSH context carries the configured management username and private key into every subprocess. Product-managed trust is resolved once against the complete deployment member set and the resulting immutable policy is shared by the member probes; an explicit operator known-hosts override remains independently resolved per member so one missing override pin becomes only that member's sanitized unavailable evidence. No status path enrolls trust or permits a permissive fallback. Its status-only loader policy preserves exact unresolved tunnel-PSK environment references because no status branch consumes them, while `config_loader.py` continues to reject every unresolved non-PSK placeholder and leaves mutating callers on the strict path. With resolved PSKs, status retains full local generation comparison. With unresolved PSKs, the status validator instead requires each agent's generation to equal its configuration digest, requires exact generation/digest parity between both available members, and still compares the locally derivable static-route and BGP-policy digests; it never hashes placeholder text as if it were the deployed secret-bearing generation. It always materializes both configured members and converts missing transport or invalid status into sanitized availability evidence. Exact cloud route authority requires the same non-empty managed-prefix set once per route target, all through the shared allocation. Authenticated controller reasons remain behind a closed identity-free normalization boundary. Pending controller effects are transitional only when their generated identity names a configured member and their encoded action kind matches the reported state; this includes an authoritative owner entering passive mode. Starting rearm or an incomplete policy transaction is transitional, while a committed disabled policy with no accepted start is maintenance and terminal successful `running` rearm can participate in healthy evidence only when policy is enabled. The classifier derives the public Auto-healing value only from the already-validated two-member policy projection. For disabled maintenance, the existing shell-quoted config-bound rearm command becomes the exact enable Action; only that Action may disclose the current invocation's config path, while other config-bearing actions retain `<file>`. The renderer uses literal Rich text for all footer cells so path markup remains inert, neutral identity/role cells, green only for proven healthy aggregate/mTLS/readiness, yellow for maintenance and transitions, and red for blocked or unavailable semantic state. Raw payloads, exceptions, resource identities, revisions, generations, digests, locks, operations, epochs, fingerprints, timings, reasons, and recovery actions stay behind the projection boundary. Non-HA status and unrelated mutation paths remain unchanged.
 
 #### Test-First Success Criteria
 
@@ -797,7 +797,7 @@ The mapped requirements, validation, and evaluation all pass.
   validation, two configured-member materialization, conservative overall
   classification, unresolved-PSK handling, and identity-safe normalization.
   Its public renderer now emits only one aggregate-titled
-  `Gateway`/`Role`/`mTLS`/`Ready` table; neutral identity/role cells and explicit
+  `Gateway`/`Role`/`mTLS credentials`/`Ready` table; neutral identity/role cells and explicit
   green/red semantic cells preserve readable no-color text without rendering
   controller details, certificate metadata, timings, reasons, or actions.
 - Pure tests cover both owner directions, expected and foreign locks, every
@@ -5368,7 +5368,7 @@ on macOS and remain separate CI evidence. No project dependencies were changed.
 
 <!-- /FEATURE: FEAT-017 -->
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-018 reqs=REQ-019 status=ready delivery=verified priority=P1 version=2 -->
+<!-- FEATURE: FEAT-018 reqs=REQ-019 status=ready delivery=verified priority=P1 version=3 -->
 ### FEAT-018: Per-tunnel replay window and sampled receive health
 
 #### Requirements Covered
@@ -5439,9 +5439,22 @@ interface receive errors or drops also warn when SA counters stay quiet. Label g
 when multiple hosts are displayed. Warm standby SAs are sampled normally; only a fresh
 post-sample authority check with matching boot identity can explain an absent SA as cold
 standby. Packet evidence never affects HA readiness, status exit codes or automated actions.
-`--packet-details` shows actual measured intervals and per-SA, interface and gateway
-counter before/after/deltas, clearly scoped. Matching counters support correlation but
-are not required to be equal or added together. Do not extend the HA wire schema.
+`--packet-details` replaces the compact packet table with a delta report grouped by
+host, showing tunnel, window, received packets, late/duplicate/integrity deltas,
+interface errors/drops and result. Gateway sequence checks appear once per host with
+an explicit zero allowance. Show measured intervals; below 120 columns split SA and
+interface checks. All error/drop thresholds are zero: positive events WARN, complete
+zero samples PASS, no accepted traffic adds idle. Proven cold standby is N/A; absent,
+reset, rekeyed or ambiguous evidence remains incomplete. Preserve confirmed increases
+as WARN with incomplete coverage and never substitute zero for missing measurements.
+Retain raw before/after values in structured observations, not verbose normal output.
+
+Refactor classification into structured counter results consumed by pure renderers;
+retain the key-free probe and wire format. Deduplicate stable SAs and interface scopes,
+label shared interfaces, and keep gateway checks independent of tunnel attribution.
+Normal status retains its compact table and reports gateway warnings/gaps once.
+Counters are not additive; PASS covers only the sample, not end-to-end delivery.
+The presentation amendment is implemented and verified locally; see its evidence below.
 
 #### Selected Option
 
@@ -5611,6 +5624,16 @@ Ruff/format checks, four-file mypy, Markdown checks and paired specification val
 Independent code/security review found no remaining scoped finding. The refreshed wheel
 again matches all 75 Python package sources and admits the original configuration and
 resolved members through the installed CLI interpreter. This is local proof only.
+
+#### Packet report amendment evidence
+
+Implemented structured counter samples/checks and tunnel/gateway reports in
+`packet_health.py`, pure responsive rendering in `packet_report.py`, and CLI wiring.
+Raw before/after values remain internal. Tests cover each zero threshold, positive
+traffic, idle/cold standby, partial/reset/rekey evidence, shared-interface deduplication,
+independent gateway checks, and 60/80/120/160-column colored/plain output. All 8,305
+unit tests pass with direct pytest `-n 4`; Ruff and mypy (241 files) pass. This is
+local source and synthetic-observation proof, not a new live gateway qualification.
 
 <!-- /FEATURE: FEAT-018 -->
 <!-- markdownlint-disable-next-line MD013 -->
@@ -10119,6 +10142,11 @@ separates owned routes from matching external coverage. Before the runtime-route
 amendment, BGP withdrawals never retired admitted destinations. The amended runtime
 requires three complete consistent absence observations and retains unknown evidence. Default/shared tables are copied per selected subnet before
 exact revision-bound attachment; source and unrelated routes stay intact.
+The same reviewed conversion runs when BGP has not learned any prefixes yet;
+private runtime-table ownership must not depend on peer startup ordering.
+The empty-selection regression covers deferred preview and fresh selection,
+exact copy/attachment effects, and preservation of the source and unrelated subnet.
+This local regression does not by itself establish live release qualification.
 
 The same route owner now backs add-routes-local, including exact-union
 summarization and private revision-bound rollback guidance. Ordinary replacement
@@ -11251,7 +11279,7 @@ documentation evidence does not qualify native supervision.
 
 <!-- /FEATURE: FEAT-037 -->
 
-<!-- FEATURE: FEAT-038 reqs=REQ-038 status=ready delivery=implemented priority=P0 version=8 -->
+<!-- FEATURE: FEAT-038 reqs=REQ-038 status=ready delivery=implemented priority=P0 version=9 -->
 ### FEAT-038: Confirmed full software repair on retained VMs
 
 #### Requirements Covered
@@ -11269,8 +11297,61 @@ The exact cause of the reported customer mismatch remains unproven.
 
 #### Design Details
 
-Before this refinement, repair proceeded from confirmation through remote
-preparation and package installation without normal progress output, and its HA
+**APT observation resilience:** use the shared 180-second metadata-refresh cap
+for ordinary, HA and retained-VM repair package inspection/staging. A scoped
+absolute monotonic budget carries the earliest enclosing deadline through nested
+observations; reserve ten seconds for cleanup without resetting existing phase
+budgets or changing durable package-installation workers. Freeze bounded control
+request deadlines before source/payload ingestion. Repair ALRM/TERM/HUP handlers
+unwind owned subprocess cleanup and temporary metadata; cleanup excludes unrelated
+processes and preserves durable worker ownership. Defer managed callable control
+handlers during subprocess startup until cleanup owns the child and any ordinary
+process identity is journaled. Preserve default/ignored handlers and child signal
+masks; non-main threads do not install signal handlers.
+
+The same scoped deadline covers Python wheel projection and the complete HA
+corrective package observation, including its preceding and final inspection.
+Reject successful scope exit after expiry. Unscoped durable package installation
+keeps its existing dispatch and lifetime.
+
+Capture at most 64 KiB of APT stderr in memory while draining both streams. Emit
+only allowlisted typed timeout, request-budget, DNS, transport, TLS, signature/key,
+metadata-time or repository-configuration diagnostics. Mixed/truncated/unrecognized
+output uses the existing adapter fallback, with no raw output or repository identity
+in messages or persisted state. Keep text/JSON interfaces and exit behavior; show
+elapsed stage time and the 180-second maximum, distinguishing an enclosing expiry.
+Preserve signed temporary indexes, frozen archive hashes and staged/offline resume.
+No new retries, network/credential repair, flags or persisted formats are introduced.
+
+This refinement is implemented in the shared package observer, repair bootstrap,
+ordinary/HA adapters, durable failure projection and recovery/progress messages.
+Bounded requests retain their original deadlines; HA corrective planning retains
+its shorter existing allowance. Durable installation workers retain their own
+lifetime. Previously stopped/quarantined repair members still use the existing
+guarded-start/network-restoration path before preparation; installation consumes
+only the verified frozen payload.
+
+Local verification covers simulated success beyond the former refresh limit,
+absolute and nested deadline exhaustion, conservative bounded classification,
+private diagnostics, ordinary/HA adapters, staged archive reuse and both-member
+preparation failures before deliberate shutdown. The standalone
+`tests/integration/apt_observation_native.py` fixture runs the streamed stdlib
+repair bootstrap on Ubuntu 24.04/Python 3.12 with a fake APT process tree. All seven
+ALRM/TERM/HUP, refresh-timeout, request-deadline, inherited-alarm and startup-signal
+cases returned
+safe predicates and removed the owned process tree and temporary metadata, while
+leaving child control signals unblocked. An ordinary-operation unit regression
+also checks process-identity registration before cancellation and exact child
+cleanup. The focused alignment regressions passed 49 tests.
+The final local unit run passed 8,383 tests; Ruff passed and mypy passed across
+241 source files. README, changelog, requirements and design pass Markdown lint.
+The fixture does not install the VPN runtime, repair a live VM or prove
+resolution of any customer repository failure. Historical live evidence below
+qualifies its original source only.
+
+Before the earlier progress refinement, repair proceeded from confirmation
+through remote preparation and package installation without normal progress
+output, and its HA
 activation adapter dropped the existing progress sink. A terminal could therefore
 appear hung while durable repair effects continued. The command-scoped
 presentation owner now uses the existing Rich dependency: an indeterminate
@@ -11543,15 +11624,36 @@ inside its protected repair archive, after exact ownership and no-follow checks.
 Foreign ownership, symlinks and directories writable by others remain rejected.
 Existing archive contents and the original package-start policy are preserved.
 
-Confirmed reset also owns reconstruction of the retained mTLS writer-lock
-parent. Create it privately, or open its existing directory without following
+Confirmed reset also owns reconstruction of the retained mTLS and ordinary
+operation writer-lock parents. Create it privately, or open its existing directory without following
 symlinks and require current ownership with no group/world write permission.
 Acquire the existing writer lock before tightening its parent to mode `0700`;
 retain both directory and lock inodes. Ordinary repair must leave this canonical
-layout ready for subsequent HA certificate bootstrap. Normal mTLS admission
-continues to reject invalid permissions. Recognize only fixed authenticated
+layout ready for route handoff and subsequent HA certificate bootstrap. An absent
+ordinary operation journal still requires its parent to be private; reset must
+create that parent with mode `0700` even on predecessors without ordinary command
+state. Normal journal and mTLS admission continue to reject invalid permissions. Recognize only fixed authenticated
 guest permission diagnostics for shared apply/vm-ha recovery; arbitrary stderr
 never becomes a public failure reason.
+
+A clean two-project ordinary BGP replay validated this reconstruction against an
+installed official `0.5.9` predecessor. The first trial exposed the ordinary
+parent permission defect after package installation; its failure evidence was
+retained. After the reset correction, a fresh predecessor passed a 120-second
+zero-loss bidirectional ICMP/TCP baseline and direct `apply --repair` using frozen
+local `0.6.10.dev1` candidate
+`15fa76b057761a1d3c1a978da512dbb69d17a9f2f388cc9e906b2d44eac6b7b7`.
+The command completed in 558 seconds. One-second probes recorded 377 consecutive
+failed samples per protocol and direction, with approximately 379 seconds between
+the last success and first recovered success. Independent checks matched all 261
+installed first-party files, 41 Python distributions, 13 native packages and
+archives, and 16 service assets. VM, disk, address and security-group identities
+were retained; BGP, IPsec and workload routes recovered. A separate 300-second
+window had zero packet or TCP loss in both directions. Subsequent normal apply
+returned unchanged, with stable service PIDs, start times and boot identity.
+No out-of-band guest repair pre-satisfied the transition. This proves the scoped
+current-candidate repair path; it does not qualify published `0.6.9`, ordinary
+upgrade of an unrepaired predecessor, HA, or the original AWS peer report.
 
 The repair coordinator and its recovery accounting retain their execution ID.
 The HA adapter derives a separate canonical operation identity from that execution
@@ -12689,6 +12791,23 @@ old pins or represent policy admission as reused approval. Complete preparation,
 continuations and successor chains receive explicit owner-aware settlement paths.
 Unknown outcomes stay pending; expanded effects retain fresh approval.
 
+For fresh ordinary installation, retain a separate installed-release fingerprint
+across quiescence. The admission observation still treats an unresolved runtime
+journal as unknown, but publishing the command-owned journal cannot masquerade
+as changed installed metadata. Retain package, module, resolved-config and duplicate
+metadata evidence in the installation check; the operation owner independently
+validates the journal. The fresh-install transaction regression reproduces the
+prior identity rejection and passes with this correction; fresh cloud replay of
+this correction remains pending.
+
+Ordinary environment admission recognizes the exact agent `20-underlay.conf`
+path and canonical bytes installed by the product. The dependency remains hashed;
+the underlay unit is already included in management quiescence and environment
+inspection. Altered contents, additional dependencies and foreign paths or units
+remain blocked. A source regression reproduces the prior rejection and verifies
+these negative cases. A focused live ordinary update and independent installed
+environment inspection passed with this correction.
+
 Use specific allowlisted diagnostics and selector provenance for recovery output.
 Require two fresh agreeing health observations and independent role-appropriate
 runtime, tunnel, BGP and route verification; preserve maintenance semantics.
@@ -12801,7 +12920,7 @@ of the destroyed predecessor VMs.
 <!-- /FEATURE: FEAT-043 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-044 reqs=REQ-043,REQ-041,REQ-007,REQ-010,REQ-035 status=ready delivery=implemented priority=P1 version=3 -->
+<!-- FEATURE: FEAT-044 reqs=REQ-043,REQ-041,REQ-007,REQ-010,REQ-035 status=ready delivery=implemented priority=P1 version=6 -->
 ### FEAT-044: Complete wheel-owned convergence and operational diagnostics
 
 #### Requirements Covered
@@ -12869,10 +12988,21 @@ states. Report concise release alignment and health; disk metadata alone does no
 prove the build loaded by a running process. Share validated healthy presentation
 without modifying structured results. Reuse SSH acquisition and authenticated peer
 heartbeat evidence for separately labelled SSH22 and mTLS9443 observations.
-For support archives, compare heartbeat freshness with the gateway-recorded
-collection time and retain that timestamp in the derived record. Later log
-collection or archive assembly must not erase valid historical evidence. Missing
-or invalid collection times and already stale snapshots remain unknown.
+For CLI status and support archives, consume the native `apply_convergence.fresh`
+verdict, computed by the gateway using its monotonic clock and current boot/mode
+checks. Retain explicit boot and stale-reason validation in the shared classifier.
+Never subtract the native monotonic `observed_at` value from a wall-clock timestamp.
+Freeze the presentation assessment before later SSH, rendering or archive assembly.
+Keep the native status SSH command direct; no timestamp envelope or extra probe is
+needed. Separate mTLS credentials from peer-channel labels and retain the neutral
+`Peer channel · TCP 9443` header. Render green Open / mTLS verified, red specific
+connection/TLS failures and yellow Unverified with reason. CLI cells omit direction,
+timestamp and age; allow natural wrapping without forced newlines or decorative
+icons. Keep canonical assessment codes and direction in support-bundle diagnostics.
+State once that the channel reflects the observed heartbeat,
+not a continuous port probe. Archive acquisition timestamps remain provenance only;
+missing/invalid archive capture metadata or missing/false native freshness remains
+unknown. These changes do not alter HA authority or the native agent schema.
 
 Extend owner-defined diagnostic projections and closed error allowlists together.
 Retain safe operation/checkpoint identifiers, selected/pinned hashes, settlement and
@@ -12986,6 +13116,47 @@ The full disposable Linux/systemd campaign and live two-gateway campaign were no
 The retirement implementation follows the official
 [systemctl stop, disable and reload semantics](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html):
 disabling or reloading a unit alone does not establish that its service stopped.
+
+#### Observed channel presentation amendment evidence
+
+The earlier local fixtures missed the production clock-domain mismatch. A read-only
+live baseline on 2026-11-19 showed both members with native fresh/current-boot
+and authenticated heartbeat evidence, while the CLI classified both as stale.
+Source traces confirmed monotonic native observations were compared with wall time
+in both CLI and archive consumers. The repaired shared classifier consumes the
+native freshness verdict, retains boot/stale-reason checks, and freezes the observed
+assessment. Direct native SSH reads replace the unnecessary timestamp envelope.
+At that verification, CLI cells included status, direction and sanitized failure reasons.
+
+All 794 focused status, release, archive and apply-health tests pass, including a
+regression connecting real native freshness projection to the presentation consumer.
+Missing/non-boolean freshness, stale/future native snapshots, wrong boot/mode,
+classified failures and delayed rendering remain covered. Ruff and mypy pass across
+241 source files. Read-only code/security review found no further introduced issue.
+The requested live status command passed against unchanged candidate source in both
+plain and terminal output: two green Open / mTLS verified cells, no time/age, HEALTHY
+HA, and six packet-check PASS rows. The terminal run completed in about 30 seconds.
+No gateway deployment, restart, credential change or traffic intervention occurred.
+This verifies the channel-reporting amendment, not the broader upgrade, recovery,
+failover or sustained-traffic behavior of this feature.
+
+#### Status-only channel cell verification
+
+The CLI renderer now omits the direction lookup and appended direction line;
+`peer_direction()` and archive projection remain unchanged. Existing rendering
+assertions cover status-only healthy and classified failure cells, yellow unknown
+reasons, and the release table without directional labels. All 171 focused release,
+archive and native-freshness tests passed, along with scoped Ruff and whitespace
+checks. Healthy, failed, stale and unavailable cells rendered correctly in colored
+and plain output at widths 60, 80, 120 and 160. Scoped alignment review found no
+introduced code, wiring or security issue.
+
+The requested read-only live status command completed successfully in about 32 seconds
+against unchanged candidate source. Both peer cells were green Open / mTLS verified
+on single rows, without direction/time/age; the existing header was unchanged.
+HA reported HEALTHY and all six packet-check rows PASS. No gateway mutation,
+deployment or restart occurred. This verifies presentation for the observed run;
+broader upgrade, failover and sustained-traffic behavior is not newly qualified.
 
 <!-- /FEATURE: FEAT-044 -->
 
@@ -15572,7 +15743,6 @@ update_req = UpdateSubnetRequest(
 
 **Resolution:**
 **Switching to XFRM interfaces completely eliminated this issue.** XFRM's `if_id` binding mechanism provides clean separation between tunnel interfaces and avoids the packet duplication problem that occurred with VTI mode. The current implementation uses XFRM interfaces exclusively and does not experience packet duplication.
-
 
 ### VM-HA Static backup recovery after prolonged remote loss
 

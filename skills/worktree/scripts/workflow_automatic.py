@@ -324,6 +324,8 @@ def prepare_aggregation(run_dir: Path, session: str) -> dict:
     correction = run.get("corrective_execution")
     if correction and not (run_dir / "execution" / correction / "coordinator.json").exists():
         raise WorkflowError("AGGREGATION_BLOCKED", "complete the fresh corrective execution before aggregation")
+    from workflow_program import require_complete
+    require_complete(run_dir)
     if row["state"] == "allocated":
         row = projects.update(run_dir, expected="allocated", state="aggregation-ready")
     if row["state"] in {"delivered", "cleaned"}:

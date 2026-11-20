@@ -87,7 +87,7 @@ Evaluate observed product behavior against real-world acceptance criteria.
 
 ## Writes
 
-- `evidence/FEAT-*/evaluate.md`.
+- `evidence/<execution-id>/evaluate.md`.
 - Screenshots, transcripts, or API/service summaries as appropriate.
 - Per-criterion `pass`, `fail`, or `inconclusive` result.
 - For every failed gate, one immutable `failure-event-v2` recorded through

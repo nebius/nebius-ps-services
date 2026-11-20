@@ -10,6 +10,7 @@ import base64
 import contextlib
 import hashlib
 import json
+import math
 import os
 import re
 import selectors
@@ -19,8 +20,10 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Iterator
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -91,49 +94,244 @@ COMMAND = None
 CHECK = None
 PYTHON_PREPARE = None
 
+APT_REFRESH_TIMEOUT = 180
+OBSERVATION_CLEANUP_RESERVE = 10
+APT_STDERR_LIMIT = 64 * 1024
+OBSERVATION_DEADLINE: ContextVar[float | None] = ContextVar(
+    "package_observation_deadline", default=None
+)
 
-def run(args: list[str], *, timeout: float = 60, cwd: Path | None = None) -> str:
+
+class ObservationDeadline(TimeoutError):
+    code = "package_observation_deadline"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
+
+
+class ObservationInterrupted(TimeoutError):
+    code = "package_observation_interrupted"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
+
+
+class RepositoryFailure(RuntimeError):
+    CATEGORIES = frozenset(
+        {
+            "timeout",
+            "dns",
+            "transport",
+            "tls",
+            "signature",
+            "metadata_time",
+            "configuration",
+            "unknown",
+        }
+    )
+
+    def __init__(self, category: str) -> None:
+        if category not in self.CATEGORIES:
+            raise ValueError("Unknown repository failure category")
+        self.category = category
+        self.code = "apt_repository_" + category
+        super().__init__("Signed Ubuntu repository metadata is unavailable")
+
+
+class CommandFailure(RuntimeError):
+    def __init__(self, category: str = "unknown") -> None:
+        self.category = category
+        super().__init__("runtime package observation failed")
+
+
+OBSERVATION_CODES = frozenset(
+    {
+        ObservationDeadline.code,
+        ObservationInterrupted.code,
+        *("apt_repository_" + category for category in RepositoryFailure.CATEGORIES - {"unknown"}),
+    }
+)
+
+
+def observation_code(error: Exception) -> str | None:
+    """Only typed, closed diagnostics cross a streamed guest boundary."""
+    if isinstance(error, (ObservationDeadline, ObservationInterrupted)):
+        return error.code
+    if isinstance(error, RepositoryFailure) and error.category != "unknown":
+        return error.code
+    return None
+
+
+@contextlib.contextmanager
+def observation_budget(deadline: float | None = None) -> Iterator[None]:
+    """Scope only package observations, never a durable installation worker."""
+    parent = OBSERVATION_DEADLINE.get()
+    cutoff = (
+        deadline - OBSERVATION_CLEANUP_RESERVE
+        if deadline is not None and math.isfinite(deadline)
+        else None
+    )
+    if parent is not None:
+        cutoff = parent if cutoff is None else min(parent, cutoff)
+    token = OBSERVATION_DEADLINE.set(cutoff)
+    try:
+        observation_remaining()
+        yield
+        observation_remaining()
+    finally:
+        OBSERVATION_DEADLINE.reset(token)
+
+
+def observation_remaining() -> float:
+    deadline = OBSERVATION_DEADLINE.get()
+    remaining = float("inf") if deadline is None else deadline - time.monotonic()
+    if remaining <= 0:
+        raise ObservationDeadline()
+    return remaining
+
+
+def classify_apt_stderr(raw: bytes, *, truncated: bool = False) -> str:
+    """Conservative English APT predicates; raw diagnostics never leave memory."""
+    if truncated:
+        return "unknown"
+    categories: set[str] = set()
+    patterns = {
+        "dns": r"temporary failure resolving|could not resolve",
+        "transport": r"could not connect|unable to connect|connection (?:timed out|refused|failed)|network is unreachable",
+        "tls": r"certificate verification failed|certificate issuer is unknown|could not handshake|tls (?:connection|handshake)",
+        "signature": r"no_pubkey|badsig|expkeysig|revkeysig|signatures? (?:couldn't|could not) be verified|signatures were invalid|repository .+ is not signed",
+        "metadata_time": r"release file .+ (?:is expired|is not valid yet)",
+        "configuration": r"does not have a release file|malformed (?:entry|line)|type .+ is not known|conflicting values set for option|404\s+not found",
+    }
+    for line in raw.decode("utf-8", errors="replace").lower().splitlines():
+        # Ignore the generic summary following a specific error. Unknown error
+        # lines make the whole diagnosis unknown instead of hiding a second cause.
+        if not line.strip() or "some index files failed to download" in line:
+            continue
+        matched = {category for category, pattern in patterns.items() if re.search(pattern, line)}
+        if matched:
+            categories.update(matched)
+        elif line.startswith(("e:", "w:", "err:")):
+            return "unknown"
+    return next(iter(categories)) if len(categories) == 1 else "unknown"
+
+
+@contextlib.contextmanager
+def defer_control_signals() -> Iterator[None]:
+    """Deliver managed cancellation only after the caller owns its new child.
+
+    The caller must enclose this context in its child-cleanup try/finally.
+    Deferring handlers, rather than blocking signals at fork, leaves the child's
+    signal mask unchanged. Default/ignored handlers and non-main threads retain
+    their existing behavior.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    handlers = {}
+    pending = []
+
+    def defer(signum, frame):
+        pending.append((signum, frame))
+
+    try:
+        for signum in (signal.SIGALRM, signal.SIGTERM, signal.SIGHUP):
+            handler = signal.getsignal(signum)
+            if callable(handler):
+                handlers[signum] = handler
+                signal.signal(signum, defer)
+        yield
+    finally:
+        # Restore every handler before a pending signal can interrupt restoration.
+        mask = signal.pthread_sigmask(signal.SIG_BLOCK, set(handlers))
+        try:
+            for signum, handler in handlers.items():
+                signal.signal(signum, handler)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+        for signum, frame in pending:
+            handlers[signum](signum, frame)
+
+
+def run(
+    args: list[str], *, timeout: float = 60, cwd: Path | None = None, apt_diagnostics: bool = False
+) -> str:
+    remaining = observation_remaining()
+    request_limited = remaining <= timeout
+    timeout = min(timeout, remaining)
     if COMMAND is not None and cwd is None:
         if CHECK is not None:
             CHECK()
-        return COMMAND(args, limit=timeout)[1]
-    child = subprocess.Popen(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        cwd=cwd,
-        start_new_session=True,
-        env={**os.environ, "LC_ALL": "C", "DEBIAN_FRONTEND": "noninteractive"},
-    )
+        try:
+            return COMMAND(args, limit=min(timeout, observation_remaining()))[1]
+        except TimeoutError:
+            observation_remaining()
+            raise
+    deadline = min(time.monotonic() + timeout, OBSERVATION_DEADLINE.get() or float("inf"))
+    child = None
     try:
+        with defer_control_signals():
+            child = subprocess.Popen(
+                args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE if apt_diagnostics else subprocess.DEVNULL,
+                cwd=cwd,
+                start_new_session=True,
+                env={**os.environ, "LC_ALL": "C", "DEBIAN_FRONTEND": "noninteractive"},
+            )
         output = bytearray()
-        deadline = time.monotonic() + timeout
+        diagnostic = bytearray()
+        truncated = False
         assert child.stdout is not None
         with selectors.DefaultSelector() as selector:
             selector.register(child.stdout, selectors.EVENT_READ)
+            if child.stderr is not None:
+                selector.register(child.stderr, selectors.EVENT_READ)
             while selector.get_map():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    if request_limited:
+                        raise ObservationDeadline()
                     raise TimeoutError("runtime package observation deadline expired")
                 for key, _events in selector.select(min(remaining, 0.1)):
                     chunk = os.read(key.fd, 65536)
                     if not chunk:
                         selector.unregister(key.fileobj)
-                    else:
+                    elif key.fileobj is child.stdout:
                         output.extend(chunk)
                         if len(output) > 4 * 1024 * 1024:
                             raise RuntimeError("runtime package observation exceeds limit")
-        if child.wait(timeout=max(0.001, deadline - time.monotonic())):
-            raise RuntimeError("runtime package observation failed")
+                    else:
+                        space = APT_STDERR_LIMIT - len(diagnostic)
+                        truncated = truncated or len(chunk) > space
+                        diagnostic.extend(chunk[:space])
+        try:
+            status = child.wait(timeout=max(0.001, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            if request_limited:
+                raise ObservationDeadline() from None
+            raise TimeoutError("runtime package observation deadline expired") from None
+        if status:
+            raise CommandFailure(classify_apt_stderr(diagnostic, truncated=truncated))
         return output.decode()
     finally:
+        # A second control signal must not interrupt collection of an owned child.
+        previous_mask = signal.pthread_sigmask(
+            signal.SIG_BLOCK, {signal.SIGALRM, signal.SIGTERM, signal.SIGHUP}
+        )
         try:
-            os.killpg(child.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        child.wait(timeout=5)
-        if child.stdout is not None:
-            child.stdout.close()
+            if child is not None:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                child.wait(timeout=5)
+        finally:
+            if child is not None and child.stdout is not None:
+                child.stdout.close()
+            if child is not None and child.stderr is not None:
+                child.stderr.close()
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
 
 def policy_payload() -> dict | None:
@@ -660,123 +858,136 @@ def apt_indexes() -> Iterator[list[str]]:
         )
         options = ["-c", str(config)]
         try:
-            run(["apt-get", *options, "update", "-qq"], timeout=120, cwd=directory)
-        except (RuntimeError, TimeoutError) as error:
-            # Keep repository output/URLs private, but do not misreport a
-            # network, signature or repository failure as a checkpoint conflict.
-            raise RuntimeError("Signed Ubuntu repository metadata is unavailable") from error
+            run(
+                ["apt-get", *options, "update", "-qq"],
+                timeout=APT_REFRESH_TIMEOUT,
+                cwd=directory,
+                apt_diagnostics=True,
+            )
+        except (ObservationDeadline, ObservationInterrupted):
+            raise
+        except TimeoutError:
+            raise RepositoryFailure("timeout") from None
+        except CommandFailure as error:
+            raise RepositoryFailure(error.category) from None
+        except RuntimeError:
+            raise RepositoryFailure("unknown") from None
         yield options
 
 
-def plan(parent: str | None = None) -> dict:
-    existing = state()
-    if existing is not None and pending(parent) is not None:
-        return existing["plan"]
-    return plan_current()
+def plan(parent: str | None = None, *, deadline: float | None = None) -> dict:
+    with observation_budget(deadline):
+        existing = state()
+        if existing is not None and pending(parent) is not None:
+            return existing["plan"]
+        return plan_current()
 
 
-def plan_current(*, reinstall: bool = False) -> dict:
+def plan_current(*, reinstall: bool = False, deadline: float | None = None) -> dict:
     """Read-only package proposal; it grants no replacement of pending work."""
-    before = packages()
-    if run(["dpkg", "--audit"]).strip() and not reinstall:
-        raise RuntimeError("unowned incomplete package work requires reconciliation")
-    required = REPAIR_REQUIRED if reinstall else REQUIRED
-    installed = all(before.get(k, [None, None])[1] == "installed" for k in required)
-    old = [k for k in LEGACY if before.get(k, [None, None])[1] == "installed"]
-    install: dict[str, str] = {}
-    remove = []
-    archives: dict[str, dict] = {}
-    if reinstall or not installed or old:
-        with apt_indexes() as options:
-            simulated = run(
-                [
-                    "apt-get",
-                    *options,
-                    "-s",
-                    "--no-install-recommends",
-                    *(["--reinstall"] if reinstall else []),
-                    "install",
-                    *required,
-                    *(k + "-" for k in old),
-                ]
-            )
-            for line in simulated.splitlines():
-                if line.startswith("Inst "):
-                    match = re.match(r"Inst ([A-Za-z0-9:+.-]+)(?: \[[^]]+\])? \(([^ ]+)", line)
-                    if match is None:
-                        raise RuntimeError("package closure cannot be parsed")
-                    install[match[1]] = match[2]
-                elif line.startswith("Remv "):
-                    name = line.split()[1]
-                    if name not in LEGACY:
-                        raise RuntimeError("runtime closure removes an unrelated package")
-                    remove.append(name)
-            for name, version in sorted(install.items()):
-                output = run(
-                    ["apt-get", *options, "--print-uris", "download", name + "=" + version]
+    with observation_budget(deadline):
+        before = packages()
+        if run(["dpkg", "--audit"]).strip() and not reinstall:
+            raise RuntimeError("unowned incomplete package work requires reconciliation")
+        required = REPAIR_REQUIRED if reinstall else REQUIRED
+        installed = all(before.get(k, [None, None])[1] == "installed" for k in required)
+        old = [k for k in LEGACY if before.get(k, [None, None])[1] == "installed"]
+        install: dict[str, str] = {}
+        remove = []
+        archives: dict[str, dict] = {}
+        if reinstall or not installed or old:
+            with apt_indexes() as options:
+                simulated = run(
+                    [
+                        "apt-get",
+                        *options,
+                        "-s",
+                        "--no-install-recommends",
+                        *(["--reinstall"] if reinstall else []),
+                        "install",
+                        *required,
+                        *(k + "-" for k in old),
+                    ]
                 )
-                rows = [shlex.split(line) for line in output.splitlines() if line.startswith("'")]
-                if len(rows) != 1 or len(rows[0]) != 4:
-                    raise RuntimeError("exact package archive is unavailable")
-                _uri, filename, size, _legacy_checksum = rows[0]
-                # apt-get --print-uris advertises an MD5 compatibility field. Pin the
-                # SHA256 from the same exact authenticated APT package record.
-                records = run(["apt-cache", *options, "show", name + "=" + version])
-                hashes = set()
-                for paragraph in records.strip().split("\n\n"):
-                    fields = dict(
-                        line.split(": ", 1)
-                        for line in paragraph.splitlines()
-                        if ": " in line and not line.startswith(" ")
+                for line in simulated.splitlines():
+                    if line.startswith("Inst "):
+                        match = re.match(r"Inst ([A-Za-z0-9:+.-]+)(?: \[[^]]+\])? \(([^ ]+)", line)
+                        if match is None:
+                            raise RuntimeError("package closure cannot be parsed")
+                        install[match[1]] = match[2]
+                    elif line.startswith("Remv "):
+                        name = line.split()[1]
+                        if name not in LEGACY:
+                            raise RuntimeError("runtime closure removes an unrelated package")
+                        remove.append(name)
+                for name, version in sorted(install.items()):
+                    output = run(
+                        ["apt-get", *options, "--print-uris", "download", name + "=" + version]
                     )
+                    rows = [
+                        shlex.split(line) for line in output.splitlines() if line.startswith("'")
+                    ]
+                    if len(rows) != 1 or len(rows[0]) != 4:
+                        raise RuntimeError("exact package archive is unavailable")
+                    _uri, filename, size, _legacy_checksum = rows[0]
+                    # apt-get --print-uris advertises an MD5 compatibility field. Pin the
+                    # SHA256 from the same exact authenticated APT package record.
+                    records = run(["apt-cache", *options, "show", name + "=" + version])
+                    hashes = set()
+                    for paragraph in records.strip().split("\n\n"):
+                        fields = dict(
+                            line.split(": ", 1)
+                            for line in paragraph.splitlines()
+                            if ": " in line and not line.startswith(" ")
+                        )
+                        if (
+                            fields.get("Package") == name.split(":")[0]
+                            and fields.get("Version") == version
+                            and fields.get("Size") == size
+                            and "Filename" in fields
+                        ):
+                            hashes.add(fields.get("SHA256", ""))
                     if (
-                        fields.get("Package") == name.split(":")[0]
-                        and fields.get("Version") == version
-                        and fields.get("Size") == size
-                        and "Filename" in fields
+                        Path(filename).name != filename
+                        or not filename.endswith(".deb")
+                        or len(hashes) != 1
+                        or not all(re.fullmatch(r"[a-f0-9]{64}", h) for h in hashes)
                     ):
-                        hashes.add(fields.get("SHA256", ""))
-                if (
-                    Path(filename).name != filename
-                    or not filename.endswith(".deb")
-                    or len(hashes) != 1
-                    or not all(re.fullmatch(r"[a-f0-9]{64}", h) for h in hashes)
-                ):
-                    raise RuntimeError("package archive lacks an unambiguous approved SHA256")
-                checksum = hashes.pop()
-                archives[filename] = {
-                    "package": name,
-                    "version": version,
-                    "size": int(size),
-                    "sha256": checksum,
-                }
-    if reinstall:
-        if not set(required).issubset(install):
-            raise RuntimeError("Repair did not resolve the complete managed runtime")
-        incomplete = {
-            name
-            for name, (_version, status) in before.items()
-            if status not in {"installed", "config-files", "not-installed"}
+                        raise RuntimeError("package archive lacks an unambiguous approved SHA256")
+                    checksum = hashes.pop()
+                    archives[filename] = {
+                        "package": name,
+                        "version": version,
+                        "size": int(size),
+                        "sha256": checksum,
+                    }
+        if reinstall:
+            if not set(required).issubset(install):
+                raise RuntimeError("Repair did not resolve the complete managed runtime")
+            incomplete = {
+                name
+                for name, (_version, status) in before.items()
+                if status not in {"installed", "config-files", "not-installed"}
+            }
+            if not incomplete.issubset(set(install) | set(remove)):
+                raise RuntimeError("Unrelated incomplete OS package work requires reconciliation")
+        desired = {k: before[k] for k in required if k in before}
+        desired.update({k: [v, "installed"] for k, v in install.items()})
+        policy = {} if reinstall else unit_policy()
+        if not reinstall and any(
+            v.get("UnitFileState") in {"masked", "masked-runtime"} for v in policy.values()
+        ):
+            raise RuntimeError("operator service masks inhibit runtime migration")
+        return {
+            "unit_policy": policy,
+            "startup_policy": policy_snapshot(),
+            "schema": SCHEMA,
+            "before": {k: before.get(k) for k in sorted(set(desired) | set(remove))},
+            "install": install,
+            "remove": sorted(remove),
+            "archives": archives,
+            "desired": desired,
         }
-        if not incomplete.issubset(set(install) | set(remove)):
-            raise RuntimeError("Unrelated incomplete OS package work requires reconciliation")
-    desired = {k: before[k] for k in required if k in before}
-    desired.update({k: [v, "installed"] for k, v in install.items()})
-    policy = {} if reinstall else unit_policy()
-    if not reinstall and any(
-        v.get("UnitFileState") in {"masked", "masked-runtime"} for v in policy.values()
-    ):
-        raise RuntimeError("operator service masks inhibit runtime migration")
-    return {
-        "unit_policy": policy,
-        "startup_policy": policy_snapshot(),
-        "schema": SCHEMA,
-        "before": {k: before.get(k) for k in sorted(set(desired) | set(remove))},
-        "install": install,
-        "remove": sorted(remove),
-        "archives": archives,
-        "desired": desired,
-    }
 
 
 def validate_plan(approved: dict) -> None:
@@ -835,70 +1046,76 @@ def verify_staged(approved: dict, *, root: Path | None = None) -> Path:
     validate_plan(approved)
     directory = (root or ROOT) / digest(approved)
     for name, item in approved["archives"].items():
+        observation_remaining()
         path = directory / name
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as stream:
             info = os.fstat(stream.fileno())
-            if (
-                not stat.S_ISREG(info.st_mode)
-                or info.st_size != item["size"]
-                or hashlib.sha256(stream.read()).hexdigest() != item["sha256"]
-            ):
+            if not stat.S_ISREG(info.st_mode) or info.st_size != item["size"]:
+                raise RuntimeError("staged runtime archive identity changed")
+            checksum = hashlib.sha256()
+            while chunk := stream.read(1024 * 1024):
+                observation_remaining()
+                checksum.update(chunk)
+            if checksum.hexdigest() != item["sha256"]:
                 raise RuntimeError("staged runtime archive identity changed")
             os.fsync(stream.fileno())
+            observation_remaining()
     return directory
 
 
-def stage(approved: dict, *, root: Path | None = None) -> Path:
-    validate_plan(approved)
-    staging_root = root or ROOT
-    directory = staging_root / digest(approved)
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    missing = [
-        item for name, item in approved["archives"].items() if not (directory / name).exists()
-    ]
-    if missing:
-        if (staging_root / "inhibited").exists():
-            raise RuntimeError("inhibited operation has lost its staged archive")
-        with apt_indexes() as options:
-            for item in missing:
-                run(
-                    ["apt-get", *options, "download", item["package"] + "=" + item["version"]],
-                    timeout=120,
-                    cwd=directory,
-                )
-    verify_staged(approved, root=staging_root)
-    write(directory / "plan.json", json.dumps(approved, sort_keys=True).encode())
-    return directory
+def stage(approved: dict, *, root: Path | None = None, deadline: float | None = None) -> Path:
+    with observation_budget(deadline):
+        validate_plan(approved)
+        staging_root = root or ROOT
+        directory = staging_root / digest(approved)
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        missing = [
+            item for name, item in approved["archives"].items() if not (directory / name).exists()
+        ]
+        if missing:
+            if (staging_root / "inhibited").exists():
+                raise RuntimeError("inhibited operation has lost its staged archive")
+            with apt_indexes() as options:
+                for item in missing:
+                    run(
+                        ["apt-get", *options, "download", item["package"] + "=" + item["version"]],
+                        timeout=120,
+                        cwd=directory,
+                    )
+        verify_staged(approved, root=staging_root)
+        write(directory / "plan.json", json.dumps(approved, sort_keys=True).encode())
+        return directory
 
 
-def stage_payload(manifest: dict, payload: dict) -> dict:
-    directory = stage(manifest["runtime_plan"]) / "payload"
-    items = {manifest["wheel_name"]: manifest["wheel_sha256"], **manifest["dependency_wheels"]}
-    supplied = {manifest["wheel_name"]: payload.get("wheel")}
-    dependencies = payload.get("dependency_wheels", {})
-    if isinstance(dependencies, list):
-        dependencies = {item["name"]: item["content"] for item in dependencies}
-    supplied.update(dependencies)
-    for name, expected in items.items():
-        path = directory / name
-        if path.parent != directory or not name.endswith(".whl"):
-            raise RuntimeError("invalid staged product filename")
-        if supplied.get(name) is not None:
-            encoded = supplied[name]
-            assert encoded is not None
-            raw = base64.b64decode(encoded, validate=True)
-            if hashlib.sha256(raw).hexdigest() != expected:
-                raise RuntimeError("staged product artifact changed")
-            write(path, raw)
-        if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
-            raise RuntimeError("staged product artifact is missing or changed")
-    write(directory / "manifest.json", json.dumps(manifest, sort_keys=True).encode())
-    if "ordinary_assets" in manifest:
-        if PYTHON_PREPARE is None:
-            raise RuntimeError("HA package checkpoint owner is unavailable")
-        PYTHON_PREPARE(manifest, directory)
-    return {"manifest": digest(manifest), "runtime_plan": digest(manifest["runtime_plan"])}
+def stage_payload(manifest: dict, payload: dict, *, deadline: float | None = None) -> dict:
+    with observation_budget(deadline):
+        directory = stage(manifest["runtime_plan"]) / "payload"
+        items = {manifest["wheel_name"]: manifest["wheel_sha256"], **manifest["dependency_wheels"]}
+        supplied = {manifest["wheel_name"]: payload.get("wheel")}
+        dependencies = payload.get("dependency_wheels", {})
+        if isinstance(dependencies, list):
+            dependencies = {item["name"]: item["content"] for item in dependencies}
+        supplied.update(dependencies)
+        for name, expected in items.items():
+            path = directory / name
+            if path.parent != directory or not name.endswith(".whl"):
+                raise RuntimeError("invalid staged product filename")
+            if supplied.get(name) is not None:
+                encoded = supplied[name]
+                assert encoded is not None
+                raw = base64.b64decode(encoded, validate=True)
+                if hashlib.sha256(raw).hexdigest() != expected:
+                    raise RuntimeError("staged product artifact changed")
+                write(path, raw)
+            if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                raise RuntimeError("staged product artifact is missing or changed")
+        write(directory / "manifest.json", json.dumps(manifest, sort_keys=True).encode())
+        if "ordinary_assets" in manifest:
+            if PYTHON_PREPARE is None:
+                raise RuntimeError("HA package checkpoint owner is unavailable")
+            PYTHON_PREPARE(manifest, directory)
+        return {"manifest": digest(manifest), "runtime_plan": digest(manifest["runtime_plan"])}
 
 
 def pending(parent: str | None = None) -> dict | None:

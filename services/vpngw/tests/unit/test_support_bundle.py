@@ -1264,7 +1264,7 @@ def test_archive_peer_channel_preserves_observed_direction(
                     "observed_at": captured_at,
                     "data": {
                         "guard_boot_id": "boot",
-                        "apply_convergence": {"boot_id": "boot", "observed_at": captured_at - 1},
+                        "apply_convergence": {"boot_id": "boot", "observed_at": 100, "fresh": True},
                         "heartbeat": {
                             "peer_v6_fresh": not failure,
                             "peer_send_error_kind": "tls",
@@ -1287,9 +1287,20 @@ def test_archive_peer_channel_preserves_observed_direction(
         assert sample["observed_at"] == captured_at
 
 
-@pytest.mark.parametrize("captured_at", [None, "invalid", float("nan"), True, 100])
+@pytest.mark.parametrize(
+    "captured_at,fresh",
+    [
+        (None, True),
+        ("invalid", True),
+        (float("nan"), True),
+        (True, True),
+        (100, False),
+        (100, None),
+        (100, 1),
+    ],
+)
 def test_archive_peer_channel_keeps_unknown_capture_or_stale_evidence_unknown(
-    config, tmp_path, captured_at
+    config, tmp_path, captured_at, fresh
 ):
     def run(request, timeout):
         rows, outcome = fake_runner(request, timeout)
@@ -1301,7 +1312,7 @@ def test_archive_peer_channel_keeps_unknown_capture_or_stale_evidence_unknown(
                     "observed_at": captured_at,
                     "data": {
                         "guard_boot_id": "boot",
-                        "apply_convergence": {"boot_id": "boot", "observed_at": 80},
+                        "apply_convergence": {"boot_id": "boot", "observed_at": 80, "fresh": fresh},
                         "heartbeat": {"peer_v6_fresh": True},
                     },
                 }

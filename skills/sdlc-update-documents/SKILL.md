@@ -89,7 +89,7 @@ after feature evaluation or UAT.
 - `docs/design.md`.
 - `STEERING.md` and `steering/auto-steering.json` when present.
 - `current-state.json`, latest checkpoint, feature queue, and fingerprints.
-- Current feature plan and evidence under `evidence/FEAT-*`.
+- Current SLICE or FEAT execution plan and evidence under `evidence/<execution-id>`.
 - UAT evidence under `evidence/uat/` for run-level documentation updates.
 - Existing target documentation files that mention the changed behavior.
 - `assets/templates/documents.md.template` when writing documentation evidence.
@@ -100,7 +100,7 @@ after feature evaluation or UAT.
   such as `README.md`, user docs, examples, docs indexes, or generated docs.
 - The `[Unreleased]` section of `CHANGELOG.md` when the project has one and the
   behavior change is user-facing.
-- `evidence/FEAT-*/documents.md` for feature-level documentation updates.
+- `evidence/<execution-id>/documents.md` for execution-level documentation updates.
 - `evidence/uat/documents.md` for run-level or UAT-driven documentation
   updates.
 - Steering disposition updates marking document entries resolved, superseded,

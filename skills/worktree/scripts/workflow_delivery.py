@@ -62,6 +62,8 @@ def _operators(api):
 
 def _scope(expected, execution_id, repository, *, merge=False):
     policy = expected["completion"]
+    require(policy["boundary"] in {"reviewed-pr", "merge-verified"},
+            "local completion does not authorize remote delivery")
     if merge:
         require(policy["boundary"] == "merge-verified" and execution_id in policy["delivery_scope"],
                 "run is not opted in to merging this delivery slice")
@@ -209,7 +211,109 @@ def reconcile(run_dir, execution_id):
         return record
 
 
+LOCAL_COMPLETION = "workflow/local-delivery-completion-v1"
+
+
+def completion_admission(value):
+    """Read the admission from an owner-verified completion of either boundary."""
+    return value["admission"] if value["schema"] == LOCAL_COMPLETION else value["review"]["admission"]
+
+
+def completion_candidate(value):
+    return value["result_sha"] if value["schema"] == LOCAL_COMPLETION else value["intent"]["head"]
+
+
+def complete_local(run_dir, execution_id, admission):
+    """Complete one admitted local slice without releasing the outer run lease."""
+    _authorize(run_dir, effects=True)
+    root = _root(run_dir, execution_id)
+    with lock(run_dir.parent), lock(root):
+        _authorize(run_dir, effects=True)
+        if (root / "completion.json").exists():
+            value = verify_completion(run_dir, read(root / "completion.json"))
+            require(value["schema"] == LOCAL_COMPLETION and value["admission"] == admission,
+                    "completed slice is immutable")
+            return value
+        from workflow_objectives import _writers_quiescent
+        _writers_quiescent(run_dir)
+        expected = target(run_dir, execution_id)
+        require(expected["completion"]["boundary"] == "local-promoted",
+                "accepted objective does not authorize local slice completion")
+        require(accepted(run_dir)[0].get("automatic_outer"),
+                "local document programs require an automatic managed outer")
+        require(not any((root / name).exists() for name in ("review.json", "submission.json")),
+                "remote delivery already started for this slice")
+        receipt = verify_receipt(run_dir, admission)
+        require(receipt["execution_id"] == execution_id and receipt["head"] == expected["head"],
+                "local admission belongs to another candidate")
+        coordinator = read(run_dir / "execution" / execution_id / "coordinator.json")
+        require(coordinator.get("status") == "done" and coordinator.get("final_evidence")
+                and coordinator.get("promoted_head") == receipt["head"],
+                "local completion requires finished promotion, cleanup and final gates")
+        pointer = read(run_dir / "objective-impact/execution" / (execution_id + ".json"))
+        value = {"schema": LOCAL_COMPLETION, "status": "local-promoted",
+                 "execution_id": execution_id, "objective_sha256": receipt["objective_sha256"],
+                 "admission": admission, "basis": pointer,
+                 "coordinator_sha256": digest(coordinator),
+                 "result_sha": receipt["head"], "result_tree": receipt["tree"]}
+        # The producer index makes interrupted publication recoverable without
+        # letting an arbitrary caller-authored completion stand as owner proof.
+        index = root / "local-produced.json"
+        produced = {"schema": "workflow/local-delivery-producer-v1", "sha256": digest(value)}
+        if index.exists():
+            require(read(index) == produced, "local completion publication changed during recovery")
+        else:
+            write(index, produced, exclusive=True)
+        write(root / "completion.json", value, exclusive=True)
+        return verify_completion(run_dir, value)
+
+
+def _verify_local(run_dir, value):
+    from workflow_objectives import validate_run
+    from workflow_impact import canonical_digest
+    from workflow_inputs import verify_basis
+    from workflow_task_acceptance import repository
+    execution = value["execution_id"]
+    root = _root(run_dir, execution)
+    require(value.get("status") == "local-promoted"
+            and read(root / "local-produced.json") == {
+                "schema": "workflow/local-delivery-producer-v1", "sha256": digest(value)},
+            "local completion is not an immutable owner-produced receipt")
+    _run, objective = validate_run(run_dir, owner="agentic-sdlc")
+    revision = next((r for r in objective["revisions"] if r["sha256"] == value["objective_sha256"]), None)
+    require(revision is not None, "local completion is outside accepted revision ancestry")
+    snapshot = read(run_dir / revision["snapshot"])
+    require(snapshot["completion"]["boundary"] == "local-promoted",
+            "local completion lacks accepted local authority")
+    pointer = value["basis"]
+    fingerprint = pointer.get("sha256", "")
+    require(pointer.get("schema") == "workflow/execution-basis-pointer-v2"
+            and re.fullmatch(r"[0-9a-f]{64}", fingerprint)
+            and pointer.get("path") == f"bases/{execution}/{fingerprint}.json",
+            "local completion basis pointer changed")
+    basis = read(run_dir / pointer["path"])
+    require(canonical_digest(basis) == fingerprint and basis["execution_id"] == execution
+            and basis["objective_sha256"] == value["objective_sha256"],
+            "local completion frozen basis changed")
+    verify_basis(run_dir, basis)
+    coordinator = read(run_dir / "execution" / execution / "coordinator.json")
+    require(digest(coordinator) == value["coordinator_sha256"] and coordinator["status"] == "done"
+            and coordinator["promoted_head"] == value["result_sha"],
+            "completed local execution changed")
+    receipt = verify_receipt(run_dir, value["admission"], current=False)
+    require(receipt["execution_id"] == execution and receipt["head"] == value["result_sha"]
+            and receipt["tree"] == value["result_tree"]
+            and receipt["basis_sha256"] == digest(basis)
+            and receipt["objective_sha256"] == value["objective_sha256"]
+            and receipt["inputs"] == snapshot["inputs"], "local completion admission changed")
+    require(_git(repository(run_dir), "rev-parse", value["result_sha"] + "^{tree}") == value["result_tree"],
+            "local completion Git result changed")
+    return value
+
+
 def verify_completion(run_dir, value):
+    if value.get("schema") == LOCAL_COMPLETION:
+        return _verify_local(run_dir, value)
     root = _root(run_dir, value["execution_id"])
     require(value.get("schema") == "workflow/delivery-completion-v1" and value.get("status") == "result-verified",
             "slice completion lacks verified merge results")
@@ -265,9 +369,8 @@ def _verify_phase_record(run_dir, value, phase, program):
     require(value["slices"] == [s["id"] for s in program["slices"] if s["phase"] == phase["id"]],
             "phase completion omits frozen slice membership")
     require(isinstance(value["admissions"], list) and value["admissions"], "phase has no executed exit evidence")
-    from workflow_program import verify_inputs
-    run = accepted(run_dir)[0]
-    current_basis = verify_inputs(run_dir, Path(run["project_root"]))["bundle"]["obligation_basis"]
+    from workflow_program import verify_inputs, completion_project
+    current_basis = verify_inputs(run_dir, completion_project(run_dir))["bundle"]["obligation_basis"]
     covered = set()
     for reference in value["admissions"]:
         receipt = verify_receipt(run_dir, reference, current=False)

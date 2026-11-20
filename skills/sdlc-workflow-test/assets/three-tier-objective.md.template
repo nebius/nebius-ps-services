@@ -13,6 +13,16 @@ native home. Use Git-root-relative write claims prefixed project-a/. Complete
 automatic outer aggregation and cleanup after your inner final gates. Do not push,
 publish, create a pull request, or depend on a non-local runtime service.
 
+Implement the frozen source package under `docs/contracts/` as an admitted
+document program with at least three bounded slices across multiple phases.
+Preserve `supplied-phases.json` when present; otherwise derive and explain the
+phases from the source outcomes and dependencies. The coordinator owns the
+reviewed manifest, canonical mapping and program. Normalize explicit
+`completion.boundary: local-promoted` with the accepted local runtime operations
+and `allow_nonruntime_na: true`. Complete every slice through implementation
+admission and `complete-local`, then record its phase exit. Retain the outer
+lease until every slice finishes.
+
 ## Outcome
 
 Deliver a browser task board backed by a versioned Django/Gunicorn JSON API and
@@ -112,6 +122,8 @@ requires two admitted task assignments with distinct trial containers and the
 same immutable image, proving preparation reuse across tasks.
 
 Record a deferred criterion for `tasks/domain.py::filter_tasks(records, state)`:
+declare it only in the slice that will implement and resolve filtering before
+that slice's delivery. Earlier slices must not acquire unresolved future debt.
 its prerequisite is the later filtering implementation; resolution stage is
 `before_delivery`, with `purpose: implementation`. The API must use this function to select `active` or `completed`
 records, preserving IDs and values. Freeze its command check as
@@ -137,6 +149,13 @@ revision. The outer verifier observes this state; it must not initialize or
 advance the workflow for you. At each later phase boundary, request and await
 the corresponding observation before starting dependent work. The launch
 handoff defines the communication channel; do not invent passing receipts.
+
+After the first completed local slice, stop at a quiescent checkpoint and exit
+normally for the declared interruption trial. A fresh native coordinator will
+use public continuation, preserve completed work, then accept a requested change
+to the remaining program. The outer verifier observes both boundaries. Do not
+start a second run or rebuild completed slices. Reserve final promoted Git,
+full-app browser evaluation, UAT and aggregation for the assembled application.
 
 Use test-first development. Product-owned tests remain separate from the
 verifier-owned acceptance bundle. The frozen interface for independent checks is:
@@ -190,7 +209,7 @@ a standalone browser smoke test does not certify agent continuity.
 
 Capture five independently produced sanitized screenshots under `{{EVIDENCE_ROOT}}`: empty
 state, validation error, created task, completed filter, and post-restart. Write
-the `agentic-sdlc/three-tier-results-v4` semantic manifest incrementally to
+the `agentic-sdlc/three-tier-results-v5` semantic manifest incrementally to
 `{{EVIDENCE_ROOT}}/three-tier-results.json`.
 
 ## Live Experiment Environment

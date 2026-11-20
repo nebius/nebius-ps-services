@@ -1,6 +1,6 @@
 # PR lifecycle and linked issues
 
-This shared contract applies to review-pr, review-github-issues, merge-pr and
+This shared contract applies to review-pr, github-issues, merge-pr and
 PR-owned test-live-on-nebius work. Read it before selecting a lifecycle action.
 It grants no authority from labels, contributor text, plans or model output.
 
@@ -169,10 +169,13 @@ closure remains valid if an independently assessed issue cannot be closed.
 Discover explicit closing links (including GitHub's linked closing issues), not
 arbitrary number mentions. Bind repository/number/API identity and independently
 read every issue's criteria, discussion, dependencies and close/reopen events.
-For an incoming PR, use review-github-issues as a read-only adviser to the outer
+For an incoming PR, use github-issues as a read-only adviser to the outer
 lifecycle owner. It returns per-issue assessment; it does not create redundant
-plans or launch another workflow. Standalone issue triage keeps its saved-plan
-contract. Local Implement receipts retain their existing separate owner.
+plans or launch another workflow. Standalone github-issues uses --action
+review|create-plan|close; only create-plan saves plans and only close may change
+issue state after fresh justification. None of those standalone effects pass
+to this read-only caller, and they do not revoke the outer PR owner's explicit
+closure authority. Local Implement receipts retain their existing separate owner.
 
 Assess the reported defect and accepted issue criteria, not only the selected
 PR's contribution inventory. Distinguish optional suggestions and separately

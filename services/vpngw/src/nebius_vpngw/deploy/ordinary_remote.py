@@ -132,26 +132,37 @@ def command(
         args[0] == "dpkg"
         and any(action in args for action in ("--remove", "--unpack", "--configure"))
     ) or ("pip" in args[:4] and "install" in args)
-    if DURABLE_PACKAGES and OPERATION is not None and package_effect:
+    observing = migration.OBSERVATION_DEADLINE.get() is not None
+    if DURABLE_PACKAGES and OPERATION is not None and package_effect and not observing:
         return durable_command(args, required=required)
-    remaining = min(limit, DEADLINE - (60 if OPERATION else 0) - time.monotonic())
+    enclosing = min(
+        DEADLINE - (60 if OPERATION else 0),
+        migration.OBSERVATION_DEADLINE.get() or float("inf"),
+    )
+    if observing:
+        migration.observation_remaining()
+    deadline = min(time.monotonic() + limit, enclosing)
+    remaining = deadline - time.monotonic()
     if remaining <= 0:
+        if observing:
+            raise migration.ObservationDeadline()
         raise RuntimeError("deadline")
     effect = OPERATION.intent("process") if OPERATION else None
-    CHILD = subprocess.Popen(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT if capture_stderr else subprocess.DEVNULL,
-        start_new_session=True,
-        env=command_environment(args),
-        # Projection and PID1-owned installation must create identical modes,
-        # regardless of the observing SSH process's inherited mask.
-        umask=0o022 if "pip" in args[:4] and "install" in args else -1,
-    )
+    CHILD = None
     try:
-        if OPERATION is not None and effect is not None:
-            OPERATION.process_started(effect, CHILD.pid)
-        deadline = time.monotonic() + remaining
+        with migration.defer_control_signals():
+            CHILD = subprocess.Popen(
+                args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT if capture_stderr else subprocess.DEVNULL,
+                start_new_session=True,
+                env=command_environment(args),
+                # Projection and PID1-owned installation must create identical modes,
+                # regardless of the observing SSH process's inherited mask.
+                umask=0o022 if "pip" in args[:4] and "install" in args else -1,
+            )
+            if OPERATION is not None and effect is not None:
+                OPERATION.process_started(effect, CHILD.pid)
         output = bytearray()
         assert CHILD.stdout is not None
         with selectors.DefaultSelector() as selector:
@@ -169,38 +180,43 @@ def command(
                         if len(output) > 2 * 1024 * 1024:
                             raise RuntimeError("command_output_limit")
         rc = CHILD.wait(timeout=max(0.001, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        if observing and time.monotonic() >= enclosing:
+            raise migration.ObservationDeadline() from None
+        raise
     finally:
-        # A timeout or interrupted parent must not leave package/network writers
-        # running after the deployment lock is released.
-        try:
-            # The ordinary action handles TERM and joins its own child groups
-            # before releasing its routing lock. Allow that cleanup to finish.
-            os.killpg(CHILD.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
+        if CHILD is not None:
+            # A timeout or interrupted parent must not leave package/network writers
+            # running after the deployment lock is released.
+            try:
+                # The ordinary action handles TERM and joins its own child groups
+                # before releasing its routing lock. Allow that cleanup to finish.
+                os.killpg(CHILD.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                CHILD.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            try:
+                os.killpg(CHILD.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             CHILD.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
-        try:
-            os.killpg(CHILD.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        CHILD.wait(timeout=5)
-        process = (
-            OPERATION.value["effects"][effect].get("process", {})
-            if OPERATION is not None and effect is not None
-            else None
-        )
-        if process is not None:
-            settle_deadline = min(DEADLINE, time.monotonic() + 5)
-            while not operations.process_group_empty(process):
-                if time.monotonic() >= settle_deadline:
-                    raise RuntimeError("command_descendants_unresolved")
-                time.sleep(0.02)
-        CHILD = None
-        if OPERATION is not None and effect is not None:
-            OPERATION.update(effect, state="settled")
+            process = (
+                OPERATION.value["effects"][effect].get("process", {})
+                if OPERATION is not None and effect is not None
+                else None
+            )
+            if process is not None:
+                settle_deadline = min(DEADLINE, time.monotonic() + 5)
+                while not operations.process_group_empty(process):
+                    if time.monotonic() >= settle_deadline:
+                        raise RuntimeError("command_descendants_unresolved")
+                    time.sleep(0.02)
+            CHILD = None
+            if OPERATION is not None and effect is not None:
+                OPERATION.update(effect, state="settled")
     if required and rc:
         raise RuntimeError("command")
     return rc, output.decode("utf-8", errors="strict").strip()
@@ -453,7 +469,7 @@ def _inspect_once(
         "runtime": migration.native(),
         "runtime_plan": runtime_plan
         if runtime_plan is not None
-        else migration.plan(manifest.get("ha_parent")),
+        else migration.plan(manifest.get("ha_parent"), deadline=DEADLINE),
         "runtime_pending": pending_runtime,
         "runtime_completion": completion,
         "asset_retirement": migration.asset_retirement(
@@ -476,6 +492,7 @@ def _inspect_once(
         "machine": platform.machine(),
         "package_version": dist.version if dist else None,
         "release_identity": release_identity.observe(),
+        "installed_release_identity": release_identity.observe_installation(),
         "operation": operations.observation(operations.Manager(DEADLINE))
         if logical_config is None and runtime_admission
         else None,
@@ -497,6 +514,9 @@ def stable_predecessor(observation: dict[str, Any]) -> str:
             for k, v in observation["route_ownership"].items()
             if k not in {"pending_digest", "pending_sources", "obligations"}
         }
+    # Our initial transaction changes release admission from absent to unknown.
+    # Keep the independent installation fingerprint, including partial/duplicate
+    # metadata, while the operation owner validates its own pending journal.
     # Stopping management changes service state, never these approved inputs.
     return canonical(
         {
@@ -510,6 +530,7 @@ def stable_predecessor(observation: dict[str, Any]) -> str:
                 "runtime",
                 "runtime_pending",
                 "runtime_completion",
+                "release_identity",
             }
         }
     )
@@ -733,7 +754,7 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
             if route_plan.payload != manifest["route_plan"]:
                 raise RuntimeError("route_plan_changed")
         stage = "stage"
-        migration.stage_payload(manifest, request)
+        migration.stage_payload(manifest, request, deadline=DEADLINE)
         migration.begin(manifest["runtime_plan"], request["request_id"], manifest)
         wheel = base64.b64decode(request["wheel"], validate=True)
         config = base64.b64decode(request["config"], validate=True)
@@ -941,6 +962,7 @@ def execute(request: dict[str, Any]) -> dict[str, Any]:
             code = "ordinary_transaction_failed"
         if isinstance(error, dependency_scope.DependencyFailure):
             code = error.code
+        code = migration.observation_code(error) or code
         return {"status": "failed", "stage": stage, "error_code": code}
     finally:
         OPERATION = None
@@ -1050,7 +1072,7 @@ def main(*, deadline: float | None = None) -> None:
                 if request["action"] in {"inspect", "inspect-package"}
                 else {
                     "status": "staged",
-                    "receipt": migration.stage_payload(request["manifest"], request),
+                    "receipt": migration.stage_payload(request["manifest"], request, deadline=DEADLINE),
                 }
                 if request["action"] == "stage-package"
                 else release_runtime(request)
@@ -1063,9 +1085,11 @@ def main(*, deadline: float | None = None) -> None:
             "stage": "inspect",
             "error_code": error.code
             if isinstance(error, dependency_scope.DependencyFailure)
-            else str(error)
-            if str(error) in {"asset_retirement_unproven", "asset_retirement_changed"}
-            else "ordinary_transaction_failed",
+            else migration.observation_code(error) or (
+                str(error)
+                if str(error) in {"asset_retirement_unproven", "asset_retirement_changed"}
+                else "ordinary_transaction_failed"
+            ),
         }
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     raise SystemExit(1 if result.get("status") == "failed" else 0)

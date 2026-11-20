@@ -142,6 +142,7 @@ import owned_git_origin  # noqa: E402 — private fixture owner
 import three_tier_target  # noqa: E402 — read-only workflow checkout binding
 import three_tier_runtime  # noqa: E402 — owned build/deployment evidence
 import three_tier_tests  # noqa: E402 — owner-executed product test evidence
+import three_tier_program  # noqa: E402 — frozen source and read-only program proof
 from three_tier_reporting import report_text  # noqa: E402 — verified bootstrap precedes runtime imports
 from three_tier_semantics import (  # noqa: E402 — verified bootstrap precedes runtime imports
     REQUIRED_GUI_STEPS as REQUIRED_GUI_STEPS,
@@ -160,14 +161,14 @@ import verification_catalog as runtime_catalog  # noqa: E402
 
 ROOT_MARKER = ".sdlc-workflow-test-root.json"
 ROOT_SCHEMA = "agentic-sdlc/verification-root-v1"
-LIFECYCLE_SCHEMA = "agentic-sdlc/three-tier-lifecycle-v9"
+LIFECYCLE_SCHEMA = "agentic-sdlc/three-tier-lifecycle-v10"
 RUN_MARKER = ".agentic-sdlc-three-tier-run.json"
 PROJECT_MARKER = ".sdlc-workflow-test-project.json"
 OWNERSHIP_LABEL = "sdlc-workflow-test.verification-id"
 COMPOSE_LABEL = "com.docker.compose.project"
 PHASE_STATUSES = {"PASS", "PARTIAL", "FAIL", "NOT_RUN"}
 FINAL_STATUSES = {"PASS", "PARTIAL", "FAIL"}
-PHASE_RESULT_SCHEMA = "agentic-sdlc/phase-result-v5"
+PHASE_RESULT_SCHEMA = "agentic-sdlc/phase-result-v6"
 ALLOWED_PHASES = set(REQUIRED_SDLC_PHASES) | {
     "sdlc-classify-failure",
     "sdlc-gui-test",
@@ -187,6 +188,7 @@ TASK_API_PATH = "/api/v1/tasks"
 GENERATION_GUARDED_COMMANDS = {
     "record-phase",
     "record-native-activation",
+    "record-program-checkpoint",
     "record-validation",
     "record-runtime",
     "run-browser-stage",
@@ -601,7 +603,8 @@ def validate_state(root: Path, state: dict[str, Any]) -> None:
         raise LifecycleError("Lifecycle cleanup ledger is invalid.")
 
 
-def prepare(root_value: Path) -> dict[str, Any]:
+def prepare(root_value: Path, *, planning_mode="supplied") -> dict[str, Any]:
+    three_tier_program.source_files(planning_mode)  # Validate before effects.
     root = verification_root(root_value, create=True)
     lifecycle_paths = paths(root)
     reject_symlinks(lifecycle_paths["base"], stop_at=root)
@@ -674,6 +677,7 @@ def prepare(root_value: Path) -> dict[str, Any]:
             (selected / "README.md").write_text("# " + scope + "\n\nDisposable local fixture.\n")
         import three_tier_task_acceptance
         three_tier_task_acceptance.seed(run_root / "project")
+        planning_fixture = three_tier_program.seed(run_root / "project/project-a", planning_mode)
         try:
             owned_git_origin.prepare_configuration(run_root / "project", run_root, verification_id, kind="three-tier")
             baseline = owned_git_origin.create_baseline(run_root / "project")
@@ -687,6 +691,7 @@ def prepare(root_value: Path) -> dict[str, Any]:
             "verification_id": verification_id,
             "status": "PREPARED",
             "runtime_catalog": {},
+            "planning_fixture": planning_fixture,
             "created_at": utc_now(),
             "updated_at": utc_now(),
             "verification_root": str(root),
@@ -816,6 +821,7 @@ def phase_identity(state: dict[str, Any], phase: str, *, coordinator_session: st
                 execution_phase = path.exists() or execution_phase
         if not execution_phase and any(
             entry.get("phase") in EXECUTION_PHASES and entry.get("status") == "PASS"
+            and entry.get("execution_id") == feature
             for entry in state.get("phases", [])
         ):
             raise LifecycleError("Previously observed execution state is missing.")
@@ -864,6 +870,7 @@ def validate_phase_pass_artifact(
             "recorded_head",
             "objective_sha256",
             "basis_sha256",
+            "execution_id",
             "assertions",
         }
         or result.get("schema") != PHASE_RESULT_SCHEMA
@@ -874,44 +881,35 @@ def validate_phase_pass_artifact(
         or result.get("assertions") != PHASE_REQUIRED_ASSERTIONS[phase]
     ):
         raise LifecycleError(f"Phase semantic result is invalid: {phase}")
-    try:
-        objective, expected_basis = phase_identity(state, phase, coordinator_session=coordinator_session)
-    except three_tier_target.TargetError as error:
-        raise LifecycleError(str(error)) from error
     historical = historical_entry is not None
+    key = three_tier_program.observation_key(phase, result["objective_sha256"], result["execution_id"])
     if historical:
-        admitted = [item for item in state.get("phases", []) if item.get("phase") == phase]
+        admitted = [item for item in state.get("phases", []) if phase_entry_key(item) == key]
         if (not archived or not admitted or admitted[-1] != historical_entry
                 or historical_entry.get("status") != "PASS"
                 or historical_entry.get("evidence") != evidence
                 or historical_entry.get("artifact_sha256") != artifact.stem):
-            raise LifecycleError("Historical phase is not the latest admitted immutable receipt.")
-    if result.get("objective_sha256") != objective:
-        raise LifecycleError(f"Phase objective or execution basis is stale: {phase}")
-    if result.get("basis_sha256") != expected_basis:
-        if not historical or expected_basis is None:
-            raise LifecycleError(f"Phase objective or execution basis is stale: {phase}")
-        history = state["phases"]
-        first_execution = next((index for index, entry in enumerate(history)
-                                if entry.get("phase") in EXECUTION_PHASES
-                                and entry.get("status") == "PASS"), len(history))
-        # Initial admission already validated this immutable receipt without an
-        # execution. A later preparation must not retroactively invent its basis.
-        preexecution_classifier = (
-            phase == "sdlc-classify-failure"
-            and result.get("basis_sha256") is None
-            and history.index(historical_entry) < first_execution < len(history)
-        )
-        if not preexecution_classifier:
-            try:
-                three_tier_target.validate_historical_basis(
-                    state, result.get("basis_sha256"), agent=agent_name(),
-                    phase=phase, recorded_head=result.get("recorded_head"),
-                )
-            except three_tier_target.TargetError as error:
-                raise LifecycleError(str(error)) from error
+            raise LifecycleError("Historical phase is not the latest admitted immutable receipt for its scope.")
+        if phase == "sdlc-classify-failure" and result["basis_sha256"] is None:
+            following = state["phases"][state["phases"].index(historical_entry) + 1:]
+            if not any(item.get("phase") in EXECUTION_PHASES and item.get("status") == "PASS"
+                       and item.get("execution_id") == result["execution_id"] for item in following):
+                raise LifecycleError("Historical classifier basis digest is invalid without later preparation.")
     if archived and artifact.stem != hashlib.sha256(artifact.read_bytes()).hexdigest():
         raise LifecycleError(f"Immutable phase attempt changed: {phase}")
+    try:
+        if historical:
+            three_tier_program.historical_identity(state, result, agent=agent_name())
+            expected_basis = result["basis_sha256"]
+        else:
+            objective, expected_basis = phase_identity(state, phase, coordinator_session=coordinator_session)
+            execution = three_tier_program.execution_for_phase(
+                state, phase, agent=agent_name(), coordinator_session=coordinator_session)
+            if (result["objective_sha256"] != objective or result["basis_sha256"] != expected_basis
+                    or result["execution_id"] != execution):
+                raise LifecycleError(f"Phase objective or execution basis is stale: {phase}")
+    except three_tier_target.TargetError as error:
+        raise LifecycleError(str(error)) from error
     baseline_sha = result.get("baseline_sha")
     recorded_head = result.get("recorded_head")
     if not valid_git_sha(baseline_sha) or not valid_git_sha(recorded_head):
@@ -973,6 +971,9 @@ def record_phase(
         raise LifecycleError("Coordinator selector is only valid for initial startup observation.")
     if phase not in ALLOWED_PHASES or any(character in phase for character in "\r\n"):
         raise LifecycleError("Phase name is invalid.")
+    if phase == "sdlc-start" and any(item.get("phase") == phase and item.get("status") == "PASS"
+                                     for item in state["phases"]):
+        raise LifecycleError("Native startup is observed exactly once per trial.")
     if contains_secret_material(summary):
         raise LifecycleError("Phase summary appears to contain secret material.")
     run_root = Path(state["run_root"])
@@ -1015,8 +1016,19 @@ def record_phase(
         except three_tier_target.TargetError as error:
             raise LifecycleError(str(error)) from error
     artifact_sha256 = None
+    identity = {"objective_sha256": None, "execution_id": None}
+    if status != "PASS" and state.get("workflow_startup"):
+        try:
+            identity = {
+                "objective_sha256": three_tier_target.current_objective(state, agent=agent_name()),
+                "execution_id": three_tier_program.execution_for_phase(state, phase, agent=agent_name()),
+            }
+        except three_tier_target.TargetError:
+            pass  # Retain an unscoped failure; it cannot qualify as later success.
     if status == "PASS":
         raw = (run_root / normalized_evidence[0]).read_bytes()
+        result = json.loads(raw)
+        identity = {name: result[name] for name in identity}
         artifact_sha256 = hashlib.sha256(raw).hexdigest()
         relative = f"evidence/phases/attempts/{phase}/{artifact_sha256}.json"
         immutable = run_root / relative
@@ -1033,9 +1045,12 @@ def record_phase(
                 os.fsync(handle.fileno())
         normalized_evidence = [relative]
     previous = [item for item in state["phases"] if item.get("phase") == phase]
+    scoped = [item for item in previous if phase_entry_key(item) ==
+              three_tier_program.observation_key(phase, identity["objective_sha256"], identity["execution_id"])]
     entry = {
         "attempt": len(previous) + 1,
-        "supersedes_attempt": previous[-1].get("attempt") if previous else None,
+        "supersedes_attempt": scoped[-1].get("attempt") if scoped else None,
+        **identity,
         "artifact_sha256": artifact_sha256,
         "phase": phase,
         "status": status,
@@ -1048,6 +1063,14 @@ def record_phase(
     update_state(root, state)
     import three_tier_statistics
     three_tier_statistics.observe(state, phase)
+    return state
+
+
+def record_program_checkpoint(root_value, stage):
+    root = verification_root(root_value, create=False)
+    _, state = load_active(root)
+    three_tier_program.checkpoint(state, stage, agent=agent_name())
+    update_state(root, state)
     return state
 
 
@@ -2026,28 +2049,51 @@ def observe_aggregate(state: dict) -> dict:
             "companion_probe": {"script_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
                                 "cases": len(probes), "outcome": "passed"}}
 
+def phase_entry_key(entry):
+    return three_tier_program.observation_key(entry.get("phase"), entry.get("objective_sha256"), entry.get("execution_id"))
+
+
 def validate_phase_history(state: dict[str, Any]) -> None:
     phase_map = {
-        entry.get("phase"): entry
+        phase_entry_key(entry): entry
         for entry in state.get("phases", [])
         if isinstance(entry, dict)
     }
-    if any(
-        phase not in phase_map
-        or phase_map[phase].get("status") != "PASS"
-        or not phase_map[phase].get("evidence")
-        for phase in REQUIRED_SDLC_PHASES
-    ):
-        raise LifecycleError("PASS requires recorded evidence for every SDLC phase.")
+    try:
+        program = three_tier_program.observe(state, agent=agent_name())
+    except (RuntimeError, ValueError, OSError, KeyError) as error:
+        raise LifecycleError("PASS requires complete owner-verified program evidence.") from error
+    required = {("sdlc-start", None, None)}
+    for selected in program["slices"]:
+        objective, execution = selected["objective_sha256"], selected["id"]
+        required.update((phase, objective, execution) for phase in three_tier_program.SLICE_PHASES)
+        required.update((phase, objective, None) for phase in three_tier_program.REVISION_PHASES)
+    last = program["slices"][-1]
+    required.update((phase, last["objective_sha256"], last["id"]) for phase in three_tier_program.FINAL_PHASES)
+    if any(key not in phase_map or phase_map[key].get("status") != "PASS"
+           or not phase_map[key].get("evidence") for key in required):
+        raise LifecycleError("PASS requires recorded evidence for every slice and revision phase.")
+    if any(item.get("status") != "PASS" and item.get("objective_sha256") is None
+           for item in phase_map.values()):
+        raise LifecycleError("An unscoped phase failure requires a fresh trial.")
     attempts = {}
+    scoped_attempts = {}
     for entry in state.get("phases", []):
         phase = entry.get("phase")
         expected = attempts.get(phase, 0) + 1
         if type(entry.get("attempt")) is not int or entry["attempt"] != expected:
             raise LifecycleError("Phase attempt history is incomplete or reordered.")
         attempts[phase] = expected
-    for phase in REQUIRED_SDLC_PHASES:
-        entry = phase_map[phase]
+        key = phase_entry_key(entry)
+        if entry.get("supersedes_attempt") != scoped_attempts.get(key):
+            raise LifecycleError("Phase supersession crosses a slice or revision boundary.")
+        scoped_attempts[key] = expected
+    if sum(entry.get("phase") == "sdlc-start" and entry.get("status") == "PASS"
+           for entry in state["phases"]) != 1:
+        raise LifecycleError("PASS requires exactly one initial startup observation.")
+    for key in required:
+        entry = phase_map[key]
+        phase = entry["phase"]
         evidence = entry["evidence"]
         fingerprint = entry.get("artifact_sha256")
         expected = f"evidence/phases/attempts/{phase}/{fingerprint}.json"
@@ -2552,8 +2598,11 @@ def parser() -> argparse.ArgumentParser:
         help="Required generation fence for every mutating action except prepare/destroy.",
     )
     commands = result.add_subparsers(dest="command", required=True)
-    commands.add_parser("prepare")
+    prepare_parser = commands.add_parser("prepare")
+    prepare_parser.add_argument("--planning-mode", choices=("supplied", "derived"), default="supplied")
     commands.add_parser("record-native-activation")
+    program_parser = commands.add_parser("record-program-checkpoint")
+    program_parser.add_argument("--stage", choices=("interrupted", "continued"), required=True)
     commands.add_parser("record-aggregate")
     commands.add_parser("validate-results")
     phase_parser = commands.add_parser("record-phase")
@@ -2647,7 +2696,7 @@ def main(argv: list[str]) -> int:
                 assert root is not None
                 assert_active_generation(root, arguments.expected_verification_id)
             if arguments.command == "prepare":
-                state = prepare(arguments.verification_root)
+                state = prepare(arguments.verification_root, planning_mode=arguments.planning_mode)
                 print(f"Verification ID: {state['verification_id']}")
                 print(f"Project root: {state['project_root']}")
                 print(f"Private root: {state['private_root']}")
@@ -2657,6 +2706,9 @@ def main(argv: list[str]) -> int:
             elif arguments.command == "record-native-activation":
                 record_native_activation(arguments.verification_root)
                 print("Native hook activation: correlated with the owned Codex session")
+            elif arguments.command == "record-program-checkpoint":
+                record_program_checkpoint(arguments.verification_root, arguments.stage)
+                print("Program checkpoint observed: " + arguments.stage)
             elif arguments.command == "record-phase":
                 record_phase(
                     arguments.verification_root,
