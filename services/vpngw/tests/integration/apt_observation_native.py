@@ -18,7 +18,8 @@ import time
 from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parents[2] / "src/nebius_vpngw/repair_bootstrap.py"
-SECRET = "apt-fixture-private-value"
+# Public fixture data used to detect accidental subprocess stderr disclosure.
+STDERR_SENTINEL = "synthetic-apt-stderr"
 
 
 def bootstrap():
@@ -40,7 +41,7 @@ def trial(mode: str, root: Path) -> None:
         " json.dump({'pids':[os.getpid(),child.pid],'group':os.getpgrp(),'cwd':os.getcwd(),"
         "'blocked':list(signal.pthread_sigmask(signal.SIG_BLOCK,set()))},stream)\n"
         f"os.replace({str(marker.with_suffix('.tmp'))!r},{str(marker)!r})\n"
-        f"sys.stderr.write({SECRET!r});sys.stderr.flush()\n"
+        f"sys.stderr.write({STDERR_SENTINEL!r});sys.stderr.flush()\n"
         "time.sleep(60)\n"
     )
     fake.chmod(0o700)
@@ -113,7 +114,7 @@ migration.subprocess.Popen=interrupt_spawn
             "error_code": expected,
         }
         assert not stderr, "guest emitted unexpected diagnostics"
-        assert SECRET.encode() not in stdout
+        assert STDERR_SENTINEL.encode() not in stdout
         assert not {signal.SIGALRM, signal.SIGTERM, signal.SIGHUP}.intersection(owned["blocked"])
         assert not Path(owned["cwd"]).exists(), "APT temporary workspace survived"
         # --init reaps the orphaned grandchild after the owned group is killed.
