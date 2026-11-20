@@ -113,6 +113,14 @@ ownership lock. Managed intake must also retain its exact active outer lease;
 `execution/interop.json` alone is not proof of that lease. Initialization does
 not acquire missing ownership or advance a later phase.
 
+Accepted intake may already contain `input-dependencies.json` and
+`input-declarations/`. These are input provenance, not downstream phase evidence.
+Initialization validates the current declaration against the captured source
+commit and its immutable digest-named archive through the input owner. Retained
+declaration history must also have valid digests, schemas and the same source
+commit. Preserve those bytes on initialization and replay. Missing, orphaned,
+altered, unrecognized or unsafe input records block publication without writes.
+
 Preserve `history/hook-events.jsonl` and `history/continuation-state.json` as
 audit telemetry. They may precede phase initialization and never certify phase
 completion. Unknown history or downstream artifacts require reconciliation.
@@ -362,7 +370,8 @@ without conversation history.
 ```
 
 The `execution` member above is an informational checkpoint projection. The
-execution owner's authoritative state is `execution/<FEAT-ID>/coordinator.json`,
+execution owner's authoritative state is `execution/<execution-id>/coordinator.json`
+for the selected SLICE or FEAT,
 using `workflow/execution-coordinator-v3` with `state_version: 1`. Retired
 `agentic-sdlc/execution-coordinator-v1` through
 `agentic-sdlc/execution-coordinator-v7` records stop with

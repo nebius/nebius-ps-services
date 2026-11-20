@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import tempfile
 import threading
@@ -10,6 +11,63 @@ import workflow_verification as owner
 
 
 class VerificationTests(unittest.TestCase):
+    def test_failure_diagnostics_retain_locations_without_messages_or_values(self):
+        class Probe(unittest.TestCase):
+            def runTest(self):
+                private_value = "not-a-secret"
+                try:
+                    raise ValueError(private_value)
+                except ValueError as error:
+                    raise RuntimeError(private_value) from error
+        emitted = []
+        with patch.object(owner, "_emit", side_effect=emitted.append):
+            result = owner.EventRunner().run(unittest.TestSuite([Probe()]))
+        self.assertFalse(result.wasSuccessful())
+        event = next(row for row in emitted if row["event"] == "test")
+        diagnostic = event["diagnostic"]
+        self.assertEqual([row["exception"] for row in diagnostic], ["RuntimeError", "ValueError"])
+        self.assertTrue(all(row["frames"] for row in diagnostic))
+        self.assertTrue(all(frame["path"] == "worktree/scripts/test_workflow_verification.py"
+                            for row in diagnostic for frame in row["frames"]))
+        serialized = json.dumps(emitted)
+        self.assertNotIn("not-a-secret", serialized)
+        self.assertNotIn(str(Path.home()), serialized)
+        observed = owner.Events()
+        for row in emitted:
+            observed.line(owner.PREFIX + json.dumps(row).encode())
+        self.assertFalse(observed.invalid)
+        self.assertEqual(observed.diagnostics[event["id"]], diagnostic)
+
+    def test_failure_diagnostics_bound_chains_and_omit_custom_exception_names(self):
+        custom = type("not-a-secret", (Exception,), {})
+        error = custom("not-a-secret")
+        current = error
+        for _ in range(10):
+            current.__cause__ = custom("not-a-secret")
+            current = current.__cause__
+        current.__cause__ = error
+        diagnostic = owner.failure_diagnostic((custom, error, None))
+        self.assertEqual(len(diagnostic), 4)
+        self.assertEqual({row["exception"] for row in diagnostic}, {"custom"})
+        self.assertNotIn("not-a-secret", json.dumps(diagnostic))
+        self.assertTrue(owner.valid_diagnostic(diagnostic))
+
+    def test_diagnostic_reader_rejects_values_paths_and_unbounded_records(self):
+        valid = {"exception": "ValueError", "frames": []}
+        invalid = [None, [], [valid] * 5, [{**valid, "message": "not-a-secret"}],
+                   [{**valid, "exception": "not-a-secret"}], [{**valid, "exception": []}],
+                   [{**valid, "frames": [{"path": "../outside.py", "line": 1}]}],
+                   [{**valid, "frames": [{"path": "/private/outside.py", "line": 1}]}],
+                   [{**valid, "frames": [{"path": "file.py", "line": True}]}],
+                   [{**valid, "frames": [{"path": "file.py", "line": 1, "locals": {}}]}]]
+        for diagnostic in invalid:
+            with self.subTest(diagnostic=diagnostic):
+                events = owner.Events()
+                events.line(owner.PREFIX + b'{"event":"inventory","ids":["a"]}')
+                events.line(owner.PREFIX + json.dumps({"event": "test", "id": "a", "outcome": "error",
+                                                      "diagnostic": diagnostic}).encode())
+                self.assertTrue(events.invalid)
+
     def test_exact_inventory_preserves_same_method_in_different_classes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -61,6 +119,9 @@ class VerificationTests(unittest.TestCase):
                 "test_fixture.A.test_subtest": "failed",
                 "test_fixture.A.test_success": "passed",
             })
+            self.assertEqual(set(rows[0]["diagnostics"]), {
+                "test_fixture.A.test_failure", "test_fixture.A.test_subtest"})
+            self.assertNotIn("expected negative control", json.dumps(rows))
             self.assertTrue(rows[0]["observation"]["local_group_quiescent"])
 
     def test_at_most_two_audited_groups_and_exclusive_barrier(self):
@@ -123,14 +184,14 @@ class VerificationTests(unittest.TestCase):
         events = owner.Events()
         events.line(owner.PREFIX + b'{"event":"inventory","ids":["a"]}')
         for _ in range(2):
-            events.line(owner.PREFIX + b'{"event":"test","id":"a","outcome":"passed"}')
+            events.line(owner.PREFIX + b'{"event":"test","id":"a","outcome":"passed","diagnostic":null}')
         self.assertTrue(events.invalid)
 
     def test_incomplete_pipe_cannot_certify_complete_looking_events(self):
         process = owner.source_module("workflow_process", Path(owner.__file__).with_name("workflow_process.py"))
         def run(*args, **kwargs):
             kwargs["on_stdout"](owner.PREFIX + b'{"event":"inventory","ids":["a"]}\n'
-                + owner.PREFIX + b'{"event":"test","id":"a","outcome":"passed"}\n'
+                + owner.PREFIX + b'{"event":"test","id":"a","outcome":"passed","diagnostic":null}\n'
                 + owner.PREFIX + b'{"event":"complete","successful":true,"count":1}\n')
             return {"local_group_quiescent": True, "exit_code": 0, "stop_reason": "exited",
                     "stdout": {"complete": False}, "stderr": {"complete": True}}

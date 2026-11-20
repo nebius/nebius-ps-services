@@ -48,7 +48,9 @@ def _observe_plan(discovery: Discovery, observation: dict, *, defer_bgp: bool) -
     return convert(
         plan,
         observation.get("conversion_requests", {}),
-        required=bool(plan["requests"] or discovery.force_copy or defer_bgp and policy.dynamic),
+        # Runtime BGP ownership needs private tables even before a peer supplies
+        # its first prefix. Preserve the reviewed conversion at execution time.
+        required=bool(plan["requests"] or discovery.force_copy or policy.dynamic),
     ), unknown
 
 

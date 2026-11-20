@@ -1,7 +1,7 @@
 """Correlate native Codex tool events with naturally emitted installed hook events.
 
 Read bounded prefixes in place; never copy prompts, tool arguments or transcripts.
-This adapter admits the Codex 0.167.0 rollout event shape only; live
+This adapter admits the Codex 0.170.0 rollout event shape only; live
 qualification remains separate from fixture validation.
 """
 
@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shlex
 import stat
 import os
 import sys
@@ -99,7 +100,7 @@ def _calls(data: bytes, owner_hash: str) -> dict[tuple[str, str], int]:
                 or not isinstance(identity, str)
                 or hashlib.sha256(identity.encode()).hexdigest() != owner_hash
                 or payload.get("source") != "cli"
-                or payload.get("cli_version") != "0.167.0"
+                or payload.get("cli_version") != "0.170.0"
             ):
                 raise NativeEvidenceError(
                     "Native session identity or event version is unsupported."
@@ -132,7 +133,7 @@ def _calls(data: bytes, owner_hash: str) -> dict[tuple[str, str], int]:
     return calls
 
 
-def _matches(native: bytes, hooks: bytes, startup: dict) -> list[dict]:
+def _matches(native: bytes, hooks: bytes, startup: dict, *, after_line=0) -> list[dict]:
     calls = _calls(native, startup["owner_session_hash"])
     matches = []
     for line, event in _records(hooks):
@@ -144,7 +145,7 @@ def _matches(native: bytes, hooks: bytes, startup: dict) -> list[dict]:
         ):
             continue
         key = (event.get("turn_id"), event.get("tool_use_id"))
-        if all(isinstance(item, str) for item in key) and key in calls:
+        if all(isinstance(item, str) for item in key) and key in calls and calls[key] > after_line:
             matches.append(
                 {
                     "turn_id": key[0],
@@ -230,6 +231,10 @@ def _hook_identity(home: Path, skills_root: Path) -> dict:
 
 def observe(state: dict, *, skills_root: Path) -> dict:
     startup = target.validate_startup_receipt(state)
+    return _observe_identity(state, skills_root=skills_root, startup=startup)
+
+
+def _observe_identity(state: dict, *, skills_root: Path, startup: dict) -> dict:
     boundary, home, hooks = _paths(state, startup)
     sessions = home / "sessions"
     if sessions.resolve(strict=False) != sessions:
@@ -277,10 +282,61 @@ def observe(state: dict, *, skills_root: Path) -> dict:
     }
 
 
+def _validate_identity(state, *, skills_root, startup, value):
+    boundary, home, hooks = _paths(state, startup)
+    if (
+        set(value)
+        != {
+            "schema",
+            "verification_id",
+            "owner_session_hash",
+            "hook",
+            "native",
+            "events",
+            "matches",
+        }
+        or value["schema"] != SCHEMA
+        or value["verification_id"] != state["verification_id"]
+        or value["owner_session_hash"] != startup["owner_session_hash"]
+        or value["hook"] != _hook_identity(home, skills_root)
+    ):
+        raise NativeEvidenceError("Native activation identity changed.")
+    contents = {}
+    for key in ("native", "events"):
+        ref = value[key]
+        if (
+            not isinstance(ref, dict)
+            or set(ref) != {"path", "bytes", "sha256"}
+            or not isinstance(ref["path"], str)
+        ):
+            raise NativeEvidenceError(
+                "Native activation source reference is invalid."
+            )
+        path = boundary / ref["path"]
+        if (key == "events" and path != hooks) or (
+            key == "native"
+            and (
+                not path.is_relative_to(home / "sessions")
+                or path.suffix != ".jsonl"
+            )
+        ):
+            raise NativeEvidenceError(
+                "Native activation source is outside its canonical owner."
+            )
+        contents[key] = _prefix(path, boundary, ref["bytes"])
+        if hashlib.sha256(contents[key]).hexdigest() != ref["sha256"]:
+            raise NativeEvidenceError("Native activation source prefix changed.")
+    if value["matches"] != _matches(
+        contents["native"], contents["events"], startup
+    ):
+        raise NativeEvidenceError("Native activation correlation changed.")
+    return contents
+
+
 def validate(state: dict, *, skills_root: Path) -> dict:
     try:
         startup = target.validate_startup_receipt(state)
-        boundary, home, hooks = _paths(state, startup)
+        boundary = Path(state["run_root"])
         binding = state.get("native_activation")
         if (
             not isinstance(binding, dict)
@@ -292,52 +348,7 @@ def validate(state: dict, *, skills_root: Path) -> dict:
         if hashlib.sha256(data).hexdigest() != binding["sha256"]:
             raise NativeEvidenceError("Native activation receipt changed.")
         value = json.loads(data)
-        if (
-            set(value)
-            != {
-                "schema",
-                "verification_id",
-                "owner_session_hash",
-                "hook",
-                "native",
-                "events",
-                "matches",
-            }
-            or value["schema"] != SCHEMA
-            or value["verification_id"] != state["verification_id"]
-            or value["owner_session_hash"] != startup["owner_session_hash"]
-            or value["hook"] != _hook_identity(home, skills_root)
-        ):
-            raise NativeEvidenceError("Native activation identity changed.")
-        contents = {}
-        for key in ("native", "events"):
-            ref = value[key]
-            if (
-                not isinstance(ref, dict)
-                or set(ref) != {"path", "bytes", "sha256"}
-                or not isinstance(ref["path"], str)
-            ):
-                raise NativeEvidenceError(
-                    "Native activation source reference is invalid."
-                )
-            path = boundary / ref["path"]
-            if (key == "events" and path != hooks) or (
-                key == "native"
-                and (
-                    not path.is_relative_to(home / "sessions")
-                    or path.suffix != ".jsonl"
-                )
-            ):
-                raise NativeEvidenceError(
-                    "Native activation source is outside its canonical owner."
-                )
-            contents[key] = _prefix(path, boundary, ref["bytes"])
-            if hashlib.sha256(contents[key]).hexdigest() != ref["sha256"]:
-                raise NativeEvidenceError("Native activation source prefix changed.")
-        if value["matches"] != _matches(
-            contents["native"], contents["events"], startup
-        ):
-            raise NativeEvidenceError("Native activation correlation changed.")
+        _validate_identity(state, skills_root=skills_root, startup=startup, value=value)
         return value
     except (OSError, ValueError, KeyError, TypeError, target.TargetError) as error:
         if isinstance(error, NativeEvidenceError):
@@ -345,3 +356,75 @@ def validate(state: dict, *, skills_root: Path) -> dict:
         raise NativeEvidenceError(
             "Native activation evidence is unavailable or invalid."
         ) from error
+
+
+def _continuation_operation(state, startup, contents, *, skills_root):
+    """Recognize one successful direct continuation, followed by owned hooks."""
+    expected = [
+        "-B", str(skills_root / "worktree/scripts/workflow_intake.py"),
+        "--owner", "agentic-sdlc", "continue",
+        "--project-root", state["selected_project_root"],
+    ]
+    calls = _calls(contents["native"], startup["owner_session_hash"])
+    matches = []
+    for line, record in _records(contents["native"]):
+        payload = record.get("payload", {})
+        item = payload.get("item", {})
+        if not isinstance(item, dict):
+            continue
+        if (record.get("type") != "event_msg"
+                or payload.get("type") != "item_completed"
+                or item.get("type") != "CommandExecution"
+                or calls.get((payload.get("turn_id"), item.get("id"))) != line
+                or item.get("status") != "completed" or item.get("exit_code") != 0):
+            continue
+        argv = item.get("command")
+        if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
+            continue
+        if len(argv) == 3 and Path(argv[0]).name in {"zsh", "bash", "sh"} and argv[1] in {"-c", "-lc"}:
+            try:
+                argv = shlex.split(argv[2])
+            except ValueError:
+                continue
+        if (not argv or re.fullmatch(r"python3(?:\.\d+){0,2}", Path(argv[0]).name) is None
+                or argv[1:] != expected):
+            continue
+        followup = _matches(contents["native"], contents["events"], startup, after_line=line)
+        matches.append({"turn_id": payload["turn_id"], "tool_use_id": item["id"],
+                        "native_line": line, "followup": followup[0]})
+    if len(matches) != 1:
+        raise NativeEvidenceError("Continuation needs one successful native continue command and a later same-run hook.")
+    return matches[0]
+
+
+def _continuation_identity(state, agent):
+    startup = target.validate_startup_receipt(state)
+    registration = target._registration(state, agent)
+    owner = registration[3]["owner_session_hash"]
+    if owner == startup["owner_session_hash"]:
+        raise NativeEvidenceError("Continuation requires a fresh native coordinator.")
+    return {**startup, "owner_session_hash": owner}
+
+
+def observe_continuation(state, *, skills_root, agent):
+    startup = _continuation_identity(state, agent)
+    activation = _observe_identity(state, skills_root=skills_root, startup=startup)
+    contents = _validate_identity(state, skills_root=skills_root, startup=startup, value=activation)
+    return {"schema": "agentic-sdlc/native-continuation-v1", "activation": activation,
+            "operation": _continuation_operation(state, startup, contents, skills_root=skills_root)}
+
+
+def validate_continuation(state, value, *, skills_root, agent):
+    try:
+        startup = _continuation_identity(state, agent)
+        if (not isinstance(value, dict) or set(value) != {"schema", "activation", "operation"}
+                or value["schema"] != "agentic-sdlc/native-continuation-v1"):
+            raise NativeEvidenceError("Native continuation evidence is missing or invalid.")
+        contents = _validate_identity(state, skills_root=skills_root, startup=startup, value=value["activation"])
+        if value["operation"] != _continuation_operation(state, startup, contents, skills_root=skills_root):
+            raise NativeEvidenceError("Native continuation correlation changed.")
+        return value
+    except (OSError, ValueError, KeyError, TypeError, target.TargetError) as error:
+        if isinstance(error, NativeEvidenceError):
+            raise
+        raise NativeEvidenceError("Native continuation evidence is unavailable or invalid.") from error

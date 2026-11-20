@@ -10956,326 +10956,282 @@ restricted runner. FEAT-068 separately verifies unused LFS configuration with
 sentinel executables; actual LFS content remains unsupported.
 
 <!-- /FEATURE: FEAT-052 -->
-<!-- FEATURE: FEAT-053 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=4 -->
-### FEAT-053: Project-grouped GitHub issue review and batch plans
+<!-- FEATURE: FEAT-053 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=7 -->
+### FEAT-053: GitHub issue selection, review, planning and closure
 
 #### Requirements Covered
 
-- REQ-054: Review GitHub backlogs by project and remediation batch.
+- REQ-054: Review, plan and close selected GitHub issues.
 
 #### Context Evidence
 
-The original instruction-only review-github-issues skill, references, template
-and evaluations implemented one repository, explicit issue selection or a sole
-open issue, and per-issue plans. The accepted design replaces those selection
-and artifact rules while preserving explicit invocation, evidence-based triage,
-internal research/design advisers and independently verified effects.
+The inspected instruction-only baseline uses review-github-issues, one --label,
+implicit five-item label batches and boolean --create-plan, with no standalone
+closure. Version 6 intentionally replaces that interface while preserving
+research, classifications, project ownership and saved-plan delivery contracts.
+Existing target edits are the baseline; unrelated work remains untouched.
 
 #### Design Details
 
-Use the existing bounded host agent and GitHub connector capabilities, with gh
-only as a disclosed fallback. No new models, runtime, hooks, parser service,
-database or scheduler are introduced. Counting and ordering are algorithmic
-instructions; prose does not establish deterministic code enforcement.
+Version 7 enables natural-language selection through a trigger-focused
+description, Codex allow_implicit_invocation=true and Claude default model
+invocation. Remove the obsolete explicit-only prose and native disable flag;
+the shared validator continues deriving policy from the actual skill contract.
+Normalize concrete natural requests to the existing actions and selectors.
+Default assessment is review; only requested planning/closure selects those
+actions. Implicit selection does not authorize comments or labels absent the
+user request; named standalone invocations retain their documented effects.
+Respect assessment-only/report-only limits, ambiguous scope and read-only
+callers. Skill editing and general advice remain outside issue execution.
+Cover natural positives, adjacent negatives and action-authority cases; compare
+working-byte baselines, static policy, copied installation and fresh triggering
+separately. No validator exception or new public flag is needed.
 
-Accept --repo CSV repository names/URLs, --issues CSV positive numbers, and
---priority CSV project roots; help is side-effect-free. Validate every flag and
-entry locally before repository discovery or GitHub calls, including priority
-path normalization and traversal/absolute-path rejection. Remove positional
-selectors. With neither issues nor label flag, collect open candidates in each
-selected repo
-then retain only the resolved current or explicit project scope;
-without --repo, resolve the unambiguous repository for the current Git root.
-Check every explicit issue number in every selected repo. Preserve supplied
-repo order, deduplicate identities, exclude PRs, and distinguish inaccessible
-matches from proven absence. Explicit closed issues are assessed without
-implicit reopening or redundant closure effects.
+Rename the skill to github-issues with one --action review|create-plan|close;
+review is the default. Replace --label with --filter containing literal
+comma-separated labels matched by AND. Trim entries and deduplicate, reject
+empty entries/unknown/repeated flags, and validate the full invocation before
+GitHub discovery. Retire the old name and --create-plan, --review and --close
+spellings without aliases. Preserve remaining selectors and side-effect-free
+help; issue numbers intersect filters and project membership.
 
-In unbounded/number modes, complete collection per repo before ranking it. Freeze the observed issue set
-for that collection interval and revalidate before effects; new arrivals wait
-for another invocation. Incomplete collection blocks that repo's ordered review
-and effects, not independent repositories. Label mode instead freezes the whole
-bounded selection before effects and leaves it pending on an unresolved earlier
-repository. Map each issue to one primary
-project with affected-project references. Keep verified root ownership separate
-from uncertain ownership. Exact repo-relative priority paths apply in each repo;
-report unmatched paths. Explicit priorities lead, then remaining groups by
-selected count descending and path ascending, with uncertain ownership last.
+Filter discovery includes all matching open issues by default. Only explicit
+--issue-batch N caps filtered selection across repositories in supplied order,
+oldest-created first after project filtering. Check explicit number pairs
+before selecting their filtered/capped intersection. Freeze identities before
+any effect, never refill skipped slots, and retain existing coverage, project
+resolution, ownership, priority and incomplete-discovery boundaries. Missing
+filter labels never cause label creation or an unfiltered fallback.
 
-Within each project, investigate compatible remediation batches and assess each
-member independently. Shared words are insufficient; shared change boundaries
-and compatible acceptance criteria justify a batch. Rank by highest supported
-severity, member count descending and lowest issue number. Unknown severity
-sorts after known categories. Final plans cover accepted members only; unresolved
-material dependencies keep affected planning pending. No cross-repo/project
-batch merging is introduced.
+All actions research selected issues through the existing read-only research
+adviser. Publish justified classifications/comments and scoped labels only
+within the Invocation Policy effect authority; unrequested effects are skipped
+and never block an otherwise complete assessment or requested plan.
+Review exits there. Create-plan additionally invokes design, saves compatible
+same-owner/repository plans and a verified overview, then offers the separate
+exact implementation handoff. Preserve artifact schemas, containment, human
+edits and actual owners; plans never become delivery or closure authority.
 
-One verified file-only plan covers each accepted batch, including singleton
-batches. New files use `docs/github-issues/batch-123-topic.md` under the verified owning
-project: lowest initial issue number and safe topic slug, stable after creation. Record full repo/member identities, shared remediation evidence and
-per-issue acceptance criteria. Reuse existing matching plans even with earlier
-filenames; reconcile overlaps before creation or membership changes, preserve
-maintainer edits, and do not rename/delete/merge conflicting plans automatically.
-A matching local checkout is required for saving; do not clone silently.
+Close uses fresh whole-issue evidence: resolved/supported maps to completed,
+verified duplicate maps to duplicate with the canonical API issue ID, and
+accepted maintainer policy for out-of-scope/not-planned maps to not_planned.
+Deferred, confirmed unresolved, mixed and uncertain outcomes remain open.
+Labels, dirty source and unmerged PRs are evidence leads, not resolution proof.
+Check applicable accepted revisions/versions and fresh maintainer objections
+or reopening; do not invent release/live gates. Read back an evidence-backed
+comment before closure, refresh effect preconditions, then independently verify
+state, reason and canonical duplicate target. Unsupported reason/association
+capabilities stay pending instead of silently changing meaning.
 
-research and design remain internal read-only advisers in the current host
-mode. The outer skill saves and reads back plans, then publishes concise
-individual decisions. Detailed plan content never appears in comments or chat; concise scope,
-dependency and readiness summaries with file links are permitted. Retain
-pre-write drift checks, acting-identity comment deduplication, separate comment
-and closure readbacks, and bounded uncertain-write reconciliation. Before each
-acceptance, refresh that member and all sibling/dependency evidence supporting
-its shared remediation plus relevant source state. Record dependencies in the
-plan; if independence is not established, refresh the entire accepted batch.
-Unavailable material evidence keeps dependent acceptance pending. Material
-drift requires reassessment and verified updated coverage before publication. Track
-partial effects per member; do not reverse verified effects as compensation.
+Comments, labels, plans and closure remain separate verified/pending effects.
+Observe uncertain writes before a bounded retry; preserve successful effects
+and never reopen as compensation. Plan Mode/report-only prohibit writes;
+PR-caller assessment stays read-only under the outer lifecycle owner. Existing
+security, full identity, disclosure and untrusted-input boundaries remain.
+Only close may create its narrowly scoped native duplicate association.
 
-Label-filtered review is an opt-in bounded mode: --label accepts one literal
-existing label, --issue-batch defaults to five and requires a positive integer.
-Reject repeated singleton flags and combinations with --issues before discovery.
-Select oldest-created project-matching open issues (number ties), consuming one total across
-repositories in supplied order. Stop at the limit or exhaustion, then freeze
-identities before effects; never refill changed/failed slots. Project priorities
-order only selected members. Unbounded discovery retains complete pagination.
-No overall batch deadline or automatic continuation is added.
-
-Refactor label prohibition into ordinary invocation authority to reuse existing,
-documented repository labels. Preserve unrelated labels and remove only mapped
-mutually exclusive workflow statuses. Missing or ambiguous meanings remain
-recommendations, not invented labels. Comments, labels and closure have separate
-preconditions, readbacks and pending outcomes; human reopening prevents stale
-closure. PR-caller mode remains read-only and never inherits standalone effects.
-
-Project selection and implementation handoff (version 4):
-
-Use canonical --issues only; reject --issue with a correction. --project accepts
-one exact recognized root or unique basename per repository, never fuzzy names,
-arbitrary subfolders or GitHub Projects boards. When omitted, infer the owning
-project from the invocation folder; descendants use the nearest recognized
-project root. At the repository root, use whole-repository scope, also explicitly
-selectable with `--project .`. An ambiguous/non-project container folder requires
-clarification instead of silently widening to repository scope. With --repo and
-no --project, map that inferred repository-relative root exactly in each selected
-repo; missing/ambiguous mappings remain pending. Normalize safe relative syntax
-before discovery; resolve roots from repository manifests, catalogs, instructions
-and source. Preserve explicit path intent before normalization: ./api and api/
-select exact top-level api even when bare api is ambiguous. Include primary-owned or proven-affected issues, retaining primary
-ownership and per-issue evidence. Numbers intersect project scope. Apply project
-filtering while scanning ordered label candidates, before the invocation cap;
-unresolved earlier membership blocks bounded selection, and no slot is refilled.
-Unbounded project discovery exhausts the repository candidate set. Report known
-exclusions separately from uncertain coverage; no project match is not access
-failure. Existing repo-first ordering and per-repository failure isolation remain.
-
-Save complete remediation plans under their primary owners. For explicit or current-folder project scope with
-ready plans, save docs/github-issues/project-plan.md under the resolved selected
-project. It records the latest review scope, coverage and all dispositions plus
-ready batch paths, repository/project identities, exact SHA-256 fingerprints and
-dependencies. Render document-relative links and verify their destinations
-against canonical repository-relative plan identities. This is an approval/navigation snapshot, not a second normative
-plan or durable backlog ledger. Preserve human edits and compare predecessor
-bytes before replacement. Only ready dependency-complete batches enter an
-implementation proposal; uncertain/deferred work remains separately visible.
-
-Every batch plan states its primary project root, affected components, scoped
-change paths and project-local validation context. Before execution the root
-resolves the actual matching checkout, verifies repo and project identities,
-loads every applicable ancestor/project instruction and compares plan/evidence
-state. Never use review cwd as execution scope or store absolute private paths
-in reusable artifacts. Cross-owner work keeps its own plan and execution root.
-
-After triage, the root offers the exact plan set and waits for direct operator
-authorization. Explicit $implement uses one existing run per approved batch,
-sequentially in dependency order, with the individual plan path/digest and
-criteria snapshotted by existing intake. It does not pass a link-only overview
-as the singular issue plan, invent a multi-plan runtime schema or nest owners.
-Natural approval such as implement it or proceed, when unambiguously answering
-the current proposal, permits ordinary local implementation without invoking
-Implement or fabricating its state/receipt. Both routes retain host-mode limits,
-refresh plan/evidence state and require new agreement for material scope changes.
-Implementation approval grants no publication, merge or issue closure; triage's
-existing independent effect authority is unchanged. Read-only PR callers never
-offer this standalone continuation.
+Use the existing bounded host agent: adaptive source investigation and planning
+need judgment; selection/authorization/effect checks remain explicit skill
+rules, not a claim of deterministic enforcement. No new CLI, model, runtime,
+provider, scheduler or storage service is introduced.
 
 #### Selected Option
 
-Extend the instruction-only skill with a focused grouping reference, shared
-batch-plan template and behavioral evaluations. GitHub owns issue state,
-repository evidence owns project mapping, and verified files own accepted
-planning artifacts. The outer skill owns triage; maintain-project-specs owns
-this canonical pair. Fixed host/application/AI choices remain unchanged.
+One action selector separates selection from effects and avoids conflicting
+boolean action combinations. One shared research/selection workflow feeds
+three explicit exits. GitHub owns observed issue state; files own requested
+plans. Preserve the existing read-only adviser boundary for PR callers.
 
 #### Alternatives Considered
 
-Per-issue plans duplicate shared remediation and fail the accepted batch model.
-A custom scheduler or multi-agent service adds infrastructure without a measured
-need. Global cross-repository ordering conflicts with the selected repo-first
-workflow. Issue counts set project order but cannot substitute for severity.
+Separate action flags allow confusing combinations and multiply validation
+rules. Keeping --label/five-item defaults fails the requested all-match filter.
+Blind label-based closure trusts stale classifications. Legacy aliases create
+two public paths and are not requested. Additional lifecycle actions are deferred.
 
 #### Implementation Boundaries
 
-Modify review-github-issues and its catalog README/Unreleased references plus
-REQ-054 and FEAT-053 through paired publication. Preserve unrelated changes.
-No shared validator, plugin membership, installed-home or live issue changes.
-Update selection/grouping/plan/handoff references, overview template, native
-metadata and the shared issue-resolution handoff; retain its runtime schema.
-Shared PR lifecycle and label-policy references remain consistent; mock
-composition evaluations must load both actual sibling instructions.
+Rename the package, metadata, public examples and references; update plugin
+manifests, direct callers, catalog and Unreleased notes. Retain historical
+release evidence and saved-plan formats. Publish this pair only through
+maintain-project-specs. Install through the scoped owner and explicitly retire
+the old managed installation; do not alter unrelated skills or hooks.
 
 #### Test-First Success Criteria
 
-- TDD-001: No flags discovers every paginated open issue, excludes PRs and
-  handles empty results; incomplete coverage never becomes an ordered full run.
-- TDD-002: Multiple repo/number combinations retain full identity, repo order,
-  all existing matches and explicit missing/access limitations.
-- TDD-003: Priority overrides, count ties, root/uncertain ownership and same
-  paths in different repos produce the declared grouping without double counts.
-- TDD-004: Compatible BGP and SSH reports form separate batches; unrelated
-  same-keyword reports do not merge. Severity precedes batch size.
-- TDD-005: Shared plans cover each accepted member, preserve existing content,
-  reconcile overlaps, and remain file-only through nested adviser composition.
-- TDD-006: Drift, interrupted saves, partial comments, timeouts and reruns retain
-  per-issue evidence and do not duplicate effects or implicitly reopen issues.
-- TDD-007: Invalid priority input causes no GitHub calls; sibling evidence
-  refresh precedes dependent acceptance; frozen target changes never expand
-  effects; selecting one existing plan member preserves unselected members.
-
-- TDD-008: Project roots/unique names, ambiguity, invalid paths, proven shared
-  impact, keyword false positives and number intersections preserve selection.
-- TDD-009: Project filtering precedes label caps; unresolved earlier membership
-  blocks selection; multi-repo identities, PR exclusion and pagination remain.
-- TDD-010: Overview reuse, exact fingerprints, human edits, dependencies, save
-  failures and approvals never create stale or unselected implementation scope.
-- TDD-011: Both approval routes bind the actual owning checkout/project, preserve
-  host limits and avoid implicit Implement, fake receipts or remote authority.
+- Default review equals explicit review; review/planning never close issues.
+- AND filters, number intersections, project exclusions and unbounded versus
+  explicit capped discovery have complete, frozen, no-refill coverage.
+- Closure requires every material claim, a justified reason, fresh evidence
+  and independent readback; stale labels, dirty-only fixes, partial claims,
+  objections, uncertain writes and unsupported transports never bypass checks.
+- PR callers/help/read-only modes retain their effect limits. Plans remain
+  file-only and preserve owners, human edits and separate implementation consent.
+- Only the new skill is installed after ownership-checked migration; all
+  metadata, manifests, callers, docs and evaluation definitions agree.
 
 #### Validation Plan
 
-Run core/Codex/Claude structure, canonical pair, Markdown/reference and plugin
-membership checks. Apply align with report-only code-review and apply-security.
-Validate disposable copied distribution separately from real-home activation.
+Run structure/native policy/spec checks, scoped Markdown/links, synthetic
+instruction evaluations and disposable distribution migration/parity. Apply
+align with nested code-review, linter and apply-security. Report native output
+and actual effect execution separately; no live GitHub mutations.
 
 #### Test Plan
 
-Extend synthetic quality cases and canonical trigger definitions for selection,
-ordering, ownership, batching, plan reuse, failure boundaries and disclosure.
-Use mocked GitHub/filesystem effects; never live issues as fixtures.
+Use synthetic repositories and mocked effects for all three actions, malformed
+inputs, AND matching, intersections, pagination gaps, project scope, closure
+reasons, duplicate binding, drift, partial effects and retries. Run narrow
+package/manifest/npx checks and Codex/Claude disposable installation migration.
 
 #### Evaluation Plan
 
-Compare material instruction behavior against the captured working-byte
-baseline in fresh isolated native contexts when available. Nested composition
-requires actual research/design instructions and mock artifact tools. Static
-definitions are not runtime or quality proof; report unavailable lanes honestly.
-
-#### Rollout And Rollback
-
-Deliver source after focused checks, then validate disposable installation.
-Real-home installation is separate. Roll back only this task's scoped edits;
-never reverse unrelated work or external issue decisions automatically.
+Update existing behavioral and trigger cases and add action-specific cases.
+Use current research/design advisers where the runner supports composition.
+If mock-effect execution or native authentication is unavailable, report the
+unobserved boundary rather than claiming it from simulated output.
 
 #### Done Definition
 
-All affected source surfaces agree on discovery, ordering, batching, authority,
-artifacts and limitations. Focused checks pass and unrun native/live evidence
-remains explicit.
+Source, references, evaluations and docs agree; focused alignment passes.
+Record installed parity and fresh-session discovery separately. Neither those
+checks nor generated responses establish live closure behavior.
 
 #### Implementation Evidence
 
-Version 4 is implemented in skill instructions, project-selection and
-implementation-handoff references, overview and batch templates, native metadata,
-README/catalog and Unreleased notes. Current-folder scope replaces the former
-no-flags whole-repository default; explicit project/name/. overrides and --issues
-intersection are aligned. Plans bind actual checkout/project ownership and
-scoped change/validation paths before execution. The shared issue-resolution
-reference preserves the existing singular metadata and per-batch runtime.
-Added 23 quality and seven trigger definitions: totals 77 and 29. Independent
-review findings RGI-CR-001 through RGI-CR-003 corrected explicit path intent,
-numbered-selection scope and cross-owner document links. Final overview
-verification occurs after triage; natural approval never invokes Implement.
-Earlier evidence below describes prior revisions.
+Version 7 removes obsolete explicit-only description/policy and Claude
+disable-model-invocation while preserving Codex allow_implicit_invocation=true.
+Core and effect-bearing references normalize natural intent to existing actions
+and enforce requested comment/label authority. Catalog, usage and Unreleased
+notes agree. The shared validator is unchanged. There are 47 trigger cases
+(29 positive, 18 negative) and 130 quality definitions, including natural-language
+action/effect boundaries. Version 6 evidence below is historical baseline proof.
 
-The current label-batch revision is implemented in both skill instructions,
-help, READMEs, native metadata and focused references. Shared lifecycle and
-issue-label policies preserve existing effects, per-item owners and caller
-checkout isolation. Added 22 behavioral and eight trigger definitions across
-the two skills; source now contains 83 quality and 41 trigger definitions.
-Earlier implementation evidence below describes prior revisions.
-
-The version 2 workflow and scoped alignment repairs are implemented. Argument
-preflight now precedes discovery; every acceptance refreshes its shared member
-and source dependencies. Evaluation coverage includes sibling drift discovery,
-frozen selection and reuse for a selected subset without unselected effects.
-
-Version 2 updates the source skill, focused grouping/operations/triage/plan
-references, shared batch template, native metadata, catalog documentation and
-Unreleased notes. The 15 trigger definitions and 41 behavioral definitions cover
-backlogs, multi-repo number matching, ordering, ownership, BGP/SSH batching,
-shared plans, overlap, partial effects and disclosure. Positional selectors are
-removed. No live issue effects, real-home installation or shared-runner changes
-were performed; unrelated working edits are preserved.
+Version 6 is implemented in github-issues core instructions, 17 payload files,
+a dedicated closure reference, native metadata, selection/assessment/planning
+references and unchanged artifact formats. Direct PR/delivery callers, both
+plugin manifests, catalog, usage docs and Unreleased notes use the new interface.
+125 quality cases and 39 trigger cases cover preserved behavior and new actions.
+No executable parser, scheduler or product runtime was introduced.
 
 #### Verification Evidence
 
-Version 4: standard/core and both repository host structure checks pass with
-canonical eval definitions. Claude explicit-only frontmatter remains a recognized
-host extension. Relative-resource checks and scoped whitespace pass. Disposable
-pinned skills CLI 1.5.26 discovery, Codex/Claude copy parity, repeat installation
-and isolation pass; real-home installation and runtime activation were not run.
-Fresh Codex quality comparison and Claude trigger attempts both returned
-UNAVAILABLE because isolated native authentication is absent. No credentials
-were copied and no live GitHub effects were used. Mock sibling composition
-remains unavailable; definitions and static review are not behavioral execution
-proof. Canonical pair and final Markdown checks are rerun after this evidence
-publication. Delivery remains implemented, not runtime-verified.
+Version 7: the captured working-byte baseline reproduces the Codex policy
+contradiction. Corrected core standard, repository Codex (stateful profile)
+and Claude checks pass with strict standard frontmatter and no warnings.
+The actual pinned skills 1.5.26 discovery, both-host copied payload parity,
+repeat installation and isolation pass. Scoped Markdown and whitespace pass.
+Trigger CSV and quality JSON are static definitions, not executed behavior.
+Fresh isolated native trigger evaluation requires authentication unavailable
+to the clean runner; runtime and comparative quality remain unverified.
+The final reviewed payload was installed through the scoped repository
+installer into both existing managed Codex and Claude catalogs. All 17 payload
+files match; unrelated installed skills, hooks and registrations stayed
+unchanged. Code-review and security reinspection resolved the reference-level
+authority conflict and found no remaining blocking issue. Help retains all
+three actions and every documented flag; the Learning Loop remains compliant.
+No live GitHub effects were exercised.
 
-Current label-batch revision: STATIC_PASS for standard fields and repository
-Codex/Claude validation, canonical pair validation, scoped Markdown/whitespace,
-eval schemas and 41 relative references. Native explicit-only frontmatter is
-an intentional host extension. Pinned skills CLI 1.5.26 discovery, both-host
-copy parity, repeat installation and isolation passed in disposable homes.
-Initial checks with system Python lacked PyYAML; rerunning in an existing
-prepared environment passed without dependency or source changes.
+Verified 2026-11-19: portable standard-field and repository Codex/Claude checks;
+both plugin manifests; 51 local reference links; JSON uniqueness/required fields;
+repository-configured Markdown and scoped whitespace checks; canonical pair.
+The initial linter wrapper used a child cwd without the repository configuration;
+the scoped native check with the existing root configuration passed unchanged.
+The version 6 baseline used explicit-only native frontmatter; version 7
+intentionally removes that restriction.
 
-Independent code/security review found and resolved three instruction conflicts:
-bounded discovery failure precedence, terminal-audit-before-merge routing and
-severity-label prohibition. Focused regression assertions cover each. Final
-review found no blocking contract or serious security issue. Native Codex and
-Claude trigger attempts and a Codex baseline quality attempt were UNAVAILABLE
-because disposable homes lacked authentication. Mock cross-skill effect
-execution remains UNAVAILABLE: the existing runner installs only one skill and
-provides no mock ledger/sibling composition. Definitions and review are not
-runtime effect proof. No live GitHub changes or real-home installation occurred.
-Historical verification below does not qualify the new instruction behavior.
+Pinned skills 1.5.26 discovery, both-host copy parity, repeated installation and
+unrelated sentinel isolation passed. Six existing installer ownership/isolation
+tests passed. Separate disposable old-to-new migrations passed for Codex and
+Claude, including old skill removal, 17-file parity, repeat installation and
+unrelated/hook isolation. Both existing managed user installations were then
+migrated through the scoped installer with verified ownership and payload parity;
+the old skill is absent and unrelated installed payloads remained unchanged.
 
-STATIC_PASS: standard fields, repository core/Codex/Claude structure and optional
-stateful profile; both plugin catalogs; canonical pair; relative references;
-eval definitions and scoped Markdown/whitespace. Native explicit-only metadata
-is preserved as an intentional standard-frontmatter extension. The existing
-CHANGELOG duplicate Changed heading also occurs in the captured baseline and
-is outside this change; template angle placeholders are intentional syntax.
+A fresh authenticated native Codex process evaluated 23 candidate scenarios and
+five captured prior-version cases using local skill/reference reads only.
+Expected decisions passed for AND selection/intersections, unlimited/capped
+selection, invalid flags, justified closure reasons, stale/partial evidence,
+human reopening, explanation failure, retry bounds, unsupported duplicate
+capabilities, closed issues, scope drift and read-only callers. Shared planning,
+question classification and Plan Mode behavior were preserved against the prior
+working-byte baseline. Prior default filtering selected five; new filtering
+selected all eight fixture matches. The prior and new invocation names/flags
+were explicit in their respective cases; this is not a same-prompt benchmark.
+These are intended-effect simulations, not executed mock or live GitHub effects.
+No credentials were copied or authentication changed. Full effect execution and
+Claude native behavior remain unverified. Independent nested code-review and
+security review found no blocking instruction or authority issue.
 
-Independent instruction review repaired an overly strict filename assertion
-(RGI-CR-001). A subsequent complete-contract alignment repaired argument
-validation after discovery (RGI-ALIGN-001), added frozen/subset scope cases
-(RGI-ALIGN-002), and repaired missing supporting-sibling refresh before
-acceptance (RGI-SEC-001). Final independent instruction and security reviews
-confirmed all findings resolved at the source-contract level, with no remaining
-serious issue. Fresh structure, scoped lint, definitions, reference and spec
-checks passed. Disposable pinned skills CLI discovery, both-host copy parity,
-repeat installation and isolation passed; no real-home installation occurred.
+Fresh installed Codex discovery/help passed after a focused correction: the
+initial help omitted no-reopen and retired-flag disclosures, so the Help
+contract was tightened and installed payloads refreshed. The fresh rerun named
+all actions/selectors, no implicit cap, no reopening/implementation and rejected
+retired flags without post-load tools. This proves discovery/help, not live triage.
+Affected installed downstream callers were refreshed only where source/install
+comparison proved their differences were limited to this task's changed files.
+Codex review-pr/worktree and both-host create-pr/merge-pr/implement consumers
+were refreshed; Claude review-pr was refreshed. The older Claude worktree
+package has no old-name executable link and was retained because refreshing it
+would absorb unrelated pending source changes. Its earlier descriptive title
+is not evidence of a current version 6 installation.
 
-Native triggering and comparative quality are UNAVAILABLE: the isolated runner
-has neither host's environment authentication and intentionally cannot reuse
-real login files. Actual nested composition is UNAVAILABLE because that runner
-does not install sibling advisers or supply mock GitHub/artifact tools. The
-behavioral cases are definitions, not observed effect proof. Delivery remains
-implemented, not runtime-verified; no live GitHub behavior is claimed.
+#### Historical Version 5 Evidence
+
+The following evidence applies only to the earlier interface, not version 6
+closure or its runtime effects.
+
+Version 5 is implemented in review-github-issues core instructions, all affected
+references/templates, native metadata and usage docs. New research coverage is
+shared by every review; design/artifacts/handoff are gated by --create-plan.
+Catalog, Unreleased notes and downstream PR/issue-resolution references agree.
+100 behavioral and 33 trigger definitions cover the new defaults and preserved
+selection, ownership, retry and approval boundaries.
+
+Verified 2026-11-19: portable-core, Codex and Claude structure/policy validation;
+canonical pair validation; scoped Markdown and diff checks; 43 local reference
+links; JSON case structure/unique IDs. Pinned skills 1.5.26 discovery, both-host
+copy parity, repeat installation and isolation passed. The existing scoped
+installer also produced byte parity for all 16 target payload files in a
+disposable destination. Read-only instruction/security review completed; two
+introduced evaluation ambiguities were corrected.
+
+A clean native Codex process evaluated six offline instruction scenarios against
+the captured working-byte baseline. Candidate expectations passed for default
+existing support, promised gap, mixed claims, separate requested plans,
+Plan Mode and ambiguous product root. The trace contained local reads only.
+These are intended-effect simulations, not executed GitHub/file mock effects;
+full effect-path quality and live GitHub behavior remain unverified. Installation
+and fresh-session discovery are recorded separately from source checks.
+
+The scoped native Codex installation has byte parity with all 16 source payload
+files. A fresh native session discovered the installed skill and returned help
+with --create-plan, default no plans, scoped label creation, unchanged issue
+state and ambiguous-product selection, without subsequent tools/effects. An
+initial help response omitted effect boundaries; explicit help instructions
+were added and the same smoke check passed on rerun. This proves help discovery,
+not end-to-end live triage or GitHub mutations.
+
+A follow-up align pass corrected stale scope/planning evaluation assumptions and
+clarified overview fields and optional-plan documentation. Structure, Markdown,
+local-link, definition-schema, source-review and security checks passed. Four new
+offline native policy scenarios passed for questions, lost label-creation
+responses, cross-repository links and separate primary owners. They assessed
+intended effects only; no mock mutations or live GitHub effects were executed.
+The scoped installed payload was refreshed and verified against source.
+
+#### Rollout And Rollback
+
+Validate old-to-new migration in disposable homes before scoped native install.
+Verify ownership and new payload parity before retiring the old managed skill;
+never delete unmanaged content or introduce aliases. Preserve existing plans.
+Restore only task-owned changes from the captured baseline if necessary,
+retaining concurrent edits and observed external effects. No live effects are
+part of this refactor.
 
 <!-- /FEATURE: FEAT-053 -->
 
-<!-- FEATURE: FEAT-054 reqs=REQ-055 status=ready delivery=implemented priority=P0 version=3 -->
+<!-- FEATURE: FEAT-054 reqs=REQ-055 status=ready delivery=implemented priority=P0 version=5 -->
 ### FEAT-054: Complete document-package intake and phased delivery
 
 #### Requirements Covered
@@ -11290,17 +11246,60 @@ Existing Worktree objective/execution helpers, canonical spec parser, SDLC adapt
 
 Extend the shared objective intake with digest-bound document bundles and completion policy. The canonical spec owner validates a source-ID coverage crosswalk; source assets remain portable project documentation. Add a private program ledger with explicit phase dependencies, immutable slice membership, task feature/requirement mappings, scoped completion and phase-exit evidence. Elaborate upcoming slices rather than an entire detailed backlog. Source changes fence dispatch and require accepted impact/replanning. Existing spec schemas, stable IDs and paired publication remain authoritative.
 
+Source-bundle-v2 adds a reviewed planning record: supplied or derived mode,
+source-path references, rationale and normalized phases with dependencies and
+exit criteria. Early source inventory may declare planning null; program
+admission requires a complete record and exact equality with the program's
+phase definitions. Existing program validation remains the sole DAG, coverage
+and execution owner. No new coordinator or compatibility path is introduced.
+
+The root first identifies source authority and distinguishes implementation
+phases from installer stages, external prerequisites and release qualification.
+Supplied phases are preserved; missing phases are derived from observable
+outcomes and prerequisite/risk edges. The design adapter records the rationale,
+and the context adapter supplies evidence. Slice planning freezes membership,
+checks and rollback at a reviewable scope while leaving future task detail open.
+A plan must retain the full obligation inventory. A declared derivation is not
+proof that a model inferred it correctly; source interpretation is reviewed.
+
+The shared delivery owner adds an explicit local-promoted completion policy for
+managed document programs. After existing promotion and cleanup, the coordinator
+obtains executed qualification/admission and asks that owner to issue an immutable
+local completion receipt. Bind accepted objective, execution ID, admission,
+execution basis, completed coordinator and promoted commit/tree. Verify current
+coordinator authority, quiescent writers and exact clean managed promotion before
+publication; issue no PR, remote merge or aggregate authority. Remote attestation
+rejects local policy before external effects, and existing protected merge proofs
+remain unchanged.
+
+Common delivery accessors expose the admission and candidate/result identities
+without making program or qualification consumers depend on remote receipt fields.
+Historical local verification checks the accepted revision chain, original
+admission and immutable basis/coordinator evidence against the persistent Git
+repository, including after managed checkout cleanup. Preserve completed slice
+order/definitions across revisions. Existing phase exits and current obligation
+basis checks require corrective coverage when accepted source truth changes.
+Managed next-slice preparation keeps its existing local promotion path; require
+full program completion before automatic aggregation changes lease/project state.
+
+Native qualification uses the disposable three-tier owner and two source-plan
+scenarios. Intermediate slices prove their own scoped outcomes; final complete
+application and release-equivalent test obligations remain independent. Deferred
+implementation debt is declared in its owning slice and resolved before that
+slice's admission. The harness observes product-owned transitions and never
+manufactures program, promotion, completion or accepted revision state.
+
 #### Selected Option
 
 Extend existing deterministic owners and thin phase adapters with versioned contracts.
 
 #### Alternatives Considered
 
-A replacement coordinator duplicates authority. One project-wide PR makes review and recovery unbounded. Concurrent publication candidates add base races; retain one qualified candidate.
+Guidance alone cannot reject phase drift after acceptance. A general prose-to-phase compiler would claim unsupported semantic completeness. A replacement coordinator duplicates authority. One project-wide PR makes review and recovery unbounded. Concurrent publication candidates add base races; retain one qualified candidate.
 
 #### Implementation Boundaries
 
-Repo-owned skills, referenced support helpers, hook source, templates, documentation, catalogs and tests. No application implementation, actual cluster operation or production installation is included.
+Repo-owned skills, referenced support helpers, hook source, templates, documentation, catalogs and tests. No implementation of a user application, actual cluster operation or production installation is included; disposable verification applications are in scope.
 
 #### Test-First Success Criteria
 
@@ -11329,9 +11328,26 @@ Implementation, ownership, docs and focused tests agree; all unexecuted native/l
 
 #### Implementation Evidence
 
+The native phased-program extension adds explicit local-promoted completion for automatic managed projects. Owner-produced receipts retain original accepted revisions, immutable execution bases, admission and promoted Git identities after later slices and outer cleanup. Aggregation refuses unfinished programs. Remote delivery policy remains independent.
+
+The phase-planning extension is implemented in the existing source-bundle and
+program owners, with source-bundle-v2 provenance and exact phase comparisons
+on initial admission and revalidation. Context/design/planning adapters and
+execution artifact guidance now distinguish phases, slices and features.
+No application implementation or native multi-slice delivery is claimed.
+
 Implemented source_bundle.py, workflow_program.py and accepted objective v2. Portable contract snapshots carry digests, original IDs, explicit dispositions and canonical REQ/FEAT mappings. Programs declare phases, slices and regression criteria; exact input admission rejects unrelated changes. Completed slice definitions and order remain immutable, and full completion requires current obligation evidence beyond phase exit subsets.
 
 #### Verification Evidence
+
+Focused extension validation passed: 19 native evidence tests, 11 source/scoped-history observer tests, 14 classifier identity tests, 25 source/program tests and 14 delivery tests. Python lint, Markdown lint and diff whitespace checks passed. The earlier target regression run was interrupted before completion when the source snapshot was superseded; it supplies no PASS claim. Full frozen-catalog preflight and both fresh native planning-mode trials remain pending.
+
+Phase-planning extension: 25 focused source/program tests and 14 real-Git
+bootstrap tests pass. Required-verifier inventory regression passes, including
+null and mismatched phase plans at admission and revalidation. Supplied and
+derived fixtures each preserve 601 obligations across four phases and eight
+slices. Native multi-slice delivery and model planning quality remain separate
+qualification lanes; these deterministic tests do not establish them.
 
 Synthetic package tests pass with 601 obligations, missing catalog IDs/references, conflicts, drift and canonical mappings. Program tests cover phase ordering, completed-contract immutability and missing/stale full-program evidence. Prose inventory and semantic conflict completeness remain root-reviewed rather than automatically proven.
 
@@ -13364,7 +13380,7 @@ native trials do not qualify this changed execution contract.
 
 <!-- /FEATURE: FEAT-071 -->
 
-<!-- FEATURE: FEAT-072 reqs=REQ-073 status=ready delivery=implemented priority=P1 version=4 -->
+<!-- FEATURE: FEAT-072 reqs=REQ-073 status=ready delivery=implemented priority=P1 version=5 -->
 ### FEAT-072: Owner-aligned SDLC verifier and complete workspace teardown
 
 #### Requirements Covered
@@ -13457,6 +13473,36 @@ For plan-command recovery, revalidate the retained review against the current
 plan, validation sidecar, objective and specs. Never change coordinator state,
 seal tests, dispatch tasks or extend runtime admission from an observation.
 
+For phased qualification, prepare a frozen supplied or derived portable source
+package through the existing lifecycle. A requested campaign executes those
+variants in fresh sequential generations, retaining each validated report before
+exact replacement/cleanup. Keep one app/runtime and the existing installed
+catalog, native launch, companion, task-container and resource owners; add no
+public workflow or substitute coordinator.
+
+Version phase/result contracts together to bind observation scope and execution
+identity. Startup is admitted once. Planning observations are keyed by accepted
+objective digest and SDLC phase; execution observations additionally name the
+owner-selected slice. Supersession stays within one key, while immutable global
+attempt archives preserve all earlier slices and revisions. Live admission uses
+the current checkpoint, objective, basis and exact target. Historical verification
+resolves the original accepted snapshot and completed execution/admission proofs;
+existing same-execution nonmaterial lineage rules retain their narrow meaning.
+Historical observation never grants current Compose, browser or worker access.
+
+The final program observation invokes shared program input and completion owners,
+then binds planning origin, accepted/program digests, slice/phase coverage and
+observed interruption/resume/revision evidence. Reject omitted earlier slices,
+replayed foreign evidence, missing exits and stale changed-obligation coverage.
+Keep scoped intermediate validation distinct from the final existing browser,
+API/PostgreSQL, restart, aggregate rebuild and five non-GUI test classes plus GUI
+acceptance. Preserve the original independent harness bytes and failed attempts.
+
+The native adapter remains pinned to one verified Codex CLI event contract.
+Inspect official versioned protocol definitions and test the exact selected
+version before the fresh trial; version-string substitution alone is not native
+qualification. No broad version range or legacy adapter path is introduced.
+
 #### Selected Option
 
 Focused changes to the existing verifier and fixture owners, with two private
@@ -13540,6 +13586,8 @@ no broader full-workflow PASS follows from one native scenario.
 
 #### Implementation Evidence
 
+The three-tier extension now seeds frozen supplied/derived source fixtures, requires normative coverage from those exact sources, records revision/slice-scoped phase evidence, and independently correlates successful native continuation with same-run hooks. Final ingestion recomputes program completion and preserves full application, task-container, companion, aggregate and cleanup gates.
+
 Implemented reusable current-contract fixtures; private suite catalog/runner with
 measured dispatch budget, progress, interruption-safe reports and prior report
 retention; aggregate workspace ownership, serialized cleanup, immutable
@@ -13548,6 +13596,8 @@ correlation. The native launcher creates private evidence at inception.
 Documentation, help, eval cases and source-installed maintenance are aligned.
 
 #### Verification Evidence
+
+Focused extension validation passed: 19 native evidence tests, 11 source/scoped-history observer tests, 14 classifier identity tests, 25 source/program tests and 14 delivery tests. Python lint, Markdown lint and diff whitespace checks passed. The earlier target regression run was interrupted before completion when the source snapshot was superseded; it supplies no PASS claim. Full frozen-catalog preflight and both fresh native planning-mode trials remain pending.
 
 An earlier candidate passed all 17 deterministic suites. Fresh native trials
 proved direct startup selection and natural command/hook correlation, then exposed
@@ -14469,7 +14519,7 @@ checkout isolation. Added 22 behavioral and eight trigger definitions across
 the two skills; source now contains 83 quality and 41 trigger definitions.
 Earlier implementation evidence below describes prior revisions.
 
-The shared review-pr lifecycle reference aligns review-pr, review-github-issues,
+The shared review-pr lifecycle reference aligns review-pr, github-issues,
 merge-pr, test-live-on-nebius and the existing local issue handoff without
 fabricating Implement authority. README/changelog and hosted bundle references
 are aligned. Controller contracts/stages now bind applicability, causal diagnosis, feature

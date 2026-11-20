@@ -139,14 +139,14 @@ def main(argv=None):
     command = sub.add_parser('aggregate-record-gates', allow_abbrev=False)
     command.add_argument('--run-dir', type=Path, required=True)
     command.add_argument('--candidate', type=Path, required=True)
-    for action in ('uat-readiness', 'uat-recover-cleanup', 'admit-phase', 'admit-delivery', 'qualify', 'attest-delivery', 'submit-delivery', 'reconcile-delivery', 'phase-exit'):
+    for action in ('uat-readiness', 'uat-recover-cleanup', 'admit-phase', 'admit-delivery', 'qualify', 'attest-delivery', 'submit-delivery', 'reconcile-delivery', 'complete-local', 'phase-exit'):
         command = sub.add_parser(action, allow_abbrev=False)
         command.add_argument('--run-dir', type=Path, required=True)
         if action != 'uat-recover-cleanup':
             command.add_argument('--execution', required=True)
         if action == 'qualify':
             command.add_argument('--stage', choices=('promoted', 'aggregate'), default='promoted')
-        if action in {'uat-readiness', 'uat-recover-cleanup', 'admit-phase', 'qualify', 'attest-delivery', 'phase-exit'}:
+        if action in {'uat-readiness', 'uat-recover-cleanup', 'admit-phase', 'qualify', 'attest-delivery', 'complete-local', 'phase-exit'}:
             command.add_argument('--candidate', type=Path, required=True)
     for action in ('admit-inputs', 'refinement-ready', 'settle-objective', 'complete', 'cancel-complete', 'retire-fenced-waves', 'resume-replanned', 'aggregate-prepare', 'aggregate-validate', 'aggregate-finish'):
         command = sub.add_parser(action, allow_abbrev=False)
@@ -185,13 +185,15 @@ def main(argv=None):
         elif args.action == 'qualify':
             from workflow_qualification import qualify
             value = qualify(args.run_dir, args.execution, read(args.candidate), stage=args.stage)
-        elif args.action in {'attest-delivery', 'submit-delivery', 'reconcile-delivery', 'phase-exit'}:
+        elif args.action in {'attest-delivery', 'submit-delivery', 'reconcile-delivery', 'complete-local', 'phase-exit'}:
             import workflow_delivery
             if args.action == 'attest-delivery':
                 candidate = read(args.candidate)
                 value = workflow_delivery.attest(args.run_dir, args.execution, candidate['review'], candidate['admission'])
             elif args.action == 'phase-exit':
                 value = workflow_delivery.phase_exit(args.run_dir, args.execution, read(args.candidate)['admissions'])
+            elif args.action == 'complete-local':
+                value = workflow_delivery.complete_local(args.run_dir, args.execution, read(args.candidate)['admission'])
             else:
                 value = getattr(workflow_delivery, 'submit' if args.action == 'submit-delivery' else 'reconcile')(args.run_dir, args.execution)
         elif args.action == 'admit-inputs':

@@ -71,7 +71,7 @@ Prepare one locked delivery slice for isolated TDD and bounded dependency-wave i
 
 ## Inputs
 
-- Active run directory, current `FEAT-*`, and locked plan.
+- Active run directory, current SLICE or FEAT execution identity, and locked plan.
 - Canonical project checkout, named promotion branch, exact `HEAD`, and Git
   common directory, plus the exact initialized project folder and repo-relative
   scope. Unmanaged mode also requires a verified `origin` default identity;
@@ -96,7 +96,7 @@ Prepare one locked delivery slice for isolated TDD and bounded dependency-wave i
 ## Writes
 
 - Private execution state under
-  `<agent-home>/sdlc-runs/<project-id>/<run-id>/execution/<FEAT-*>/`.
+  `<agent-home>/sdlc-runs/<project-id>/<run-id>/execution/<execution-id>/`.
 - A persistent feature integration branch/worktree under the private run root.
 - A scoped contract commit on the named project branch only when requirements
   and design plus the exact admitted contract snapshot are the complete

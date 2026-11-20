@@ -107,11 +107,12 @@ def test_fresh_apt_workspace_is_bounded_and_removed_on_error(monkeypatch):
 
     calls = []
 
-    def run(args, *, timeout, cwd):
+    def run(args, *, timeout, cwd, apt_diagnostics):
+        assert apt_diagnostics
         calls.append((args, timeout, cwd))
         config = Path(args[2]).read_text()
         assert args == ["apt-get", "-c", str(cwd / "apt.conf"), "update", "-qq"]
-        assert timeout == 120
+        assert timeout == 180
         assert f'Dir::State::lists "{cwd / "lists"}";' in config
         assert 'Dir::Cache::pkgcache "";' in config
         assert 'APT::Update::Error-Mode "any";' in config

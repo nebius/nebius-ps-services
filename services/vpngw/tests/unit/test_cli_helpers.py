@@ -10551,7 +10551,7 @@ def test_vm_ha_status_renderer_emits_one_four_column_table() -> None:
 
     rendered = output.getvalue()
     assert rendered.count("VM-HA Status — HEALTHY") == 1
-    assert all(header in rendered for header in ("Gateway", "Role", "mTLS", "Ready"))
+    assert all(header in rendered for header in ("Gateway", "Role", "mTLS credentials", "Ready"))
     assert all(
         header not in rendered
         for header in ("Field", "Value", "Details", "Controller", "Data Plane")
@@ -10707,7 +10707,7 @@ def test_vm_ha_status_renderer_colors_only_semantic_health_cells(
     assert [column.header for column in healthy_table.columns] == [
         "Gateway",
         "Role",
-        "mTLS",
+        "mTLS credentials",
         "Ready",
     ]
     assert str(healthy_table.title.spans[-1].style) == "bold green"

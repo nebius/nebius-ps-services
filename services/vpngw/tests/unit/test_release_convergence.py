@@ -268,19 +268,13 @@ def test_healthy_is_green_and_plain_output_preserves_text(value):
 def test_peer_reachability_is_derived_from_current_heartbeat_not_listener():
     current = {
         "guard_boot_id": "boot",
-        "apply_convergence": {"observed_at": 100, "boot_id": "boot"},
+        "apply_convergence": {"observed_at": 100, "boot_id": "boot", "fresh": True},
     }
     received = {**current, "heartbeat": {"peer_v6_fresh": True}}
+    assert operational_diagnostics.peer_channel({"listeners": [{"local_port": 9443}]}) == "unknown"
+    assert operational_diagnostics.peer_channel(received) == "authenticated-receive"
     assert (
-        operational_diagnostics.peer_channel({"listeners": [{"local_port": 9443}]}, now=101)
-        == "unknown"
-    )
-    assert operational_diagnostics.peer_channel(received, now=101) == "authenticated-receive"
-    assert operational_diagnostics.peer_channel(received, now=111) == "unknown"
-    assert (
-        operational_diagnostics.peer_channel(
-            {**received, "reasons": ["current-boot-status-stale"]}, now=101
-        )
+        operational_diagnostics.peer_channel({**received, "reasons": ["current-boot-status-stale"]})
         == "unknown"
     )
     failed = {
@@ -291,7 +285,7 @@ def test_peer_reachability_is_derived_from_current_heartbeat_not_listener():
             "peer_send_consecutive_failures": 1,
         },
     }
-    assert operational_diagnostics.peer_channel(failed, now=101) == "tls-failure"
+    assert operational_diagnostics.peer_channel(failed) == "tls-failure"
     assert operational_diagnostics.peer_direction("tls-failure") == "gateway-to-peer"
     assert operational_diagnostics.peer_direction("authenticated-receive") == "peer-to-gateway"
 
@@ -515,3 +509,161 @@ def test_missing_obsolete_unit_only_removes_its_exact_enablement_link(
         runtime_migration.retire_owned_assets(plan)
         assert not link.is_symlink()
         runtime_migration.retire_owned_assets(plan)
+
+
+def _channel_record():
+    return {
+        "guard_boot_id": "boot",
+        "apply_convergence": {"observed_at": 100, "boot_id": "boot", "fresh": True},
+        "heartbeat": {"peer_v6_fresh": True},
+    }
+
+
+def test_channel_capture_survives_slow_render_without_using_operator_wall_clock(monkeypatch):
+    import time
+
+    record = _channel_record()
+    monkeypatch.setattr(time, "time", lambda: 1_795_104_000)
+    captured = operational_diagnostics.observe_peer_channel(record)
+    record["apply_convergence"]["fresh"] = False
+    monkeypatch.setattr(time, "time", lambda: 1_795_104_060)
+    text = operational_diagnostics.peer_channel_text(captured)
+    assert text.style == "green"
+    assert "Open · mTLS verified" in text.plain
+    assert text.plain == "Open · mTLS verified"
+    assert operational_diagnostics.peer_channel(record) == "unknown"
+
+
+@pytest.mark.parametrize("fresh", [None, False, "true", 1, 0, [], {}])
+def test_missing_or_invalid_native_freshness_never_becomes_verified(fresh):
+    record = _channel_record()
+    record["apply_convergence"]["fresh"] = fresh
+    observation = operational_diagnostics.observe_peer_channel(record)
+    assert observation.assessment == "unknown"
+    text = operational_diagnostics.peer_channel_text(observation)
+    assert text.style == "yellow"
+    assert text.plain.startswith("Unverified · ")
+    assert "\n" not in text.plain
+
+
+@pytest.mark.parametrize(
+    "change", ["stale-reason", "wrong-boot", "missing-boot", "missing-fresh", "missing-evidence"]
+)
+def test_invalid_heartbeat_at_capture_remains_unverified(change):
+    record = _channel_record()
+    if change == "stale-reason":
+        record["reasons"] = ["current-boot-status-stale"]
+    elif change == "wrong-boot":
+        record["guard_boot_id"] = "other"
+    elif change == "missing-boot":
+        del record["guard_boot_id"]
+    elif change == "missing-fresh":
+        del record["apply_convergence"]["fresh"]
+    else:
+        del record["apply_convergence"]
+    observation = operational_diagnostics.observe_peer_channel(record)
+    assert observation.assessment == "unknown"
+    assert observation.reason
+
+
+@pytest.mark.parametrize(
+    "kind,label",
+    [
+        ("refused", "Connection refused"),
+        ("timeout", "Timeout"),
+        ("unreachable", "Unreachable"),
+        ("tls", "TLS failed"),
+    ],
+)
+def test_channel_failure_keeps_classified_reason_and_color_without_direction(kind, label):
+    record = _channel_record()
+    record["heartbeat"] = {
+        "peer_v6_fresh": False,
+        "peer_send_consecutive_failures": 1,
+        "peer_send_error_kind": kind,
+    }
+    observed = operational_diagnostics.observe_peer_channel(record)
+    text = operational_diagnostics.peer_channel_text(observed)
+    assert text.plain == label
+    assert text.style == "red"
+    assert "closed" not in text.plain.lower()
+
+
+def test_cli_transport_reads_native_freshness_with_one_direct_ssh_command(monkeypatch):
+    from nebius_vpngw import cli
+
+    record = _channel_record()
+    commands = []
+    monkeypatch.setattr(cli, "_build_ssh_base_cmd", lambda *a, **k: ["ssh"])
+    monkeypatch.setattr(cli, "_validate_vm_ha_agent_status", lambda value, **k: value)
+
+    def ssh(command, **kwargs):
+        commands.append(command)
+        assert command[-1] == "sudo /usr/bin/python3 -m nebius_vpngw.agent.main --vm-ha-status"
+        assert 0 < kwargs["timeout"] <= 15
+        return NS(returncode=0, stdout=json.dumps(record), stderr="")
+
+    monkeypatch.setattr(cli.subprocess, "run", ssh)
+    actual = cli._fetch_vm_ha_agent_status(
+        target="192.0.2.1",
+        hostname="gateway",
+        username="ubuntu",
+        key_path=None,
+        ssh_policy=object(),
+        inst_cfg=object(),
+    )
+    assert actual == record
+    assert len(commands) == 1
+    assert (
+        operational_diagnostics.observe_peer_channel(actual).assessment == "authenticated-receive"
+    )
+
+
+def test_release_access_uses_frozen_channel_after_release_ssh_delay(monkeypatch):
+    from nebius_vpngw import cli
+
+    observed = operational_diagnostics.observe_peer_channel(_channel_record())
+    snapshot = NS(members=(NS(name="gateway", record=_channel_record(), peer_channel=observed),))
+    monkeypatch.setattr(cli, "_status_ssh_target_command", lambda *a, **k: ["ssh"])
+    monkeypatch.setattr(cli.time, "time", lambda: 1000)
+    monkeypatch.setattr(cli.time, "monotonic", lambda: 40)
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *a, **k: NS(returncode=0, stdout='{"state":"present","version":"0.6.6"}'),
+    )
+    stream = io.StringIO()
+    cli._render_release_access(
+        Console(file=stream, width=180, no_color=True),
+        NS(iter_instance_configs=lambda: [NS(hostname="gateway")]),
+        None,
+        {"gateway": "192.0.2.1"},
+        snapshot,
+    )
+    output = stream.getvalue()
+    assert "Open · mTLS verified" in output
+    assert "collected" not in output
+    assert "Observed" not in output
+    assert "Peer channel · TCP 9443" in output
+    assert "peer-to-gateway" not in output
+    assert "gateway-to-peer" not in output
+    assert "not a continuous port probe" in output
+
+
+@pytest.mark.parametrize("native", ["{", "[]"])
+def test_malformed_native_status_stays_permanent(monkeypatch, native):
+    from nebius_vpngw import cli
+
+    monkeypatch.setattr(cli, "_build_ssh_base_cmd", lambda *a, **k: ["ssh"])
+    monkeypatch.setattr(
+        cli.subprocess, "run", lambda *a, **k: NS(returncode=0, stdout=native, stderr="")
+    )
+    with pytest.raises(cli._VMHAAgentStatusPermanent):
+        cli._fetch_vm_ha_agent_status(
+            target="192.0.2.1",
+            hostname="gateway",
+            username="ubuntu",
+            key_path=None,
+            ssh_policy=object(),
+            inst_cfg=object(),
+        )

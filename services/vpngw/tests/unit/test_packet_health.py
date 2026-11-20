@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from rich.console import Console
 
-from nebius_vpngw import cli
+from nebius_vpngw import cli, packet_report
 from nebius_vpngw import packet_health as health
 from nebius_vpngw.ipsec_observation import Inventory
 
@@ -163,53 +163,55 @@ def test_key_bearing_xfrm_rejected():
 )
 def test_health_uses_fresh_deltas_including_zero_accepted_packets(monkeypatch, kwargs, expected):
     result = health.summarize(observation(monkeypatch, **kwargs), "site-a", 1024)
-    assert result["window"] == "1024"
-    assert result["health"] == expected
-    assert "Gateway-wide" in result["details"][-1]
+    assert result.window == "1024"
+    assert result.health == expected
+    assert health.summarize_gateway(observation(monkeypatch, **kwargs)).sequence.delta == 0
 
 
 def test_global_counter_does_not_need_to_equal_tunnel_counter(monkeypatch):
     result = health.summarize(observation(monkeypatch, state=xfrm(late=28), seq=99), "site-a", 1024)
-    assert result["health"] == "18 late drops"
-    assert "(+89)" in result["details"][-1]
+    assert result.health == "18 late drops"
+    gateway = health.summarize_gateway(observation(monkeypatch, state=xfrm(late=28), seq=99))
+    assert gateway.sequence.delta == 89
+    assert gateway.result == "WARN"
 
 
 @pytest.mark.parametrize(
     "explicit,expected", [(None, "Idle"), (32, "Expected 32; not active; Idle")]
 )
 def test_inherited_window_is_not_reported_as_mismatch(monkeypatch, explicit, expected):
-    assert health.summarize(observation(monkeypatch), "site-a", explicit)["health"] == expected
+    assert health.summarize(observation(monkeypatch), "site-a", explicit).health == expected
 
 
 def test_disabled_window_is_reported(monkeypatch):
     obs = observation(monkeypatch, state=xfrm(window=0))
-    assert "Replay protection disabled" in health.summarize(obs, "site-a", None)["health"]
+    assert "Replay protection disabled" in health.summarize(obs, "site-a", None).health
 
 
 def test_partial_sample_retains_confirmed_drops(monkeypatch):
     obs = observation(monkeypatch, state=xfrm(late=28), link=ValueError("private detail"))
     # Lost interface mapping does not invalidate the stable SA's own counters.
     result = health.summarize(obs, "site-a", 1024)
-    assert "18 late drops" in result["health"]
-    assert "sample incomplete" in result["health"]
+    assert "18 late drops" in result.health
+    assert "sample incomplete" in result.health
     assert "private detail" not in json.dumps(obs)
 
 
 def test_counter_reset_and_rekey_do_not_subtract_unrelated_totals(monkeypatch):
     obs = observation(monkeypatch, state=xfrm(late=1, packets=0))
-    assert "sample incomplete" in health.summarize(obs, "site-a", 1024)["health"]
+    assert "sample incomplete" in health.summarize(obs, "site-a", 1024).health
     obs = observation(
         monkeypatch, raw=RAW.replace('"uniqueid":"7"', '"uniqueid":"8"'), state=xfrm(late=999)
     )
     result = health.summarize(obs, "site-a", 1024)
-    assert result["health"] == "sample incomplete (SAs changed)"
-    assert not any("(+989)" in line for line in result["details"])
+    assert result.health == "sample incomplete (SAs changed)"
+    assert result.counters["late"].delta is None
 
 
 def test_boot_change_never_looks_healthy(monkeypatch):
     obs = observation(monkeypatch)
     obs["samples"][1]["boot"] = "22345678-1234-1234-1234-123456789012"
-    assert health.summarize(obs, "site-a", 1024)["health"] == "Gateway restarted"
+    assert health.summarize(obs, "site-a", 1024).health == "Gateway restarted"
 
 
 def test_same_peer_multiple_marked_states_are_ambiguous(monkeypatch):
@@ -217,7 +219,7 @@ def test_same_peer_multiple_marked_states_are_ambiguous(monkeypatch):
         monkeypatch, state=xfrm() + xfrm().replace("if_id", "mark 0x1/0xff\n    if_id")
     )
     assert obs["samples"][1]["tunnels"]["site-a"]["reason"] == "ambiguous"
-    assert "sample incomplete" in health.summarize(obs, "site-a", 1024)["health"]
+    assert "sample incomplete" in health.summarize(obs, "site-a", 1024).health
 
 
 def test_overlap_preserves_positive_stable_subset(monkeypatch):
@@ -225,7 +227,7 @@ def test_overlap_preserves_positive_stable_subset(monkeypatch):
     sa = next(iter(obs["samples"][1]["tunnels"]["site-a"]["sas"].values()))
     obs["samples"][1]["tunnels"]["site-a"]["sas"]["b" * 64] = dict(sa, spi=123, late=1000)
     assert (
-        health.summarize(obs, "site-a", 1024)["health"]
+        health.summarize(obs, "site-a", 1024).health
         == "18 late drops; sample incomplete (SAs changed)"
     )
 
@@ -235,7 +237,7 @@ def test_no_sa_only_expected_for_authoritative_cold_standby(monkeypatch, cold):
     obs = observation(monkeypatch, raw=Inventory.from_events([]).json(), state="")
     obs["samples"][0]["tunnels"]["site-a"]["sas"] = {}
     expected = "Cold standby (no inbound SA)" if cold else "No inbound SA"
-    assert health.summarize(obs, "site-a", 1024, cold_standby=cold)["health"] == expected
+    assert health.summarize(obs, "site-a", 1024, cold_standby=cold).health == expected
 
 
 def test_malformed_remote_data_does_not_reach_presentation(monkeypatch):
@@ -386,22 +388,22 @@ def test_packet_table_narrow_no_color_and_expected_only_payload(monkeypatch):
         details=True,
     )
     text = stream.getvalue()
-    assert "Packet health" in text and "18 late drops" in text
+    assert "Packet receive checks" in text and "18 late drops" in text
     assert "do-not-send" not in repr(jobs)
-    assert "Gateway-wide XfrmInStateSeqError" in text
+    assert "XfrmInStateSeqError" in text
     assert "not additive" in text
 
 
 @pytest.mark.parametrize("packets", [100, 110])
 def test_interface_drops_never_report_idle_or_no_new_drops(monkeypatch, packets):
     obs = observation(monkeypatch, state=xfrm(packets=packets), link=links(errors=15, dropped=15))
-    assert health.summarize(obs, "site-a", 1024)["health"] == "Interface RX errors/drops increased"
+    assert health.summarize(obs, "site-a", 1024).health == "Interface RX errors/drops increased"
 
 
 def test_unaccounted_retiring_kernel_sa_marks_sample_incomplete(monkeypatch):
     old = xfrm().replace("0xc0123456(3222418518)", "0xc0123455(3222418517)")
     obs = observation(monkeypatch, state=xfrm(late=28) + old)
-    assert health.summarize(obs, "site-a", 1024)["health"] == "18 late drops; sample incomplete"
+    assert health.summarize(obs, "site-a", 1024).health == "18 late drops; sample incomplete"
 
 
 def test_huge_timestamp_is_unavailable_without_changing_status_exit(monkeypatch):
@@ -478,7 +480,7 @@ def test_stable_overlapping_sas_sum_only_their_individual_deltas(monkeypatch):
     for index, count in enumerate((1000, 1002)):
         sa = next(iter(obs["samples"][index]["tunnels"]["site-a"]["sas"].values()))
         obs["samples"][index]["tunnels"]["site-a"]["sas"]["b" * 64] = dict(sa, spi=123, late=count)
-    assert health.summarize(obs, "site-a", 1024)["health"] == "20 late drops"
+    assert health.summarize(obs, "site-a", 1024).health == "20 late drops"
 
 
 def test_one_kernel_sa_cannot_be_attributed_to_two_child_names(monkeypatch):
@@ -489,7 +491,7 @@ def test_one_kernel_sa_cannot_be_attributed_to_two_child_names(monkeypatch):
     payload["sas"].extend(extra_payload["sas"])
     raw = json.dumps(payload)
     obs = observation(monkeypatch, raw=raw)
-    assert "ambiguous mapping" in health.summarize(obs, "site-a", 1024)["health"]
+    assert "ambiguous mapping" in health.summarize(obs, "site-a", 1024).health
 
 
 def test_probe_source_executes_without_installed_product_or_third_party_packages():
@@ -526,3 +528,156 @@ def test_probe_source_executes_without_installed_product_or_third_party_packages
     obs = health.validate_observation(json.loads(result.stdout), EXPECTED)
     sa = next(iter(obs["samples"][1]["tunnels"]["site-a"]["sas"].values()))
     assert sa["window"] == 1024 and sa["late"] == 10
+
+
+@pytest.mark.parametrize("counter", ["late", "duplicate", "integrity", "errors", "dropped"])
+def test_packet_report_zero_threshold_warns_at_each_scope(monkeypatch, counter):
+    kwargs = {"state": xfrm(packets=103)}
+    if counter in {"errors", "dropped"}:
+        kwargs["link"] = links(**{counter: 11})
+    else:
+        kwargs["state"] = xfrm(packets=103, **{counter: 11 if counter == "late" else 1})
+    report = health.summarize(observation(monkeypatch, **kwargs), "site-a", 1024)
+    assert report.result == "WARN"
+    assert report.counters[counter].delta == 1
+    assert report.counters["packets"].delta == 3
+    assert packet_report.counter_text(report.counters[counter]).style == "yellow"
+
+
+@pytest.mark.parametrize("packets,expected", [(100, "PASS · idle"), (103, "PASS")])
+def test_packet_activity_is_not_an_error(monkeypatch, packets, expected):
+    report = health.summarize(observation(monkeypatch, state=xfrm(packets=packets)), "site-a", 1024)
+    assert report.result == expected
+    assert report.counters["packets"].delta == packets - 100
+    assert packet_report.result_text(report.result).style == "green"
+
+
+def test_partial_report_preserves_positive_lower_bound_and_unknown_cells(monkeypatch):
+    report = health.summarize(
+        observation(monkeypatch, state=xfrm(late=28), link=ValueError("hidden")), "site-a", 1024
+    )
+    assert report.result == "WARN · incomplete"
+    assert packet_report.counter_text(report.counters["late"]).plain == ">=18"
+    assert packet_report.counter_text(report.counters["errors"]).plain == "—"
+    assert report.counters["late"].samples[0].before == 10
+    assert report.counters["late"].samples[0].after == 28
+    assert "hidden" not in repr(report)
+
+
+@pytest.mark.parametrize("sequence", [None, 1])
+def test_missing_or_reset_gateway_counter_cannot_pass_or_erase_tunnel_deltas(monkeypatch, sequence):
+    obs = observation(monkeypatch, state=xfrm(late=28))
+    obs["samples"][1]["global_seq"] = sequence
+    gateway = health.summarize_gateway(obs)
+    assert gateway.result == "INCOMPLETE"
+    assert gateway.sequence.delta is None
+    assert health.summarize(obs, "site-a", 1024).counters["late"].delta == 18
+
+
+def test_gateway_reboot_does_not_subtract_sequence_counters(monkeypatch):
+    obs = observation(monkeypatch, seq=200)
+    obs["samples"][1]["boot"] = "new-boot"
+    assert health.summarize_gateway(obs).result == "INCOMPLETE"
+    assert health.summarize_gateway(obs).sequence.delta is None
+
+
+def test_shared_interface_is_counted_once_per_tunnel_and_labelled(monkeypatch):
+    obs = observation(monkeypatch, link=links(errors=13))
+    for sample in obs["samples"]:
+        sas = sample["tunnels"]["site-a"]["sas"]
+        sas["b" * 64] = dict(next(iter(sas.values())), spi=123)
+    row = health.summarize(obs, "site-a", 1024)
+    assert row.counters["errors"].delta == 3
+    assert len(row.counters["errors"].samples) == 1
+    stream = io.StringIO()
+    packet_report.render(
+        Console(file=stream, width=160, no_color=True),
+        {"gateway": [("site-a", row), ("site-b", row)]},
+        {"gateway": health.summarize_gateway(obs)},
+        details=True,
+    )
+    output = stream.getvalue()
+    assert "shared interface context (xfrm0); not tunnel-attributed" in output
+    assert output.count("Sequence errors") == 1
+    assert "not additive" in output
+
+
+@pytest.mark.parametrize("width", [60, 80, 120, 160])
+@pytest.mark.parametrize("color", [False, True])
+def test_packet_report_responsive_layout_preserves_metrics_and_names(monkeypatch, width, color):
+    obs = observation(monkeypatch, state=xfrm(packets=103))
+    row = health.summarize(obs, "site-a", 1024)
+    name = "site-a-" + "long-tunnel-name-" * 3
+    stream = io.StringIO()
+    console = Console(file=stream, width=width, force_terminal=color, no_color=not color)
+    packet_report.render(
+        console,
+        {"gateway": [(name, row)]},
+        {"gateway": health.summarize_gateway(obs)},
+        details=True,
+    )
+    output = stream.getvalue()
+    import re
+
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", output)
+    joined = "".join(plain.replace("│", "").split())
+    first_column = "".join(
+        line.split("│")[1].strip() for line in plain.splitlines() if line.startswith("│")
+    )
+    assert name in first_column
+    for word in ("received", "late", "duplicate", "integrity", "sequenceerrors", "allowed", "pass"):
+        assert word in joined.lower()
+    assert "0persample;>0=WARN" in joined
+    assert ("Interfacechecks" in joined) is (width < 120)
+    assert ("\x1b[" in output) is color
+    assert "→" not in plain
+
+
+def test_normal_status_surfaces_gateway_warning_once_without_tunnel_attribution(monkeypatch):
+    obs = observation(monkeypatch, seq=11)
+    row = health.summarize(obs, "site-a", 1024)
+    assert row.result == "PASS · idle"
+    stream = io.StringIO()
+    packet_report.render(
+        Console(file=stream, width=120, no_color=True),
+        {"gateway": [("site-a", row), ("site-b", row)]},
+        {"gateway": health.summarize_gateway(obs)},
+        details=False,
+    )
+    assert stream.getvalue().count("Sequence errors") == 1
+    assert "WARN" in stream.getvalue()
+
+
+def test_sample_reset_never_becomes_zero_pass(monkeypatch):
+    obs = observation(monkeypatch, state=xfrm(packets=0, late=0))
+    report = health.summarize(obs, "site-a", 1024)
+    assert report.result == "INCOMPLETE"
+    assert packet_report.counter_text(report.counters["packets"], traffic=True).plain == "—"
+
+
+def test_cold_standby_report_does_not_invent_measurements(monkeypatch):
+    obs = observation(monkeypatch, raw=Inventory.from_events([]).json(), state="")
+    obs["samples"][0]["tunnels"]["site-a"]["sas"] = {}
+    row = health.summarize(obs, "site-a", 1024, cold_standby=True)
+    assert row.result == "N/A · cold standby"
+    assert all(check.delta is None for check in row.counters.values())
+    assert health.summarize(obs, "site-a", 1024).result == "INCOMPLETE"
+
+
+def test_narrow_interface_warning_is_labelled_as_aggregate_tunnel_result(monkeypatch):
+    obs = observation(monkeypatch, link=links(errors=11))
+    row = health.summarize(obs, "site-a", 1024)
+    assert row.counters["late"].delta == 0
+    assert row.result == "WARN"
+    stream = io.StringIO()
+    packet_report.render(
+        Console(file=stream, width=80, no_color=True),
+        {"gateway": [("site-a", row)]},
+        {"gateway": health.summarize_gateway(obs)},
+        details=True,
+    )
+    output = stream.getvalue()
+    assert "Tunnel checks (SA counters)" in output
+    assert "Interface checks" in output
+    assert "Interface RX errors/drops increased" in output
+    assert "SA checks" not in output

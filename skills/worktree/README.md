@@ -1,5 +1,10 @@
 # Worktree
 
+Document-driven SDLC uses [reviewed phase planning](references/phase-planning.md)
+to preserve supplied milestones or derive missing ones. Program admission and
+revalidation compare exact phase definitions with the accepted source manifest;
+bounded delivery slices and task execution retain their existing owners.
+
 `worktree` creates full-repository linked worktrees for parallel monorepo work
 and integrates each committed child locally into the current non-default source
 branch. Child branches are never pushed or used for pull requests.
@@ -60,6 +65,8 @@ Manual creation requires the complete primary checkout to be clean.
 Implement/SDLC automatic outers use [scoped admission](references/automatic-projects.md#scoped-automatic-admission):
 a clean project and committed shared inputs may start while unrelated siblings
 are dirty. Final original-branch promotion still requires the whole checkout clean.
+Input declarations use validated string claim kinds and canonical paths;
+malformed declarations fail through the input owner before workflow mutation.
 Creation captures the
 exact current local feature-branch SHA and uses:
 
@@ -144,6 +151,8 @@ run outside coordinator locks. Incomplete output or unproven cleanup blocks
 receipt publication, retries and successor admission until reconciliation.
 Both verification runners bind result callbacks to the collected test identities,
 preserving case accounting when fixture setup changes test-object attributes.
+Failure observations retain bounded exception types and catalog-relative source
+locations. Messages, source text, local values and external paths are excluded.
 
 When `<task>` is omitted, `add` normalizes the resolved project directory's
 basename into the task slug. For example, invoking `$worktree` from `skills/`
@@ -426,3 +435,10 @@ Execution Git commands, including commit hooks and byte-exact seal-message
 plumbing, use the shared bounded process owner without a duration deadline.
 Ordinary hook descendants must be quiescent before returning or initiating Git
 recovery. Tool counters include these observed execution commands.
+
+Document programs may explicitly accept `local-promoted` completion inside an
+automatic managed project. The delivery owner records each admitted slice's
+exact promoted result, immutable execution basis and completed cleanup. Later
+revisions preserve those receipts; aggregation requires all current obligations
+and phase exits. This policy does not authorize remote publication. See the
+[document delivery contract](references/document-delivery.md).

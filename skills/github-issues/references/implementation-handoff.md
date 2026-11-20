@@ -1,6 +1,8 @@
 # Operator approval and implementation handoff
 
-Read after complete batch plans are saved. This reference ends triage and
+Read only after `--action create-plan` produced verified complete batch plans.
+Default review never writes an overview or offers this handoff, including when
+old plans exist. This reference ends triage and
 describes the root's separately authorized continuation. It does not make this
 skill an implementation coordinator or change another skill's invocation policy.
 PR-caller assessment never offers this standalone continuation.
@@ -40,7 +42,7 @@ dependencies, readiness and the exact proposed set. Do not paste detailed plan
 steps or excerpts. Ask whether to implement that set, revise it or leave it for
 later. Show that explicit `$implement` selects its workflow and natural approval
 selects ordinary local implementation. A failed overview save blocks this
-combined proposal but does not undo independently verified batch acceptance.
+combined proposal but does not undo independently verified review findings or batch files.
 No complete ready plan means no implementation approval question.
 
 ## Interpret approval

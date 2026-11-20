@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "agentic-sdlc/three-tier-results-v4",
+  "$id": "agentic-sdlc/three-tier-results-v5",
   "title": "Agentic SDLC three-tier semantic results",
   "type": "object",
   "additionalProperties": false,
@@ -12,11 +12,12 @@
     "layers",
     "tests",
     "sdlc_phases",
-    "gui_uat"
+    "gui_uat",
+    "program"
   ],
   "properties": {
     "schema": {
-      "const": "agentic-sdlc/three-tier-results-v4"
+      "const": "agentic-sdlc/three-tier-results-v5"
     },
     "scenario": {
       "const": "three-tier-task-board-v1"
@@ -265,6 +266,10 @@
           "const": true
         }
       }
+    },
+    "program": {
+      "type": "object",
+      "description": "Exact read-only three_tier_program.qualify output: accepted supplied/derived planning, all local slice/phase receipts, stopped and continued native checkpoints, and a changed accepted program. Recomputed by the installed owners; caller status is never proof."
     }
   },
   "$defs": {

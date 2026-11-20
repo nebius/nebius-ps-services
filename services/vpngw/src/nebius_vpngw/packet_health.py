@@ -16,6 +16,7 @@ import selectors
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -474,111 +475,207 @@ def collect_gateways(jobs: dict[str, tuple[list[str], dict[str, int | None]]]) -
         return dict(executor.map(run, jobs))
 
 
-def _delta(before: dict[str, Any], after: dict[str, Any], key: str) -> int | None:
-    if after[key] < before[key]:
+@dataclass(frozen=True)
+class CounterSample:
+    scope: str
+    identity: str
+    before: int
+    after: int
+
+    @property
+    def delta(self) -> int | None:
+        return self.after - self.before if self.after >= self.before else None
+
+
+@dataclass(frozen=True)
+class CounterCheck:
+    samples: tuple[CounterSample, ...] = ()
+    complete: bool = False
+
+    @property
+    def delta(self) -> int | None:
+        values = [sample.delta for sample in self.samples if sample.delta is not None]
+        return sum(values) if values else None
+
+    @property
+    def increased(self) -> bool:
+        return (self.delta or 0) > 0
+
+
+@dataclass(frozen=True)
+class TunnelReport:
+    window: str
+    health: str
+    result: str
+    interval: float | None
+    counters: dict[str, CounterCheck]
+    interfaces: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GatewayReport:
+    interval: float | None
+    sequence: CounterCheck
+    result: str
+    reason: str = ""
+
+
+def sample_interval(observation: dict[str, Any]) -> float | None:
+    first, second = observation["samples"]
+    if first is None or second is None or first["boot"] != second["boot"]:
         return None
-    return int(after[key] - before[key])
+    return float(
+        (second["started"] + second["finished"] - first["started"] - first["finished"]) / 2
+    )
+
+
+def _sample_complete(observation: dict[str, Any]) -> bool:
+    first, second = observation["samples"]
+    return bool(
+        first is not None
+        and second is not None
+        and first["boot"] == second["boot"]
+        and second["started"] >= first["finished"] + OBSERVATION_SECONDS - 0.1
+    )
+
+
+def _counter_check(samples: list[CounterSample], *, complete: bool) -> CounterCheck:
+    return CounterCheck(
+        tuple(samples), bool(complete and samples and all(s.delta is not None for s in samples))
+    )
+
+
+def summarize_gateway(observation: dict[str, Any]) -> GatewayReport:
+    """Sequence errors describe the gateway, never a particular tunnel."""
+    first, second = observation["samples"]
+    interval = sample_interval(observation)
+    if interval is None:
+        return GatewayReport(
+            None, CounterCheck(), "INCOMPLETE", "Missing sample or gateway restarted"
+        )
+    before, after = first["global_seq"], second["global_seq"]
+    samples = (
+        [CounterSample("gateway", "XfrmInStateSeqError", before, after)]
+        if before is not None and after is not None
+        else []
+    )
+    check = _counter_check(samples, complete=_sample_complete(observation))
+    result = "WARN" if check.increased else "PASS" if check.complete else "INCOMPLETE"
+    if check.increased and not check.complete:
+        result = "WARN · incomplete"
+    return GatewayReport(
+        interval,
+        check,
+        result,
+        "" if check.complete else "Missing/reset sequence counter or incomplete interval",
+    )
 
 
 def summarize(
     observation: dict[str, Any], name: str, expected: int | None, *, cold_standby: bool = False
-) -> dict[str, Any]:
-    """Derive health from exact stable identities, never cumulative historical totals."""
+) -> TunnelReport:
+    """Compare stable identities once; retain scope and coverage separately from values."""
     first, second = observation["samples"]
-    result: dict[str, Any] = {"window": "Unknown", "health": "Unavailable", "details": []}
+    counters = {key: CounterCheck() for key in (*COUNTERS, "errors", "dropped")}
+    interval = sample_interval(observation)
     if second is None:
-        return result
+        return TunnelReport("Unknown", "Unavailable", "INCOMPLETE", interval, counters)
     current = second["tunnels"][name]
     windows = {sa["window"] for sa in current["sas"].values()}
-    result["window"] = (
-        str(next(iter(windows))) if len(windows) == 1 else "Mixed" if windows else "—"
-    )
+    window = str(next(iter(windows))) if len(windows) == 1 else "Mixed" if windows else "—"
     warnings = []
     if 0 in windows:
         warnings.append("Replay protection disabled")
     if expected is not None and windows and windows != {expected}:
         warnings.append(f"Expected {expected}; not active")
     if first is None or first["boot"] != second["boot"]:
-        result["health"] = "; ".join(
-            [*warnings, "Sample incomplete" if first is None else "Gateway restarted"]
+        reason = "Sample incomplete" if first is None else "Gateway restarted"
+        return TunnelReport(
+            window, "; ".join([*warnings, reason]), "INCOMPLETE", interval, counters
         )
-        return result
     previous = first["tunnels"][name]
-    interval = (second["started"] + second["finished"] - first["started"] - first["finished"]) / 2
-    complete = (
+    identities = set(previous["sas"]) & set(current["sas"])
+    complete = bool(
         previous["complete"]
         and current["complete"]
         and set(previous["sas"]) == set(current["sas"])
-        and second["started"] >= first["finished"] + OBSERVATION_SECONDS - 0.1
+        and _sample_complete(observation)
         and len(windows) <= 1
     )
-    details = result["details"]
-    details.append(f"Sample interval: {interval:.2f}s (source reads are sequential)")
-    totals = dict.fromkeys(COUNTERS, 0)
-    for identity in sorted(set(previous["sas"]) & set(current["sas"])):
-        before = previous["sas"][identity]
-        after = current["sas"][identity]
-        if before["window"] != after["window"] or before["interface"] != after["interface"]:
-            complete = False
-        for key in COUNTERS:
-            delta = _delta(before, after, key)
-            if delta is None:
-                complete = False
-            else:
-                totals[key] += delta
-            details.append(
-                f"Inbound SA 0x{after['spi']:08x} {key}: {before[key]} → {after[key]} "
-                + (f"(+{delta})" if delta is not None else "(reset)")
+    stable_binding = all(
+        (previous["sas"][identity]["window"], previous["sas"][identity]["interface"])
+        == (current["sas"][identity]["window"], current["sas"][identity]["interface"])
+        for identity in identities
+    )
+    complete = complete and stable_binding
+    for key in COUNTERS:
+        samples = [
+            CounterSample(
+                "inbound-sa",
+                f"0x{current['sas'][identity]['spi']:08x}",
+                previous["sas"][identity][key],
+                current["sas"][identity][key],
             )
+            for identity in sorted(identities)
+        ]
+        counters[key] = _counter_check(samples, complete=complete)
     interfaces = {sa["interface"] for sa in current["sas"].values() if sa["interface"] is not None}
-    interface_drops = False
-    for index in sorted(interfaces):
-        before = first["links"].get(index)
-        after = second["links"].get(index)
-        if (
-            not before
-            or not after
-            or (before["name"], before["if_id"]) != (after["name"], after["if_id"])
-        ):
-            complete = False
-            continue
-        for key in ("errors", "dropped"):
-            delta = _delta(before, after, key)
-            if delta is None:
-                complete = False
-            elif delta > 0:
-                interface_drops = True
-            details.append(
-                f"Interface {after['name']} RX {key}: {before[key]} → {after[key]} "
-                + (f"(+{delta})" if delta is not None else "(reset)")
-            )
-    before_seq, after_seq = first["global_seq"], second["global_seq"]
-    if before_seq is None or after_seq is None or after_seq < before_seq:
-        complete = False
-    else:
-        details.append(
-            f"Gateway-wide XfrmInStateSeqError: {before_seq} → {after_seq} (+{after_seq - before_seq})"
+    interface_names = []
+    for key in ("errors", "dropped"):
+        samples = []
+        mapped = bool(interfaces) and all(
+            sa["interface"] is not None for sa in current["sas"].values()
         )
+        for index in sorted(interfaces):
+            before, after = first["links"].get(index), second["links"].get(index)
+            if (
+                not before
+                or not after
+                or (before["name"], before["if_id"]) != (after["name"], after["if_id"])
+            ):
+                mapped = False
+                continue
+            if key == "errors":
+                interface_names.append(after["name"])
+            samples.append(CounterSample("interface", after["name"], before[key], after[key]))
+        counters[key] = _counter_check(samples, complete=complete and mapped)
     reasons = [
-        f"{totals[key]} {label}"
+        f"{counters[key].delta} {label}"
         for key, label in (
             ("late", "late drops"),
             ("duplicate", "duplicate drops"),
             ("integrity", "integrity failures"),
         )
-        if totals[key]
+        if counters[key].increased
     ]
-    if interface_drops and not reasons:
+    if any(counters[key].increased for key in ("errors", "dropped")) and not reasons:
         reasons.append("Interface RX errors/drops increased")
+    if current["sas"]:
+        complete = complete and all(check.complete for check in counters.values())
+    has_errors = bool(reasons or warnings)
     if not complete:
         changed = set(previous["sas"]) != set(current["sas"])
         if "ambiguous" in {previous["reason"], current["reason"]}:
             reasons.append("sample incomplete (ambiguous mapping)")
         else:
             reasons.append("sample incomplete (SAs changed)" if changed else "sample incomplete")
+        result = "WARN · incomplete" if has_errors else "INCOMPLETE"
     elif not current["sas"]:
         reasons.append("Cold standby (no inbound SA)" if cold_standby else "No inbound SA")
-    elif not reasons:
-        reasons.append("No new drops" if totals["packets"] else "Idle")
-    result["health"] = "; ".join([*warnings, *reasons])
-    return result
+        result = "N/A · cold standby" if cold_standby else "INCOMPLETE"
+    elif has_errors:
+        if not reasons:
+            reasons.append("No new drops" if counters["packets"].increased else "Idle")
+        result = "WARN"
+    else:
+        idle = not counters["packets"].increased
+        reasons.append("Idle" if idle else "No new drops")
+        result = "PASS · idle" if idle else "PASS"
+    return TunnelReport(
+        window,
+        "; ".join([*warnings, *reasons]),
+        result,
+        interval,
+        counters,
+        tuple(interface_names),
+    )

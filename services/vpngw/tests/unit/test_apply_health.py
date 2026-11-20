@@ -6,6 +6,7 @@ import pytest
 from nebius_vpngw.agent.main import _project_current_vm_ha_status
 from nebius_vpngw.deploy.apply_health import ha_convergence
 from nebius_vpngw.deploy.apply_plan import Evidence
+from nebius_vpngw.operational_diagnostics import peer_channel
 
 
 def snapshot(*, coverage="ready", policy="enabled"):
@@ -162,5 +163,7 @@ def test_guest_projection_requires_current_guard_boot_and_fresh_controller(
         clock=lambda: now,
     )
     assert bool((projected.get("apply_convergence") or {}).get("fresh")) is fresh
+    # Consume the real gateway verdict; observed_at is monotonic, not wall time.
+    assert peer_channel(projected) == ("authenticated-receive" if fresh else "unknown")
     # Observational convergence never grants the existing agent writer gate.
     assert projected["controller_ready_boot_id"] is None

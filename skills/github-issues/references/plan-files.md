@@ -1,6 +1,6 @@
-# Accepted batch plan files
+# Requested batch plan files
 
-Read this for a batch with accepted candidates. The artifact is the implementation
+Read this only with `--action create-plan` for a batch of eligible candidates. The artifact is the implementation
 handoff; it is not permission to implement, publish or modify canonical specs.
 
 ## Resolve the destination
@@ -46,9 +46,19 @@ GitHub state/comment merely because a related plan mentions it. Existing
 unselected member content stays intact; a material conflicting dependency
 keeps the selected planning pending.
 
+## Planning gate and membership
+
+Without `--action create-plan`, leave all plan files and overviews untouched, including
+existing ready plans. Review findings and labels/comments need no artifact.
+Use [triage eligibility](triage.md) for actionable confirmed members. A related
+group may require several plans, or none. Related labels never define acceptance
+membership. In this artifact, accepted members means scope accepted for this
+proposed plan, not operator authorization, delivery commitment or issue closure.
+
 ## Produce a complete handoff
 
-Use `research` and `design` in their non-implementing roles. Supply the accepted
+Reuse the completed mandatory `research` evidence and invoke `design` in its
+non-implementing role. Supply the accepted
 problem, evidence and constraints and load their actual required instructions.
 These are advisory consultations within the existing outer execution mode,
 not standalone planning sessions. Their default user-facing plan delivery is
@@ -99,21 +109,21 @@ If it changed, stop and reconcile. Use a safe file editor and compare the diff;
 do not overwrite a concurrently changed file. Remove no existing plan and do
 not rename it merely because the issue title changed.
 
-## Verify before acceptance
+## Verify before planning readiness
 
 Read the saved file back from its resolved project path. Check full
 repository/project/member identities, shared-remediation rationale, each member's acceptance criteria,
 filename, required content, absence of template placeholders,
 consistency with the latest evidence and preservation of existing edits.
 After the completeness check, set the planning status to complete, then reread
-the final bytes. Do not announce acceptance until that complete artifact has
+the final bytes. Do not announce plan readiness until that complete artifact has
 been saved and verified.
 
 If interrupted with a partial artifact, retain it as incomplete; do not describe
 it as ready. If saving is disallowed or unavailable, report the missing file
 operation, never paste the plan into chat or GitHub. After a successful save,
-chat may report links, scope, dependencies and readiness, never detailed steps. GitHub receives a concise acceptance
-decision, not plan text, absolute local paths or a fabricated hosted-file link.
+chat may report links, scope, dependencies and readiness, never detailed steps. GitHub may receive a concise plan-ready
+locator, not plan text, absolute local paths or a fabricated hosted-file link.
 A repository-relative plan path may be named explicitly as saved locally; follow
 [comment guidance](comments.md).
 
@@ -124,12 +134,12 @@ its existing human edits and compare predecessor bytes before replacement.
 Overview failure leaves the combined proposal pending, not an invalidation of
 independently saved batch plans or completed triage effects.
 
-Track acceptance publication independently for every member. A verified plan
+Track plan-readiness publication independently for every member. A verified plan
 can cover several issues even if one comment fails. Preserve the file and
 verified comments; retry only the unresolved authorized effect after readback.
-Before each acceptance, refresh its target and recorded supporting evidence,
+Before each plan-ready publication, refresh its target and recorded supporting evidence,
 including siblings and relevant source state. If independence is not established,
 refresh every accepted member. Unavailable material evidence keeps dependent
-acceptance pending. Material drift in a member invalidates its dependent plan
-coverage; revise and reverify before acceptance, while independent batches can
+planning readiness pending. Material drift in a member invalidates its dependent plan
+coverage; revise and reverify before planning readiness, while independent batches can
 continue. Never defer a required sibling read until that sibling's own turn.

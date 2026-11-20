@@ -112,7 +112,7 @@ environment-evidence gap does not establish a Docker failure: native worker and
 phase evidence gaps use the phase owner and classifier route. Cleanup still
 discovers all exactly owned historical images and resources.
 
-Lifecycle v9 is incompatible with earlier active state and requires a fresh trial;
+Lifecycle v10 is incompatible with earlier active state and requires a fresh trial;
 historical reports remain historical without migration. After the owned UAT
 restart, refresh inventory through this same operation before the fresh
 post-restart browser stage. Preserve the named volume and do not reset the

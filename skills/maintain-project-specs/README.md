@@ -68,6 +68,12 @@ controls.
 
 ## Canonical Documents
 
+Document-driven SDLC uses source-bundle-v2 with a reviewed phase-planning record.
+The source owner validates references and structure; the program owner requires
+exact phase agreement before admission and on revalidation. See
+[phase planning](../worktree/references/phase-planning.md) for supplied versus
+derived milestones, early null planning and semantic review limits.
+
 The skill understands canonical managed regions in:
 
 - `docs/requirements.md`

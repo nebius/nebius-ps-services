@@ -1,0 +1,6 @@
+interface:
+  display_name: "GitHub Issues"
+  short_description: "Review, plan or close selected GitHub issues"
+  default_prompt: "Use $github-issues with --action review|create-plan|close; review is the default. Research selected issues, publish scoped labels/comments, and match all --filter labels with no implicit cap. Only create-plan saves file-only shared plans/overview and offers separate implementation approval. Only close permits freshly justified closure with verified reason and canonical duplicate target. Preserve project scope, human decisions, read-only PR callers and host limits; never reopen or implement."
+policy:
+  allow_implicit_invocation: true

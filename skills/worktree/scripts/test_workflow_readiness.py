@@ -98,8 +98,8 @@ class ReadinessTests(unittest.TestCase):
              {'properties': {'updated_at': {'type': 'integer'}}}),
             ({'schema': 'workflow/unknown-data-v1', 'updated_at': 'first'},
              {'schema': 'workflow/unknown-data-v1', 'updated_at': 'second'}),
-            ({'schema': 'agentic-sdlc/phase-result-v5', 'updated_at': {'type': 'string'}},
-             {'schema': 'agentic-sdlc/phase-result-v5', 'updated_at': {'type': 'integer'}}),
+            ({'schema': 'agentic-sdlc/phase-result-v6', 'updated_at': {'type': 'string'}},
+             {'schema': 'agentic-sdlc/phase-result-v6', 'updated_at': {'type': 'integer'}}),
         ):
             with self.subTest(first=first):
                 write_private(evidence, first)
@@ -112,7 +112,7 @@ class ReadinessTests(unittest.TestCase):
 
     def test_owned_json_metadata_converges_without_erasing_nested_decisions(self):
         evidence = self.run_dir / 'evidence/FEAT-001/decision.json'
-        value = {'schema': 'agentic-sdlc/phase-result-v5', 'updated_at': 'first',
+        value = {'schema': 'agentic-sdlc/phase-result-v6', 'updated_at': 'first',
                  'assertions': {'example': {'updated_at': 'meaningful'}}}
         write_private(evidence, value)
         seed_validation(self.plan)

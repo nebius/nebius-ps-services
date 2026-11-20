@@ -78,7 +78,7 @@ a dependency-safe task graph.
 
 ## Inputs
 
-- One `FEAT-*`.
+- One admitted `SLICE-*` execution, or a standalone `FEAT-*`, with its mapped features.
 - Corresponding `REQ-*` blocks.
 - Context pack.
 - Current repo and feature state.
@@ -103,8 +103,8 @@ a dependency-safe task graph.
 
 ## Writes
 
-- `plans/FEAT-*.plan.vN.md`.
-- `plans/FEAT-*.plan.vN.md.lock` (append `.lock` to the complete plan filename).
+- `plans/<execution-id>.plan.vN.md` for the selected SLICE or FEAT.
+- `plans/<execution-id>.plan.vN.md.lock` (append `.lock` to the complete plan filename).
 - Plan fingerprint and state transition to `plan_locked`.
 - `corrective-plan-validation-v1` from
   `scripts/corrective_plan.py` for a corrective version.
@@ -130,6 +130,9 @@ against those inputs before execution preparation. Serial waves remain mandatory
 group only proven independent tasks within a wave and refill freed slots promptly.
 
 - Use `assets/templates/feature-plan.md.template` for plan shape.
+- For document programs, apply `../worktree/references/phase-planning.md` to
+  bound the selected slice. Preserve its admitted phase and source coverage;
+  do not invent phases here or expand every future slice into detailed tasks.
 - Confirm feature status is ready and dependencies are complete or explicitly allowed.
 - Identify files to inspect, create, modify, and avoid.
 - For serial multi-layer application features, plan one end-to-end slice around

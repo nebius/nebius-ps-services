@@ -702,6 +702,18 @@ class Manager:
                 if path.name not in {"ordinary-admission.conf", "20-runtime-admission.conf"}:
                     files[str(path)] = hashlib.sha256(raw).hexdigest()
                 known = text == "/etc/systemd/system/nebius-vpngw-agent.service.d/override.conf"
+                # Ordinary apply installs this dependency on a management unit
+                # already included in our quiescence and environment checks.
+                # Admit only the canonical product path and complete contents;
+                # keep its hash above so later edits still invalidate the plan.
+                known = known or (
+                    name == "nebius-vpngw-agent.service"
+                    and text == "/etc/systemd/system/nebius-vpngw-agent.service.d/20-underlay.conf"
+                    and raw == (
+                        b"[Unit]\nAfter=nebius-vpngw-underlay.service\n"
+                        b"Requires=nebius-vpngw-underlay.service\n"
+                    )
+                )
                 if text in unit.get("DropInPaths", []) and not known and name in MANAGEMENT:
                     if re.search(
                         rb"(?m)^\s*(Wants|Requires|BindsTo|Upholds|OnFailure|OnSuccess)\s*=\s*\S",

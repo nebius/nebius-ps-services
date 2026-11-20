@@ -3,11 +3,10 @@
 Read after target collection and before ordering review work. These are rules
 for the existing host agent, not a separate executable scheduler.
 
-`--issue-batch` caps selection only in label mode; a remediation batch groups
-compatible selected issues. These are different concepts. In label mode freeze
-the bounded set across repositories after current/explicit project filtering
-and before final grouping or effects, then retain
-repository order. Project priorities cannot pull unselected issues into it.
+`--issue-batch` is an explicit cap on filtered selection; omission means all
+matches. A remediation batch groups compatible selected issues. Freeze the
+selected set after number/AND-label/project intersection and before grouping or
+effects. Preserve repository order; priorities never admit unselected issues.
 
 ## Project ownership and counts
 
@@ -27,7 +26,7 @@ Uncertainty blocks owner-dependent planning, not independent groups.
 For explicit `--issues`, count only project-matching selected existing issues, including selected
 closed issues assessed without reopening. Do not count unselected related
 issues, PRs, missing numbers, or duplicate observations. Counts describe the
-frozen collection, not a live counter that shrinks after every closure.
+frozen collection, not a live counter that changes with later issue state.
 
 ## Project order
 
@@ -53,11 +52,28 @@ Show the ordered project/count overview before detailed review. If later
 evidence changes ownership, correct the counts and remaining queue explicitly;
 do not repeat completed effects or conceal the earlier classification limit.
 
+## Related groups
+
+After research, record evidenced relationships: shared underlying problems,
+workflow boundaries or material dependencies. Read related discussions together
+and preserve each issue's type, outcome, confidence and evidence. Mere keywords
+or product membership do not establish relatedness. No transitive merge is
+implied by an overlapping issue. Cross-repository evidence uses links only;
+repository-local labels never represent a cross-repository group.
+
+For authorized label/comment effects, use stable shared labels under
+[label management](labels.md), with comments
+linking exact members and explaining the relationship. Related groups may span
+primary owners inside the selected product's proven affected scope, but cannot
+expand the selected write set or imply shared implementation. Unselected related
+issues remain context. Every reported group identifies any incomplete labeling.
+
 ## Remediation batches
 
 Investigate one project at a time, reading complete relevant discussions and
 source evidence before finalizing its batches. Every selected issue belongs to
-one batch, including singleton or unresolved batches. Record the common problem,
+one review/remediation batch, including singleton or unresolved batches. Related
+groups are independent and may overlap; remediation batches do not. Record the common problem,
 shared change boundary, member identities, evidence and why the acceptance
 criteria fit together. These classification notes are not implementation steps
 and may appear in the concise review overview.
@@ -77,28 +93,31 @@ selected member count descending, then lowest member issue number ascending.
 Recompute a batch's evidence-based rank if investigation disproves its serious
 claim; do not let an unsupported alarming title set severity.
 
-After assessment, one plan covers the accepted subset of each compatible
-batch; record deferred, duplicate, rejected and unresolved members separately.
+Without `--action create-plan`, do not write plans or an implementation
+overview. Review stops at findings; close proceeds to the separate
+[closure](closure.md) checks. With it, one plan covers eligible actionable confirmed
+members of each compatible batch under [triage](triage.md); record deferred,
+duplicate, rejected and unresolved members separately.
 If a missing decision or member dependency is material to the shared change,
-leave the affected planning pending. Do not accept a dependent subset merely
-to bypass unresolved evidence. Independent accepted members may proceed.
+leave the affected planning pending. Do not mark a dependent subset plan-ready merely
+to bypass unresolved evidence. Independent eligible members may proceed to requested planning.
 
 Example: three BGP issues sharing one route-reconciliation defect and two SSH
 issues sharing one access-policy defect form two batches and, when accepted,
-two plans. A high-severity SSH batch precedes a normal-severity BGP batch even
+two plans only when the selected action is `create-plan`. A high-severity SSH batch precedes a normal-severity BGP batch even
 though BGP has more issues. If the BGP claims require different remediations,
 split them instead of forcing one plan.
 
 ## Progress and completion
 
 Keep a compact issue registry in working context: full identity, observed state,
-primary/affected projects, evidence limits, batch, disposition, plan path and
+primary/affected projects, evidence limits, batch, type, outcome, relationships, optional plan path and
 verified/pending effect status. The project overview is a review/approval snapshot, not a live backlog ledger.
 Do not introduce a committed delivery ledger,
 private runtime or separate state machine. Existing permitted task-state support
 may hold sanitized progress, never sensitive issue contents or effect proof.
 
-Report discovery completeness separately from review completion. A saved shared
-plan can coexist with a published acceptance for one member and a failed comment
-for another. Preserve those distinct outcomes. On rerun, refresh targets and
+Report discovery completeness separately from review completion. A completed review can coexist with failed requested planning or closure. A saved shared
+plan can coexist with a verified plan-ready comment for one member and a failed
+comment for another. Preserve those distinct outcomes. On rerun, refresh targets and
 read existing artifacts/comments before effects; summaries are not receipts.
