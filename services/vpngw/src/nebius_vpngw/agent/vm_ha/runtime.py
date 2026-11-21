@@ -26,10 +26,12 @@ from nebius_vpngw.agent.routing_guard import (
     has_table_220_rule,
     table_220_routes_from_all_json,
 )
+from nebius_vpngw.agent.vm_ha.apipa import PeerRoute, harmless_dhcp_route
 from nebius_vpngw.agent.vm_ha.auto_healing import (
     AutoHealingPolicyStore,
     project_local_policy,
 )
+from nebius_vpngw.agent.vm_ha.diagnostics import quiet_routing_safety
 from nebius_vpngw.agent.vm_ha.evidence import PeerEvidenceTracker
 from nebius_vpngw.agent.vm_ha.models import (
     DigestSet,
@@ -904,15 +906,35 @@ def _routing_hygiene_ready(
     rules: CommandResult,
     all_routes: CommandResult,
     broad_apipa: CommandResult,
+    *,
+    dhcp_apipa_paths_proven: bool = False,
 ) -> bool:
-    return (
-        rules.returncode == 0
-        and not has_table_220_rule(rules.stdout)
-        and all_routes.returncode == 0
-        and table_220_routes_from_all_json(all_routes.stdout) == []
-        and broad_apipa.returncode == 0
-        and not broad_apipa.stdout.strip()
+    from .diagnostics import diagnostic
+
+    table_routes = table_220_routes_from_all_json(all_routes.stdout)
+    reason = next(
+        (
+            reason
+            for failed, reason in (
+                (rules.returncode != 0, "rule-observation-unavailable"),
+                (has_table_220_rule(rules.stdout), "table-220-rule-present"),
+                (
+                    all_routes.returncode != 0 or table_routes is None,
+                    "route-observation-unavailable",
+                ),
+                (bool(table_routes), "table-220-route-present"),
+                (broad_apipa.returncode != 0, "apipa-observation-unavailable"),
+                (
+                    bool(broad_apipa.stdout.strip()) and not dhcp_apipa_paths_proven,
+                    "broad-apipa-route-present",
+                ),
+            )
+            if failed
+        ),
+        "dhcp-apipa-paths-proven" if dhcp_apipa_paths_proven else "ready",
     )
+    diagnostic("routing-safety-observation", scope="hygiene", reason=reason)
+    return reason in {"ready", "dhcp-apipa-paths-proven"}
 
 
 @dataclass(frozen=True)
@@ -942,6 +964,7 @@ class DataPlaneCommandSet:
     sysctl: str = "/usr/sbin/sysctl"
     vtysh: str = "/usr/bin/vtysh"
     ip: str = "/usr/sbin/ip"
+    networkctl: str = "/usr/bin/networkctl"
     swanctl: str = "/usr/sbin/swanctl"
     python: str = "/usr/bin/python3"
     empty_swanctl_config: str = "/dev/null"
@@ -1329,6 +1352,8 @@ class SystemDataPlaneRuntime:
         tunnel_cold_passive: bool = False,
         destination_protection: DestinationProtection | None = None,
         underlay_verifier: Callable[[], bool] | None = None,
+        bgp_peer_routes: tuple[PeerRoute, ...] = (),
+        physical_interface: str = "",
         passive_materialization_attempts: int = 12,
         passive_materialization_interval: float = 0.5,
         bgp_export_attempts: int = 60,
@@ -1379,6 +1404,8 @@ class SystemDataPlaneRuntime:
         self.routing_lock_path = routing_lock_path
         self.active_preparer = active_preparer
         self.underlay_verifier = underlay_verifier
+        self.bgp_peer_routes = bgp_peer_routes
+        self.physical_interface = physical_interface
         self.origination_verifier = origination_verifier
         self.blocked_preparer = blocked_preparer
         self.candidate_preparer = candidate_preparer
@@ -1784,6 +1811,31 @@ class SystemDataPlaneRuntime:
                 for expected in active_export_alternatives
             ):
                 export_state = BGPExportState.MATCH
+        dhcp_apipa_paths_proven = False
+        if (
+            mode is DataPlaneMode.ACTIVE
+            and self.configured_bgp_sessions
+            and not self.tunnel_cold_passive
+            and not self.static_tunnel_names
+            and self.destination_protection is not None
+            and broad_apipa.returncode == 0
+            and broad_apipa.stdout.strip()
+        ):
+            try:
+                protected = self.destination_protection.protected_prefixes() | frozenset(learned)
+                dhcp_apipa_paths_proven = harmless_dhcp_route(
+                    peers=self.bgp_peer_routes,
+                    configured_peers=self.configured_bgp_sessions,
+                    interface=self.physical_interface,
+                    protected_prefixes=protected,
+                    routes=routes,
+                    links=xfrm_links,
+                    run=self._run,
+                    ip_command=self.commands.ip,
+                    networkctl_command=self.commands.networkctl,
+                )
+            except (OSError, RuntimeError, ValueError):
+                pass  # Unknown destination ownership remains fail-closed.
         return LocalDataPlaneObservation(
             service_healthy=services,
             forwarding_enabled=self._forwarding(),
@@ -1798,7 +1850,9 @@ class SystemDataPlaneRuntime:
             established_ike_sa_count=established_ike_sa_count,
             static_suspended=static_suspended,
             bgp_export_state=export_state,
-            routing_hygiene_ready=_routing_hygiene_ready(rules, all_routes, broad_apipa)
+            routing_hygiene_ready=_routing_hygiene_ready(
+                rules, all_routes, broad_apipa, dhcp_apipa_paths_proven=dhcp_apipa_paths_proven
+            )
             and self.underlay_verifier is not None
             and self.underlay_verifier(),
             protection_ready=self.destination_protection is not None
@@ -3616,6 +3670,7 @@ class VMHARuntimePorts:
     auto_healing_policy_provider: Callable[[], tuple[str, str]]
     tunnel_recovery_provider: Callable[[], dict[str, Any] | None] = lambda: None
 
+    @quiet_routing_safety()
     def sample_local_health(
         self,
         *,
@@ -4446,6 +4501,17 @@ def build_runtime_ports(
         from ...tunnel_state import collect_tunnel_state
 
         tunnels, _, interfaces = collect_tunnel_state(full_config, log=lambda _message: None)
+        data_plane_kwargs["bgp_peer_routes"] = tuple(
+            PeerRoute(
+                peer=item["remote_inner_ip"],
+                source=item["local_inner_ip"],
+                interface=item["name"],
+                if_id=item["if_id"],
+            )
+            for item in interfaces
+            if item["mode"] == "bgp"
+        )
+        data_plane_kwargs["physical_interface"] = local.network_interface_name
         static_ids = {item["if_id"] for item in interfaces if item["mode"] == "static"}
         data_plane_kwargs["static_tunnel_names"] = tuple(
             tunnel["name"] for tunnel in tunnels if tunnel["if_id"] in static_ids

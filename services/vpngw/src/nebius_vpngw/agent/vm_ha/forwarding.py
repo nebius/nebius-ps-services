@@ -142,6 +142,10 @@ class DestinationProtection:
             result[prefix] = tuple(sorted(p.interface for p in policies[owner].paths))
         return result
 
+    def protected_prefixes(self) -> frozenset[str]:
+        """Configured and retained workload destinations, including local workloads."""
+        return frozenset(self._destinations(self._ledger())) | frozenset(self.local)
+
     def admit(self, prefixes: frozenset[str]) -> None:
         """Bind new admitted BGP routes to their actual configured XFRM path.
 
@@ -250,11 +254,27 @@ class DestinationProtection:
                     raise RuntimeError("protected interface identity differs")
 
     def ready(self) -> bool:
+        from .diagnostics import diagnostic
+
+        reason = "ready"
         try:
             self.verify()
-            return True
-        except (OSError, RuntimeError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired):
-            return False
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            KeyError,
+            subprocess.TimeoutExpired,
+        ) as error:
+            reason = {
+                "destination protection is missing": "protection-missing",
+                "destination protection differs from admitted intent": "protection-intent-drift",
+                "protected interface identity is unavailable": "interface-observation-unavailable",
+                "protected interface identity differs": "interface-identity-drift",
+            }.get(str(error), "observation-unavailable")
+        diagnostic("routing-safety-observation", scope="protection", reason=reason)
+        return reason == "ready"
 
     def install(self) -> None:
         ledger = self._ledger()

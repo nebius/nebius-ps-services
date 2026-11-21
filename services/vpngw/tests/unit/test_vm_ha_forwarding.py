@@ -130,3 +130,55 @@ def test_absent_path_is_safe_but_reused_interface_identity_is_not(tmp_path, kind
 
     protection.run = run
     assert protection.ready() is ready
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (
+            RuntimeError("destination protection differs from admitted intent"),
+            "protection-intent-drift",
+        ),
+        (RuntimeError("protected interface identity differs"), "interface-identity-drift"),
+        (RuntimeError("secret-canary"), "observation-unavailable"),
+        (subprocess.TimeoutExpired(["secret-canary"], 1), "observation-unavailable"),
+    ],
+)
+def test_protection_failure_diagnostic_has_closed_reason(tmp_path, monkeypatch, error, reason):
+    from nebius_vpngw.agent.vm_ha import diagnostics
+
+    events = []
+    protection = DestinationProtection(
+        tmp_path / "ledger", cluster="cluster", policies=(), local_prefixes=()
+    )
+    monkeypatch.setattr(protection, "verify", lambda: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(
+        diagnostics, "diagnostic", lambda event, **fields: events.append((event, fields))
+    )
+    assert not protection.ready()
+    assert events == [("routing-safety-observation", {"scope": "protection", "reason": reason})]
+
+
+def test_apipa_safety_inventory_includes_configured_local_and_retained_workloads(tmp_path):
+    from nebius_vpngw.agent.vm_ha.forwarding import SCHEMA
+
+    ledger = tmp_path / "ledger"
+    ledger.write_text(
+        json.dumps(
+            {
+                "schema": SCHEMA,
+                "cluster": "cluster",
+                "admitted": {"169.254.128.0/24": "retired-connection"},
+            }
+        )
+    )
+    ledger.chmod(0o600)
+    protection = DestinationProtection(
+        ledger,
+        cluster="cluster",
+        policies=connection_policies(config("bgp")),
+        local_prefixes=("169.254.64.0/24",),
+    )
+    assert protection.protected_prefixes() == frozenset(
+        {"169.254.64.0/24", "169.254.128.0/24", "10.1.0.0/16"}
+    )

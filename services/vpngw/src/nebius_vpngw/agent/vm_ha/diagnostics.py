@@ -12,9 +12,23 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 _SEQUENCE = itertools.count(1)
+_QUIET_ROUTING_SAFETY: ContextVar[bool] = ContextVar("quiet_routing_safety", default=False)
+
+
+@contextlib.contextmanager
+def quiet_routing_safety() -> Iterator[None]:
+    """Independent health collection must never wait on controller journal I/O."""
+    token = _QUIET_ROUTING_SAFETY.set(True)
+    try:
+        yield
+    finally:
+        _QUIET_ROUTING_SAFETY.reset(token)
+
+
 _TOKENS = {
     "reason",
     "connection",
@@ -43,6 +57,7 @@ _TOKEN = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 # differs from the last record written for the same subject, so a steady state
 # leaves no journal trail. Elapsed-time measurements never make a decision new.
 _ON_CHANGE = {
+    "routing-safety-observation": "routing-safety",
     "authority-accepted": "authority",
     "authority-refused": "authority",
     "step-admitted": "step-gate",
@@ -53,6 +68,7 @@ _ON_CHANGE = {
     "static-recovery-wait": "static-recovery",
 }
 _SUBJECTS = {
+    "routing-safety": ("scope",),
     "authority": ("scope",),
     "step-gate": (),
     "path-health": ("connection", "target", "scope"),
@@ -145,6 +161,8 @@ def diagnostic(event: str, **fields: object) -> None:
     may leave sequence gaps but must never prevent an authorized recovery. A
     failed write is not remembered, so the same changed decision is retried.
     """
+    if event == "routing-safety-observation" and _QUIET_ROUTING_SAFETY.get():
+        return
     try:
         if not _TOKEN.fullmatch(event):
             return

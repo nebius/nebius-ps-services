@@ -678,12 +678,9 @@ def test_repair_replacement_advice_requires_owned_existing_targets(owned, tmp_pa
         ]
         assert "--repair" not in shlex.split(recovery.fresh_apply_command)
         assert "deletes gateway VMs" in recovery.text()
-        assert (
-            "Step 2 — software repair, after authenticated SSH access is available"
-            in recovery.text()
-        )
-        assert "Step 3 — last-resort VM rebuild" in recovery.text()
-        assert recovery.text().index("Step 2") < recovery.text().index("Step 3")
+        assert "normal apply is not a prerequisite" in recovery.text()
+        assert "Last-resort VM rebuild" in recovery.text()
+        assert recovery.text().count(recovery.repair_command) == 1
     missing = advice(context, RepairBlocked("repair-vm-missing", ownership_established=True))
     assert missing.destroy_command is None
 
@@ -754,15 +751,19 @@ def test_service_account_failure_suggests_compatible_repair(
         assert recovery["reason_code"] == ("invalid-arguments" if repair else "dns-unavailable")
     else:
         assert result.stdout.count("Reason:") == 1
-        repair_command = next(
-            line.strip()
-            for line in result.stdout.splitlines()
-            if line.strip().startswith("nebius-vpngw ")
-        )
         resume_command = next(
             line.removeprefix("Resume command: ")
             for line in result.stdout.splitlines()
             if line.startswith("Resume command: ")
+        )
+        repair_command = (
+            resume_command
+            if repair
+            else next(
+                line.strip()
+                for line in result.stdout.splitlines()
+                if line.strip().startswith("nebius-vpngw ")
+            )
         )
         prerequisite = result.stdout
     expected = [

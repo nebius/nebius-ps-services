@@ -11,6 +11,26 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Avoid unnecessary active BGP VM-HA self-fencing during DHCP renewal when
+  fresh native evidence proves the DHCP broad APIPA route cannot divert any
+  configured peer or VPN workload. Keep passive, promotion, static, mixed-mode,
+  table-220, underlay, destination-protection and cloud ownership checks strict.
+  Give periodic HA cleanup a bounded writer-lock handoff window so ordinary
+  controller observations do not discard a maintenance cycle after only 100 ms.
+
+- Preserve safe cutover failure guidance through planned failover/failback CLI
+  error handling, while keeping arbitrary exception details redacted. Identify
+  routing-safety failures with closed component diagnostics, without blocking
+  independent health collection on controller journal output or changing fences.
+
+- Identify the failed repair preflight check and distinguish typed operator,
+  provider, runtime-credential and SSH authentication failures from provider
+  permission or availability errors. Preserve redaction and all admission checks.
+  Present normal apply as a recommendation, allow direct confirmed repair, and
+  avoid repeating the same repair retry command as a numbered recovery step.
+  Share concise default-No confirmation wording across ordinary, VM-HA and
+  regional repair, retaining exact target, rebuild, retention and outage details.
+
 - Diagnose an ordinary apply approval that no longer matches required work or
   its pending command as `approval-state-changed`, with a retry command that
   omits the rejected digest. Preserve the existing fail-closed approval checks.

@@ -751,11 +751,32 @@ def verify(cfg: dict[str, Any]) -> str:
 
 
 def ready(cfg: dict[str, Any]) -> bool:
+    reason = "ready"
     try:
         verify(cfg)
-        return True
-    except (OSError, RuntimeError, ValueError, KeyError, TypeError):
-        return False
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
+        # Closed source-owned reasons only; never native output, paths or values.
+        reason = {
+            "underlay persistence proof is missing or stale; run normal apply": "persistence-unproven",
+            "underlay route inventory is malformed": "route-inventory-malformed",
+            "underlay kernel route is missing or conflicts with intent": "physical-route-missing",
+            "underlay and VPN have conflicting exact kernel destinations": "vpn-route-conflict",
+            "underlay route lookup is unavailable": "route-lookup-unavailable",
+            "underlay route lookup selects a different path": "route-lookup-drift",
+            "underlay requires one verified DHCP IPv4 address and router": "dhcp-lease-unavailable",
+            "DHCP router does not match the physical kernel route": "dhcp-route-mismatch",
+            "networkd cannot identify the primary interface": "interface-unavailable",
+            "underlay command failed: networkctl": "networkd-command-failed",
+            "underlay command failed: ip": "ip-command-failed",
+        }.get(
+            str(error),
+            "deadline-exceeded" if isinstance(error, TimeoutError) else "observation-unavailable",
+        )
+    if cfg.get("vm_ha") is not None:
+        from .vm_ha.diagnostics import diagnostic
+
+        diagnostic("routing-safety-observation", scope="underlay", reason=reason)
+    return reason == "ready"
 
 
 def main() -> None:

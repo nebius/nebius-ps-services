@@ -273,7 +273,7 @@ explains that blocker and provides the retained-VM repair command. Retrying does
 not reset the correction allowance; ownership and submitted work must still be
 reconciled before reconstruction.
 
-Use this recovery order:
+Recommended recovery options:
 
 1. `apply -c <config.yaml>` deploys, upgrades or reconciles the gateways.
 2. `apply -c <config.yaml> --repair` reconstructs software when authenticated SSH
@@ -286,6 +286,14 @@ Use this recovery order:
 
 A release change alone uses the first step. Last-resort rebuilding is never an
 implicit consequence of `apply` or `apply --repair`.
+You may invoke `--repair` directly, including for healthy or unchanged gateways;
+normal apply is not a prerequisite. Once access and safety checks pass, answering
+`y` to the default-No confirmation starts repair in the same command.
+Per-deployment repair inspection errors name the failed check and distinguish typed
+operator, provider, runtime-credential and SSH failures. A provider permission
+denial is reported separately from rejected credentials or service availability.
+Unknown causes remain unknown; diagnostics never expose raw credential or provider
+response contents. Retry instructions preserve `--repair`.
 After verified destruction, fresh apply can establish new managed SSH identities
 without the deleted VMs' private host keys. Explicit operator pins remain binding.
 
@@ -297,8 +305,14 @@ computer running the command, then run:
 nebius-vpngw apply --local-config-file my-vpn.config.yaml --repair
 ```
 
-Repair lists the existing VM and disk identities and asks for confirmation
-(default: No). After confirmation, an animated status shows the current stage,
+After prerequisite checks pass, repair recommends normal apply for routine
+convergence, lists the exact VM/disk targets, and explains the rebuild, retained
+resources and absence of an overall outage limit. It asks
+`Continue with software repair? [y/N]:`; answering Yes starts repair in the same
+invocation. No or Enter cancels, and EOF or interruption never authorizes repair.
+Regional pair repair groups the targets by region and asks once:
+`Continue with software repair in both regions? [y/N]:`.
+After confirmation, an animated status shows the current stage,
 member and elapsed time, including dependency downloads, package installation,
 worker waits and activation checks. Progress stays on stderr; redirected output
 uses plain stage and wait messages, and JSON stdout remains one terminal result.
@@ -5503,6 +5517,8 @@ This is the **primary defense** against DHCP-added broad APIPA routes.
 - Uses current-boot VM-HA authority under the shared routing lock: an active
   owner receives the full reconciler, while a fenced passive member receives
   only table 220 and broad `169.254.0.0/16` cleanup
+- Waits up to five seconds for HA writer-lock handoff, then rechecks current
+  inhibition, role and fencing; persistent contention still skips the cycle
 - Skips blocked, stale, transitioning, or unfenced VM-HA members without
   routing mutation
 - Independent of agent lifecycle
@@ -5518,9 +5534,22 @@ or local-prefix routes, reloads services, or changes cloud/VPC state. Passive
 readiness and `status` remain degraded while either prohibited route artifact
 is present or cannot be observed exactly.
 
+An already-active BGP-only VM-HA owner can remain healthy during DHCP renewal
+when fresh native evidence proves that the single broad route belongs to DHCP
+on its physical interface and cannot divert any configured BGP peer. Every peer
+must retain its exact `/32` route, assigned local source and expected active XFRM
+interface, and an unforced kernel lookup must select that path. No configured,
+retained or learned VPN workload prefix may overlap APIPA. Missing or ambiguous
+evidence, custom IPv4 policy rules, static or mixed routing, passive state and
+promotion remain strict.
+Table-220, underlay, destination-protection and cloud ownership checks still apply;
+the routing owner continues removing the broad route through normal maintenance.
+
 **Why This Three-Layer Approach?**
 
-Nebius cloud DHCP server provides gateway `169.254.169.1`, which causes systemd-networkd to add a `169.254.0.0/16` route. This broad route conflicts with VPN tunnel inner IPs (also in 169.254.0.0/16 APIPA range).
+Nebius cloud DHCP can cause systemd-networkd to add a `169.254.0.0/16` route.
+It overlaps VPN tunnel inner addresses and can divert traffic when the required
+more-specific XFRM routes or policy-routing checks are missing.
 
 We cannot:
 
@@ -6045,6 +6074,12 @@ which readiness predicates remain unsatisfied, including pending controller or
 rearm operations. These diagnostics do not grant readiness, extend timeouts,
 change durable operation identity, or permit creation before acknowledgement.
 Raw exceptions, credentials and host details are excluded from these diagnostics.
+Planned VM cutover refusals and timeouts retain safe status and controller-journal
+guidance in both text and JSON modes. Controller journals identify routing-safety
+checks with closed component reasons for table-220, broad APIPA, physical routes,
+and destination protection. Repeated identical observations are suppressed;
+independent health sampling never waits for this journal output. These messages
+do not relax forwarding fences or establish that an unverified transfer failed.
 Post-recovery package verification binds the failing member before reporting its
 safe reason, so an error in reporting cannot mask the original verification failure.
 

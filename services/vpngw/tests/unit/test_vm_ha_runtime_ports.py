@@ -6193,3 +6193,85 @@ def test_static_names_use_canonical_inheritance_and_disabled_tunnel_projection(t
     )
     assert captured["static_tunnel_names"] == ("inherited",)
     ports.close()
+
+
+def test_local_sampler_does_not_wait_for_blocked_controller_diagnostics(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    import yaml
+    from tests.unit.test_ha_tunnel_selection import config as tunnel_config
+
+    from nebius_vpngw.agent.vm_ha import diagnostics
+    from nebius_vpngw.agent.vm_ha.runtime import BoundRouteRuntime
+
+    ports = build_runtime_ports(
+        _runtime_config(tmp_path),
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **kw: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        mtls_snapshot_provider=_fake_mtls_snapshot,
+        route_backend_factory=lambda sdk: FakeRouteBackend(),
+        data_plane_factory=FakeDataPlane,
+    )
+    state_dir = tmp_path / "sample"
+    state_dir.mkdir()
+    state_path = state_dir / "data-plane.json"
+    state_path.write_text('{"mode":"active"}')
+    config_path = tmp_path / "sample.yaml"
+    config_path.write_text(yaml.safe_dump(tunnel_config("bgp")))
+    ports = replace(
+        ports,
+        data_plane=SystemDataPlaneRuntime(
+            state_path=state_path,
+            guard_path=state_dir / "guard.json",
+            configured_bgp_sessions=(),
+            expected_bgp_policy_digest="a" * 64,
+        ),
+    )
+
+    def observe(self, **kw):
+        assert _routing_hygiene_ready(
+            CommandResult(0, ""), CommandResult(0, "[]"), CommandResult(0, "")
+        )
+        for scope in ("underlay", "protection"):
+            diagnostics.diagnostic("routing-safety-observation", scope=scope, reason="ready")
+        return SimpleNamespace(forwarding_enabled=True)
+
+    monkeypatch.setattr(SystemDataPlaneRuntime, "observe", observe)
+    monkeypatch.setattr(
+        BoundRouteRuntime,
+        "readiness",
+        lambda self, strict=False: LocalReadiness(True, True, True, True, protection_ready=True),
+    )
+    monkeypatch.setattr(
+        "nebius_vpngw.agent.vm_ha.tunnel_runtime._selection_context", lambda *a: None
+    )
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked_sink():
+        with diagnostics._LOCK:
+            entered.set()
+            release.wait(2)
+
+    thread = threading.Thread(target=blocked_sink)
+    thread.start()
+    assert entered.wait(1)
+    try:
+        began = time.monotonic()
+        ready = ports.sample_local_health(
+            config_path=config_path, state_dir=state_dir, deadline=105, clock=lambda: 100
+        )
+        assert ready.serving_ready
+        assert time.monotonic() - began < 1
+    finally:
+        release.set()
+        thread.join(3)
+        ports.close()
+    assert not thread.is_alive()
+    # Suppression is scoped to collection, never inherited by the controller.
+    writes = []
+    monkeypatch.setattr(diagnostics, "_write", lambda event, fields: writes.append(event) or True)
+    diagnostics.diagnostic("routing-safety-observation", scope="sampler-regression", reason="ready")
+    assert writes == ["routing-safety-observation"]

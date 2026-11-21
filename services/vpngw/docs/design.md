@@ -1115,6 +1115,44 @@ Compile one explicit export decision per enabled BGP neighbor from connection po
 
 **Failure handling:** Missing peer output, malformed JSON, non-established expected sessions, an unexpected live peer, ambiguous ownership, lifecycle or member-local ownership-epoch transition, generation disagreement, forwarding/fencing disagreement, unavailable or inhibited writers, routing-lock failure, or unexpected operations produce `UNKNOWN`, proven `DRIFT`, or fail closed before an effect according to the evidence boundary. Listing reports but never repairs and downgrades mixed-time VM-HA observations and every corresponding gateway role to `UNKNOWN`. Explicit repair proceeds only from proven `DRIFT` under exact stable authority, refuses an absent, incomplete, stale, or concurrently inhibited on-node authority tuple, bypasses the unchanged-config short circuit without uploading configuration, and reports convergence only after every expected peer is re-observed exactly. Passive render, firewall, hygiene, export verification, or active pre-forward verification failure remains fenced and restores `BLOCKED` authority after re-proving deny-all; if that render cannot be proved, FRR is stopped until a required reload-or-restart reconcile succeeds.
 
+**DHCP renewal safety refinement:** A native standby renewal reproduced a
+broad DHCP APIPA route followed by hygiene failure and later product cleanup.
+Presence alone does not prove that this route overrides configured `/32` peer
+paths. For an already-active BGP-only member, derive immutable peer/source/XFRM
+identity from canonical tunnel records. Re-read exact broad routes and verify
+one unicast main-table DHCP route against current networkd DHCP ownership,
+interface, gateway, preferred source and metric. Require exact XFRM peer `/32`
+routes, assigned local source addresses and configured numeric interface IDs,
+require the exact canonical IPv4 local/main/default policy rules, then perform
+bounded `ip route get <peer> from <source>` without forcing an output interface.
+Bind its destination and source to the requested peer and configured source.
+Custom policy selectors (including ports, UID and marks) retain strict rejection. Reject absent, foreign, multipath or diverted evidence. A
+fresh empty broad-route inventory is the normal clean condition.
+
+Reject the exception if any configured, learned or retained protected workload
+prefix overlaps APIPA, or if the member is passive/promoting, static/mixed, or
+has no complete APIPA BGP peer mapping. Preserve all other readiness, table-220,
+underlay, destination-protection and ownership checks. Neither collection nor
+verification repairs routes. Periodic HA maintenance allows five seconds to
+acquire the existing ordered writer locks so routine controller observation
+contention does not discard the entire maintenance cycle. It rechecks writer
+inhibition, current role and fencing after acquisition, and still skips without
+mutation if contention outlasts that bound. Keep DHCP enabled and cleanup effects unchanged;
+disabling all DHCP routes would broaden physical-route ownership, while a
+blanket ignore would hide actual path theft. systemd 255's route denylist applies
+to IPv6 router advertisements, so it is not an IPv4 DHCP remedy.
+
+Focused regressions cover DHCP provenance, source/device/ID mismatch,
+missing `/32`, policy-route diversion, command failure, workload overlap,
+static/mixed/passive/promotion controls and blocked diagnostic output.
+Live BGP validation exercised active and standby DHCP renewals independently,
+then complete planned transfers in both directions with bidirectional workload
+traffic, sustained terminal health and exact installed-package verification.
+Traffic qualification retains one-second deadline misses separately while
+allowing bounded TCP recovery; it does not establish zero packet loss or
+zero-downtime transfer. These results qualify this BGP renewal refinement,
+not every topology or the complete feature's broader verification surface.
+
 #### Selected Option
 
 Compile one explicit export decision per enabled BGP neighbor from connection policy plus runtime origination authority. Allowed peers share the normalized local-prefix list and retain their active/passive MED route-map; denied peers receive a common explicit deny-all route-map. Project both top-level `gateway` policy and resolved `connections` into the VM-HA controller view, then derive a peer-to-expected-prefix map from that same resolved node configuration and compare bounded Adj-RIB-Out evidence with a tri-state result so incomplete observation can never trigger repair. Passive and blocked transitions avoid a startup dependency on established sessions by accepting only the conjunction of an exact live peer set, empty Adj-RIB-Out for every already-established peer, and running FRR configuration that binds every expected peer exclusively to the exact deny-all map; ordinary readiness and audit remain `UNKNOWN` until all expected peers establish. A BGP policy with zero enabled peers still requires an empty live FRR peer set. Current VM-HA ownership remains a normalized projection of lifecycle, common owner/allocation/generation, each member's local Compute ownership epoch, forwarding, fencing, writer inhibition, pending-operation evidence, and local routing hygiene rather than configured role. Reuse the existing five-minute route-maintenance timer as the single periodic owner, but make its private admission and execution role-aware so a fenced passive receives only the narrow passive cleanup instead of the active route/sysctl reconciler. Preserve the advertisement audit's exact authority result through its post-read recheck and use only that stable snapshot to label route-listing gateway headings as active, standby, or unknown.
@@ -4241,6 +4279,12 @@ Keep the controller's existing self-fencing and canonical ownership-reproof engi
 #### Implementation Boundaries
 
 `cli.py` owns a private reproof predicate, the three terminal-race decisions, fixed deadlines, and one sanitized cutover-not-yet-verified result. The predicate accepts only already-validated current-runtime status with the submitted request fingerprint, `promotion_committed=false`, no apply lock, and the closed candidate-local sequence of proof-loss self-fencing, passive re-entry, `detach-candidate-for-reproof`, attach, ownership confirmation, optional tunnel preparation, route reconciliation, and forwarding enablement. It authorizes continued observation only. Public commands, flags, JSON bytes, exit codes, request/progress/checkpoint schemas, controller, rearm, cloud, route, forwarding, and persisted-state ownership remain unchanged.
+
+Diagnosed cutover refusal and timeout use a private closed error type through
+the public command handler, retaining safe phase and status/journal guidance
+for both ownership directions and output formats. Arbitrary exceptions remain
+redacted; unknown controller reason text is never promoted to public output.
+An unverified timeout does not claim that forwarding is fenced.
 
 #### Test-First Success Criteria
 
@@ -11313,7 +11357,7 @@ documentation evidence does not qualify native supervision.
 
 <!-- /FEATURE: FEAT-037 -->
 
-<!-- FEATURE: FEAT-038 reqs=REQ-038 status=ready delivery=implemented priority=P0 version=9 -->
+<!-- FEATURE: FEAT-038 reqs=REQ-038 status=ready delivery=implemented priority=P0 version=12 -->
 ### FEAT-038: Confirmed full software repair on retained VMs
 
 #### Requirements Covered
@@ -11330,6 +11374,104 @@ provide reusable transport and installation primitives, not full reset authority
 The exact cause of the reported customer mismatch remains unproven.
 
 #### Design Details
+
+**Concise confirmation presentation:** a private presentation helper renders the
+shared recommendation, exact targets, rebuild scope, retention notice and outage
+warning, then asks the default-No question. It performs no access, cloud, journal
+or repair operations. Existing admission and execution owners call it only after
+successful inspection. Ordinary and VM-HA repair ask "Continue with software
+repair?"; the regional parent groups exact targets by region and asks "Continue
+with software repair in both regions?" once. Regional children retain exact
+confirmed-scope validation and never ask again.
+
+The single-deployment text is:
+
+```text
+Normal apply is recommended for routine convergence.
+You selected software repair, which rebuilds the managed
+software on the existing VMs and interrupts VPN traffic.
+VMs and disks will be retained.
+
+Targets:
+  <gateway>: VM <vm-id>, retained disk <disk-id>
+
+Rebuilds: VPNGW, strongSwan, FRR, managed node certificates,
+configuration and operational state.
+Retains: Ubuntu, IP allocations, SSH access and external
+peer credentials.
+
+Repair has no overall outage limit. VPN traffic remains
+interrupted until recovery completes.
+
+Continue with software repair? [y/N]:
+```
+
+Yes enters the existing transaction in the current invocation. No or empty input
+cancels before the repair transaction; EOF or interruption retains existing abort
+semantics without authorizing effects. A healthy or unchanged target and no prior
+normal apply remain eligible. Access failure prevents confirmation and keeps the
+same repair retry command. Identity revalidation, writer exclusion, fencing,
+resume behavior, command syntax and JSON/journal schemas remain unchanged.
+The presentation refinement is implemented. The final focused repair, journal,
+failure-guidance, HA-dispatch and regional-pair run passed all 365 tests, including
+valid JSON on EOF and interruption, no-effects cancellation, same-invocation
+repair, exact target display and regional child scope drift. Prerequisite-failure
+tests also prove that supplied Yes input cannot reach confirmation after denied
+access. Scoped Ruff, formatting, typing and Markdown checks passed; independent
+read-only review found no confirmation or authority regression.
+
+A subsequent live retest used a frozen build matching all current branch Python
+sources and the same HA BGP configuration. From an independently verified healthy
+baseline, confirmed repair completed in 854 seconds with the new recommendation,
+exactly two targets, the outage warning and one default-No prompt. Yes entered
+repair within that command without a preceding normal apply. Independent readback
+verified exact installed sources on both retained VMs, unchanged VM/disk/NIC
+allocation identities, healthy active/passive HA and mTLS, four ready IPsec tunnels,
+four established BGP sessions and no pending operation or apply lock. Normal apply
+then returned unchanged in 106 seconds, with ready configuration, runtime,
+authority and connectivity, no completed or pending effects, and an unchanged
+lifecycle file. Fresh independent readback passed again afterward. No external
+target intervention or live product remediation was needed. An earlier read-only
+baseline observation failed without a proven cause; the successful fresh baseline
+admitted this trial without changing the target. Elapsed command times do not
+measure traffic outages. Application workload traffic, other topologies, regional
+pairs and interruption recovery remain outside this focused qualification.
+
+**Direct repair and pre-confirmation diagnostics:** normal apply remains the
+recommended routine convergence path. Explicit repair proceeds directly to its
+existing default-No confirmation once the required checks pass; healthy state,
+matching versions and lack of an earlier apply attempt are not admission blockers.
+The CLI labels local deployment validation accurately. Fixed inspection labels
+cover retained Compute identity, SSH authority and policy, release artifact,
+managed runtime credentials, guest release and package prerequisites. A diagnostic
+wrapper retains the original exception chain without changing approval or effects.
+Recovery classifies only typed authentication, authorization and availability
+signals, includes the fixed failing stage in per-deployment diagnostics, and keeps
+raw exception/provider data private. Regional summaries preserve the cause code; child diagnostics retain the
+inspection stage. Existing specific diagnoses take precedence over generic categories.
+The text renderer avoids repeating an identical resume/repair command and presents
+recovery options as recommendations. JSON fields and command syntax stay unchanged.
+Focused tests cover denial, unknown errors, redaction, direct repeat repair and
+confirmation cancellation. Live pre-confirmation success under one operator identity
+does not explain a historical failure under another identity or qualify full repair.
+The diagnostic refinement is implemented. All 306 focused admission, repair,
+recovery and HA-dispatch tests pass, along with scoped lint, typing and build
+checks. Injected failures prove phase attribution, cause preservation, redaction
+and nonzero outcomes; live success does not identify the original historical
+authentication/provider failure.
+
+A frozen branch wheel completed a confirmed HA BGP repair from a healthy retained
+pair in 840 seconds without external target intervention. Independent readback
+verified exact installed Python sources, retained VM/disk/NIC allocation identities,
+healthy active/passive authority and mTLS, no pending operation or apply lock, and
+four established IPsec/BGP paths. The initial observation checker incorrectly
+expected cold standby tunnels; correcting that checker to the existing warm BGP
+contract and repeating observation passed without changing the target. Normal apply
+on the same configuration and artifact then returned unchanged in 124 seconds,
+with no completed or pending effects and an unchanged lifecycle file. These are
+command elapsed times, not measured traffic-outage durations. Application workload
+traffic, other topologies, regional pairs and interruption recovery were not tested
+in this focused trial; broader release qualification remains separate.
 
 **APT observation resilience:** use the shared 180-second metadata-refresh cap
 for ordinary, HA and retained-VM repair package inspection/staging. A scoped
@@ -13294,6 +13436,14 @@ ordinary data-path limitation). Full-tunnel expansion is deferred.
 Agent route guard, ordinary and HA lifecycle, deployed units, cloud policy and
 apply receipts; docs/status/support evidence follow those owners. No customer
 mutation, public schema change, new runtime dependency or compatibility shim.
+
+HA routing-safety observations identify table-220 rules/routes, broad APIPA,
+physical-route proof, and destination protection using closed component reasons.
+Journal records omit native command output, addresses, exception text, and
+credentials, and repeated identical observations are suppressed. Independent
+health collection suppresses synchronous journal publication before acquiring
+any diagnostic lock; a blocked controller log sink cannot delay its sample.
+These diagnostics never change readiness, fencing, or route ownership.
 
 #### Test-First Success Criteria
 

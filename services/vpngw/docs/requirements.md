@@ -513,6 +513,18 @@ Prevent unauthorized VM-HA origination and all export of peer-learned routes, ma
 - Passive and blocked transition safety may prove zero exports before every peer establishes only when the live peer set is exact, every established peer has an empty Adj-RIB-Out, and the running FRR configuration binds every expected peer exclusively to the exact deny-all route-map. Missing or additional bindings, nonempty established-peer exports, unexpected peers, or unavailable running configuration still fail closed. Readiness and observational audit retain their existing `UNKNOWN` result for any non-established expected peer.
 - The periodic routing owner accepts either exact current-boot active readiness or an exact current-boot passive guard with forwarding disabled, then rechecks that authority under the routing lock. Its passive branch may remove table-220 rules/routes and the broad `169.254.0.0/16` route, flush changed routing state, and restore exact product-owned physical-interface routes under REQ-044. Basic underlay maintenance does not grant active authority; it must not enable forwarding, rewrite forwarding sysctls, render protocol services, or mutate cloud/VPC state. Blocked, stale, mismatched, or lock-contended authority skips or fails without routing mutation.
 - A DHCP/network renewal or other external writer that reintroduces table-220 state or the broad APIPA route after passive materialization is removed within the configured timer cadence. Route-only table-220 state is equivalent to a policy rule for cleanup and health. Until the exact postcondition is restored, local transfer/promotion readiness, heartbeat readiness, `standby_ready`, redundancy health, and operator status must remain degraded rather than reporting the member healthy.
+- An already-active BGP-only gateway may retain readiness when DHCP restores
+  the broad APIPA route only if fresh native evidence proves it harmless: one
+  exact networkd-owned DHCP route on the physical interface; every configured
+  APIPA peer, including down peers, has its configured source address, exact
+  main-table XFRM `/32`, expected interface ID and matching unforced kernel
+  lookup under only the canonical IPv4 local/main/default policy rules; and no configured, learned or retained VPN workload prefix overlaps
+  `169.254.0.0/16`. Table-220 exclusion, physical-route proof, destination
+  protection, cloud ownership and forwarding authority remain mandatory.
+  Missing or ambiguous evidence, static/mixed modes, passive/promotion phases,
+  non-DHCP routes and overlapping workload prefixes retain strict rejection.
+  The check is observational; periodic and passive cleanup keep their existing
+  ownership. This exception never authorizes promotion or cloud effects.
 - Bounded per-peer Adj-RIB-Out evidence is compared as `MATCH`, `DRIFT`, or `UNKNOWN`. Missing or malformed output, a non-established expected peer, or unavailable/transitioning HA authority is `UNKNOWN`, never a match and never repair authority.
 - Ordinary VM-HA `status` retains its exact table shape and redaction contract. Proven active-owner export drift is unsafe and blocks readiness; standby-only export or local routing-hygiene drift degrades an otherwise safe owner; unavailable owner/standby evidence follows the existing conservative `UNKNOWN`/`DEGRADED` precedence. Its routing table detects both a table-220 policy rule and route-only table-220 contents without performing repair.
 - `list-routes-local` performs no remote write, upload, service start/reload, or reconciliation wait. It preserves its route tables and exit semantics while reporting owner-aware advertisement `MATCH`, `DRIFT`, or `UNKNOWN` and directing repair to an explicit mutating workflow. Repair operates only on proven drift under one stable common owner, allocation, and generation plus each target member's stable local Compute ownership epoch. It reconciles only the already-installed configuration while holding the apply/rearm, mTLS-writer, and routing locks from the on-node authority recheck through rendering and persistence; forces a render even when the configuration hash is unchanged; and requires exact authority and advertisement rechecks after reconciliation. Configuration installation remains owned by `apply`.
@@ -4341,9 +4353,11 @@ on existing Ubuntu gateways without manually deleting checkpoints or replacing
 VMs. Support ordinary and VM-HA deployments in Static and BGP modes, including
 regional pairs. This explicit operation accepts a full VPN outage.
 
-Use an explicit recovery ladder: normal apply for convergence and upgrades;
-software repair on accessible retained VMs; then a separately confirmed last-resort
-VM rebuild when the retained guests cannot be recovered. The last resort uses
+Recommend normal apply for convergence and upgrades, software repair on accessible
+retained VMs, and a separately confirmed last-resort VM rebuild when retained guests
+cannot be recovered. This recommendation imposes no command-order prerequisite:
+operators may request repair directly, including for healthy or unchanged gateways,
+and proceed within that invocation after the default-No outage confirmation. The last resort uses
 canonical destroy followed by fresh apply from the same YAML through the SDK.
 It is never an implicit VM-deletion mode of apply or apply --repair.
 After verified destruction, fresh apply must not depend on the deleted guests'
@@ -4356,6 +4370,15 @@ preserve explicit operator trust sources and exact publication recovery.
   confirmation before changes. No separate repair dry-run or user-supplied digest
   is required. Declined or missing confirmation makes no changes. Ordinary apply
   preview and confirmation contracts remain unchanged.
+- Use a shared concise confirmation presentation for ordinary, VM-HA and regional
+  repair. Lead with "Normal apply is recommended for routine convergence." Then
+  describe software reconstruction and traffic interruption, list exact VM/disk
+  targets, and state the rebuilt and retained scope and absence of an overall
+  outage limit. Ask "Continue with software repair?" with No as the default;
+  regional pairs group targets by region and ask once for both regions. Yes
+  continues the current invocation; No or empty input cancels, and EOF or
+  interruption grants no repair authority. A recommendation never creates an
+  admission condition. Existing access, target and safety checks remain binding.
 - Immediately after confirmation, show animated repair progress on interactive
   stderr with the current stage, member and elapsed time. Cover preparation,
   dependency resolution, staging, isolation, package installation, activation
@@ -4364,6 +4387,13 @@ preserve explicit operator trust sources and exact publication recovery.
   useful stage transitions without terminal control sequences; JSON stdout stays
   one terminal result. Stop the display on success, failure and interruption;
   presentation failures never change repair authority, deadlines or outcomes.
+- Per-deployment pre-confirmation failures identify the failed repair inspection
+  stage and distinguish operator credential acquisition, provider authentication, provider
+  permission denial, runtime credential verification and SSH authentication when
+  typed evidence exists. Preserve the underlying diagnostic and nonzero outcome;
+  unknown causes remain unknown. Expose no raw exceptions, keys or provider replies.
+  Recovery output keeps the same repair retry command without presenting a required
+  preceding normal apply or duplicating the same command as a numbered step.
 - Admit repair before old deployment resume validation. Missing or malformed
   journals, changed desired digests, broken package imports, altered product
   assets, failed services and broken managed node identities select reconstruction

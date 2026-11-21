@@ -243,23 +243,14 @@ def apply(
             for side in pair_config.SIDES
         }
         if repair:
-            import typer
+            from .deploy import repair_confirmation
 
             if any(approvals.values()):
                 raise ValueError("Pair repair cannot include disruption digests")
             scopes = _inspect_repairs(directory / "inspection", requests, manifest, pinned, lock_fd)
-            typer.echo(
-                "Full repair will interrupt VPN traffic and rebuild VPNGW packages, configuration and managed node identity in both regions."
-            )
-            for side, scope in scopes.items():
-                for target in scope["targets"]:
-                    typer.echo(
-                        f"Region {side}: {target['name']}, retained VM {target['compute']}, disk {target['disk']}"
-                    )
-            typer.echo(
-                "Ubuntu, VM/disk/IP identities, SSH access and external peer credentials are retained. Recovery may exceed five minutes."
-            )
-            if not typer.confirm("Proceed with disruptive repair of both regions?", default=False):
+            if not repair_confirmation.confirm(
+                ((side, scope["targets"]) for side, scope in scopes.items()), regional=True
+            ):
                 return {"phase": "cancelled"}
             for side in requests:
                 requests[side]["repair_scope"] = scopes[side]
