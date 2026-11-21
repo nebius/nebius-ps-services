@@ -323,6 +323,7 @@ def test_ordinary_repair_reuses_only_an_existing_pin_bound_to_the_retained_vm(
     from nebius_vpngw.deploy import ssh_policy
     from nebius_vpngw.deploy.recovery import SSHIdentityUnavailable
 
+    monkeypatch.setattr(repair_apply.ordinary_apply, "require_dependency_resolver", lambda: "/uv")
     monkeypatch.setenv("HOME", str(tmp_path))
     for key in (ssh_policy.KNOWN_HOSTS_ENV, ssh_policy.HOST_KEYS_DIR_ENV):
         monkeypatch.delenv(key, raising=False)
