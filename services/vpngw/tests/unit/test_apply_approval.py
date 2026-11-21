@@ -26,7 +26,9 @@ def test_ordinary_cli_reuses_original_approval_after_partial_effects(monkeypatch
         close=lambda: None,
     )
     monkeypatch.setattr(ordinary_apply, "inspect_plan", lambda *args, **kwargs: item)
-    monkeypatch.setattr(ordinary_apply, "remote", lambda *args, **kwargs: {"observation": item.observation})
+    monkeypatch.setattr(
+        ordinary_apply, "remote", lambda *args, **kwargs: {"observation": item.observation}
+    )
     approval = []
     original = cli._approve_disruption
     monkeypatch.setattr(
@@ -56,6 +58,18 @@ def test_ordinary_cli_reuses_original_approval_after_partial_effects(monkeypatch
             item.observation = {"runtime_pending": {"phase": phase, "operation": "e" * 32}}
             item.digest = "2" * 64
             monkeypatch.setattr(cli, "_approve_disruption", original)
+            with pytest.raises(cli.PreparationBlocked, match="approval-state-changed"):
+                cli._prepare_ordinary_apply(
+                    manager,
+                    None,
+                    (instance,),
+                    {"desired": "same"},
+                    supplied="f" * 64,
+                    dry_run=False,
+                    recreate=False,
+                    command_journal=journal,
+                    artifact_sha256="a" * 64,
+                )
             result = cli._prepare_ordinary_apply(
                 manager,
                 None,
@@ -82,6 +96,47 @@ def test_ordinary_cli_reuses_original_approval_after_partial_effects(monkeypatch
                 )
         finally:
             cli._VM_MANAGER_LIFETIMES.reset(token)
+
+
+def test_ordinary_noop_rejects_obsolete_approval_with_actionable_recovery(monkeypatch, tmp_path):
+    from nebius_vpngw.deploy.recovery import Invocation, advice
+
+    journal = CommandJournal("project", "gateway", root=tmp_path / "command")
+    instance = SimpleNamespace(hostname="gateway")
+    manager = SimpleNamespace(inspect_ordinary_targets=lambda _: {"gateway": ("compute", "target")})
+    item = SimpleNamespace(
+        noop=True,
+        effects=[],
+        digest="1" * 64,
+        observation={"runtime_pending": None},
+        manifest={"wheel_sha256": "a" * 64},
+        close=lambda: None,
+    )
+    monkeypatch.setattr(ordinary_apply, "inspect_plan", lambda *args, **kwargs: item)
+    with ExitStack() as stack:
+        token = cli._VM_MANAGER_LIFETIMES.set(stack)
+        try:
+            with pytest.raises(cli.PreparationBlocked, match="approval-state-changed") as caught:
+                cli._prepare_ordinary_apply(
+                    manager,
+                    None,
+                    (instance,),
+                    {},
+                    supplied="b" * 64,
+                    dry_run=False,
+                    recreate=False,
+                    command_journal=journal,
+                    artifact_sha256="a" * 64,
+                )
+        finally:
+            cli._VM_MANAGER_LIFETIMES.reset(token)
+    recovery = advice(
+        Invocation("apply", resume_options=("--approve-disruption", "b" * 64)), caught.value
+    )
+    assert recovery.reason_code == "approval-state-changed"
+    assert "--approve-disruption" not in recovery.resume_command
+    assert journal.snapshot() is None
+    assert "command_approval" not in item.manifest
 
 
 def test_ha_runtime_release_does_not_complete_parent_authority(monkeypatch):
