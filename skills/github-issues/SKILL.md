@@ -169,6 +169,10 @@ accepted maintainer decisions and evidence limitations.
   assignments, milestones, transfers, label rename/deletion, authentication
   changes, Git/PR actions, product edits or canonical-spec writes.
 
+Separately requested `being-fixed` progress labeling follows the explicit
+implementation-admission rule in [labels](references/labels.md); ordinary
+review or planning never starts a repair.
+
 Routine actions never edit this skill. Future implementation's canonical
 contract changes are handoffs to `maintain-project-specs`.
 

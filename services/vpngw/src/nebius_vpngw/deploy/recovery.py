@@ -358,6 +358,16 @@ class Recovery:
 # Only product-owned predicates select human explanations. Exception messages
 # may contain credentials or provider response bodies and never enter this map.
 GUEST_FAILURES = {
+    "handoff_import_failed": (
+        "The gateway could not import the streamed ordinary-to-HA handoff code.",
+        "Verify the selected artifact is complete, then resume the original apply operation.",
+        "An intact artifact and settled deployment writers are required before repair.",
+    ),
+    "handoff_execution_failed": (
+        "The gateway handoff process failed; the underlying cause is unknown.",
+        "Inspect the gateway journals and reconcile the original operation before retrying apply.",
+        "Establish the submitted operation's outcome and settle its writers before repair.",
+    ),
     "asset_retirement_unproven": (
         "Obsolete service asset ownership is unproven.",
         "Preserve the files and restore the completed predecessor manifest before retrying apply.",
@@ -397,6 +407,11 @@ GUEST_FAILURES = {
         "The gateway's local VPN runtime no longer passes verification.",
         "Inspect VPN service health and the retained operation, then resume apply or use repair.",
         "Establish the current package worker's outcome and exact retained VM ownership first.",
+    ),
+    "ordinary_route_state_invalid": (
+        "The gateway's saved local route state failed validation; ordinary upgrade cannot use it.",
+        "Inspect the saved software state, then review the separately confirmed apply --repair plan.",
+        "Repair must prove exact retained ownership and quiesce prior writers before rebuilding software state.",
     ),
     "final_artifact": (
         "The installed artifact or runtime differs from the approved deployment.",
@@ -614,6 +629,16 @@ CAUSES = {
         "Repair cannot broaden stateless firewall rules to establish quarantine access.",
     ),
     **SSH_CAUSES,
+    "ordinary-upgrade-required": (
+        "The retained ordinary gateway does not match the selected release artifact.",
+        "Run apply --convert-to-ha with the original ordinary configuration to upgrade and verify it first.",
+        "Use ordinary apply first; repair requires a diagnosed local software failure and its own confirmation.",
+    ),
+    "conversion-lifecycle-unavailable": (
+        "An HA command exists but its scoped lifecycle evidence is unavailable.",
+        "Restore the authoritative HA lifecycle and resume with its HA configuration.",
+        "Resolve the existing HA operation before any ordinary reconstruction.",
+    ),
     "gateway-release-newer": (
         "A gateway has a newer VPNGW release than the selected CLI release.",
         "Upgrade the CLI to that release or newer and rerun apply.",

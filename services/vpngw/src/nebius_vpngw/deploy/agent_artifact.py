@@ -14,6 +14,8 @@ import stat
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
+from contextvars import ContextVar
 from importlib import metadata
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -24,6 +26,20 @@ from packaging.version import Version
 SCHEMA = "nebius-vpngw/release-artifact-v1"
 RELEASE_ROOT = "https://github.com/nebius/nebius-ps-services/releases/download"
 LIMIT = 64 * 1024 * 1024
+
+_SELECTION: ContextVar[list[tuple[Path, str, str]] | None] = ContextVar(
+    "frozen_agent_selection", default=None
+)
+
+
+@contextmanager
+def frozen_selection():
+    """Keep one immutable release across composed apply phases in this invocation."""
+    token = _SELECTION.set([])
+    try:
+        yield
+    finally:
+        _SELECTION.reset(token)
 
 
 def failure(message: str):
@@ -235,6 +251,20 @@ def build_source(root: Path) -> Path:
 
 
 def resolve(project_root: Path | None) -> tuple[Path, str]:
+    selection = _SELECTION.get()
+    if selection is None:
+        return _resolve(project_root)
+    if not selection:
+        path, source = _resolve(project_root)
+        digest = hashlib.sha256(_read(path)).hexdigest()
+        selection.append((cache_wheel(path, expected=digest), source, digest))
+    path, source, digest = selection[0]
+    if hashlib.sha256(_read(path)).hexdigest() != digest:
+        raise failure("Selected agent artifact changed within this invocation")
+    return path, source
+
+
+def _resolve(project_root: Path | None) -> tuple[Path, str]:
     override = os.environ.get("VPNGW_AGENT_WHEEL")
     if "VPNGW_AGENT_WHEEL" in os.environ:
         if not override:

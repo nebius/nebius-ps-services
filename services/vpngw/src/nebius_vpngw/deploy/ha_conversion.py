@@ -61,6 +61,7 @@ def resolve(
     force: bool,
     dry_run: bool,
     region: str | None,
+    ordinary_prerequisite: Any = None,
     **kwargs: Any,
 ) -> Any:
     source_path = source_path.expanduser().absolute()
@@ -130,6 +131,14 @@ def resolve(
             or api._file_fingerprint(locator) != saved[1]
         ):
             raise ConversionFailure("conversion-record-changed")
+        if ordinary_prerequisite is not None:
+            ordinary_prerequisite(source_path, destination, identity)
+            if (
+                api._file_fingerprint(source_path) != source_fingerprint
+                or api._file_fingerprint(locator) != saved[1]
+                or api._file_fingerprint(destination) != candidate_fingerprint
+            ):
+                raise ConversionFailure("conversion-record-changed")
         if stat.S_IMODE(destination.stat().st_mode) != 0o600:
             if not force:
                 if context := CURRENT.get():
@@ -162,6 +171,9 @@ def resolve(
         force=force,
         dry_run=dry_run,
         region=region,
+        ordinary_prerequisite=(lambda: ordinary_prerequisite(source_path, destination, identity))
+        if ordinary_prerequisite is not None
+        else None,
         **kwargs,
     )
     if isinstance(effective, api.VMHACommandResult):

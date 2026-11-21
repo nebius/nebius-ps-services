@@ -51,11 +51,14 @@ class _ContextManagedFake:
 
 @pytest.fixture(autouse=True)
 def _admit_ordinary_conversion_trust(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Existing conversion tests exercise behavior after the trust prerequisite."""
+    """Wizard/publication tests start after verified ordinary prerequisites."""
 
     monkeypatch.setattr(
         "nebius_vpngw.cli._ordinary_vm_ha_conversion_trust_prerequisite",
         lambda _path, _source: None,
+    )
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.conversion_prerequisite.run", lambda *args, **kwargs: False
     )
 
 
@@ -903,7 +906,7 @@ def test_source_change_before_passive_reservation_blocks_authentication(
 
     assert result.exit_code == 1, result.output
     reserve.assert_not_called()
-    assert "conversion-failed-before-cloud-effects" in result.output
+    assert "conversion-source-changed" in result.output
     assert not (tmp_path / "ordinary.vm-ha.config.yaml").exists()
 
 
@@ -943,9 +946,14 @@ def test_source_change_during_wizard_blocks_candidate_publication(
     source.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")
     answers = "\n".join(_happy_answers(tmp_path)) + "\n"
 
+    def changing_wizard(*args, **kwargs):
+        converted = run_vm_ha_conversion_wizard(*args, **kwargs)
+        source.write_text(source.read_text() + "\n# concurrent edit\n")
+        return converted
+
     with (
         patch("nebius_vpngw.cli._vm_ha_wizard_streams_interactive", return_value=True),
-        patch("nebius_vpngw.cli._file_fingerprint", return_value=None),
+        patch("nebius_vpngw.cli.run_vm_ha_conversion_wizard", side_effect=changing_wizard),
     ):
         result = CliRunner().invoke(
             app,

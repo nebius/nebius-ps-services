@@ -5,6 +5,11 @@ or close issues with verified justification. Selection is independent from the
 action. Default review publishes concise findings and scoped labels without
 creating plans or changing issue state.
 
+When implementation is separately authorized and underway, an explicit request
+to mark the selected issues `being-fixed` may create/reuse that progress label.
+Review and planning alone never apply it or authorize implementation. The label
+remains until its lifecycle owner verifies merged resolution or ends the repair.
+
 ## Usage
 
 ```text

@@ -294,6 +294,7 @@ def execute(
     repair: Callable[[dict, dict], None],
     finish: Callable[[dict], None],
     continue_unsubmitted: Callable[[], None] | None = None,
+    verify_observation: Callable[[dict], None] | None = None,
 ) -> None:
     """Recover one pending lifecycle effect without replaying completed siblings.
 
@@ -332,22 +333,29 @@ def execute(
     elif pending is not None and pending["stage"] != stage:
         raise RuntimeError("another activation stage has an unresolved repair")
 
-    def bounded_observation() -> dict:
+    def current_observation() -> dict:
         from .vm_ha_cloud import vm_ha_observation_budget
 
         try:
             with vm_ha_observation_budget(seconds=20, clock=recovery.clock):
-                return observe(recovery.clock() + 20)
+                observation = observe(recovery.clock() + 20)
         except TimeoutError as error:
             raise ObservationUnavailable(
                 "activation-observation", "observation-deadline-expired"
             ) from error
+        # A fresh verification may observe an admitted guest phase. Its owner
+        # retains the existing per-request bounds and cancellation semantics;
+        # the completed status read must not impose an effect deadline on it.
+        # Verification still precedes every success or repair decision below.
+        if verify_observation is not None:
+            verify_observation(observation)
+        return observation
 
     while True:
         # Each observation is bounded independently. Elapsed time grants no new
         # effect and never cancels an existing owner or consumes an attempt.
         try:
-            observation = bounded_observation()
+            observation = current_observation()
         except Exception as error:
             if unavailable_observation(error) is not None:
                 if first is not None:
@@ -417,7 +425,7 @@ def execute(
         try:
             repair(attempt, observation)
             effect(None)
-            verified = bounded_observation()
+            verified = current_observation()
             if verified.get("complete") is not True:
                 raise RuntimeError("activation repair postconditions remain unproven")
         except Exception as error:

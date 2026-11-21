@@ -39,8 +39,9 @@ overwritten or silently assigned a different meaning.
 
 ## Missing definitions allowed
 
-Create only a needed definition in this table or the relationship family below,
-with the stated description and six-digit color. Reuse matching definitions;
+Create only a needed definition in this table, the relationship family below,
+or the explicitly requested progress label below, with its stated description
+and six-digit color. Reuse matching definitions;
 do not recolor, rename, delete or archive existing labels. Descriptions are
 public-safe and under GitHub's 100-character limit.
 
@@ -61,8 +62,30 @@ public-safe and under GitHub's 100-character limit.
 | `review:deferred` | Valid work is deferred with explicit reconsideration conditions. | `fef2c0` |
 | `review:not-planned` | Evidence or accepted policy rules out the requested work. | `e4e669` |
 
-A missing severity, priority, ownership or implementation-status label remains a
-recommendation. No arbitrary new label families are authorized.
+A missing severity, priority or ownership label remains a recommendation.
+No arbitrary new label families are authorized.
+
+## Separately authorized implementation progress
+
+`being-fixed` describes work already admitted by a separate implementation owner;
+review, create-plan, eligibility and a saved plan never imply that admission.
+Apply it only when the user explicitly requests this progress label and the
+selected issue's repair is actually underway, or an authorized lifecycle owner
+requests it. Do not implement work from this skill or require another approval
+when the same task already authorized implementation and labeling.
+
+Reuse a definition that means an authorized repair is underway and the issue
+stays open until the fix is merged and verified on the default branch. If absent,
+that explicit progress-label request permits creating `being-fixed` with color
+`D4C5F9` and description `Authorized repair underway; keep open until merged and verified on the default branch.`
+A conflicting definition remains pending. Check automation, add without replacing
+other labels, and independently read back the result. This label never proves
+resolution or grants implementation, publication or closure authority.
+
+Leave it while admitted work remains active. Remove only this progress label
+when the authorized owner verifies merged resolution and closure, or explicitly
+ends the repair; preserve unrelated labels. A stopped or blocked run must report
+its actual progress rather than claiming completion.
 
 ## Relationship groups
 

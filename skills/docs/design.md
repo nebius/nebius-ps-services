@@ -10956,7 +10956,7 @@ restricted runner. FEAT-068 separately verifies unused LFS configuration with
 sentinel executables; actual LFS content remains unsupported.
 
 <!-- /FEATURE: FEAT-052 -->
-<!-- FEATURE: FEAT-053 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=7 -->
+<!-- FEATURE: FEAT-053 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=8 -->
 ### FEAT-053: GitHub issue selection, review, planning and closure
 
 #### Requirements Covered
@@ -10972,6 +10972,16 @@ research, classifications, project ownership and saved-plan delivery contracts.
 Existing target edits are the baseline; unrelated work remains untouched.
 
 #### Design Details
+
+Version 8 admits only an explicitly requested progress-label effect after a
+separate owner has authorized and begun implementation. Reuse `being-fixed`
+when its meaning agrees; create the missing definition with the color and
+public-safe description in the label policy. A conflicting definition stays
+pending. Check automation, add without replacing other labels, and independently
+read back the result. Leave the label while repair remains active; only the
+lifecycle owner removes it after verified merged closure or an explicit end to
+repair. This introduces no implementation, PR or closure authority into triage.
+Cover admitted progress and review-only rejection in quality and trigger cases.
 
 Version 7 enables natural-language selection through a trigger-focused
 description, Codex allow_implicit_invocation=true and Claude default model
@@ -11099,6 +11109,11 @@ checks nor generated responses establish live closure behavior.
 
 #### Implementation Evidence
 
+Version 8 aligns core instructions, label policy, local and catalog README,
+Unreleased notes and two added quality/trigger definitions. The complete skill
+has 132 quality definitions and 49 trigger cases. No runtime or public action
+was added; the existing authorization and independent readback owners remain.
+
 Version 7 removes obsolete explicit-only description/policy and Claude
 disable-model-invocation while preserving Codex allow_implicit_invocation=true.
 Core and effect-bearing references normalize natural intent to existing actions
@@ -11115,6 +11130,13 @@ plugin manifests, catalog, usage docs and Unreleased notes use the new interface
 No executable parser, scheduler or product runtime was introduced.
 
 #### Verification Evidence
+
+Version 8 passed scoped Codex/Claude structure checks, actual pinned npx
+skills discovery, copied payload parity, repeat installation and isolation,
+Markdown and whitespace checks. The five changed payload files were installed
+through the scoped Codex installer and independently matched to source. Native
+quality execution lacked clean-runner authentication; definitions and installed
+parity do not establish fresh-session activation or executed model quality.
 
 Version 7: the captured working-byte baseline reproduces the Codex policy
 contradiction. Corrected core standard, repository Codex (stateful profile)

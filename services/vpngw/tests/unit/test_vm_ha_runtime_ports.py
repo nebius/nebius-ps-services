@@ -55,6 +55,7 @@ from nebius_vpngw.agent.vm_ha_controller import (
     DataPlaneMode,
     LocalReadiness,
 )
+from nebius_vpngw.deploy.route_manager import NebiusSDKRouteBackend
 from nebius_vpngw.deploy.vm_ha_cloud import (
     AllocationObservation,
     AllocationOwner,
@@ -74,6 +75,7 @@ from nebius_vpngw.deploy.vm_ha_routes import (
     RouteOccupancySnapshot,
     RouteReconciliationContext,
     RouteReconciliationReceipt,
+    RouteReplacementCompensated,
     RouteRollbackSnapshot,
     RouteTransitionState,
     VerifiedAllocationOwnership,
@@ -3163,6 +3165,180 @@ def test_route_plan_retypes_exact_owned_migration_route_for_new_generation(
     ports.close()
 
 
+@pytest.mark.parametrize("desired_kind", [ManagedRouteKind.STATIC, ManagedRouteKind.BGP])
+@pytest.mark.parametrize("outcome", ["complete", "compensated", "ledger-crash"])
+def test_route_kind_change_preserves_cloud_authority_until_replacement(
+    tmp_path: Path, monkeypatch, desired_kind: ManagedRouteKind, outcome: str
+) -> None:
+    config = _runtime_config(tmp_path)
+    old_kind = (
+        ManagedRouteKind.BGP if desired_kind is ManagedRouteKind.STATIC else ManagedRouteKind.STATIC
+    )
+    manifest_key = "static_routes" if desired_kind is ManagedRouteKind.STATIC else "bgp_policy"
+    static_json = json.dumps(
+        [{"connection": "site-a", "remote_prefixes": ["10.20.0.0/16"]}],
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    static_digest = hashlib.sha256(static_json.encode()).hexdigest()
+    config["generation"]["logical_manifests"][manifest_key + "_json"] = static_json
+    config["generation"]["digests"][manifest_key] = static_digest
+    config["readiness"]["digests"][manifest_key] = static_digest
+    config["runtime_binding"][manifest_key + "_digest"] = static_digest
+    target = VMHARouteTarget.model_validate(config["runtime_binding"]["route_targets"][0])
+    config["runtime_binding"]["migration_routes"] = [
+        {
+            "allocation_id": "allocation-a",
+            "name": "vpngw-10.20.0.0-16",
+            "prefix": "10.20.0.0/16",
+            "resource_revision": "7",
+            "route_id": "route-old",
+            "route_target": target.model_dump(mode="json"),
+        }
+    ]
+
+    if desired_kind is ManagedRouteKind.BGP:
+        config["gateway"] = {"local_prefixes": ["10.96.0.0/13"]}
+        config["connections"] = [
+            {
+                "name": "site-a",
+                "routing_mode": "bgp",
+                "tunnels": [
+                    {"name": "peer", "inner_remote_ip": "169.254.10.2", "ha_role": "active"}
+                ],
+            }
+        ]
+
+    class CloudAuthorityBackend(NebiusSDKRouteBackend):
+        def __init__(self) -> None:
+            super().__init__(None)
+            self.route = SimpleNamespace(
+                metadata=SimpleNamespace(
+                    id="route-old",
+                    name="vpngw-10.20.0.0-16",
+                    parent_id=target.route_table_id,
+                    resource_version="7",
+                    description="",
+                    labels=self._authority_labels(
+                        cluster_id="cluster-a",
+                        allocation_id="allocation-a",
+                        route_target=target,
+                        route_kind=old_kind,
+                    ),
+                ),
+                spec=SimpleNamespace(
+                    destination=SimpleNamespace(cidr="10.20.0.0/16"),
+                    next_hop=SimpleNamespace(allocation=SimpleNamespace(id="allocation-a")),
+                ),
+            )
+
+        def verify_target(self, observed: VMHARouteTarget) -> None:
+            assert observed == target
+
+        def _raw_routes(self, table: str) -> tuple[object, ...]:
+            assert table == target.route_table_id
+            return (self.route,)
+
+        def apply_mutation(self, mutation: RouteMutation) -> str:
+            # The API effect is simulated; all planning and cloud/local authority
+            # comparisons use the actual SDK backend, not a ledger-derived fake.
+            if self.route.metadata.id == "route-new":
+                return "route-new"
+            assert mutation.rollback == self._rollback_snapshot(self.route, target)
+            assert mutation.kind is RouteMutationKind.REPLACE
+            if outcome == "compensated":
+                self.route.metadata.id = "route-restored"
+                raise RouteReplacementCompensated("route-restored")
+            self.route.metadata.id = "route-new"
+            self.route.metadata.labels = self._authority_labels(
+                cluster_id=mutation.cluster_id,
+                allocation_id=mutation.allocation_id,
+                route_target=target,
+                route_kind=mutation.route_kind,
+            )
+            return "route-new"
+
+    backend = CloudAuthorityBackend()
+    ports = build_runtime_ports(
+        config,
+        state_dir=tmp_path / "state",
+        replay_store=MemoryReplayStore(),
+        sdk_factory=lambda **_kwargs: FakeSDK(),
+        credential_bundle_factory=_fake_credential_bundle,
+        route_backend_factory=lambda _sdk: backend,
+        data_plane_factory=FakeDataPlane,
+    )
+    if desired_kind is ManagedRouteKind.BGP:
+        observed = replace(
+            ports.routes.data_plane.observe(),
+            configured_bgp_sessions=frozenset({"peer"}),
+            established_bgp_sessions=frozenset({"peer"}),
+            learned_bgp_prefixes=frozenset({"10.20.0.0/16"}),
+            usable_xfrm_prefixes=frozenset({"10.20.0.0/16"}),
+            observed_bgp_policy_digest=ports.routes.expected_import_policy_digest,
+        )
+        monkeypatch.setattr(ports.routes.data_plane, "observe", lambda: observed)
+    old_owner = ManagedRouteOwnership("cluster-a", old_kind, target)
+    ports.routes.store.save_ledger({"route-old": old_owner})
+    ownership = VerifiedAllocationOwnership("cluster-a", "node-a", "node-a", "allocation-a", "7")
+
+    plan = ports.routes._plan(ownership, RouteTransitionState(0.0), prepare_authority=True)
+
+    assert plan.blocked_reasons == ()
+    assert len(plan.mutations) == 1
+    mutation = plan.mutations[0]
+    assert mutation.kind is RouteMutationKind.REPLACE
+    assert mutation.route_kind is desired_kind
+    assert ports.routes.store.load_ledger() == {"route-old": old_owner}
+    assert backend.route.metadata.labels[backend._AUTHORITY_KIND_LABEL] == old_kind.value
+    context = RouteReconciliationContext(
+        operation_id="route-op",
+        cluster_id="cluster-a",
+        owner_node_id="node-a",
+        allocation_id="allocation-a",
+        ownership_epoch="7",
+        generation_id="a" * 64,
+        configuration_digest="a" * 64,
+        static_routes_digest=ports.binding.static_routes_digest,
+        bgp_policy_digest=ports.binding.bgp_policy_digest,
+        ownership_incarnation=2,
+    )
+    ports.routes.store.save_pending_mutation(mutation, context)
+    if outcome == "compensated":
+        with pytest.raises(RuntimeError, match="exactly compensated"):
+            ports.routes._apply_mutation(mutation, ports.routes.store.load_ledger())
+        assert ports.routes.store.load_ledger() == {"route-restored": old_owner}
+        assert ports.routes.store.load_pending_mutation() is not None
+        assert backend.route.metadata.labels[backend._AUTHORITY_KIND_LABEL] == old_kind.value
+        # Replay after committing the restored identity retains the predecessor kind.
+        ports.routes._record_compensated_route(
+            mutation, "route-restored", ports.routes.store.load_ledger()
+        )
+        assert len(backend.list_routes(target, ports.routes.store.load_ledger())) == 1
+        ports.close()
+        return
+    if outcome == "ledger-crash":
+        with monkeypatch.context() as patch:
+
+            def crash(_ledger):
+                raise OSError("test ledger crash")
+
+            patch.setattr(ports.routes.store, "save_ledger", crash)
+            with pytest.raises(OSError, match="test ledger crash"):
+                ports.routes._apply_mutation(mutation, ports.routes.store.load_ledger())
+        assert ports.routes.store.load_ledger() == {"route-old": old_owner}
+        assert ports.routes.store.load_pending_mutation() is not None
+    ports.routes._apply_mutation(mutation, ports.routes.store.load_ledger())
+
+    assert ports.routes.store.load_ledger() == {
+        "route-new": ManagedRouteOwnership("cluster-a", desired_kind, target)
+    }
+    assert ports.routes.store.load_pending_mutation() is None
+    assert backend.route.metadata.labels[backend._AUTHORITY_KIND_LABEL] == desired_kind.value
+    assert ports.routes._plan(ownership, RouteTransitionState(0.0)).mutations == ()
+    ports.close()
+
+
 def test_route_plan_retires_only_backend_proven_absent_ledger_identity(
     tmp_path: Path,
 ) -> None:
@@ -5314,7 +5490,12 @@ def test_compensated_route_replacement_requires_a_new_controller_operation(
     ports.close()
 
 
-def test_replacement_recovery_rejects_a_different_ledger_kind(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "mismatch", ["missing-labels", "allocation", "managed", "cluster", "target", "kind"]
+)
+def test_replacement_recovery_rejects_a_different_ledger_kind(
+    tmp_path: Path, mismatch: str
+) -> None:
     ports = build_runtime_ports(
         _runtime_config(tmp_path),
         state_dir=tmp_path / "state",
@@ -5325,14 +5506,30 @@ def test_replacement_recovery_rejects_a_different_ledger_kind(tmp_path: Path) ->
         data_plane_factory=FakeDataPlane,
     )
     target = ports.binding.route_targets[0]
+    labels = NebiusSDKRouteBackend._authority_labels(
+        cluster_id="cluster-a",
+        allocation_id="allocation-a",
+        route_target=target,
+        route_kind=ManagedRouteKind.BGP,
+    )
+    if mismatch == "missing-labels":
+        labels = {}
+    elif mismatch != "allocation":
+        key = {
+            "managed": NebiusSDKRouteBackend._AUTHORITY_MANAGED_LABEL,
+            "cluster": NebiusSDKRouteBackend._AUTHORITY_CLUSTER_LABEL,
+            "target": NebiusSDKRouteBackend._AUTHORITY_TARGET_LABEL,
+            "kind": NebiusSDKRouteBackend._AUTHORITY_KIND_LABEL,
+        }[mismatch]
+        labels[key] = "foreign"
     rollback = RouteRollbackSnapshot(
         route_id="route-old",
         resource_version="7",
         name="customer-route",
-        labels=(),
+        labels=tuple(sorted(labels.items())),
         description="",
         prefix="10.0.0.0/24",
-        allocation_id="old-allocation",
+        allocation_id="old-allocation" if mismatch == "allocation" else "allocation-a",
         route_target=target,
     )
     mutation = RouteMutation(

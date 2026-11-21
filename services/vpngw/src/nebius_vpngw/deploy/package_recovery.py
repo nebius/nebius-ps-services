@@ -17,15 +17,21 @@ COORDINATED: ContextVar[bool] = ContextVar("package_pair_coordinated", default=F
 
 def diagnosis_fingerprint(observations: list[dict]) -> str:
     """A restarted transport is not evidence that the failed package work changed."""
-    return digest([
-        {
-            **item,
-            "result": {key: value for key, value in (item["result"] or {}).items()
-                       if key != "generation"},
-        }
-        if item["state"] == "READY_TO_CONTINUE" else item
-        for item in observations
-    ])
+    return digest(
+        [
+            {
+                **item,
+                "result": {
+                    key: value
+                    for key, value in (item["result"] or {}).items()
+                    if key != "generation"
+                },
+            }
+            if item["state"] == "READY_TO_CONTINUE"
+            else item
+            for item in observations
+        ]
+    )
 
 
 def lifecycle_root(state: Any) -> Path:
@@ -75,9 +81,8 @@ def prepare(
             REPAIR.reset(token)
 
     def observe(_deadline: float) -> dict:
-        from .vm_ha_package import verify_prepared
-
         observations = []
+        prepared = []
         for ssh, plan, local, expected in members():
             holder = (handoffs or {}).get(plan.instance.hostname)
             if holder is not None:
@@ -94,20 +99,10 @@ def prepare(
                         "phase": phase_digest(request),
                     },
                 )
-                if observed["state"] == "PREPARED":
-                    holder.package_receipt = observed["result"]
-                    holder.verify_prepared()
             else:
                 observed = observe_guarded(ssh, plan, local, expected)
-                if observed["state"] == "PREPARED":
-                    verify_prepared(
-                        ssh,
-                        plan,
-                        local,
-                        checkpoint_conversion=expected,
-                        convert=False,
-                        allow_new_boot=True,
-                    )
+            if observed["state"] == "PREPARED":
+                prepared.append((ssh, plan, local, expected, holder, observed["result"]))
             observations.append(observed)
         states = [item["state"] for item in observations]
         if not states or "BLOCKED" in states:
@@ -117,6 +112,7 @@ def prepare(
             state in {"PREPARED", "READY_TO_CONTINUE", "NOT_SUBMITTED"} for state in states
         )
         return {
+            "prepared": prepared,
             "complete": complete,
             "settled": settled,
             "unsubmitted": (
@@ -132,6 +128,26 @@ def prepare(
             else None,
         }
 
+    def verify(observation: dict) -> None:
+        from .vm_ha_package import verify_prepared
+
+        # Keep each exact prepared member bound to the preceding status sample.
+        # The retained worker's fresh verification is supervised work, not a
+        # pure status read, and may outlive that read's cumulative allowance.
+        for ssh, plan, local, expected, holder, receipt in observation["prepared"]:
+            if holder is not None:
+                holder.package_receipt = receipt
+                holder.verify_prepared()
+            else:
+                verify_prepared(
+                    ssh,
+                    plan,
+                    local,
+                    checkpoint_conversion=expected,
+                    convert=False,
+                    allow_new_boot=True,
+                )
+
     def repair(_attempt: dict, _observation: dict) -> None:
         nonlocal repairing
         repairing = True
@@ -144,6 +160,7 @@ def prepare(
         repair=repair,
         finish=lambda _: None,
         continue_unsubmitted=lambda: run(None),
+        verify_observation=verify,
     )
 
 

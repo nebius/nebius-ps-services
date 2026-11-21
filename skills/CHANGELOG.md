@@ -4,6 +4,11 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Allow explicitly requested `being-fixed` progress labeling for repairs already
+  authorized and underway. Define scoped creation, additive updates, independent
+  readback and owner-controlled removal; review and planning alone never start
+  implementation or prove resolution.
+
 - Allow implicit `github-issues` selection for concrete issue assessment,
   triage, planning and closure requests. Align the description, invocation
   policy, Claude frontmatter and trigger evals with the existing Codex policy;

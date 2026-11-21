@@ -3016,6 +3016,14 @@ class BoundRouteRuntime:
                         ledger[migration.route_id] = expected
                         changed = True
                     continue
+                if recorded.kind is not expected.kind and self.backend.verify_migration_successor(
+                    migration, recorded
+                ):
+                    # Existing HA cloud labels still prove the old kind. Keep
+                    # that authority until the normal replacement transaction
+                    # publishes and verifies its successor; eagerly retyping the
+                    # ledger would make every subsequent cloud read conflict.
+                    continue
                 if not self.backend.verify_migration_route(migration):
                     raise RuntimeError("approval-bound migration route changed before replacement")
                 if recorded.kind is not expected.kind:
@@ -3165,22 +3173,17 @@ class BoundRouteRuntime:
     ) -> None:
         if not mutation.route_id:
             raise RuntimeError("compensated route replacement has no original identity")
-        expected = ManagedRouteOwnership(
-            cluster_id=mutation.cluster_id,
-            kind=mutation.route_kind,
-            route_target=mutation.route_target,
-        )
         original = ledger.get(mutation.route_id)
         restored = ledger.get(restored_route_id)
         if restored_route_id == mutation.route_id:
-            if original != expected:
+            if not self._mutation_predecessor_matches(mutation, original):
                 raise RuntimeError("compensated route lacks exact durable management authority")
             return
         if original is None:
-            if restored != expected:
+            if not self._mutation_predecessor_matches(mutation, restored):
                 raise RuntimeError("compensated route ledger recovery is ambiguous")
             return
-        if original != expected or restored is not None:
+        if not self._mutation_predecessor_matches(mutation, original) or restored is not None:
             raise RuntimeError("compensated route ledger recovery is ambiguous")
         del ledger[mutation.route_id]
         ledger[restored_route_id] = original
@@ -3289,6 +3292,36 @@ class BoundRouteRuntime:
             )
         return None
 
+    @staticmethod
+    def _mutation_predecessor_matches(
+        mutation: RouteMutation, recorded: ManagedRouteOwnership | None
+    ) -> bool:
+        if recorded is None or (
+            recorded.cluster_id != mutation.cluster_id
+            or recorded.route_target != mutation.route_target
+        ):
+            return False
+        if recorded.kind is mutation.route_kind:
+            return True
+        rollback = mutation.rollback
+        # A kind change replaces an existing HA route. Its rollback snapshot
+        # must prove the old cloud authority; the backend rechecks that exact
+        # snapshot before effects and restores it on compensation.
+        return (
+            mutation.kind is RouteMutationKind.REPLACE
+            and rollback is not None
+            and rollback.allocation_id == mutation.allocation_id
+            and all(
+                dict(rollback.labels).get(key) == value
+                for key, value in NebiusSDKRouteBackend._authority_labels(
+                    cluster_id=recorded.cluster_id,
+                    allocation_id=rollback.allocation_id,
+                    route_target=recorded.route_target,
+                    route_kind=recorded.kind,
+                ).items()
+            )
+        )
+
     def _apply_mutation(
         self, mutation: RouteMutation, ledger: dict[str, ManagedRouteOwnership]
     ) -> None:
@@ -3303,11 +3336,7 @@ class BoundRouteRuntime:
                 ledger,
             ):
                 return
-            if recorded is None or (
-                recorded.cluster_id != mutation.cluster_id
-                or recorded.route_target != mutation.route_target
-                or recorded.kind is not mutation.route_kind
-            ):
+            if not self._mutation_predecessor_matches(mutation, recorded):
                 raise RuntimeError("route mutation lacks exact durable management authority")
         protection = getattr(self.data_plane, "destination_protection", None)
         if protection is not None and mutation.kind is not RouteMutationKind.DELETE:

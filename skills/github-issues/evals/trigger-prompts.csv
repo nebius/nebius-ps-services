@@ -46,3 +46,5 @@ implicit-close,true,Review GitHub issue 17 in example-org/widget and close it if
 implicit-review-no-plans,true,"Investigate this product GitHub backlog and label confirmed bugs. Do not post comments, create plans or close anything."
 implicit-source-refactor,false,Fix the github-issues skill so its implicit invocation metadata and validator expectations agree; do not triage issues.
 implicit-advice-only,false,Explain how GitHub issue labels can help organize a backlog without assessing or changing any real issues.
+explicit-admitted-progress,true,Use $github-issues to mark issue 17 being-fixed while the separately authorized repair is underway.
+progress-label-explanation,false,Explain what being-fixed means; do not change issues or implement anything.

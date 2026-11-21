@@ -316,6 +316,68 @@ def test_stopped_ordinary_repair_admission_does_not_require_preboot_ssh(monkeypa
     assert result.intent["targets"][0]["compute"] == "vm-a"
 
 
+@pytest.mark.parametrize("pin,changed", [(True, False), (False, False), (True, True)])
+def test_ordinary_repair_reuses_only_an_existing_pin_bound_to_the_retained_vm(
+    monkeypatch, tmp_path, pin, changed
+):
+    from nebius_vpngw.deploy import ssh_policy
+    from nebius_vpngw.deploy.recovery import SSHIdentityUnavailable
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for key in (ssh_policy.KNOWN_HOSTS_ENV, ssh_policy.HOST_KEYS_DIR_ENV):
+        monkeypatch.delenv(key, raising=False)
+    name, address = "gateway-0", "192.0.2.1"
+    directory = tmp_path / ".ssh"
+    directory.mkdir(mode=0o700)
+    _, kind, data = ssh_policy._generate_ed25519_host_key(name)
+    known = directory / "known_hosts"
+    known.write_text(f"{address} {kind} {data}\n" if pin else "")
+    known.chmod(0o600)
+    original = known.read_bytes()
+    scope = ssh_policy.VMHASSHTrustScope(
+        "tenant-a", "project-a", "region-a", "gateway", "ordinary-v1"
+    )
+    retained = {"compute": "vm-a", "project": "project-a", "disk": "disk-a", "nics": []}
+
+    def binding():
+        if changed:
+            raise RuntimeError("Retained identity changed")
+
+    manager = SimpleNamespace(
+        project_id="project-a",
+        _management_key_path=None,
+        discover_ordinary_gateway_members=lambda _: {name: address},
+        _ordinary_ssh_preflight_snapshot={name: (object(), address)},
+        ordinary_ssh_trust_bindings=lambda *a, **kw: {name: lambda: None},
+        recover_ordinary_ssh_host_keys=lambda *a, **kw: {},
+    )
+    monkeypatch.setattr(repair_apply, "retained_binding", lambda _: retained)
+    monkeypatch.setattr(repair_apply.repair_ssh, "bindings", lambda *a: {name: binding})
+    monkeypatch.setattr(cli, "_ordinary_ssh_trust_scope", lambda *a, **kw: scope)
+    monkeypatch.setattr(repair_apply, "SSHPush", lambda **kw: SimpleNamespace(**kw))
+    wheel = tmp_path / "release.whl"
+    wheel.write_bytes(b"frozen-artifact")
+    args = dict(
+        manager=manager,
+        plan=SimpleNamespace(vm_ha=None, gateway_group=SimpleNamespace(name="gateway")),
+        local={"gateway_group": {}},
+        path=tmp_path / "config.yaml",
+        instances=(SimpleNamespace(hostname=name, config_yaml="selected-config"),),
+        wheel=wheel,
+    )
+    if pin and not changed:
+        result = repair_apply.inspect(**args)
+        policy = result.ssh.ssh_policy
+        assert data in policy.known_hosts_file.read_text()
+        assert policy.identities == ()
+        assert policy.managed_action == "migrate"
+    else:
+        with pytest.raises((SSHIdentityUnavailable, RuntimeError)):
+            repair_apply.inspect(**args)
+    assert known.read_bytes() == original
+    assert not (directory / "nebius-vpngw" / scope.digest).exists()
+
+
 def test_dependency_tags_are_computed_for_guest_not_controller():
     value = repair_apply.dependency_environment(
         {

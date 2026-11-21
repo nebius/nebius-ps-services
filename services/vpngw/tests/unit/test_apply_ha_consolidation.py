@@ -640,6 +640,9 @@ def test_repeat_conversion_uses_current_ha_credentials_not_obsolete_source(
     monkeypatch.delenv("OLD_CONVERSION_PSK")
     monkeypatch.setenv("NEW_CONVERSION_PSK", "fixture-only-after-rotation")
     observed = _inspection(_snapshot(overall="HEALTHY", action="none"))
+    # This test models an established HA gateway after credential rotation;
+    # candidate existence alone no longer establishes that ownership.
+    monkeypatch.setattr("nebius_vpngw.deploy.conversion_prerequisite.ha_owns", lambda *args: True)
     calls = []
     monkeypatch.setattr(cli, "VMHAApplyLock", lambda **kw: _Lock(calls))
 

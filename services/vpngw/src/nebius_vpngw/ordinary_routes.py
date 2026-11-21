@@ -43,8 +43,17 @@ def digest(value: Any) -> str:
     return operations.digest(value)
 
 
+class RouteStateInvalid(RuntimeError):
+    """The saved local route state cannot authorize ordinary convergence."""
+
+    def __init__(self) -> None:
+        super().__init__("ordinary_route_state_invalid")
+
+
 def require(condition: bool, code: str = "ordinary_route_ownership_unverified") -> None:
     if not condition:
+        if code == "ordinary_route_state_invalid":
+            raise RouteStateInvalid()
         raise RuntimeError(code)
 
 

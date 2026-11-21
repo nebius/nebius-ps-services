@@ -353,7 +353,8 @@ class OrdinaryCloudRoutes:
             record["snapshot"]["destination"] for record in journal.inventory().values()
         )
         absence = self.absence.observe(identity, policy, learned, admitted)
-        pending = journal.transaction()
+        previous = journal.snapshot()
+        pending = previous["transaction"] if previous else None
         if pending and pending["phase"] == "pending":
             plan = pending["plan"]
             if plan is None:
@@ -364,6 +365,29 @@ class OrdinaryCloudRoutes:
                 or plan["options"].get("routing_admission") != admission
             ):
                 raise RuntimeError("Pending runtime route effect belongs to another binding")
+            # An interrupted tick can publish a withdrawal plan before any
+            # cloud intent. Fresh BGP evidence may invalidate that withdrawal.
+            # Retain every receipt-bearing plan; only an effect-free predecessor
+            # can be archived and selected again under current runtime authority.
+            withdrawals = tuple(plan["requests"].values())
+            if (
+                not pending["operations"]
+                and not pending["verified"]
+                and withdrawals
+                and all(
+                    item["type"] == "DeleteRouteRequest" and item["reason"] == "bgp-withdrawn"
+                    for item in withdrawals
+                )
+                and any(
+                    not absence.admits(policy, learned, item["before"]["destination"])
+                    for item in withdrawals
+                )
+            ):
+                with journal:
+                    observe()
+                    journal.retire_unsubmitted(previous)
+                pending = None
+        if pending and pending["phase"] == "pending":
             approval = pending["approval"]
         else:
             plan = inspect(

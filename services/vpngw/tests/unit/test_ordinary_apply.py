@@ -4,6 +4,7 @@ import base64
 import copy
 import fcntl
 import hashlib
+import io
 import json
 import os
 import re
@@ -38,12 +39,13 @@ def test_package_manifest_retains_all_canonical_networking_assets(release_wheel,
     assert set(manifest["assets"]) == canonical
     assert "/etc/systemd/system/nebius-vpngw-underlay.service" in canonical
     previous = {
-        "phase": "complete", "operation": "a" * 32,
-        "manifest": {"wheel_sha256": "b" * 64,
-                     "assets": {path: {} for path in canonical}},
+        "phase": "complete",
+        "operation": "a" * 32,
+        "manifest": {"wheel_sha256": "b" * 64, "assets": {path: {} for path in canonical}},
     }
     assert runtime_migration.asset_retirement(manifest, previous) == {
-        "predecessor": None, "removals": {},
+        "predecessor": None,
+        "removals": {},
     }
 
 
@@ -266,6 +268,52 @@ def empty_routes():
         "obligations": [],
         "kernel": {"boot": "boot", "links": [], "routes": []},
     }
+
+
+@pytest.mark.parametrize("package", ["matched", "older", "missing"])
+@pytest.mark.parametrize("verify_runtime", [False, True])
+def test_inspection_never_launches_an_unmatched_installed_agent(
+    monkeypatch, tmp_path, ordinary_operation_guest, package, verify_runtime
+):
+    # An older agent can ignore --ordinary-apply and start its daemon. Inspection
+    # must use the streamed reader until the selected package is actually present.
+    installed = tmp_path / "agent.py"
+    installed.write_bytes(b"selected" if package == "matched" else b"previous")
+    distribution = SimpleNamespace(version="0.6.1", locate_file=lambda _: installed)
+
+    def find_distribution(_name):
+        if package == "missing":
+            raise ordinary_remote.metadata.PackageNotFoundError
+        return distribution
+
+    monkeypatch.setattr(ordinary_remote.metadata, "distribution", find_distribution)
+    config = tmp_path / "config.yaml"
+    config.write_text("gateway: {}\nconnections: []\n")
+    boot = tmp_path / "boot"
+    boot.write_text("current-boot")
+    monkeypatch.setattr(ordinary_remote, "CONFIG", config)
+    monkeypatch.setattr(ordinary_remote, "BOOT", boot)
+    monkeypatch.setattr(ordinary_remote, "ROUTING_LOCK", tmp_path / "routing.lock")
+    monkeypatch.setattr(ordinary_remote, "DEADLINE", time.monotonic() + 30)
+    monkeypatch.setattr(ordinary_remote, "command", lambda *a, **kw: (0, "active"))
+    monkeypatch.setattr(
+        ordinary_remote.routes.RouteStore, "snapshot", lambda *a, **kw: empty_routes()
+    )
+    receipt = Mock(return_value={"package_identity": "selected"})
+    monkeypatch.setattr(ordinary_remote, "agent_receipt", receipt)
+    observed = ordinary_remote.inspect(
+        {
+            "files": {"nebius_vpngw/agent/main.py": ordinary_remote.sha(b"selected")},
+            "assets": {},
+            "package_identity": "selected",
+            "route_projection": None,
+        },
+        verify_runtime=verify_runtime,
+    )
+    eligible = package == "matched" and verify_runtime
+    assert observed["verified"] is eligible
+    assert receipt.call_count == int(eligible)
+    assert observed["route_ownership"] == empty_routes()
 
 
 @pytest.fixture
@@ -1210,16 +1258,25 @@ def test_fresh_install_owns_transaction_state_without_release_identity_drift(
     monkeypatch.setattr(
         release_identity.importlib.metadata,
         "distributions",
-        lambda: [
-            SimpleNamespace(metadata={"Name": "nebius-vpngw"}, version=tx.state["package_version"])
-        ] if tx.state["package_version"] else [],
+        lambda: (
+            [
+                SimpleNamespace(
+                    metadata={"Name": "nebius-vpngw"}, version=tx.state["package_version"]
+                )
+            ]
+            if tx.state["package_version"]
+            else []
+        ),
     )
     monkeypatch.setattr(release_identity.importlib.util, "find_spec", lambda _: None)
     monkeypatch.setattr(
-        release_identity, "Path",
-        lambda value: runtime_migration.STATE
-        if str(value).endswith("runtime-migration/operation.json")
-        else ordinary_remote.CONFIG.parent / "absent-config",
+        release_identity,
+        "Path",
+        lambda value: (
+            runtime_migration.STATE
+            if str(value).endswith("runtime-migration/operation.json")
+            else ordinary_remote.CONFIG.parent / "absent-config"
+        ),
     )
     observations = []
 
@@ -1898,6 +1955,30 @@ def test_remote_failure_diagnostics_are_closed_and_metadata_only(monkeypatch, tm
         else "ordinary_transaction_failed",
     }
     assert "private-fixture-output" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("typed", [False, True])
+def test_streamed_inspection_preserves_only_typed_route_state_diagnosis(monkeypatch, capsys, typed):
+    error = (
+        ordinary_routes.RouteStateInvalid()
+        if typed
+        else RuntimeError("ordinary_route_state_invalid")
+    )
+    monkeypatch.setattr(ordinary_remote, "inspect_for_plan", Mock(side_effect=error))
+    monkeypatch.setattr(ordinary_remote.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(
+        ordinary_remote.sys,
+        "stdin",
+        SimpleNamespace(buffer=io.BytesIO(b'{"action":"inspect","manifest":{}}')),
+    )
+    with pytest.raises(SystemExit) as stopped:
+        ordinary_remote.main(deadline=time.monotonic() + 30)
+    assert stopped.value.code == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "failed",
+        "stage": "inspect",
+        "error_code": "ordinary_route_state_invalid" if typed else "ordinary_transaction_failed",
+    }
 
 
 @pytest.mark.parametrize("status,output", [(1, "{}"), (0, "{}\n{}"), (0, "{"), (0, "[]")])

@@ -15,6 +15,85 @@ def ledger(tmp_path):
     return value
 
 
+@pytest.mark.parametrize("retained", [False, True])
+def test_resumed_package_verification_outlives_status_observation_without_repair(
+    tmp_path, monkeypatch, retained
+):
+    """A live verification phase is not cancelled by the preceding status-read budget."""
+    clock = [100.0]
+    value = Recovery(tmp_path, execution="a" * 32, authority="b" * 64, clock=lambda: clock[0])
+    value.initialize()
+    value.initial("packages", state="started")
+    calls = []
+    receipt = {"approved": True}
+    plan = NS(instance=NS(hostname="member"), digest="same-package")
+    job = NS(identity="same-worker", submitted={})
+
+    def control(request):
+        assert request["action"] == "worker-status"
+        assert request["identity"] == job.identity
+        calls.append("status")
+        return {"state": "PREPARED", "result": receipt}
+
+    def verify():
+        # The existing guest owner finishes successfully after the short pure
+        # status observation allowance; this is not a new package installation.
+        if retained:
+            assert holder.package_receipt == receipt
+        calls.append("verify")
+        clock[0] += 21
+        return receipt
+
+    job.control = control
+    holder = NS(job=job, _peer_request=lambda: {}, verify_prepared=verify)
+    from nebius_vpngw.deploy import vm_ha_package
+
+    monkeypatch.setattr(
+        recovery,
+        "observe_guarded",
+        lambda *_: control({"action": "worker-status", "identity": job.identity}),
+    )
+    monkeypatch.setattr(vm_ha_package, "verify_prepared", lambda *_a, **_k: verify())
+    recovery.prepare(
+        value,
+        effect=lambda: pytest.fail("completed package work replayed"),
+        members=lambda: [(None, plan, {}, None)],
+        handoffs={"member": holder} if retained else {},
+    )
+    assert calls == ["status", "verify"]
+    assert value.initial("packages") == "verified"
+    assert value.history() == []
+
+
+@pytest.mark.parametrize("pending_repair", [False, True])
+def test_unavailable_completion_verification_never_confirms_or_replays_package(
+    tmp_path, monkeypatch, pending_repair
+):
+    from nebius_vpngw.deploy import vm_ha_package
+    from nebius_vpngw.deploy.apply_diagnostics import ObservationUnavailable
+
+    value = ledger(tmp_path)
+    value.initial("packages", state="started")
+    if pending_repair:
+        attempt = value.reserve("packages", Diagnosis("packages", "c" * 64))
+        value.transition(attempt, "dispatched")
+    before = value.read()
+    plan = NS(instance=NS(hostname="member"))
+    monkeypatch.setattr(recovery, "observe_guarded", lambda *_: {"state": "PREPARED", "result": {}})
+
+    def unavailable(*_args, **_kwargs):
+        raise ObservationUnavailable("package-response", "ssh-observation-unavailable")
+
+    monkeypatch.setattr(vm_ha_package, "verify_prepared", unavailable)
+    with pytest.raises(ObservationUnavailable):
+        recovery.prepare(
+            value,
+            effect=lambda: pytest.fail("unverified package work replayed"),
+            members=lambda: [(None, plan, {}, None)],
+        )
+    assert value.read() == before
+
+
 @pytest.mark.parametrize("lifecycle_approval", ["a" * 64, "d" * 64, None])
 @pytest.mark.parametrize("artifact_changed", [False, True])
 def test_cli_handoff_resume_preserves_lifecycle_approval(
@@ -29,9 +108,13 @@ def test_cli_handoff_resume_preserves_lifecycle_approval(
 
     host = "gateway-0"
     instance = NS(hostname=host)
-    request = {"action": "reserve", "approval": "a" * 64,
-               "artifact": "b" * 64, "package": {"host": host},
-               "observed": {"mode": "ordinary"}}
+    request = {
+        "action": "reserve",
+        "approval": "a" * 64,
+        "artifact": "b" * 64,
+        "package": {"host": host},
+        "observed": {"mode": "ordinary"},
+    }
     scope = (tmp_path / "command", "c" * 32, "e" * 64)
     token = reservations.SCOPE.set(scope)
     try:
@@ -39,18 +122,26 @@ def test_cli_handoff_resume_preserves_lifecycle_approval(
         saved = reservations.read(*scope, host)
         path = reservations.path_for(scope[0], scope[1], host)
         before = path.read_bytes()
-        calls = [node for node in ast.walk(ast.parse(Path(cli.__file__).read_text()))
-                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                 and isinstance(node.func.value, ast.Name)
-                 and node.func.value.id == "ordinary_handoff" and node.func.attr == "reserve"]
+        calls = [
+            node
+            for node in ast.walk(ast.parse(Path(cli.__file__).read_text()))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "ordinary_handoff"
+            and node.func.attr == "reserve"
+        ]
         assert len(calls) == 1
         argument = next(k.value for k in calls[0].keywords if k.arg == "approval")
         namespace = {
             "package_reservation": reservations,
-            "package_reservations": {host: saved}, "instance": instance,
-            "ha_predecessor": None, "migration_plan_digest": "f" * 64,
+            "package_reservations": {host: saved},
+            "instance": instance,
+            "ha_predecessor": None,
+            "migration_plan_digest": "f" * 64,
             "lifecycle_state": NS(transaction=NS(approval_digest=lifecycle_approval))
-            if lifecycle_approval else None,
+            if lifecycle_approval
+            else None,
         }
 
         def reattach():
@@ -71,13 +162,15 @@ def test_cli_handoff_resume_preserves_lifecycle_approval(
 
 
 def test_handoff_approval_requires_original_takeover_or_new_unreserved_intent():
-    assert reservations.handoff_approval(
-        None, proposed="a" * 64, lifecycle_approval="b" * 64
-    ) == "a" * 64
+    assert (
+        reservations.handoff_approval(None, proposed="a" * 64, lifecycle_approval="b" * 64)
+        == "a" * 64
+    )
     with pytest.raises(RuntimeError, match="reservation"):
         reservations.handoff_approval(
             {"request": {"action": "prepare-guarded", "approval": "b" * 64}},
-            proposed="a" * 64, lifecycle_approval="b" * 64,
+            proposed="a" * 64,
+            lifecycle_approval="b" * 64,
         )
 
 
@@ -356,10 +449,15 @@ def test_restarted_worker_is_not_new_evidence_for_same_failed_repair(tmp_path, m
         calls.append(REPAIR.get())
         raise PackageUnresolved("exact", "package-predecessor-changed")
 
-    monkeypatch.setattr(recovery, "observe_guarded", lambda *_: {
-        "state": "READY_TO_CONTINUE", "identity": "exact",
-        "result": {"generation": len(calls), "failure": "package-predecessor-changed"},
-    })
+    monkeypatch.setattr(
+        recovery,
+        "observe_guarded",
+        lambda *_: {
+            "state": "READY_TO_CONTINUE",
+            "identity": "exact",
+            "result": {"generation": len(calls), "failure": "package-predecessor-changed"},
+        },
+    )
     with pytest.raises(RuntimeError, match="refuses unchanged repair"):
         recovery.prepare(value, effect=effect, members=lambda: [(None, plan, {}, None)])
     assert calls == [False, True]
@@ -371,7 +469,9 @@ def test_restarted_worker_is_not_new_evidence_for_same_failed_repair(tmp_path, m
     assert calls == [False, True]
 
 
-def test_automatic_repair_continues_when_same_error_has_real_package_progress(tmp_path, monkeypatch):
+def test_automatic_repair_continues_when_same_error_has_real_package_progress(
+    tmp_path, monkeypatch
+):
     from nebius_vpngw.deploy import vm_ha_package
 
     value = ledger(tmp_path)
@@ -386,10 +486,15 @@ def test_automatic_repair_continues_when_same_error_has_real_package_progress(tm
     def observe(*_args):
         if len(calls) == 3:
             return {"state": "PREPARED", "identity": "exact", "result": {"verified": True}}
-        return {"state": "READY_TO_CONTINUE", "identity": "exact", "result": {
-            "generation": len(calls), "failure": "package-worker-failed",
-            "progress": digest("native" if len(calls) == 1 else "python"),
-        }}
+        return {
+            "state": "READY_TO_CONTINUE",
+            "identity": "exact",
+            "result": {
+                "generation": len(calls),
+                "failure": "package-worker-failed",
+                "progress": digest("native" if len(calls) == 1 else "python"),
+            },
+        }
 
     monkeypatch.setattr(recovery, "observe_guarded", observe)
     monkeypatch.setattr(vm_ha_package, "verify_prepared", lambda *_a, **_kw: None)

@@ -1774,6 +1774,11 @@ publishes concise findings with type, review-outcome and related-group labels.
 Scoped missing labels may be created; issue state stays unchanged. Related
 labels and direct links do not imply duplicate status or shared-plan membership.
 
+An explicit `being-fixed` request may create/reuse that progress label only when
+separately authorized implementation is underway. It grants no repair or closure
+authority; its lifecycle owner removes it after verified merged closure or when
+the repair ends, preserving unrelated labels.
+
 Only `--action create-plan` invokes design and saves eligible compatible batch plans
 and a verified project overview for separate implementation approval. Default
 review creates no artifacts or implementation proposal. Detailed plans remain

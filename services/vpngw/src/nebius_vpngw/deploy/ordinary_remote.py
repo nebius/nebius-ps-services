@@ -404,7 +404,10 @@ def _inspect_once(
     if runtime_admission:
         _, agent_state = command(["systemctl", "is-active", "nebius-vpngw-agent"], required=False)
     verified = False
-    if config_sha and verify_runtime and runtime_admission:
+    # Previous agents may ignore the verification flag and enter their normal
+    # daemon (including reconciliation). Only execute the selected, byte-verified
+    # implementation; an unmatched package must converge before runtime proof.
+    if config_sha and verify_runtime and runtime_admission and files == manifest["files"]:
         try:
             receipt = agent_receipt(config_sha, boot, verify_only=True)
             verified = receipt.get("package_identity") == manifest["package_identity"]
@@ -1072,7 +1075,9 @@ def main(*, deadline: float | None = None) -> None:
                 if request["action"] in {"inspect", "inspect-package"}
                 else {
                     "status": "staged",
-                    "receipt": migration.stage_payload(request["manifest"], request, deadline=DEADLINE),
+                    "receipt": migration.stage_payload(
+                        request["manifest"], request, deadline=DEADLINE
+                    ),
                 }
                 if request["action"] == "stage-package"
                 else release_runtime(request)
@@ -1085,7 +1090,10 @@ def main(*, deadline: float | None = None) -> None:
             "stage": "inspect",
             "error_code": error.code
             if isinstance(error, dependency_scope.DependencyFailure)
-            else migration.observation_code(error) or (
+            else "ordinary_route_state_invalid"
+            if isinstance(error, routes.RouteStateInvalid)
+            else migration.observation_code(error)
+            or (
                 str(error)
                 if str(error) in {"asset_retirement_unproven", "asset_retirement_changed"}
                 else "ordinary_transaction_failed"

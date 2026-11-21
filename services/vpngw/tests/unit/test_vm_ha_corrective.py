@@ -333,6 +333,8 @@ def reservation_guest(monkeypatch, tmp_path, ordinary_operation_guest, runtime_m
     from nebius_vpngw import package_worker
     from nebius_vpngw.deploy import handoff_remote as guest
 
+    # Direct owner calls need the request lifetime normally set by main().
+    monkeypatch.setattr(guest.remote, "DEADLINE", time.monotonic() + 60)
     monkeypatch.setattr(package_worker, "native_lock", lambda _path, **kwargs: nullcontext())
     state_dir = tmp_path / "ha"
     state_dir.mkdir(mode=0o700)
@@ -534,11 +536,18 @@ def test_corrective_proposal_is_read_only_and_uses_current_native_inventory(
     )
     assert guest.corrective_plan({**request, "manifest": manifest}) == {
         "dependency_inventory": {},
-        "observation": {"runtime_plan": fresh}
+        "observation": {"runtime_plan": fresh},
     }
-    assert seen == [({**manifest, "runtime_plan": fresh,
-                     "asset_retirement": {"predecessor": None, "removals": {}}},
-                    {"runtime_admission": False, "dependency_inventory": {}})]
+    assert seen == [
+        (
+            {
+                **manifest,
+                "runtime_plan": fresh,
+                "asset_retirement": {"predecessor": None, "removals": {}},
+            },
+            {"runtime_admission": False, "dependency_inventory": {}},
+        )
+    ]
     assert guest.remote.migration.state() == state
     assert guest.corrective_children() == request["children"]
     assert not (guest.repair.STATE / "corrective").exists()
@@ -557,21 +566,30 @@ def test_corrective_successor_preserves_exact_asset_retirement(
     retained = "/etc/systemd/system/nebius-vpngw-retained.service"
 
     def asset(name):
-        return {"member": "nebius_vpngw/systemd/" + name.rsplit("/", 1)[-1],
-                "mode": 0o644, "sha256": "f" * 64}
+        return {
+            "member": "nebius_vpngw/systemd/" + name.rsplit("/", 1)[-1],
+            "mode": 0o644,
+            "sha256": "f" * 64,
+        }
 
     state["manifest"]["assets"] = {old: asset(old), retained: asset(retained)}
     state["manifest"]["asset_retirement"] = {
-        "predecessor": {"operation": "9" * 32}, "removals": {pending: asset(pending)},
+        "predecessor": {"operation": "9" * 32},
+        "removals": {pending: asset(pending)},
     }
     migration.save(state)
     request["children"] = guest.corrective_children()
     manifest = {**request["package"]["desired"], "assets": {retained: asset(retained)}}
     monkeypatch.setattr(migration, "plan_current", lambda *, deadline=None: state["plan"])
-    monkeypatch.setattr(guest.remote, "inspect", lambda proposed, **_: {
-        "asset_retirement": migration.asset_retirement(
-            proposed, migration.completed_asset_predecessor()),
-    })
+    monkeypatch.setattr(
+        guest.remote,
+        "inspect",
+        lambda proposed, **_: {
+            "asset_retirement": migration.asset_retirement(
+                proposed, migration.completed_asset_predecessor()
+            ),
+        },
+    )
     result = guest.corrective_plan({**request, "manifest": manifest})
     retirement = result["observation"]["asset_retirement"]
     assert retirement["removals"] == {old: asset(old), pending: asset(pending)}
@@ -585,12 +603,14 @@ def test_corrective_successor_preserves_exact_asset_retirement(
     with pytest.raises(RuntimeError, match="corrective runtime predecessor differs"):
         migration.begin(state["plan"], operation, selected, superseded_sha256="0" * 64)
     assert migration.state() == state
-    for invalid in (manifest, {**selected, "asset_retirement": {
-        **retirement, "removals": {old: asset(old)}
-    }}):
+    for invalid in (
+        manifest,
+        {**selected, "asset_retirement": {**retirement, "removals": {old: asset(old)}}},
+    ):
         with pytest.raises(RuntimeError, match="asset_retirement_unproven"):
-            migration.begin(state["plan"], operation, invalid,
-                            superseded_sha256=migration.digest(state))
+            migration.begin(
+                state["plan"], operation, invalid, superseded_sha256=migration.digest(state)
+            )
         assert migration.state() == state
         assert verified == []
     migration.begin(state["plan"], operation, selected, superseded_sha256=migration.digest(state))
@@ -756,7 +776,9 @@ def test_corrective_runtime_preserves_original_policy_after_inhibited_activation
             }
         ),
     )
-    monkeypatch.setattr(migration, "policy_snapshot", lambda: migration.policy_identity(migration.policy_payload()))
+    monkeypatch.setattr(
+        migration, "policy_snapshot", lambda: migration.policy_identity(migration.policy_payload())
+    )
     previous = migration.state()
     previous.update(phase="activating", policy=operator_policy)
     migration.save(previous)

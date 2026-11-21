@@ -215,6 +215,32 @@ proof; an SSH failure is never permission to accept an unknown key. Status is
 read-only. Recovery examples use the YAML selectors and retain only explicit CLI
 overrides.
 
+`apply --convert-to-ha -c <ordinary.yaml>` first runs ordinary apply against the
+preserved source for both BGP and Static gateways. It upgrades an older release
+and verifies the exact selected package, runtime, local tunnel configuration and
+owned routes before preparing HA. Pending work, failed verification or declined
+approval stops conversion. Ordinary disruption approval (`--approve-disruption`)
+and the later HA approval (`--approve`) are separate; approve each reviewed phase.
+Upgrade inspection reads unmatched installed packages without invoking their agent;
+runtime verification runs only after the installed package files match the selected
+artifact, so old agents cannot mistake a verification request for daemon startup.
+
+A positively diagnosed local software verification failure can offer the existing
+repair workflow with its own default-No confirmation. This includes saved local
+route state that fails validation and cannot authorize an ordinary upgrade; it does
+not add a reader for an obsolete state format. Repair completion is followed
+by fresh ordinary verification. Unknown failures and release identity do not trigger
+automatic reconstruction. Retrying an already-started HA conversion resumes its HA
+owner. An explicit HA candidate cannot bypass an ordinary release upgrade: use the
+original ordinary YAML with `--convert-to-ha`. Dry-run never performs the upgrade.
+These checks do not prove end-to-end workload traffic; verify that independently.
+Changing an existing HA gateway between BGP and Static uses ordinary `apply`.
+The route transaction retains its current cloud ownership labels until replacement
+is verified; a failed replacement restores the previous route kind.
+Ordinary repair can reuse an existing operator host-key pin after rechecking the
+exact retained VM binding, even if apply stopped before publishing managed trust.
+It cannot enroll an unknown host or accept a changed host identity.
+
 Ordinary-to-HA conversion binds package reservations to the approved operation
 before staging. Settled route creation receipts remain with their route owner;
 they are not treated as Compute or allocation identities. Brief IAM readback
@@ -1148,6 +1174,10 @@ Package approval remains valid across the handoff's own journal and service-stop
 changes. Other package, configuration, dependency or target drift requires a new
 preview and approval. A pending handoff is recovered even when all approved package
 writes have finished; a completed handoff does not block healthy HA convergence.
+On resume, the short member-status observation budget does not cancel the guest
+worker's fresh package verification. Verification retains its existing transport
+bounds and must succeed before recovery can complete or select a repair. Unknown
+verification preserves the original operation and its repair allowance.
 
 If an unfinished conversion has already published its HA marker, the retained
 host's package can be repaired under HA authority, including when product imports
@@ -1531,7 +1561,16 @@ nebius-vpngw apply -c my-vpn.vm-ha.config.yaml --approve <approval-digest>
 ```
 
 This approval binds the current plan and artifact. Changed configuration,
-artifact or observed state requires a fresh preview. The approved workflow
+artifact or observed state requires a fresh preview. If streamed handoff admission fails, apply reports a bounded import or execution
+category. Missing guest responses preserve an unknown operation outcome and any
+available process exit status; reconcile the original operation before retrying.
+Guest exception text and stderr are never printed.
+
+If an ordinary BGP route returns before its planned withdrawal submits any cloud
+operation, the runtime archives that unused plan and preserves the route. Existing
+operation receipts still require reconciliation before conversion can proceed.
+
+The approved workflow
 prepares the passive before the retained active and verifies guarded activation,
 shared-address ownership, routes and standby readiness before reporting health.
 Managed runtime credentials and per-VM mTLS identities are handled by approved
@@ -1879,7 +1918,8 @@ standby readiness before committing `enabled` on both members. The CLI never
 starts Compute directly. Ownership, allocation, target revision, policy, or
 writer drift fails closed and requires a fresh plan.
 
-Interactive conversion accepts an existing unattached passive public IP or
+Interactive conversion accepts an existing unattached passive public IP in the
+gateway subnet, including an operator-named allocation, or
 asks separately, with a default-No confirmation, whether to create or reuse the
 deterministic passive allocation. Effective-region precedence is explicit
 `--region`, then `gateway_group.region`, then top-level `region_id`. JSON and

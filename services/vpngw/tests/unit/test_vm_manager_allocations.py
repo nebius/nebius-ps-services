@@ -1273,6 +1273,82 @@ def test_ensure_public_allocation_rejects_requested_ip_when_allocation_is_attach
         )
 
 
+@pytest.mark.parametrize("bound", (False, True))
+def test_vm_ha_reuses_explicit_preallocated_public_address(tmp_path, bound):
+    manager = VMManager(project_id="project-1", region="eu-north1")
+    existing = _public_allocation("203.0.113.7", name="operator-reserved-address")
+    _install_vm_ha_journal(manager, tmp_path)
+    with (
+        patch.object(manager, "_list_allocations_by_ip", return_value={"203.0.113.7": existing}),
+        patch.object(manager, "_get_allocation_by_id", return_value=existing),
+        patch.object(
+            manager,
+            "_create_public_allocation_via_client",
+            side_effect=AssertionError("selected allocation must be reused"),
+        ),
+    ):
+        _, allocation = manager._ensure_public_allocation(
+            alloc_api=None,
+            alloc_client=object(),
+            inst_name="gateway-1",
+            nic_name="eth0",
+            subnet_id="subnet-1",
+            desired_ip="203.0.113.7",
+            preserved_alloc_id=None,
+            approved_allocation_id="alloc-1" if bound else None,
+            operation_id="operation-1",
+        )
+    assert allocation is existing
+
+
+@pytest.mark.parametrize(
+    "defect", ("project", "subnet", "private", "address", "attached", "state", "lookup")
+)
+def test_vm_ha_selected_public_allocation_fails_closed(tmp_path, defect):
+    manager = VMManager(project_id="project-1", region="eu-north1")
+    existing = _public_allocation("203.0.113.7", name="operator-reserved-address")
+    _install_vm_ha_journal(manager, tmp_path)
+    if defect == "project":
+        existing.metadata.parent_id = "foreign-project"
+    elif defect == "subnet":
+        existing.spec.ipv4_public.subnet_id = "foreign-subnet"
+    elif defect == "private":
+        existing.spec.ipv4_private = SimpleNamespace(subnet_id="subnet-1")
+    elif defect == "address":
+        existing.status.details.allocated_cidr = "203.0.113.8/32"
+        existing.spec.ipv4_public.address = "203.0.113.8/32"
+    elif defect == "attached":
+        existing.status.details.resource_id = "foreign-instance"
+    elif defect == "state":
+        existing.status.state = "DELETING"
+    with (
+        patch.object(
+            manager,
+            "_list_allocations_by_ip",
+            return_value={"203.0.113.7": existing},
+            side_effect=RuntimeError("inventory unavailable") if defect == "lookup" else None,
+        ) as lookup,
+        patch.object(manager, "_get_allocation_by_id", return_value=existing),
+        patch.object(
+            manager,
+            "_create_public_allocation_via_client",
+            side_effect=AssertionError("unsafe allocation must not create"),
+        ),
+        pytest.raises(RuntimeError),
+    ):
+        manager._ensure_public_allocation(
+            alloc_api=None,
+            alloc_client=object(),
+            inst_name="gateway-1",
+            nic_name="eth0",
+            subnet_id="subnet-1",
+            desired_ip="203.0.113.7",
+            preserved_alloc_id=None,
+            operation_id="operation-1",
+        )
+    assert lookup.call_args.kwargs == {"fail_closed": True}
+
+
 def test_vm_ha_public_allocation_resolves_typed_already_exists_by_exact_shape(
     tmp_path,
 ) -> None:
@@ -1295,6 +1371,7 @@ def test_vm_ha_public_allocation_resolves_typed_already_exists_by_exact_shape(
     )
 
     with (
+        patch.object(vm_mgr, "_list_allocations_by_ip", return_value={}),
         patch.object(
             vm_mgr,
             "_find_ha_allocation_by_name",
@@ -1381,6 +1458,7 @@ def test_vm_ha_public_allocation_rejects_foreign_shape_after_already_exists(
     )
 
     with (
+        patch.object(vm_mgr, "_list_allocations_by_ip", return_value={}),
         patch.object(
             vm_mgr,
             "_find_ha_allocation_by_name",

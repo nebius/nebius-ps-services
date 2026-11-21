@@ -28,6 +28,21 @@ def installed(monkeypatch, direct=None):
     )
 
 
+def test_conversion_freezes_wheel_across_ordinary_and_ha_phases(tmp_path, monkeypatch):
+    wheel = tmp_path / "nebius_vpngw-0.6.6-py3-none-any.whl"
+    wheel.write_bytes(b"original")
+    monkeypatch.setenv("VPNGW_AGENT_WHEEL", str(wheel))
+    with artifacts.frozen_selection():
+        first, _ = artifacts.resolve(None)
+        wheel.write_bytes(b"replacement")
+        second, _ = artifacts.resolve(None)
+        assert first == second and second.read_bytes() == b"original"
+        second.write_bytes(b"cache drift")
+        with pytest.raises(VMHAAgentArtifactError, match="changed within"):
+            artifacts.resolve(None)
+    assert artifacts.resolve(None)[0] == wheel
+
+
 def test_index_install_uses_exact_manifest_and_retains_digest_cache(monkeypatch):
     content = b"candidate"
     digest = hashlib.sha256(content).hexdigest()
