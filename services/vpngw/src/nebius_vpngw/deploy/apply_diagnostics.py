@@ -128,9 +128,14 @@ class ObservationUnavailable(DiagnosticFailure):
 class GuestResponseUnavailable(ObservationUnavailable):
     """An ended guest response is not evidence of an operator interruption."""
 
-    def __init__(self, phase: str) -> None:
+    def __init__(self, phase: str, *, exit_status: int | None = None) -> None:
+        if exit_status is not None and (
+            type(exit_status) is not int or not 0 <= exit_status <= 255
+        ):
+            raise ValueError("invalid guest exit status")
         super().__init__(phase, "guest-response-unavailable")
-        self.first = Failure(phase, "guest-response-unavailable")
+        reasons = () if exit_status is None else (f"guest-exit-code-{exit_status}",)
+        self.first = Failure(phase, "guest-response-unavailable", reasons)
 
 
 def unavailable_observation(error: BaseException | None) -> ObservationUnavailable | None:

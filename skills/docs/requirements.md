@@ -4216,6 +4216,15 @@ and close issues only when a fresh assessment justifies the disposition.
   spelling. Preserve explicit standalone action effects, report-only limits,
   separate implementation approval and non-triggers for skill editing/advice.
 
+- AC-012: Separately requested `being-fixed` progress labeling requires repair
+  authorization and actual implementation underway, or an authorized lifecycle
+  owner request. Reuse a matching definition or create only the policy-defined
+  missing label; check automation, preserve unrelated labels and read back the
+  result. Review, planning and eligibility alone never admit implementation.
+  The lifecycle owner removes only this progress label after verified merged
+  resolution and closure, or when it explicitly ends the repair. Labels never
+  grant implementation, publication or closure authority.
+
 #### Negative Criteria
 
 - NC-001: No automatic plans or closures in review; no bulk closure merely from

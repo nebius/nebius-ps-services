@@ -234,8 +234,9 @@ def test_route_operation_wait_obeys_remaining_tick_budget():
 
 
 @pytest.mark.parametrize("mixed_summary", [False, True])
+@pytest.mark.parametrize("withdrawal_returns", [False, True])
 def test_periodic_runtime_adds_and_withdraws_through_existing_receipt_owner(
-    request, tmp_path, monkeypatch, mixed_summary
+    request, tmp_path, monkeypatch, mixed_summary, withdrawal_returns
 ):
     """Real route planner/effect journal; fake SDK, credentials and native boundary."""
     import contextlib
@@ -330,6 +331,53 @@ def test_periodic_runtime_adds_and_withdraws_through_existing_receipt_owner(
     runtime.step()
     runtime.step()
     assert len(cloud.routes) == (3 if mixed_summary else 2)
+    if withdrawal_returns:
+        from nebius_vpngw.deploy import ordinary_route_execute
+
+        before = {
+            key: route.__pb2_message__.SerializeToString(deterministic=True)
+            for key, route in cloud.routes.items()
+        }
+        with monkeypatch.context() as patch:
+
+            def interrupt_before_submission(*args, **kwargs):
+                raise TimeoutError("tick expired after plan publication")
+
+            patch.setattr(ordinary_route_execute, "_admit", interrupt_before_submission)
+            with pytest.raises(TimeoutError, match="plan publication"):
+                runtime.step()
+        pending = owner.journal(value).snapshot()
+        assert pending["transaction"]["phase"] == "pending"
+        assert not pending["transaction"]["operations"]
+        assert not pending["transaction"]["verified"]
+        learned["peer"] = (dynamic_prefix,)
+        with monkeypatch.context() as patch:
+            original_observe = Discovery.observe
+            calls = 0
+
+            def unavailable_during_retirement(self):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise RuntimeError("retirement observation unavailable")
+                return original_observe(self)
+
+            patch.setattr(Discovery, "observe", unavailable_during_retirement)
+            with pytest.raises(RuntimeError, match="retirement observation unavailable"):
+                runtime.step()
+        assert owner.journal(value).snapshot() == pending
+        assert runtime.step()["cloud_routes"] == "verified"
+        assert {
+            key: route.__pb2_message__.SerializeToString(deterministic=True)
+            for key, route in cloud.routes.items()
+        } == before
+        assert owner.journal(value).transaction() is None
+        history = owner.journal(value).root / "history" / (digest(pending) + ".json")
+        assert json.loads(history.read_text()) == pending
+        # The settled runtime is eligible for the existing HA handoff again.
+        owner.reserve("2" * 64, digest(owner.snapshot()))
+        runtime.close()
+        return
     runtime.step()
     assert {r.spec.destination.cidr for r in cloud.routes.values()} == (
         {"172.16.0.0/24", "192.168.1.128/25"} if mixed_summary else {"172.16.0.0/24"}

@@ -9451,7 +9451,7 @@ Sources: [Debian maintainer-script retry contract](https://www.debian.org/doc/de
 <!-- /FEATURE: FEAT-034 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-035 reqs=REQ-035 status=ready delivery=implemented priority=P0 version=60 -->
+<!-- FEATURE: FEAT-035 reqs=REQ-035 status=ready delivery=implemented priority=P0 version=62 -->
 ### FEAT-035: Composed apply planning, authority and results
 
 #### Requirements Covered
@@ -9492,6 +9492,11 @@ owned retained VMs, never automatic or an unconditional success claim.
 An ended guest response is an unknown operation outcome, not proof of operator
 interruption. Preserve this typed predicate through convergence and structured
 results, with original-request reconciliation and conditional repair guidance.
+The stdlib bootstrap wraps bundle loading and request execution, translating
+import failures and other exceptions into closed handoff predicates without
+exception text or stderr. An empty response is classified as unavailable;
+include only an already-ready bounded process exit status, never block waiting
+for it or infer that the submitted operation had no effect.
 
 The activation owner also emits a typed exhaustion predicate when its three
 corrective attempts are consumed. Preserve that settled guard and the existing
@@ -10140,7 +10145,17 @@ owner freezes configured-peer policy and exact infrastructure before guest work,
 then selects fresh BGP destinations inside that scope. An exact creation ledger
 separates owned routes from matching external coverage. Before the runtime-route
 amendment, BGP withdrawals never retired admitted destinations. The amended runtime
-requires three complete consistent absence observations and retains unknown evidence. Default/shared tables are copied per selected subnet before
+requires three complete consistent absence observations and retains unknown evidence.
+A tick interrupted after saving a withdrawal plan but before recording any cloud
+operation can leave that plan obsolete when BGP returns. The runtime may archive
+only an exact pending plan consisting entirely of BGP withdrawals, with matching
+runtime binding and routing admission, no cloud-operation records and no verified
+effects, when current absence evidence no longer permits a withdrawal. Recheck
+runtime authority under the journal lock, archive the exact predecessor, preserve
+creation bindings and select a fresh plan. Never mark unexecuted deletion complete
+or discard an intent or accepted-operation receipt. Regression coverage exercises
+publication interruption, route return, preserved cloud objects, archived history
+and subsequent HA handoff admission; live qualification is separate. Default/shared tables are copied per selected subnet before
 exact revision-bound attachment; source and unrelated routes stay intact.
 The same reviewed conversion runs when BGP has not learned any prefixes yet;
 private runtime-table ownership must not depend on peer startup ordering.
@@ -10694,7 +10709,7 @@ still requires full native, installed-package and all-topology live qualificatio
 
 <!-- /FEATURE: FEAT-036 -->
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-037 reqs=REQ-037 status=ready delivery=implemented priority=P0 version=23 -->
+<!-- FEATURE: FEAT-037 reqs=REQ-037 status=ready delivery=implemented priority=P0 version=24 -->
 ### FEAT-037: Command-owned activation and package recovery
 
 #### Requirements Covered
@@ -11092,6 +11107,14 @@ native gates pass, docs agree, and live qualification gaps are explicitly record
 
 #### Implementation Evidence
 
+Package recovery collects member status within the existing cumulative 20-second
+read allowance, then verifies every exact prepared member outside that completed
+read scope. Fresh retained-worker verification keeps its durable guest owner and
+per-request transport bounds; it is not assigned a status-read effect deadline.
+Verification precedes completion and repair selection, including prepared peers
+of an unfinished member. Unknown verification preserves the original operation
+and allowance without marking success or dispatching another package install.
+
 The guarded-install predecessor mismatch is repaired by the shared
 `ha_package_contract` projection, included in the streamed bootstrap and wheel.
 Worker phase results retain closed failure predicates and semantic progress;
@@ -11198,6 +11221,13 @@ policy or changed/unknown authority remains blocking. README, modernization
 notes and the Unreleased changelog describe these semantics.
 
 #### Verification Evidence
+
+A controlled-clock regression reproduces a completed retained-worker verification
+being rejected when it outlives the preceding status allowance. Retained and created
+member cases pass after separating those phases. Unknown-verification cases preserve
+initial and dispatched-repair history exactly, without replay or a completion receipt.
+The 171 focused recovery, transport, effect and corrective tests pass locally; live
+resume qualification remains pending.
 
 Standby preparation observes the same durable owner Start after either a received
 or lost request acknowledgement. A still-Stopped Compute read does not override
@@ -11955,7 +11985,7 @@ traffic qualification obligations above remain separate.
 <!-- /FEATURE: FEAT-038 -->
 
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-039 reqs=REQ-039 status=ready delivery=implemented priority=P0 version=9 -->
+<!-- FEATURE: FEAT-039 reqs=REQ-039 status=ready delivery=implemented priority=P0 version=11 -->
 ### FEAT-039: One apply command with shared HA orchestration
 
 #### Requirements Covered
@@ -11988,8 +12018,10 @@ Changed source, selector scope, conflicting output, missing candidate or unsafe
 files fail before effects. A missing locator after a crash may be reconstructed
 only from the existing exact structural conversion proof. Plain Single apply
 never follows the locator. HA input plus conversion flag reconciles HA; output or
-force on HA input is rejected. First noninteractive conversion needs a complete
-existing candidate; otherwise report required peer inputs without effects.
+force on HA input is rejected. REQ-045/FEAT-047 require ordinary convergence before HA preparation. A first
+noninteractive conversion then needs a complete existing candidate; otherwise
+report required peer inputs without HA effects and retain any verified ordinary
+actions in the terminal result. Established HA ownership skips ordinary apply.
 
 Move explicit rotation and healing policy into this shared flow. Normalize the
 new exact --approve into existing typed domains; preserve old apply options and
@@ -12005,6 +12037,14 @@ Diagnostics are populated before JSON and pair-child publication. All selectors
 flow through inspection, planning, composite actions and execution. Repair guidance
 uses the authoritative generated HA YAML after conversion. Unexpected failures
 retain unknown cause honestly; pending operations retain exact resume guidance.
+
+For an HA BGP/Static route-kind change, retain the cloud-proven predecessor kind
+in the local ownership ledger until the ordinary replacement transaction verifies
+its successor. Cross-kind replacement requires the exact cluster, route target,
+allocation and predecessor HA labels in the rollback snapshot; the backend rechecks
+the snapshot before effects. Compensation preserves the predecessor kind and its
+restored route identity. Keep existing journal replay and strict cloud/ledger
+agreement; do not add a permissive reader for a mismatched ledger.
 
 #### Selected Option
 
@@ -12054,7 +12094,14 @@ Apply retains existing effect owners and approvals. Conversion initializes HA lo
 
 #### Verification Evidence
 
-Local/installed, lock, successor, diagnostic and interruption regressions pass. Handoff refresh regressions preserve original ownership and reject later identity drift. Final-build live acceptance remains pending.
+Local/installed, lock, successor, diagnostic and interruption regressions pass. Handoff refresh regressions preserve original ownership and reject later identity drift. The subsequent focused campaign passed a plain HA BGP package upgrade with
+unchanged retained VM/disk and boot identities, and fresh Static HA provisioning.
+Independent package, cloud-route and HA runtime checks passed. Real SDK-backend
+route-kind regressions reproduce the prior eager ledger retyping failure and
+cover both directions, compensation, interrupted ledger commit and invalid
+predecessor authority. The final local suite passed 8,656 tests with 159 isolated
+native-fixture skips. A clean live BGP/Static mode-switch replay and the broader
+all-mode matrix remain unverified.
 
 <!-- /FEATURE: FEAT-039 -->
 
@@ -13553,6 +13600,200 @@ No additional live gateway or traffic testing was performed in this follow-up;
 previous traffic and upgrade limitations remain as recorded above.
 
 <!-- /FEATURE: FEAT-046 -->
+
+<!-- FEATURE: FEAT-047 reqs=REQ-045 status=ready delivery=implemented priority=P0 version=8 -->
+### FEAT-047: Ordinary convergence before HA conversion
+
+#### Requirements Covered
+
+- REQ-045: Prepare ordinary gateways before HA conversion.
+
+#### Context Evidence
+
+`ha_convergence.run` already selects private ordinary and HA engines under one
+public apply lock. Ordinary apply owns exact package and runtime convergence;
+`ha_conversion.resolve` owns protected source/candidate provenance. Before this
+change, conversion could install a newer artifact during HA handoff without
+requiring ordinary convergence first. The user approved replacing that ordering for BGP and
+Static conversion. Workload probes remain explicitly test-only.
+
+#### Design Details
+
+Introduce a focused conversion-prerequisite coordinator using existing private
+owners, not a second persistent state machine. Invoke the prerequisite from the existing protected provenance resolver after
+read-only source/candidate validation and before any wizard reservation/publication.
+Revalidate source, candidate and locator fingerprints after ordinary convergence. A candidate or locator
+alone is preparation. Validated lifecycle and HA parent command records
+select the existing HA resume path; contradictory ownership blocks safely. Shared
+credential enrollment alone is not HA authority.
+
+For a genuinely ordinary source, call `_apply_impl` with explicit ordinary options
+and a separate child `ApplyReport`. Preserve the outer lock, selectors, diagnostic
+context and resource cleanup. Forward ordinary disruption approval only to that
+phase. A declined zero exit is not convergence. Require a verified terminal owner
+result and no pending work before fresh source verification and HA preparation.
+Pin the selected artifact across phases, retain source/resource identity, and
+never reuse an earlier HA approval after source effects. Preserve verified ordinary
+actions in the existing HA action report even when later preparation needs input
+or HA approval is declined; these actions do not claim HA convergence.
+
+Repair is a separate, diagnosed and confirmed phase. Generic repair guidance and
+successful reconstruction admission do not establish necessity. Only positively
+classified local software failures may offer the existing repair owner; retain
+its exact identity checks and default-No confirmation. A typed failed saved
+route-state validation is an eligible inspection diagnosis; no obsolete-format
+reader or generic exception may substitute for that predicate. Ordinary repair
+may reuse an existing default-known-hosts pin only through the canonical trust
+policy and exact retained-VM binding, without network enrollment or a new private
+host identity. This also covers inspection failing before managed trust publication.
+Unknown or ambiguous
+failures return their original diagnostic and recovery instructions. After repair,
+rerun ordinary verification before considering HA. Do not add compatibility readers
+or use repair as the default release upgrade.
+
+Explicit HA input retains HA ownership and recovery semantics. At the ordinary
+retained-member handoff boundary, require the selected first-party release/artifact
+rather than silently upgrading it during conversion; otherwise direct the operator
+to the original ordinary source conversion entry point. Fresh standby installation
+and established HA upgrades retain their existing owners. Explicitly selected
+passive public addresses may use operator-chosen allocation names. Provisioning
+resolves the exact address with a fail-closed project lookup, verifies project,
+subnet, public shape, stable allocation and no attachment, and records its exact
+ID through the existing effect journal. ID-bound resume preserves that identity;
+create-conflict reconciliation still requires the deterministic create name.
+
+Pre-upgrade inspection executes no installed agent until its files match the
+selected artifact. Older agents may ignore verification arguments and start a
+daemon; the streamed inspection must not assume their CLI capabilities.
+
+Package/runtime verification uses the existing exact file, dependency, asset,
+current-boot and configuration proofs. Tunnel and route evidence retains its actual
+scope: loaded local tunnel configuration, routing invariants, selected path and
+owned cloud routes are distinct from remote-peer and workload reachability. The
+result must not promote unknown workload connectivity to ready. Independent private
+workload probes belong to live qualification, not deployment orchestration.
+
+#### Selected Option
+
+Compose ordinary convergence and HA conversion through existing owners with a
+strict prerequisite boundary and separate approvals. Keep one public command.
+
+#### Alternatives Considered
+
+Manual upgrade before conversion is safe but leaves the requested workflow to the
+operator. Combined package upgrade during HA handoff mixes failure boundaries.
+Automatic full repair on any failure would mistake unknown outcomes for diagnosed
+software defects. A new persistent conversion engine duplicates existing authority.
+
+#### Implementation Boundaries
+
+`deploy/ha_convergence.py`, `deploy/ha_conversion.py` and a focused prerequisite
+module own orchestration. Existing ordinary, repair, release, lifecycle and route
+owners keep effects and durable receipts. CLI help, recovery guidance and README
+explain the prerequisite and distinct approval/verification scopes.
+
+#### Test-First Success Criteria
+
+Demonstrate current failure of prerequisite ordering/gating tests, then prove both
+routing modes stop before HA effects on incomplete ordinary convergence. Prove
+existing HA resume never runs ordinary apply and reports remain singular.
+
+#### Validation Plan
+
+Run focused prerequisite, consolidation, conversion, ordinary, repair and handoff
+regressions; scoped lint/types; full local suite and candidate build. Freeze the
+new candidate before live tests; preserve the earlier issue-fix candidate evidence.
+
+#### Test Plan
+
+Use authentic older ordinary BGP and Static installations and invoke conversion
+without manually pre-upgrading them. Verify actual internal ordinary transition,
+exact retained identities/artifact, HA ownership/routes and bidirectional private
+workload traffic. Keep repair and normal-upgrade evidence separate; remove exact
+owned fixtures and credentials after all trials.
+
+#### Evaluation Plan
+
+Require negative-control and changed-path proof. No installed/live success claims
+until the corresponding candidate runs and independent postconditions pass.
+
+#### Rollout And Rollback
+
+Keep interrupted work under its original owner and resume it. Preserve the source,
+separate candidate and historical receipts. Stop safely on ambiguous ownership;
+never manually pre-satisfy product transitions to obtain a successful test.
+
+#### Done Definition
+
+Internal prerequisite ordering, recovery boundaries and reporting pass local and
+live BGP/Static qualification with complete scoped cleanup and requested review.
+
+#### Implementation Evidence
+
+Implemented by `conversion_prerequisite`, protected resolver callbacks and the
+existing ordinary/repair owners. One invocation freezes its release across
+prerequisite and HA phases, including predecessor replanning. Fresh retained-member
+release admission rejects an old or file-drifted explicit HA candidate. Internal
+repair retains its own recovery invocation; ordinary apply and standalone repair
+keep their existing dispatch and confirmation contracts. CLI help, README and
+changelog describe ordering, approval separation and verification limits.
+
+#### Verification Evidence
+
+Ordering, approval isolation, dry-run failure status, retained ownership,
+immutable artifact selection and explicit repair gating have focused regressions.
+Negative controls failed before the respective fixes for legacy-agent inspection,
+route-state diagnosis, existing bound SSH pins and selected public-allocation
+reuse. Existing ordinary apply, standalone repair, consolidation and wizard
+coverage passes. The final source suite passed 8,656 tests with 159 isolated
+native fixtures skipped; scoped Ruff, formatting, mypy and built-wheel help pass.
+
+The frozen development builds v9, v10 and v11 identify
+0.6.10.dev261272, 0.6.10.dev261273 and 0.6.10.dev261274 respectively;
+these are test artifacts, not published releases.
+
+The authentic 0.5.9 BGP trial used the v9 candidate: ordinary convergence reached
+a diagnosed saved-route-state failure, separately confirmed native repair ran,
+and fresh ordinary verification passed before any HA candidate or lifecycle.
+Independent checks proved all 262 selected package files, retained VM and disk,
+owned routes and 20/20 private packets in each direction. After an explicit
+public-allocation reuse defect was repaired, the v10 CLI resumed the exact v9
+artifact and operation through healthy HA. Both installed packages, exclusive
+shared ownership, routes and bidirectional private traffic passed independently.
+A separate plain apply upgraded that HA pair to v10 while retaining both boot
+identities; exact package files and fresh HA health passed. These are bounded
+v9/v10 live results, not a claim that v11 BGP conversion was replayed.
+
+The authentic 0.6.9 Static trial used the final v11 candidate. One native
+apply --convert-to-ha completed ordinary upgrade without repair, then paused
+at the wizard for independent exact-package, ordinary runtime, retained VM/disk,
+owned-route and 20/20 bidirectional private-traffic checks. No HA candidate or
+lifecycle existed at that boundary. The same command then completed separately
+approved HA conversion, retaining the VM/disk and reusing the selected passive
+public allocation. All four gateways across the converted and peer HA pairs
+matched the 262-file v11 artifact; independent fresh HA health, exclusive shared
+ownership, route next hops and 20/20 private packets in each direction passed.
+The old fixture's earlier failed traffic baseline was preserved and recreated
+through native destroy/apply before this clean trial; it is not counted as a
+passing conversion or a repair of old-release selection behavior.
+
+Private workload probes are test-only. Product connectivity remains unknown
+without workload evidence. Earlier BGP observation windows included packet loss;
+bounded captures localized missing encrypted packets outside the guests, without
+proving a provider cause or sustained loss-free service. The separately repaired
+HA BGP/Static route-kind replacement has source regression proof but no clean
+live mode-switch replay. Original v3 issue-fix and four automatic-failover trials
+remain separate candidate evidence.
+
+After native gateway destruction, exact owned fixture resources, implicit child
+pools and all seven test service-account credential graphs were verified absent
+across both projects. Fresh complete inventories matched the captured baseline
+resource IDs and specification fields and preserved all 56 baseline accounts.
+This is scoped cleanup proof, not a full comparison of every VM/disk field.
+Generated local deployment, credential and trust files and exact candidate caches
+were removed while preserving operator profiles and the pre-existing release cache.
+
+<!-- /FEATURE: FEAT-047 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

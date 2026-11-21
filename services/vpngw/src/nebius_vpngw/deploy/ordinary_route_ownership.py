@@ -224,6 +224,23 @@ class RouteJournal(Journal):
         state = self.snapshot()
         return state["transaction"] if state else None
 
+    def retire_unsubmitted(self, expected: dict) -> None:
+        """Archive an exact effect-free intent; never discard cloud receipts."""
+        transaction = self.state.get("transaction")
+        if (
+            self._lock is None
+            or self.state != expected
+            or transaction is None
+            or transaction["phase"] != "pending"
+            or transaction["plan"] is None
+            or transaction["operations"]
+            or transaction["verified"]
+        ):
+            raise RuntimeError("Route intent is not exactly unsubmitted")
+        self.archive()
+        self.state["transaction"] = None
+        self.save()
+
     def begin(self, plan: dict, *, approval: str) -> None:
         from .ordinary_route_plan import intent
 

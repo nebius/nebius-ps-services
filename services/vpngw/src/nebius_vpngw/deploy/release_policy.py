@@ -25,6 +25,16 @@ class ReleaseBlocked(DiagnosticFailure):
         )
 
 
+class ConversionUpgradeRequired(DiagnosticFailure):
+    first = Failure("conversion", "ordinary-upgrade-required")
+
+    def __init__(self):
+        super().__init__(
+            "The retained ordinary gateway requires release convergence before HA. "
+            "Run apply --convert-to-ha with the original ordinary configuration."
+        )
+
+
 def classify(observed: dict, selected: str) -> str:
     try:
         desired = Version(selected)
@@ -82,6 +92,7 @@ def require_targets(
     wheel: Path,
     *,
     resume: Callable[[str], bool] | None = None,
+    ordinary_conversion: frozenset[str] = frozenset(),
 ) -> None:
     if not targets:
         return
@@ -94,13 +105,31 @@ def require_targets(
     if any(classify(observed, selected) == "newer" for observed in observations.values()):
         raise ReleaseBlocked("newer")
     for name, observed in observations.items():
-        require(
+        assessment = require(
             observed,
             selected,
             owned_resume=bool(
                 classify(observed, selected) == "unknown" and resume is not None and resume(name)
             ),
         )
+        if name in ordinary_conversion:
+            if assessment != "matched":
+                raise ConversionUpgradeRequired()
+            from . import ordinary_apply
+
+            manifest = ordinary_apply.artifact(wheel, by_name[name].config_yaml)
+            installed = ordinary_apply.remote(
+                ssh,
+                targets[name],
+                by_name[name],
+                local,
+                {"action": "inspect-package", "manifest": manifest},
+            )["observation"]
+            if (
+                installed["files"] != manifest["files"]
+                or installed["package_version"] != manifest["version"]
+            ):
+                raise ConversionUpgradeRequired()
 
 
 def package_resume(

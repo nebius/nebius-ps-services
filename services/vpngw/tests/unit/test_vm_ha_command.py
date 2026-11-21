@@ -103,6 +103,14 @@ def isolated_package_recovery_root(monkeypatch, tmp_path):
 
 
 @pytest.fixture
+def verified_ordinary_conversion(monkeypatch):
+    """These HA UI cases begin after the ordinary owner verified its phase."""
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.conversion_prerequisite.run", lambda *args, **kwargs: False
+    )
+
+
+@pytest.fixture
 def ha_apply_admission(monkeypatch):
     """Isolate existing HA orchestration oracles from schema/cloud preflight.
 
@@ -1983,6 +1991,7 @@ def test_vm_ha_interactive_conversion_stops_resolve_spinner_before_prompt(
     monkeypatch,
     sample_config: dict,
     tmp_path: Path,
+    verified_ordinary_conversion,
 ) -> None:
     source = tmp_path / "gateway.config.yaml"
     original = yaml.safe_dump(sample_config, sort_keys=False)
@@ -2023,6 +2032,7 @@ def test_vm_ha_interactive_conversion_interrupt_has_no_dangling_progress_or_effe
     monkeypatch,
     sample_config: dict,
     tmp_path: Path,
+    verified_ordinary_conversion,
 ) -> None:
     source = tmp_path / "gateway.config.yaml"
     original = yaml.safe_dump(sample_config, sort_keys=False)
@@ -2363,6 +2373,7 @@ def test_vm_ha_json_noninteractive_ordinary_input_requires_conversion_input(
     monkeypatch,
     sample_config: dict,
     tmp_path: Path,
+    verified_ordinary_conversion,
 ) -> None:
     source = tmp_path / "gateway.config.yaml"
     source.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")
@@ -2387,7 +2398,7 @@ def test_vm_ha_json_noninteractive_ordinary_input_requires_conversion_input(
     payload = json.loads(result.stdout)
     assert payload["ha"]["classification"] == "conversion-required"
     assert payload["ha"]["reasons"] == ["conversion-input-required"]
-    assert payload["ha"]["actions"] == []
+    assert payload["ha"]["actions"] == ["ordinary-convergence-verified"]
     assert payload["ha"]["failover_tested"] is False
     assert not (tmp_path / "gateway.vm-ha.config.yaml").exists()
 
@@ -4541,6 +4552,7 @@ def test_vm_ha_healthy_rerun_rejects_surplus_approval_without_effects(
 def test_vm_ha_rejects_approval_when_conversion_still_needs_input(
     sample_config: dict,
     tmp_path: Path,
+    verified_ordinary_conversion,
 ) -> None:
     source = tmp_path / "gateway.config.yaml"
     source.write_text(yaml.safe_dump(sample_config, sort_keys=False), encoding="utf-8")

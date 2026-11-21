@@ -43,6 +43,58 @@ def test_unknown_never_means_absent_or_permits_newer_recovery():
         release_policy.require({"state": "present", "version": "0.6.7"}, "0.6.6", owned_resume=True)
 
 
+@pytest.mark.parametrize(
+    "version,files,expected",
+    [
+        ("0.5.9", {"package": "exact"}, "upgrade"),
+        ("0.6.6", {"package": "drift"}, "upgrade"),
+        ("0.6.6", {"package": "exact"}, None),
+        ("0.6.7", {"package": "exact"}, "newer"),
+        (None, {"package": "exact"}, "unknown"),
+    ],
+)
+def test_direct_candidate_cannot_bypass_ordinary_release_alignment(
+    monkeypatch, version, files, expected
+):
+    from nebius_vpngw.deploy import ordinary_apply
+
+    monkeypatch.setattr(release_policy, "wheel_version", lambda _: "0.6.6")
+    monkeypatch.setattr(
+        release_policy,
+        "inspect",
+        lambda *a: {"state": "present" if version else "unknown", "version": version},
+    )
+    monkeypatch.setattr(
+        ordinary_apply, "artifact", lambda *a: {"version": "0.6.6", "files": {"package": "exact"}}
+    )
+    monkeypatch.setattr(
+        ordinary_apply,
+        "remote",
+        lambda *a: {"observation": {"package_version": version, "files": files}},
+    )
+
+    def check():
+        release_policy.require_targets(
+            None,
+            {"retained": "target"},
+            (NS(hostname="retained", config_yaml="config"),),
+            {},
+            Path("unused"),
+            ordinary_conversion=frozenset({"retained"}),
+        )
+
+    if expected is None:
+        check()
+    else:
+        error = (
+            release_policy.ConversionUpgradeRequired
+            if expected == "upgrade"
+            else release_policy.ReleaseBlocked
+        )
+        with pytest.raises(error):
+            check()
+
+
 def test_batch_newer_blocks_before_any_unknown_recovery(monkeypatch):
     monkeypatch.setattr(release_policy, "wheel_version", lambda _: "0.6.6")
     observations = {

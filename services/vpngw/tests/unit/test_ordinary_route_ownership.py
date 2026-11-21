@@ -86,6 +86,45 @@ def test_names_labels_and_matching_destinations_never_adopt_external_routes(rout
     assert not journal.root.exists()
 
 
+def test_unsubmitted_retirement_requires_lock_and_exact_snapshot(route_case):
+    journal, _request, plan, _state, _create = route_case
+    with journal:
+        journal.begin(plan, approval="a" * 64)
+    expected = journal.snapshot()
+    before = journal.path.read_bytes()
+    with pytest.raises(RuntimeError, match="exactly unsubmitted"):
+        journal.retire_unsubmitted(expected)
+    with journal, pytest.raises(RuntimeError, match="exactly unsubmitted"):
+        journal.retire_unsubmitted({**expected, "revision": expected["revision"] + 1})
+    assert journal.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("progress", ["intent", "settled", "verified"])
+def test_unsubmitted_retirement_never_discards_effect_provenance(route_case, progress):
+    journal, request, plan, state, create = route_case
+    with journal:
+        journal.begin(plan, approval="a" * 64)
+        if progress == "verified":
+            journal.state["transaction"]["verified"].append("create")
+            journal.save()
+        else:
+            cloud = Cloud(object(), journal)
+            if progress == "intent":
+                cloud.admit_request = lambda request: (_ for _ in ()).throw(
+                    RuntimeError("admission changed")
+                )
+                with pytest.raises(RuntimeError, match="admission changed"):
+                    cloud.mutate("create", request, create)
+                assert state.effects == 0
+            else:
+                cloud.mutate("create", request, create)
+    expected = journal.snapshot()
+    before = journal.path.read_bytes()
+    with journal, pytest.raises(RuntimeError, match="exactly unsubmitted"):
+        journal.retire_unsubmitted(expected)
+    assert journal.path.read_bytes() == before
+
+
 def test_successful_creation_and_exact_readback_are_both_required(route_case):
     journal, request, plan, state, create = route_case
     with journal:

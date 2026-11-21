@@ -11,6 +11,41 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Preserve existing cloud route authority during HA BGP/Static mode changes.
+  Replace the route before committing its new kind, and retain the predecessor
+  kind when replacement rolls back or resumes after interruption.
+
+- Reuse explicitly selected, unattached passive public allocations during HA
+  provisioning and exact-ID resume, including allocations with operator-chosen
+  names. Preserve strict project, subnet, address, state, and attachment checks.
+
+- Inspect unmatched installed packages without executing their agent. Older agents
+  can ignore a verification flag and start a daemon; ordinary upgrade now waits
+  until package files match the selected artifact before invoking runtime proof.
+- Preserve a failed saved route-state validation as a specific inspection
+  diagnosis. Conversion may offer the existing separately confirmed repair path
+  for that condition, without accepting obsolete state or repairing unknown errors.
+- Let ordinary repair reuse an existing operator host-key pin bound to the exact
+  retained VM when ordinary inspection stopped before publishing managed trust.
+  Missing pins and changed retained identities remain blocked.
+- Run ordinary upgrade and exact local verification inside `apply --convert-to-ha`
+  before BGP or Static HA preparation. Keep one release artifact, separate ordinary
+  and HA approvals, and the original owner for interrupted conversions. Only a
+  diagnosed local software failure can offer separately confirmed repair, followed
+  by ordinary verification; workload traffic remains an independent test.
+- Keep resumed HA package verification outside the completed status-read budget.
+  The existing guest owner may finish verification without replaying package
+  installation; unknown verification still leaves the original operation pending
+  and cannot consume a repair attempt or confirm success.
+- Retire an ordinary BGP withdrawal plan when current evidence no longer permits
+  withdrawal and no cloud operation or verified effect exists. Archive the unused
+  plan and preserve route ownership so it cannot permanently block HA conversion;
+  retain all existing operation receipts for reconciliation.
+- Classify ordinary-to-HA handoff import and execution failures even during
+  streamed bundle loading. Preserve missing-response outcomes and bounded guest
+  exit evidence instead of reporting an operator interruption; keep raw guest
+  stderr private.
+
 - Increase the shared APT metadata-refresh maximum from 120 to 180 seconds while
   respecting shorter enclosing deadlines and reserving ten seconds for cleanup.
   Distinguish refresh timeout, request expiry and clear repository failures using

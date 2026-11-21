@@ -4126,6 +4126,10 @@ resource identities except effects explicitly included in an approved plan.
   Use the authoritative generated HA configuration after conversion. Help,
   successful no-ops and declined approval are not deployment failures; pending
   operations retain truthful resume guidance. Unknown causes stay unknown.
+  Ordinary-to-HA streamed admission classifies import and execution failures
+  even before its guest modules finish loading. Missing responses retain an
+  unknown operation outcome and any available bounded process exit status,
+  never an operator-interruption claim or raw guest stderr.
 - AC-021: Final-candidate qualification retains 28 core cells: four topology and
   routing combinations by fresh apply, authentic ordinary upgrade, unchanged
   reapply, configuration change, interrupted resume, dry-run and repair followed
@@ -4481,6 +4485,7 @@ existing effect ownership or weakening deployment safety.
   artifact and infrastructure parity before a healthy no-op. Runtime controllers
   remain the sole continuous healing, rearm and failover owners.
 - Explicit --convert-to-ha preserves Single YAML and publishes separate HA YAML.
+  REQ-045 adds verified ordinary convergence before HA preparation.
   A protected source-to-candidate record makes repeats with either YAML and a
   custom output idempotent, including later legitimate HA edits. It selects
   configuration only; existing lifecycle/cloud checks still establish authority.
@@ -4949,6 +4954,74 @@ the historical traffic-loss finding and blocked clean-upgrade qualification;
 the waiver does not establish unperformed acceptance.
 
 <!-- /REQUIREMENT: REQ-044 -->
+
+<!-- REQUIREMENT: REQ-045 status=active priority=P0 type=feature -->
+### REQ-045: Prepare ordinary gateways before HA conversion
+
+#### User Story
+
+A single `apply --convert-to-ha` invocation upgrades and verifies its retained
+ordinary gateway before beginning HA conversion, in both BGP and Static modes.
+The operator need not discover the required ordinary-upgrade ordering manually.
+
+#### Acceptance Criteria
+
+- Before candidate publication, passive-address reservation or HA effects, invoke
+  the existing ordinary apply owner against the preserved ordinary source. Older
+  releases upgrade normally; matching releases verify exact artifact, dependencies,
+  managed assets, runtime, tunnel configuration and owned routes. Version text alone
+  is insufficient. Keep the same selected immutable release through both phases.
+- A diagnosed local software failure may enter the existing explicitly confirmed
+  repair workflow only when its admission is satisfied. Never infer repair need
+  from generic recovery advice. Preserve default-No confirmation, retained resource
+  identity and fresh ordinary verification after repair. Unknown identity, newer
+  guest releases, unavailable observations and uncertain operations remain blocked
+  or pending; they must not trigger speculative reconstruction.
+- Continue to HA only after verified ordinary convergence. Cancellation, required
+  approval, pending work, unknown evidence and failed verification stop before HA
+  effects. Ordinary approval never authorizes HA resources or interruption effects.
+- Reuse the existing command lock, diagnostics, effect owners and single terminal
+  report. Preserve exact interrupted-operation authority. Candidate or locator
+  existence alone never proves conversion has started; validated HA ownership
+  routes retries to HA recovery without ordinary apply against a converted host.
+- Explicit HA input continues through its owning HA workflow. An ordinary retained
+  guest that still needs a release upgrade cannot bypass prerequisite convergence
+  by supplying an HA candidate directly; return actionable source-upgrade guidance.
+- Keep dry-run non-mutating and preserve effective selectors, protected source and
+  candidate provenance, exact artifact identity and distinct approval domains.
+- The CLI verifies its product-owned package, runtime, tunnel and route evidence.
+  Workload traffic probes and private workload VMs are test fixtures only: do not
+  create them from conversion or report end-to-end traffic as verified without a
+  separate actual probe.
+
+#### Negative Criteria
+
+- No public-command recursion, duplicate transaction owner, implicit full repair,
+  forced downgrade, version-only readiness, speculative success or legacy shim.
+- No ordinary apply after HA effects have started and no stale HA approval reuse
+  after source convergence changes the observed deployment.
+
+#### Validation Method
+
+Negative-control orchestration tests, focused owner regressions, full local checks,
+and frozen-candidate live conversion from authentic older ordinary BGP and Static
+installations through the single conversion entry point.
+
+#### Test Method
+
+Cover older, matched, drifted, newer and unknown release states; pending/resumed
+upgrades; cancellation and approval separation; eligible and ineligible repair;
+existing candidate versus started HA ownership; dry-run and single-result JSON.
+Independently verify retained VM/disks, exact artifacts, routes, exclusive shared
+ownership and private workload traffic before and after conversion, then clean up.
+
+#### Evaluation Method
+
+Report source, local, installed and live proof separately. Historical candidate
+passes are not evidence for the new orchestration. Preserve failed trials and
+classify any recovery intervention before replay.
+
+<!-- /REQUIREMENT: REQ-045 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->

@@ -14,6 +14,7 @@ from typing import Any
 
 import click
 
+from .apply_command import ReplanReady
 from .apply_plan import Evidence, Outcome, Result
 from .ha_composite import ResultReady
 from .ha_conversion import resolve as resolve_conversion
@@ -107,11 +108,13 @@ def converge(
     dry_run: bool = False,
     approve: str | None = None,
     output_format: Any = None,
+    ordinary_options: dict[str, Any] | None = None,
 ) -> Any:
     result: Any
     effective_config_file = local_config_file
     observed_health = api.VMHACommandHealth.UNKNOWN
     convergence_effects_may_have_started = False
+    prerequisite_actions: tuple[str, ...] = ()
     interactive = (
         output_format is api._VMHAOutputFormat.TEXT and api._vm_ha_wizard_streams_interactive()
     )
@@ -135,6 +138,26 @@ def converge(
             )
 
         try:
+
+            def prerequisite(source: Path, candidate: Path, identity: dict[str, str]) -> None:
+                nonlocal approve, prerequisite_actions
+                from . import conversion_prerequisite
+
+                if conversion_prerequisite.ha_owns(candidate, identity):
+                    return
+                changed = conversion_prerequisite.run(
+                    api,
+                    REPORT.get(),
+                    source=source,
+                    options=ordinary_options or {},
+                    interactive=interactive,
+                )
+                prerequisite_actions = ("ordinary-convergence-verified",)
+                if changed:
+                    prerequisite_actions += ("ordinary-changes-applied",)
+                    REPORT.get().started = True
+                    approve = None
+
             effective = resolve_conversion(
                 api=api,
                 source_path=local_config_file,
@@ -146,6 +169,7 @@ def converge(
                 before_interactive_wizard=finish_resolve_progress,
                 progress_sink=progress_sink,
                 ordinary_trust_preflight=api._ordinary_vm_ha_conversion_trust_prerequisite,
+                ordinary_prerequisite=prerequisite if ordinary_options is not None else None,
             )
         except BaseException:
             if resolve_progress_active:
@@ -989,6 +1013,8 @@ def converge(
                     actions=(*actions, "standby-rearmed"),
                     dry_run=False,
                 )
+    except (ReportedExit, ReplanReady):
+        raise
     except api.WizardInterrupted:
         result = api.VMHACommandResult(
             outcome=api.VMHACommandOutcome.FAILED,
@@ -996,6 +1022,7 @@ def converge(
             health=api.VMHACommandHealth.UNKNOWN,
             effective_config_file=output or api._default_vm_ha_candidate_path(local_config_file),
             reasons=("input-interrupted",),
+            actions=prerequisite_actions,
             next_action="rerun apply when the required input is available",
         )
         raise Interrupted(result) from None
@@ -1008,6 +1035,7 @@ def converge(
             health=api.VMHACommandHealth.UNKNOWN,
             effective_config_file=effective_config_file,
             reasons=("interrupted",),
+            actions=prerequisite_actions,
             next_action="rerun apply",
         )
         raise Interrupted(result) from None
@@ -1115,7 +1143,7 @@ def converge(
         )
     finally:
         progress_reporter.close_unfinished()
-    return result
+    return replace(result, actions=(*prerequisite_actions, *result.actions))
 
 
 # Admission and reporting remain outside the effect orchestration above.
@@ -1148,7 +1176,7 @@ def validate_options(options: dict[str, Any]) -> None:
     ):
         raise ArgumentFailure("approval-conflict")
     if modes and any(
-        options.get(key)
+        options.get(key) and not (key == "approve_disruption" and options.get("convert_to_ha"))
         for key in (
             "recreate_gw",
             "resume_replacement",
@@ -1288,6 +1316,7 @@ def _project(api: Any, report: Any, result: Any, *, specialized: bool = False) -
                 "standby-auto-healing-already-enabled",
                 "standby-auto-healing-already-disabled",
                 "apply-converged",
+                "ordinary-convergence-verified",
             }
             for action in result.actions
         )
@@ -1354,7 +1383,7 @@ def run(api: Any, report: Any, **options: Any) -> None:
         not is_ha
         and not convert
         or any(
-            options.get(key)
+            options.get(key) and not (key == "approve_disruption" and convert)
             for key in (
                 "recreate_gw",
                 "resume_replacement",
@@ -1399,6 +1428,7 @@ def run(api: Any, report: Any, **options: Any) -> None:
                 dry_run=dry_run,
                 approve=approve,
                 output_format=ha_format,
+                ordinary_options=options if convert else None,
             )
             if (
                 "standby-rearmed" in result.actions

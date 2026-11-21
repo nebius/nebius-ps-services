@@ -8244,6 +8244,9 @@ def _apply_impl(
             planned_instances,
             local_cfg,
             release_wheel,
+            ordinary_conversion=frozenset({vm_ha_migration_active_name})
+            if vm_ha_migration_active_name is not None and ha_pending_prerequisites is None
+            else frozenset(),
             resume=lambda name: release_policy.package_resume(
                 SSHPush(ssh_policy=ssh_policy),
                 release_targets[name],
@@ -13660,7 +13663,7 @@ def apply(
     convert_to_ha: bool = typer.Option(
         False,
         "--convert-to-ha",
-        help="Prepare or reuse a separate HA YAML, then reconcile it idempotently",
+        help="Upgrade and verify the ordinary gateway, then prepare or resume its HA conversion",
     ),
     output: Path | None = typer.Option(
         None,
@@ -13754,66 +13757,69 @@ def apply(
 
 
 def _run_apply_reported(report: ApplyReport, **kwargs: t.Any) -> None:
-    try:
-        from .deploy.apply_command import ReplanReady
-        from .deploy.ha_convergence import ReportedExit, run
+    from .deploy.agent_artifact import frozen_selection
 
+    with frozen_selection() if kwargs.get("convert_to_ha") else contextlib.nullcontext():
         try:
-            run(sys.modules[__name__], report, **kwargs)
-        except ReplanReady:
-            # Settlement has its own approval. Re-read live state and require a
-            # new approval; the retired command's digest cannot authorize it.
-            for option in (
-                "approve",
-                "approve_disruption",
-                "approve_vm_ha_migration",
-                "recover_vm_ha_migration",
-                "replace_failed_vm_ha_passive",
-            ):
-                kwargs[option] = None
-            from .deploy.recovery import CURRENT
+            from .deploy.apply_command import ReplanReady
+            from .deploy.ha_convergence import ReportedExit, run
 
-            context = CURRENT.get()
-            if context is not None:
-                context.consume_approval()
-            run(sys.modules[__name__], report, **kwargs)
-    except ReportedExit:
-        raise
-    except typer.Exit as error:
-        if error.exit_code != 0:
-            report.failed(error)
-        else:
-            from .deploy.recovery import ApprovalDeclined
+            try:
+                run(sys.modules[__name__], report, **kwargs)
+            except ReplanReady:
+                # Settlement has its own approval. Re-read live state and require a
+                # new approval; the retired command's digest cannot authorize it.
+                for option in (
+                    "approve",
+                    "approve_disruption",
+                    "approve_vm_ha_migration",
+                    "recover_vm_ha_migration",
+                    "replace_failed_vm_ha_passive",
+                ):
+                    kwargs[option] = None
+                from .deploy.recovery import CURRENT
 
-            if isinstance(error, ApprovalDeclined):
-                report.cancelled = True
-        raise
-    except SystemExit as error:
-        if error.code is not None and error.code != 0:
+                context = CURRENT.get()
+                if context is not None:
+                    context.consume_approval()
+                run(sys.modules[__name__], report, **kwargs)
+        except ReportedExit:
+            raise
+        except typer.Exit as error:
+            if error.exit_code != 0:
+                report.failed(error)
+            else:
+                from .deploy.recovery import ApprovalDeclined
+
+                if isinstance(error, ApprovalDeclined):
+                    report.cancelled = True
+            raise
+        except SystemExit as error:
+            if error.code is not None and error.code != 0:
+                report.failed(error)
+            raise
+        except (KeyboardInterrupt, EOFError, typer.Abort) as error:
             report.failed(error)
-        raise
-    except (KeyboardInterrupt, EOFError, typer.Abort) as error:
-        report.failed(error)
-        raise
-    except (
-        IngressCapabilityError,
-        _VMHAAgentPackagePreparationFailed,
-        PreparationBlocked,
-    ) as error:
-        report.failed(error)
-        raise typer.Exit(code=1) from error
-    except ReplayWindowCapabilityError as error:
-        report.failed(error)
-        print("[red]Apply stopped: replay_window requires a matching agent wheel.[/red]")
-        print(
-            "[yellow]For a source checkout, rebuild with "
-            "'python -m build --wheel --no-isolation' in the prepared project environment. "
-            "Select the matching wheel with VPNGW_AGENT_WHEEL, then rerun apply.[/yellow]"
-        )
-        raise typer.Exit(code=1) from None
-    except Exception as error:
-        report.failed(error)
-        raise
+            raise
+        except (
+            IngressCapabilityError,
+            _VMHAAgentPackagePreparationFailed,
+            PreparationBlocked,
+        ) as error:
+            report.failed(error)
+            raise typer.Exit(code=1) from error
+        except ReplayWindowCapabilityError as error:
+            report.failed(error)
+            print("[red]Apply stopped: replay_window requires a matching agent wheel.[/red]")
+            print(
+                "[yellow]For a source checkout, rebuild with "
+                "'python -m build --wheel --no-isolation' in the prepared project environment. "
+                "Select the matching wheel with VPNGW_AGENT_WHEEL, then rerun apply.[/yellow]"
+            )
+            raise typer.Exit(code=1) from None
+        except Exception as error:
+            report.failed(error)
+            raise
 
 
 @app.command(
@@ -22611,6 +22617,7 @@ def _resolve_vm_ha_effective_config(
     region: str | None,
     before_interactive_wizard: t.Callable[[], None] | None = None,
     progress_sink: _VMHAProgressSink | None = None,
+    ordinary_prerequisite: t.Callable[[], None] | None = None,
     ordinary_trust_preflight: (
         t.Callable[[Path, t.Mapping[str, t.Any]], VMHACommandResult | None] | None
     ) = None,
@@ -22694,6 +22701,15 @@ def _resolve_vm_ha_effective_config(
                 _resolve_vm_ha_region(existing, explicit_region=region)
             except ValueError:
                 return _vm_ha_region_unavailable(destination)
+            if ordinary_prerequisite is not None:
+                ordinary_prerequisite()
+                if (
+                    _file_fingerprint(source_path) != source_fingerprint
+                    or _file_fingerprint(destination) != existing_fingerprint
+                ):
+                    from .deploy.ha_conversion import ConversionFailure
+
+                    raise ConversionFailure("conversion-record-changed")
             mode = stat.S_IMODE(destination.lstat().st_mode)
             if mode == 0o600:
                 if _file_fingerprint(destination) != existing_fingerprint:
@@ -22768,6 +22784,13 @@ def _resolve_vm_ha_effective_config(
         _resolve_vm_ha_region(conversion_source, explicit_region=region)
     except ValueError:
         return _vm_ha_region_unavailable(destination)
+
+    if ordinary_prerequisite is not None:
+        ordinary_prerequisite()
+        if _file_fingerprint(source_path) != source_fingerprint:
+            from .deploy.ha_conversion import ConversionFailure
+
+            raise ConversionFailure("conversion-source-changed")
 
     if dry_run or not interactive:
         return _vm_ha_action_required(

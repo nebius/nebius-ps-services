@@ -4648,7 +4648,7 @@ class VMManager:
             "(best effort only)."
         )
 
-    def _validate_vm_ha_replayed_public_allocation(
+    def _validate_vm_ha_public_allocation(
         self,
         alloc_client: t.Any,
         alloc_obj: t.Any,
@@ -4656,15 +4656,16 @@ class VMManager:
         alloc_name: str,
         subnet_id: str,
         desired_ip: str,
+        require_name: bool = True,
     ) -> t.Any:
-        """Validate the exact unattached public allocation after create replay."""
+        """Validate an exact unattached allocation selected by address or create name."""
 
         alloc_obj = self._hydrate_allocation(alloc_client, alloc_obj)
         metadata = getattr(alloc_obj, "metadata", None)
         spec = getattr(alloc_obj, "spec", None)
         ipv4_public = getattr(spec, "ipv4_public", None) if spec is not None else None
         if (
-            self._allocation_name(alloc_obj) != alloc_name
+            (require_name and self._allocation_name(alloc_obj) != alloc_name)
             or str(getattr(metadata, "parent_id", "") or "") != (self.project_id or "")
             or ipv4_public is None
             or getattr(spec, "ipv4_private", None) is not None
@@ -4830,13 +4831,30 @@ class VMManager:
                 raise RuntimeError(
                     f"VM-HA approved public allocation is incomplete for {inst_name}"
                 )
-            alloc_obj = self._validate_vm_ha_replayed_public_allocation(
+            alloc_obj = self._validate_vm_ha_public_allocation(
                 alloc_client,
                 alloc_obj,
                 alloc_name=alloc_name,
                 subnet_id=subnet_id,
                 desired_ip=approved_ip,
+                require_name=False,
             )
+        elif desired_ip and self._vm_ha_journal is not None:
+            # The explicit address is the selection; an operator-reserved name
+            # need not equal our generated create name. Fail closed on lookup
+            # uncertainty, then bind the exact ID through the owning effect.
+            if alloc_client is None or not subnet_id:
+                raise RuntimeError("VM-HA selected public allocation requires its SDK and subnet")
+            alloc_obj = self._list_allocations_by_ip(alloc_client, fail_closed=True).get(desired_ip)
+            if alloc_obj is not None:
+                alloc_obj = self._validate_vm_ha_public_allocation(
+                    alloc_client,
+                    alloc_obj,
+                    alloc_name=alloc_name,
+                    subnet_id=subnet_id,
+                    desired_ip=desired_ip,
+                    require_name=False,
+                )
         elif desired_ip and self._vm_ha_journal is None:
             alloc_obj, _ = self._find_requested_public_allocation(
                 alloc_client,
@@ -4955,7 +4973,7 @@ class VMManager:
                     raise RuntimeError(
                         f"VM-HA public allocation {alloc_name} was absent after create conflict"
                     ) from e
-                return alloc_name, self._validate_vm_ha_replayed_public_allocation(
+                return alloc_name, self._validate_vm_ha_public_allocation(
                     alloc_client,
                     existing,
                     alloc_name=alloc_name,

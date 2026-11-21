@@ -276,10 +276,15 @@ def _start(client: Any, request: dict) -> tuple[Any, Any]:
     stdin, stdout, _stderr = client.exec_command(
         "sudo -n /usr/bin/python3 -B -c "
         + shlex.quote(
-            f"import base64,sys,time; _handoff_observation_deadline=time.monotonic()+{timeout!r}; "
-            "raw=sys.stdin.readline(4194305); "
-            "assert len(raw)<=4194304 and raw.endswith('\\n'); "
-            "exec(compile(base64.b64decode(raw.strip(),validate=True),'<ha-bootstrap>','exec'))"
+            "import base64,json,sys,time\n"
+            f"_handoff_observation_deadline=time.monotonic()+{timeout!r}\n"
+            "try:\n"
+            " raw=sys.stdin.readline(4194305)\n"
+            " assert len(raw)<=4194304 and raw.endswith('\\n')\n"
+            " exec(compile(base64.b64decode(raw.strip(),validate=True),'<ha-bootstrap>','exec'))\n"
+            "except Exception as error:\n"
+            " code='handoff_import_failed' if isinstance(error,ImportError) else 'handoff_execution_failed'\n"
+            " print(json.dumps({'status':'failed','stage':'inspect','error_code':code}),flush=True)\n"
         ),
         timeout=timeout,
     )
@@ -300,7 +305,15 @@ def _send(stdin: Any, request: dict) -> None:
 def _receive(stdout: Any) -> dict:
     raw = stdout.readline(2 * 1024 * 1024 + 1)
     if not raw:
-        raise EOFError("HA package observation connection closed")
+        from .apply_diagnostics import GuestResponseUnavailable
+
+        channel = getattr(stdout, "channel", None)
+        status = None
+        if channel is not None and channel.exit_status_ready():
+            observed = channel.recv_exit_status()
+            if type(observed) is int and 0 <= observed <= 255:
+                status = observed
+        raise GuestResponseUnavailable("handoff-response", exit_status=status)
     value = json.loads(raw)
     if not isinstance(value, dict):
         raise ValueError("Ordinary-to-HA admission response invalid")
@@ -638,7 +651,11 @@ def corrective_action(ssh: Any, target: str, instance: Any, local: dict, request
     from .ssh_commands import budget
 
     if request["action"] not in {
-        "corrective-inspect", "corrective-plan", "corrective-reserve", "replan-inspect", "replan-settle"
+        "corrective-inspect",
+        "corrective-plan",
+        "corrective-reserve",
+        "replan-inspect",
+        "replan-settle",
     }:
         raise ValueError("unsupported corrective handoff action")
     duration = 600 if request["action"] in {"corrective-reserve", "replan-settle"} else 30

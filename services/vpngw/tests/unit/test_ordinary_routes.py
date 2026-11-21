@@ -104,6 +104,17 @@ def snapshot(guest, desired=None, proof=None):
     )
 
 
+@pytest.mark.parametrize("format_version", [None, 3, 4])
+def test_invalid_saved_route_state_is_diagnosed_without_rewriting_it(guest, format_version):
+    old, kernel, state, store, boot, _ = guest
+    state.write_text(json.dumps({"render_version": format_version, "resolved_config": old}))
+    before = state.read_bytes()
+    with pytest.raises(routes.RouteStateInvalid, match="ordinary_route_state_invalid"):
+        store.snapshot(old, state, kernel.run, boot)
+    assert state.read_bytes() == before
+    assert kernel.deletes == []
+
+
 def begin(guest, plan, identity="a", approved=True, previous=None, config_hash="b" * 64):
     _, _, _, store, _, manager = guest
     binding = {
@@ -655,7 +666,9 @@ def test_saved_proof_lost_reply_retry_rebinds_ledger_before_final_confirmation(
             }
 
         monkeypatch.setattr(ordinary_remote, "agent_receipt", receipt)
-        monkeypatch.setattr(ordinary_remote, "admit_routing_semantics", lambda manifest, request_id: None)
+        monkeypatch.setattr(
+            ordinary_remote, "admit_routing_semantics", lambda manifest, request_id: None
+        )
         ordinary_remote.final_confirmation(manifest, final, "f" * 32, retry)
         assert ops.Journal().read()["state"] == "complete"
     finally:

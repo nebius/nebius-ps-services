@@ -136,6 +136,10 @@ def inspect(
         trust_scope=scope(local, plan, project_id=manager.project_id),
         default_known_hosts_bindings=retained,
         allow_managed_repair=plan.vm_ha is None,
+        # Ordinary inspection may stop before publishing its managed receipt.
+        # Reuse the same existing operator pin with exact retained-VM bindings;
+        # this grants no network enrollment or replacement host identity.
+        allow_default_known_hosts_import=plan.vm_ha is None,
         persist_default_host_keys=False,
         host_identity_recovery=recover if plan.vm_ha is None else None,
     )
