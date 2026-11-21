@@ -20145,6 +20145,32 @@ class _VMHAPlannedCutoverVerificationUnavailable(RuntimeError):
         self.elapsed_seconds = elapsed_seconds
 
 
+class _VMHAPlannedCutoverError(RuntimeError):
+    """A diagnosed cutover failure with only closed, identity-free presentation."""
+
+    def __init__(
+        self,
+        *,
+        elapsed_seconds: float,
+        blocked: bool = False,
+        retry_phase: str | None = None,
+        controller_step_failed: bool = False,
+    ) -> None:
+        detail = (
+            "was blocked by the VM-HA controller"
+            if blocked
+            else f"did not complete within {elapsed_seconds:.1f}s"
+        )
+        if blocked and controller_step_failed:
+            detail += ": controller-step-failed"
+        if retry_phase in _VM_HA_TRANSFER_PHASE_LABELS.values():
+            detail += f"; the VM-HA controller was still retrying {retry_phase}"
+        guidance = _VM_HA_CONTROLLER_RECOVERY_GUIDANCE
+        if not blocked and retry_phase is None:
+            guidance = guidance.removeprefix("Forwarding remains fenced. ")
+        super().__init__(f"{detail}. {guidance}")
+
+
 class _VMHAPlannedCutoverVerificationIncomplete(RuntimeError):
     """Exact controller reproof did not reach terminal proof before its deadline."""
 
@@ -20585,17 +20611,13 @@ def _wait_for_vm_ha_planned_transfer(
         if last_observation_unavailable:
             raise _VMHAPlannedCutoverVerificationUnavailable(elapsed_seconds=elapsed)
         if last_retry_phase is not None:
-            raise RuntimeError(
-                f"{operation_name} did not complete within {elapsed:.1f}s; the VM-HA "
-                f"controller was still retrying {last_retry_phase}. "
-                f"{_VM_HA_CONTROLLER_RECOVERY_GUIDANCE}"
-            )
+            raise _VMHAPlannedCutoverError(elapsed_seconds=elapsed, retry_phase=last_retry_phase)
         if last_reproof_active:
             raise _VMHAPlannedCutoverVerificationIncomplete(
                 elapsed_seconds=elapsed,
                 budget_seconds=context.cutover_timeout_seconds,
             )
-        raise RuntimeError(f"{operation_name} did not complete within {elapsed:.1f}s")
+        raise _VMHAPlannedCutoverError(elapsed_seconds=elapsed)
 
     def restoration_error(
         message: str,
@@ -20698,9 +20720,10 @@ def _wait_for_vm_ha_planned_transfer(
                 last_reproof_active
                 or (detail == "controller-step-failed" and retryable_failure is not None)
             ):
-                raise RuntimeError(
-                    f"{operation_name} was blocked by the VM-HA controller: {detail}. "
-                    f"{_VM_HA_CONTROLLER_RECOVERY_GUIDANCE}"
+                raise _VMHAPlannedCutoverError(
+                    elapsed_seconds=elapsed,
+                    blocked=True,
+                    controller_step_failed=detail == "controller-step-failed",
                 )
         if elapsed >= next_progress:
             phase = last_progress_phase or (
@@ -26583,6 +26606,9 @@ def _run_vm_ha_planned_transfer(
             "when both members are reachable.",
             err=True,
         )
+        raise typer.Exit(code=1) from None
+    except _VMHAPlannedCutoverError as error:
+        typer.echo(f"{operation_name} {error}", err=True)
         raise typer.Exit(code=1) from None
     except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired):
         typer.echo(

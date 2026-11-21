@@ -7146,3 +7146,77 @@ def test_default_runtime_injects_publisher_send_health(tmp_path: Path) -> None:
         }
     finally:
         runtime.close(restore_guard=False)
+
+
+@pytest.mark.parametrize("after_wait", ["passive", "active", "inhibited"])
+def test_periodic_ha_maintenance_waits_for_transient_writer_and_rechecks_authority(
+    tmp_path, monkeypatch, after_wait
+):
+    import fcntl
+    import threading
+
+    from nebius_vpngw import ha_repair
+    from nebius_vpngw.agent import routing_guard
+
+    state = tmp_path / "state"
+    (state / "mtls").mkdir(parents=True)
+    monkeypatch.setattr(routing_guard, "VM_HA_STATUS_PATH", state / "status.json")
+    original_path = ha_repair.Path
+    monkeypatch.setattr(
+        ha_repair,
+        "Path",
+        lambda value: (
+            tmp_path / "routes.lock"
+            if str(value) == "/run/nebius-vpngw/fix-routes.lock"
+            else original_path(value)
+        ),
+    )
+    fd = os.open(state / "rearm.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    released = threading.Event()
+
+    def release():
+        released.set()
+        os.close(fd)
+
+    timer = threading.Timer(0.3, release)
+    checks = []
+    effects = []
+
+    def quiescent(_state):
+        assert released.is_set()
+        checks.append("fresh")
+
+    monkeypatch.setattr(
+        "nebius_vpngw.agent.vm_ha.auto_healing.require_auto_healing_writer_quiescent", quiescent
+    )
+    monkeypatch.setattr(
+        "nebius_vpngw.agent.main._vm_ha_writer_inhibition_operation_id",
+        lambda **kwargs: "pending" if after_wait == "inhibited" else None,
+    )
+    monkeypatch.setattr(routing_guard, "_vm_ha_route_maintenance_mode", lambda cfg: after_wait)
+    monkeypatch.setattr(
+        routing_guard,
+        "enforce_vm_ha_passive_routing_hygiene_locked",
+        lambda cfg: effects.append("passive"),
+    )
+    monkeypatch.setattr(
+        routing_guard, "_enforce_routing_invariants_locked", lambda cfg: effects.append("active")
+    )
+    cfg = {
+        "vm_ha": {
+            "cluster_id": "cluster",
+            "node": {"node_id": "a"},
+            "generation": {"generation_id": "a" * 64},
+        }
+    }
+    timer.start()
+    try:
+        routing_guard.enforce_periodic_routing_invariants(cfg)
+    finally:
+        timer.join()
+    assert checks == ["fresh"]
+    assert effects == ([] if after_wait == "inhibited" else [after_wait])
+    # Every acquired descriptor was released, including the inhibited return.
+    with ha_repair.writer_locks(state, deadline=time.monotonic() + 0.1):
+        pass

@@ -519,3 +519,29 @@ def test_classless_dhcp_gateway_matches_networkd_destination_selection():
 )
 def test_networkd_renewal_state_is_a_bitset(state, expected):
     assert underlay._configured({"ConfigState": state}) is expected
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (
+            underlay.UnderlayError("underlay kernel route is missing or conflicts with intent"),
+            "physical-route-missing",
+        ),
+        (underlay.UnderlayError("underlay command failed: networkctl"), "networkd-command-failed"),
+        (TimeoutError("secret-canary"), "deadline-exceeded"),
+        (RuntimeError("secret-canary"), "observation-unavailable"),
+    ],
+)
+def test_ha_underlay_failure_diagnostic_has_closed_reason(monkeypatch, error, reason):
+    from nebius_vpngw.agent.vm_ha import diagnostics
+
+    events = []
+    monkeypatch.setattr(underlay, "verify", lambda cfg: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(
+        diagnostics, "diagnostic", lambda event, **fields: events.append((event, fields))
+    )
+    assert not underlay.ready({"vm_ha": {}})
+    assert events == [("routing-safety-observation", {"scope": "underlay", "reason": reason})]
+    assert not underlay.ready({})
+    assert len(events) == 1  # Ordinary readiness retains its existing quiet behavior.

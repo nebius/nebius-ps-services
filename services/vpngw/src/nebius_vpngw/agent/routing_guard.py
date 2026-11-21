@@ -305,7 +305,10 @@ def enforce_periodic_routing_invariants(cfg: dict[str, Any]) -> None:
         state_dir = VM_HA_STATUS_PATH.parent
         with ExitStack() as stack:
             try:
-                stack.enter_context(writer_locks(state_dir, deadline=time.monotonic() + 0.1))
+                # Controller observation can hold rearm.lock longer than 100 ms.
+                # Give transient writers a bounded handoff opportunity, then
+                # recheck all authority below; never bypass a contended lock.
+                stack.enter_context(writer_locks(state_dir, deadline=time.monotonic() + 5.0))
             except RuntimeError:
                 print("[RoutingGuard] HA writer lock held; skipping")
                 return

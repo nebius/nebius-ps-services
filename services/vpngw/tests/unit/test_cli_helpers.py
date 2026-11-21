@@ -17536,3 +17536,69 @@ def test_ordinary_apply_stages_all_members_before_any_activation(
             ]
         ),
     ]
+
+
+@pytest.mark.parametrize("command", ("failover", "failback"))
+@pytest.mark.parametrize("output_format", ("text", "json"))
+@pytest.mark.parametrize("failure", ("blocked", "timeout"))
+def test_planned_cutover_failure_reaches_cli_with_safe_phase_guidance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    output_format: str,
+    failure: str,
+) -> None:
+    """Exercise the real waiter through the public handler, including redaction."""
+    import nebius_vpngw.cli as cli
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("project_id: project-test\n")
+    target_role = "passive" if command == "failover" else "active"
+    record = {
+        "schema": f"nebius-vpngw/vm-ha-manual-{command}-v1",
+        "cluster_id": "cluster-a",
+        "node_id": f"node-{target_role}",
+        "generation_id": "a" * 64,
+        "requested_at": 10.0,
+    }
+    context = SimpleNamespace(
+        target_role=target_role,
+        request_timeout_seconds=1.0,
+        cutover_timeout_seconds=1.0,
+        restoration_timeout_seconds=1.0,
+        status_reader=lambda: {"state": "blocked", "reasons": ["secret-canary-private-detail"]},
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_vm_ha_planned_target",
+        lambda **kw: SimpleNamespace(
+            outcome="standby-ready",
+            record={},
+            terminal_context=context,
+        ),
+    )
+    monkeypatch.setattr(cli, "_run_vm_ha_operator_command", lambda **kw: [record])
+    waiter = cli._wait_for_vm_ha_planned_transfer
+    ticks = iter((0.0, 2.0)) if failure == "timeout" else iter((0.0, 0.0, 0.0))
+    monkeypatch.setattr(
+        cli,
+        "_wait_for_vm_ha_planned_transfer",
+        lambda **kw: waiter(
+            **kw,
+            clock=lambda: kw["started_at"] + next(ticks),
+            sleeper=lambda _: pytest.fail("blocked or expired cutover must terminate"),
+        ),
+    )
+    result = CliRunner().invoke(
+        app,
+        [command, "vm", "--local-config-file", str(config_path), "--output-format", output_format],
+    )
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == record if output_format == "json" else result.stdout == ""
+    assert (
+        "blocked by the VM-HA controller" if failure == "blocked" else "did not complete within"
+    ) in result.stderr
+    assert "nebius-vpngw status --local-config-file <file>" in result.stderr
+    assert "journalctl -u nebius-vpngw-vm-ha.service" in result.stderr
+    assert "secret-canary" not in result.output
+    assert "successfully" not in result.output
