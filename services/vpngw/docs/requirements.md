@@ -4341,9 +4341,11 @@ on existing Ubuntu gateways without manually deleting checkpoints or replacing
 VMs. Support ordinary and VM-HA deployments in Static and BGP modes, including
 regional pairs. This explicit operation accepts a full VPN outage.
 
-Use an explicit recovery ladder: normal apply for convergence and upgrades;
-software repair on accessible retained VMs; then a separately confirmed last-resort
-VM rebuild when the retained guests cannot be recovered. The last resort uses
+Recommend normal apply for convergence and upgrades, software repair on accessible
+retained VMs, and a separately confirmed last-resort VM rebuild when retained guests
+cannot be recovered. This recommendation imposes no command-order prerequisite:
+operators may request repair directly, including for healthy or unchanged gateways,
+and proceed within that invocation after the default-No outage confirmation. The last resort uses
 canonical destroy followed by fresh apply from the same YAML through the SDK.
 It is never an implicit VM-deletion mode of apply or apply --repair.
 After verified destruction, fresh apply must not depend on the deleted guests'
@@ -4356,6 +4358,15 @@ preserve explicit operator trust sources and exact publication recovery.
   confirmation before changes. No separate repair dry-run or user-supplied digest
   is required. Declined or missing confirmation makes no changes. Ordinary apply
   preview and confirmation contracts remain unchanged.
+- Use a shared concise confirmation presentation for ordinary, VM-HA and regional
+  repair. Lead with "Normal apply is recommended for routine convergence." Then
+  describe software reconstruction and traffic interruption, list exact VM/disk
+  targets, and state the rebuilt and retained scope and absence of an overall
+  outage limit. Ask "Continue with software repair?" with No as the default;
+  regional pairs group targets by region and ask once for both regions. Yes
+  continues the current invocation; No or empty input cancels, and EOF or
+  interruption grants no repair authority. A recommendation never creates an
+  admission condition. Existing access, target and safety checks remain binding.
 - Immediately after confirmation, show animated repair progress on interactive
   stderr with the current stage, member and elapsed time. Cover preparation,
   dependency resolution, staging, isolation, package installation, activation
@@ -4364,6 +4375,13 @@ preserve explicit operator trust sources and exact publication recovery.
   useful stage transitions without terminal control sequences; JSON stdout stays
   one terminal result. Stop the display on success, failure and interruption;
   presentation failures never change repair authority, deadlines or outcomes.
+- Per-deployment pre-confirmation failures identify the failed repair inspection
+  stage and distinguish operator credential acquisition, provider authentication, provider
+  permission denial, runtime credential verification and SSH authentication when
+  typed evidence exists. Preserve the underlying diagnostic and nonzero outcome;
+  unknown causes remain unknown. Expose no raw exceptions, keys or provider replies.
+  Recovery output keeps the same repair retry command without presenting a required
+  preceding normal apply or duplicating the same command as a numbered step.
 - Admit repair before old deployment resume validation. Missing or malformed
   journals, changed desired digests, broken package imports, altered product
   assets, failed services and broken managed node identities select reconstruction

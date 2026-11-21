@@ -11313,7 +11313,7 @@ documentation evidence does not qualify native supervision.
 
 <!-- /FEATURE: FEAT-037 -->
 
-<!-- FEATURE: FEAT-038 reqs=REQ-038 status=ready delivery=implemented priority=P0 version=9 -->
+<!-- FEATURE: FEAT-038 reqs=REQ-038 status=ready delivery=implemented priority=P0 version=12 -->
 ### FEAT-038: Confirmed full software repair on retained VMs
 
 #### Requirements Covered
@@ -11330,6 +11330,104 @@ provide reusable transport and installation primitives, not full reset authority
 The exact cause of the reported customer mismatch remains unproven.
 
 #### Design Details
+
+**Concise confirmation presentation:** a private presentation helper renders the
+shared recommendation, exact targets, rebuild scope, retention notice and outage
+warning, then asks the default-No question. It performs no access, cloud, journal
+or repair operations. Existing admission and execution owners call it only after
+successful inspection. Ordinary and VM-HA repair ask "Continue with software
+repair?"; the regional parent groups exact targets by region and asks "Continue
+with software repair in both regions?" once. Regional children retain exact
+confirmed-scope validation and never ask again.
+
+The single-deployment text is:
+
+```text
+Normal apply is recommended for routine convergence.
+You selected software repair, which rebuilds the managed
+software on the existing VMs and interrupts VPN traffic.
+VMs and disks will be retained.
+
+Targets:
+  <gateway>: VM <vm-id>, retained disk <disk-id>
+
+Rebuilds: VPNGW, strongSwan, FRR, managed node certificates,
+configuration and operational state.
+Retains: Ubuntu, IP allocations, SSH access and external
+peer credentials.
+
+Repair has no overall outage limit. VPN traffic remains
+interrupted until recovery completes.
+
+Continue with software repair? [y/N]:
+```
+
+Yes enters the existing transaction in the current invocation. No or empty input
+cancels before the repair transaction; EOF or interruption retains existing abort
+semantics without authorizing effects. A healthy or unchanged target and no prior
+normal apply remain eligible. Access failure prevents confirmation and keeps the
+same repair retry command. Identity revalidation, writer exclusion, fencing,
+resume behavior, command syntax and JSON/journal schemas remain unchanged.
+The presentation refinement is implemented. The final focused repair, journal,
+failure-guidance, HA-dispatch and regional-pair run passed all 365 tests, including
+valid JSON on EOF and interruption, no-effects cancellation, same-invocation
+repair, exact target display and regional child scope drift. Prerequisite-failure
+tests also prove that supplied Yes input cannot reach confirmation after denied
+access. Scoped Ruff, formatting, typing and Markdown checks passed; independent
+read-only review found no confirmation or authority regression.
+
+A subsequent live retest used a frozen build matching all current branch Python
+sources and the same HA BGP configuration. From an independently verified healthy
+baseline, confirmed repair completed in 854 seconds with the new recommendation,
+exactly two targets, the outage warning and one default-No prompt. Yes entered
+repair within that command without a preceding normal apply. Independent readback
+verified exact installed sources on both retained VMs, unchanged VM/disk/NIC
+allocation identities, healthy active/passive HA and mTLS, four ready IPsec tunnels,
+four established BGP sessions and no pending operation or apply lock. Normal apply
+then returned unchanged in 106 seconds, with ready configuration, runtime,
+authority and connectivity, no completed or pending effects, and an unchanged
+lifecycle file. Fresh independent readback passed again afterward. No external
+target intervention or live product remediation was needed. An earlier read-only
+baseline observation failed without a proven cause; the successful fresh baseline
+admitted this trial without changing the target. Elapsed command times do not
+measure traffic outages. Application workload traffic, other topologies, regional
+pairs and interruption recovery remain outside this focused qualification.
+
+**Direct repair and pre-confirmation diagnostics:** normal apply remains the
+recommended routine convergence path. Explicit repair proceeds directly to its
+existing default-No confirmation once the required checks pass; healthy state,
+matching versions and lack of an earlier apply attempt are not admission blockers.
+The CLI labels local deployment validation accurately. Fixed inspection labels
+cover retained Compute identity, SSH authority and policy, release artifact,
+managed runtime credentials, guest release and package prerequisites. A diagnostic
+wrapper retains the original exception chain without changing approval or effects.
+Recovery classifies only typed authentication, authorization and availability
+signals, includes the fixed failing stage in per-deployment diagnostics, and keeps
+raw exception/provider data private. Regional summaries preserve the cause code; child diagnostics retain the
+inspection stage. Existing specific diagnoses take precedence over generic categories.
+The text renderer avoids repeating an identical resume/repair command and presents
+recovery options as recommendations. JSON fields and command syntax stay unchanged.
+Focused tests cover denial, unknown errors, redaction, direct repeat repair and
+confirmation cancellation. Live pre-confirmation success under one operator identity
+does not explain a historical failure under another identity or qualify full repair.
+The diagnostic refinement is implemented. All 306 focused admission, repair,
+recovery and HA-dispatch tests pass, along with scoped lint, typing and build
+checks. Injected failures prove phase attribution, cause preservation, redaction
+and nonzero outcomes; live success does not identify the original historical
+authentication/provider failure.
+
+A frozen branch wheel completed a confirmed HA BGP repair from a healthy retained
+pair in 840 seconds without external target intervention. Independent readback
+verified exact installed Python sources, retained VM/disk/NIC allocation identities,
+healthy active/passive authority and mTLS, no pending operation or apply lock, and
+four established IPsec/BGP paths. The initial observation checker incorrectly
+expected cold standby tunnels; correcting that checker to the existing warm BGP
+contract and repeating observation passed without changing the target. Normal apply
+on the same configuration and artifact then returned unchanged in 124 seconds,
+with no completed or pending effects and an unchanged lifecycle file. These are
+command elapsed times, not measured traffic-outage durations. Application workload
+traffic, other topologies, regional pairs and interruption recovery were not tested
+in this focused trial; broader release qualification remains separate.
 
 **APT observation resilience:** use the shared 180-second metadata-refresh cap
 for ordinary, HA and retained-VM repair package inspection/staging. A scoped

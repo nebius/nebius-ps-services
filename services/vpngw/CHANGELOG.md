@@ -11,6 +11,14 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Identify the failed repair preflight check and distinguish typed operator,
+  provider, runtime-credential and SSH authentication failures from provider
+  permission or availability errors. Preserve redaction and all admission checks.
+  Present normal apply as a recommendation, allow direct confirmed repair, and
+  avoid repeating the same repair retry command as a numbered recovery step.
+  Share concise default-No confirmation wording across ordinary, VM-HA and
+  regional repair, retaining exact target, rebuild, retention and outage details.
+
 - Diagnose an ordinary apply approval that no longer matches required work or
   its pending command as `approval-state-changed`, with a retry command that
   omits the rejected digest. Preserve the existing fail-closed approval checks.

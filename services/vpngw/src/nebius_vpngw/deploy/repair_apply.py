@@ -18,8 +18,8 @@ from packaging.tags import compatible_tags, cpython_tags
 
 from .. import repair_bootstrap, repair_guest
 from .. import repair_state as state
-from . import ordinary_apply, repair_progress, repair_ssh
-from .recovery import RepairBlocked, RepairWorkerPending
+from . import ordinary_apply, repair_confirmation, repair_progress, repair_ssh
+from .recovery import RepairBlocked, RepairWorkerPending, repair_inspection
 from .repair_cloud import CloudJournal, Quarantine, RetainedCloud, retained_binding
 from .repair_progress import Phase, Wait
 from .ssh_policy import require_vm_ha_ssh_policy
@@ -93,31 +93,33 @@ def inspect(
 ) -> Admission:
     from .. import cli
 
-    targets = (
-        manager.discover_vm_ha_members(plan.gateway_group)
-        if plan.vm_ha is not None
-        else manager.discover_ordinary_gateway_members(plan.gateway_group)
-    )
-    if set(targets) != {item.hostname for item in instances}:
-        raise RepairBlocked("repair-vm-missing")
-    snapshot = (
-        manager._vm_ha_ssh_preflight_snapshot
-        if plan.vm_ha is not None
-        else manager._ordinary_ssh_preflight_snapshot
-    )
-    bindings = {name: retained_binding(snapshot[name][0]) for name in targets}
-    if any(value["project"] != manager.project_id for value in bindings.values()):
-        raise RuntimeError("Repair target belongs to another project")
-    vm_spec = local["gateway_group"].get("vm_spec", {})
-    if plan.vm_ha is not None:
-        assertions = repair_ssh.ha_bindings(manager, plan.gateway_group, path)
-    else:
-        assertions = manager.ordinary_ssh_trust_bindings(
-            plan.gateway_group, retained_hosts=set(targets)
+    with repair_inspection("members"):
+        targets = (
+            manager.discover_vm_ha_members(plan.gateway_group)
+            if plan.vm_ha is not None
+            else manager.discover_ordinary_gateway_members(plan.gateway_group)
         )
-    for assertion in assertions.values():
-        assertion()
-    retained = repair_ssh.bindings(manager, plan.gateway_group, snapshot)
+        if set(targets) != {item.hostname for item in instances}:
+            raise RepairBlocked("repair-vm-missing")
+    with repair_inspection("ssh-authority"):
+        snapshot = (
+            manager._vm_ha_ssh_preflight_snapshot
+            if plan.vm_ha is not None
+            else manager._ordinary_ssh_preflight_snapshot
+        )
+        bindings = {name: retained_binding(snapshot[name][0]) for name in targets}
+        if any(value["project"] != manager.project_id for value in bindings.values()):
+            raise RuntimeError("Repair target belongs to another project")
+        vm_spec = local["gateway_group"].get("vm_spec", {})
+        if plan.vm_ha is not None:
+            assertions = repair_ssh.ha_bindings(manager, plan.gateway_group, path)
+        else:
+            assertions = manager.ordinary_ssh_trust_bindings(
+                plan.gateway_group, retained_hosts=set(targets)
+            )
+        for assertion in assertions.values():
+            assertion()
+        retained = repair_ssh.bindings(manager, plan.gateway_group, snapshot)
 
     def recover(hostnames: frozenset[str]) -> dict:
         values = manager.recover_ordinary_ssh_host_keys(hostnames, spec=plan.gateway_group)
@@ -125,30 +127,34 @@ def inspect(
             name: replace(value, assert_current=retained[name]) for name, value in values.items()
         }
 
-    scope = cli._vm_ha_ssh_trust_scope if plan.vm_ha is not None else cli._ordinary_ssh_trust_scope
-    policy = require_vm_ha_ssh_policy(
-        tuple(sorted(targets.items())),
-        enrollment_hosts=(),
-        retained_hosts=set(targets),
-        management_key_path=manager._management_key_path,
-        management_public_key=vm_spec.get("ssh_public_key"),
-        require_management_key=plan.vm_ha is not None,
-        trust_scope=scope(local, plan, project_id=manager.project_id),
-        default_known_hosts_bindings=retained,
-        allow_managed_repair=plan.vm_ha is None,
-        # Ordinary inspection may stop before publishing its managed receipt.
-        # Reuse the same existing operator pin with exact retained-VM bindings;
-        # this grants no network enrollment or replacement host identity.
-        allow_default_known_hosts_import=plan.vm_ha is None,
-        persist_default_host_keys=False,
-        host_identity_recovery=recover if plan.vm_ha is None else None,
-    )
-    ssh = SSHPush(ssh_policy=policy)
-    artifact = ssh.resolve_vm_ha_agent_artifact() if plan.vm_ha is not None else None
-    selected = artifact.path if artifact is not None else wheel
-    if selected is None:
-        raise RuntimeError("Repair requires the exact selected release wheel")
-    checksum = hashlib.sha256(selected.read_bytes()).hexdigest()
+    with repair_inspection("ssh-policy"):
+        scope = (
+            cli._vm_ha_ssh_trust_scope if plan.vm_ha is not None else cli._ordinary_ssh_trust_scope
+        )
+        policy = require_vm_ha_ssh_policy(
+            tuple(sorted(targets.items())),
+            enrollment_hosts=(),
+            retained_hosts=set(targets),
+            management_key_path=manager._management_key_path,
+            management_public_key=vm_spec.get("ssh_public_key"),
+            require_management_key=plan.vm_ha is not None,
+            trust_scope=scope(local, plan, project_id=manager.project_id),
+            default_known_hosts_bindings=retained,
+            allow_managed_repair=plan.vm_ha is None,
+            # Ordinary inspection may stop before publishing its managed receipt.
+            # Reuse the same existing operator pin with exact retained-VM bindings;
+            # this grants no network enrollment or replacement host identity.
+            allow_default_known_hosts_import=plan.vm_ha is None,
+            persist_default_host_keys=False,
+            host_identity_recovery=recover if plan.vm_ha is None else None,
+        )
+        ssh = SSHPush(ssh_policy=policy)
+    with repair_inspection("artifact"):
+        artifact = ssh.resolve_vm_ha_agent_artifact() if plan.vm_ha is not None else None
+        selected = artifact.path if artifact is not None else wheel
+        if selected is None:
+            raise RuntimeError("Repair requires the exact selected release wheel")
+        checksum = hashlib.sha256(selected.read_bytes()).hexdigest()
     intent = {
         "project": manager.project_id,
         "gateway": plan.gateway_group.name,
@@ -168,16 +174,17 @@ def inspect(
     }
     state.validate_intent(intent)
     credential_plan = None
-    if plan.vm_ha is not None:
-        from ..vm_ha_managed_credentials import inspect_managed_vm_ha_credentials
+    with repair_inspection("runtime-credentials"):
+        if plan.vm_ha is not None:
+            from ..vm_ha_managed_credentials import inspect_managed_vm_ha_credentials
 
-        credential_plan = inspect_managed_vm_ha_credentials(
-            project_id=manager.project_id,
-            gateway_name=plan.gateway_group.name,
-            node_ids=tuple(item.vm_ha_node.node_id for item in instances),
-            tenant_id=local.get("tenant_id"),
-            region_id=plan.gateway_group.region,
-        )
+            credential_plan = inspect_managed_vm_ha_credentials(
+                project_id=manager.project_id,
+                gateway_name=plan.gateway_group.name,
+                node_ids=tuple(item.vm_ha_node.node_id for item in instances),
+                tenant_id=local.get("tenant_id"),
+                region_id=plan.gateway_group.region,
+            )
     ssh._wheel_path = selected
     admission = Admission(
         manager,
@@ -195,19 +202,21 @@ def inspect(
     )
     from . import release_policy
 
-    release_policy.require_targets(
-        ssh,
-        {
-            name: target
-            for name, target in targets.items()
-            if instance_cloud_state(snapshot[name][0]) is InstanceCloudState.RUNNING
-        },
-        instances,
-        local,
-        selected,
-        resume=lambda name: release_resume(admission, name),
-    )
-    require_package_prerequisites(admission)
+    with repair_inspection("guest-release"):
+        release_policy.require_targets(
+            ssh,
+            {
+                name: target
+                for name, target in targets.items()
+                if instance_cloud_state(snapshot[name][0]) is InstanceCloudState.RUNNING
+            },
+            instances,
+            local,
+            selected,
+            resume=lambda name: release_resume(admission, name),
+        )
+    with repair_inspection("dependencies"):
+        require_package_prerequisites(admission)
     return admission
 
 
@@ -277,15 +286,7 @@ def confirm(admission: Admission) -> bool:
         if parent.request.get("repair_scope") != admission.intent:
             raise RuntimeError("Regional repair targets changed after pair confirmation")
         return True
-    typer.echo(
-        "Full repair will stop VPN traffic on every listed gateway and rebuild VPNGW, strongSwan, FRR, managed node certificates, configuration and operational state."
-    )
-    for target in admission.intent["targets"]:
-        typer.echo(f"  {target['name']}: VM {target['compute']}, retained disk {target['disk']}")
-    typer.echo(
-        "Ubuntu, VM and disk identities, IP allocations, SSH access and external peer credentials are retained. Repair has no overall outage limit; VPN traffic remains interrupted until recovery completes."
-    )
-    return typer.confirm("Proceed with disruptive repair?", default=False)
+    return repair_confirmation.confirm(((None, admission.intent["targets"]),))
 
 
 class Coordinator:

@@ -7331,7 +7331,7 @@ def _apply_impl(
     print("[bold]Building deployment plan...[/bold]")
     plan: ResolvedDeploymentPlan = merge_with_peer_configs(local_cfg, [])
 
-    print("[bold]Validating quotas and constraints...[/bold]")
+    print("[bold]Validating deployment constraints...[/bold]")
     plan.validate()
 
     if prepare_vm_ha_peer_rotation:

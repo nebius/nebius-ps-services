@@ -6,6 +6,8 @@ import re
 import shlex
 import socket
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -214,6 +216,34 @@ class RepairWorkerPending(ObservationUnavailable):
         self.args = (CAUSES["repair-worker-pending"][0],)
 
 
+class RepairInspectionFailure(RuntimeError):
+    """Attach a fixed check label while retaining the original typed cause."""
+
+    CHECKS = {
+        "members": "retained Compute members",
+        "ssh-authority": "retained VM and SSH identity authority",
+        "ssh-policy": "SSH host trust and client identity",
+        "artifact": "selected repair release artifact",
+        "runtime-credentials": "managed runtime credentials and IAM access",
+        "guest-release": "gateway release over authenticated SSH",
+        "dependencies": "repair package prerequisites",
+    }
+
+    def __init__(self, check: str):
+        self.check = check
+        super().__init__("Repair inspection failed: " + self.CHECKS[check])
+
+
+@contextmanager
+def repair_inspection(check: str) -> Iterator[None]:
+    if check not in RepairInspectionFailure.CHECKS:
+        raise ValueError("Unknown repair inspection check")
+    try:
+        yield
+    except Exception as error:
+        raise RepairInspectionFailure(check) from error
+
+
 @dataclass
 class Invocation:
     command: str
@@ -335,16 +365,25 @@ class Recovery:
             f"Next action: {self.next_action}",
             f"Resume command: {self.resume_command}",
             f"Repair prerequisite: {self.repair_prerequisite}",
-            "Recovery order: normal apply, software repair, then last-resort VM rebuild.",
-            "Step 2 — software repair, after authenticated SSH access is available:",
-            "  " + self.repair_command,
-            "Repair retains the Ubuntu VMs and disks and can interrupt VPN traffic "
-            "for longer than two minutes. You will be asked to confirm.",
         ]
+        if self.resume_command == self.repair_command:
+            lines.append("Repair may be requested directly; normal apply is not a prerequisite.")
+        else:
+            lines.extend(
+                (
+                    "Recommended first: normal apply for routine convergence.",
+                    "Software repair may be requested directly after its access checks and confirmation:",
+                    "  " + self.repair_command,
+                )
+            )
+        lines.append(
+            "Repair retains the Ubuntu VMs and disks and can interrupt VPN traffic "
+            "for longer than two minutes. You will be asked to confirm."
+        )
         if self.destroy_command and self.fresh_apply_command:
             lines.extend(
                 (
-                    "Step 3 — last-resort VM rebuild, only if the retained VMs cannot be recovered:",
+                    "Last-resort VM rebuild, only if the retained VMs cannot be recovered:",
                     "  " + self.destroy_command,
                     "  " + self.fresh_apply_command,
                     "Destroy deletes gateway VMs and boot-disk contents and prolongs the outage. "
@@ -1039,6 +1078,31 @@ CAUSES = {
         "Restore the selected authentication and required access, then retry.",
         "Working authentication and provider access are required first.",
     ),
+    "operator-authentication-failed": (
+        "The selected CLI profile could not provide operator credentials.",
+        "Restore authentication for the selected CLI profile, then retry the same command.",
+        "The selected operator profile must provide valid credentials before repair.",
+    ),
+    "provider-authentication-failed": (
+        "The provider rejected the selected operator credentials.",
+        "Verify the selected operator token or CLI profile, then retry the same command.",
+        "The provider must accept the selected operator credentials before repair.",
+    ),
+    "provider-permission-denied": (
+        "The provider denied access to the required operation.",
+        "Verify the selected operator's permissions for the failed check, then retry the same command.",
+        "The selected operator needs access to the required provider operation before repair.",
+    ),
+    "provider-unavailable": (
+        "The provider service is unavailable; credential validity is unverified.",
+        "Restore provider connectivity or wait for service recovery, then retry the same command.",
+        "The required provider service must be reachable before repair.",
+    ),
+    "runtime-credential-authentication-failed": (
+        "The selected runtime credential failed authentication.",
+        "Verify the managed runtime credential and its provider access, then retry the same command.",
+        "The configured runtime credential must authenticate before repair.",
+    ),
     "runtime-credential-authorization-failed": (
         "The runtime identity check was denied by the provider.",
         "Verify the configured runtime service account's required access, then retry apply.",
@@ -1148,7 +1212,6 @@ def advice(
         "provider-timeout": "operation-timeout",
         "ssh-authentication-failed": "authentication-or-provider-unavailable",
         "permission-denied": "authentication-or-provider-unavailable",
-        "runtime-credential-authentication-failed": "authentication-or-provider-unavailable",
     }
     candidates = [aliases.get(value, value) for value in candidates]
     code = next((value for value in candidates if value in CAUSES), "unknown-failure")
@@ -1226,6 +1289,37 @@ def advice(
             code = "verification-failed"
         elif any("dependenc" in value for value in (diagnostic.predicate, *diagnostic.reasons)):
             code = "dependency-verification-failed"
+    inspection = next(
+        (item for item in error_chain(error) if isinstance(item, RepairInspectionFailure)), None
+    )
+    if inspection is not None and code in {
+        "authentication-or-provider-unavailable",
+        "unknown-failure",
+    }:
+        import paramiko  # type: ignore[import-untyped]
+
+        runtime_failure = any(
+            isinstance(item, VMHACredentialIdentityError) and item.reason == "authentication-failed"
+            for item in error_chain(error)
+        )
+        if runtime_failure:
+            code = "runtime-credential-authentication-failed"
+        elif error is not None and error_chain_has_cli_authentication_failure(error):
+            code = "operator-authentication-failed"
+        else:
+            for item in error_chain(error):
+                if isinstance(item, paramiko.AuthenticationException):
+                    code = "ssh-client-authentication-failed"
+                    break
+                if nebius_request_error_code_is(item, "PERMISSION_DENIED"):
+                    code = "provider-permission-denied"
+                    break
+                if nebius_request_error_code_is(item, "UNAUTHENTICATED"):
+                    code = "provider-authentication-failed"
+                    break
+                if nebius_request_error_code_is(item, "UNAVAILABLE"):
+                    code = "provider-unavailable"
+                    break
     reason, action, prerequisite = CAUSES[code]
     if code == "predecessor-settlement-required":
         action = (
@@ -1323,6 +1417,8 @@ def advice(
                 ):
                     reason = "gateway_group.initial_security_group_ids was renamed to gateway_group.security_group_ids."
                 break
+    if inspection is not None:
+        reason += " Failed repair check: " + inspection.CHECKS[inspection.check] + "."
     replacement = invocation.repair and any(
         isinstance(item, RepairBlocked) and item.replacement_applicable
         for item in error_chain(error)

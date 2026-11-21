@@ -293,11 +293,15 @@ def test_real_child_process_barriers_and_independent_project_context(tmp_path, m
 
 
 @pytest.mark.parametrize("approve", [False, True])
-def test_pair_repair_inspects_both_targets_before_one_confirmation_and_keeps_barriers(tmp_path, monkeypatch, approve):
+def test_pair_repair_inspects_both_targets_before_one_confirmation_and_keeps_barriers(
+    tmp_path, monkeypatch, capsys, approve
+):
     import typer
 
     path = prepared_pair(tmp_path)
-    code = CHILD.replace("side=child.request['side']", """side=child.request['side']
+    code = CHILD.replace(
+        "side=child.request['side']",
+        """side=child.request['side']
 scope={'targets':[{'name':side,'compute':'compute-'+side,'disk':'disk-'+side}]}
 assert child.request['repair'] is True
 if child.request['inspect_repair']:
@@ -307,7 +311,8 @@ if child.request['inspect_repair']:
  os.close(child.request['lock_fd'])
  raise SystemExit(0)
 assert child.request['repair_scope']==scope
-""")
+""",
+    )
     monkeypatch.setattr(pair_apply, "command", lambda: [sys.executable, "-c", code])
     confirmations = []
 
@@ -316,6 +321,14 @@ assert child.request['repair_scope']==scope
         assert len(inspections) == 2
         assert all(json.loads(item.read_text())["phase"] == "complete" for item in inspections)
         assert default is False
+        assert prompt == "Continue with software repair in both regions?"
+        shown = capsys.readouterr().out
+        assert "Normal apply is recommended for routine convergence." in shown
+        assert "Repair has no overall outage limit." in shown
+        for side in ("a", "b"):
+            assert (
+                f"Region {side}:\n    {side}: VM compute-{side}, retained disk disk-{side}" in shown
+            )
         confirmations.append(prompt)
         return approve
 
