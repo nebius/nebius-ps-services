@@ -7073,7 +7073,7 @@ def _prepare_ordinary_apply(
     if command.plan.effects:
         if command.resumed:
             if supplied is not None and supplied != command.approval:
-                raise RuntimeError("Disruption approval differs from the pending apply command")
+                raise PreparationBlocked("approval-state-changed")
             approved = not dry_run
         else:
             approved = _approve_disruption(command.approval, supplied=supplied, dry_run=dry_run)
@@ -7083,7 +7083,7 @@ def _prepare_ordinary_apply(
                     command.approval, command.plan.mapping()
                 )
     elif supplied is not None and not recreate:
-        raise RuntimeError("No matching disruption plan requires this approval")
+        raise PreparationBlocked("approval-state-changed")
     return plans, targets, approved, command
 
 

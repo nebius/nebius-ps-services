@@ -11,6 +11,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Diagnose an ordinary apply approval that no longer matches required work or
+  its pending command as `approval-state-changed`, with a retry command that
+  omits the rejected digest. Preserve the existing fail-closed approval checks.
+
 - Preserve existing cloud route authority during HA BGP/Static mode changes.
   Replace the route before committing its new kind, and retain the predecessor
   kind when replacement rolls back or resumes after interruption.

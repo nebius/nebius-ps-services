@@ -773,6 +773,12 @@ identity, additional keys, malformed responses and denied access still block.
 If exact readback remains unavailable, keep the selected key and operation
 receipts and resume the same command.
 
+If ordinary apply's background route writer finishes the previewed work before
+execution, a now-unnecessary `--approve-disruption` digest is rejected as
+`approval-state-changed`. Rerun the printed command without that obsolete
+approval and review any remaining changes. A different digest supplied for a
+pending command receives the same diagnosis; its original authority is retained.
+
 If an attachment request was conclusively rejected before effects, `apply --dry-run`
 can propose a new request for the same desired attachments. Review its new digest
 with `--approve` for HA or `--approve-disruption` for Single. The original command,

@@ -9486,6 +9486,10 @@ conversion replaces the repair target only after authoritative HA publication.
 Never infer a cause from arbitrary exception text or reflect secrets in unknown
 errors. Typed preparation causes survive outer convergence wrappers. Render
 advice once in text or structured recovery, retaining existing result fields.
+Ordinary approval rejection uses the same typed state-change diagnosis when a
+background writer has already satisfied the previewed work or a supplied digest
+differs from the pending command. The suggested retry omits the rejected digest;
+no approval or pending execution is rewritten.
 Pending operations offer exact resume and explain why repair must wait. Failed
 repair explains its blocker; destructive fallback remains conditional on exact
 owned retained VMs, never automatic or an unconditional success claim.
