@@ -237,7 +237,7 @@ measuring performance.
 | `app-stack` | Implicit allowed | Select the smallest justified application technology stack and emit schema-v2 logical component classes and exact technology decisions for approved scaffold handoffs. |
 | `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
 | `container` | Implicit allowed | Build, review, harden, troubleshoot, and validate OCI images, Docker/BuildKit workflows, Compose stacks, runtime contracts, multi-platform and GPU containers, and supply-chain evidence. |
-| `design` | Implicit allowed | Plan software changes and portable HTML artifacts against project docs/code; include README hierarchy when relevant. Use `nebius`, `ai-agent-design`, `ai-stack` and `app-stack` for applicable decisions without duplicate selection; use official-first `research` fallback when a specialist is missing. Implement only on explicit request; canonical documents remain with `maintain-project-specs`. |
+| `design` | Implicit allowed | Plan software changes and portable HTML artifacts against project docs/code with evidence-checked patterns and bounded decision search; include README hierarchy when relevant. Use `nebius`, `ai-agent-design`, `ai-stack` and `app-stack` for applicable decisions without duplicate selection; use official-first `research` fallback when a specialist is missing. Implement only on explicit request; canonical documents remain with `maintain-project-specs`. |
 | `frontend-project` | Implicit allowed | Materialize exact React, TypeScript, and Vite frontend files from fixed decisions, including deterministic candidate manifests and public environment schemas. |
 | `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
@@ -259,7 +259,7 @@ measuring performance.
 | `implement` | Explicit only | Implement a conversation objective or current plan with isolated workers, durable dependency waves, verified local delivery, and explicit cross-session continuation. |
 | `implement-test` | Explicit only | Run lightweight Implement verification or own one replaceable disposable multi-tier live fixture. |
 | `terraform` | Implicit allowed | Scaffold, standardize, or improve Terraform repositories and modules with state guidance, validation, security controls, examples, and CI. |
-| `troubleshoot` | Implicit allowed | Adaptively trace failures across code, compute, storage and networks; choose bounded distinguishing evidence and verify causal repair. |
+| `troubleshoot` | Implicit allowed | Adaptively trace failures across code, compute, storage and networks; separate technical route, provisional decision approach and urgency while preserving bounded evidence and causal proof. |
 
 ### Agentic SDLC Workflow
 

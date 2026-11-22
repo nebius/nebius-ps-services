@@ -963,6 +963,15 @@ causal proof, safe repair and independent verification.
   ambiguous symptoms, conditional parallelism, contradictory/stale/missing evidence,
   vendor signals, permission escapes, cancellation and budget exhaustion.
 
+- AC-019: Keep technical route, decision approach and urgency separate. Use
+  recognition only to prioritize a grounded hypothesis and discriminator; retain
+  baseline, material alternatives, counterfactual proof, causal-owner repair and
+  independent verification. Reclassification never resets budgets or evidence.
+- AC-020: Integrate provisional sensemaking, recognition and bounded search in
+  the existing loop, without another state machine, ledger, public flag or early
+  stopping gate. Preserve original qualification cases and compare editorial-only
+  with framework candidates; install only versions with complete passing evidence.
+
 #### Negative Criteria
 
 - NC-001: Status commands, passing tests or symptom disappearance alone do not
@@ -2127,6 +2136,15 @@ costly migration or runtime benchmark on the entire skill catalog.
   rejects symlinks in its skill-relative path and any resolved path outside the
   skill before reading content, and malformed-case diagnostics identify rows
   without echoing IDs or prompts into logs.
+
+- AC-016: Native quality comparisons select a model explicitly, freeze complete
+  candidate/baseline/fixture and optional sibling-catalog inputs, and run bounded
+  alternating repetitions. Retain exact case identity, byte/mode fingerprints,
+  outcomes and bounded redacted provenance-bound evidence for independent review.
+- AC-017: Require complete native evidence and both anonymous assertion grades;
+  deterministic safety checks cannot be waived by a judge. Separate agent/judge
+  elapsed time and usage; unknown descendant accounting, cache comparability,
+  native Plan Mode and tool schemas remain explicit qualification limitations.
 
 #### Negative Criteria
 
@@ -3311,6 +3329,19 @@ visual theme and layouts appropriate to documents, reports and presentations.
   Distinguish fallback, provenance, assumptions and unverified claims from
   actual specialist use. If research is unavailable, apply that hierarchy
   directly; unresolved material facts remain explicit planning limitations.
+
+- AC-020: Preserve existing design capabilities while reducing repeated reads and
+  option search. Use a provisional decision approach, evidence-checked pattern
+  reuse and bounded search without skipping the seven phases or hard constraints.
+  Stop research only when no unresolved decision-changing gap remains; uncertain
+  interactions require a bounded validation plan, acceptance signals and revisit
+  triggers, not unapproved execution.
+- AC-021: Compare original, editorial-only and framework candidates on frozen
+  fixtures and dependency catalogs. Require all capability assertions and zero
+  unauthorized effects or false completion. Target at least 20% lower median
+  agent elapsed time on predeclared simple/standard successful pairs, no overall
+  median latency increase and at most 25% median aggregate token growth. Preserve
+  failures, variability and missing accounting; judge cost is reported separately.
 
 #### Negative Criteria
 

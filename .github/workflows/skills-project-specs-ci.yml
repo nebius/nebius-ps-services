@@ -383,9 +383,10 @@ jobs:
           python -B -m unittest discover \
             -s maintain-project-specs/assets/hooks/tests -p 'test_*.py'
 
-      - name: Run troubleshooting helper, hook and diagnostic harness tests
+      - name: Run design and troubleshooting contract, helper and harness tests
         run: |
           set -euo pipefail
+          python -B design/scripts/test_skill_contract.py
           python -B -m unittest discover -s troubleshoot/scripts -p 'test_*.py'
           python -B -m unittest discover -s troubleshoot/assets/hooks/tests -p 'test_*.py'
           python -B -m unittest discover -s troubleshoot/evals/diagnostic -p 'test_*.py'

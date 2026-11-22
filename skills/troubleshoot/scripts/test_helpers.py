@@ -163,7 +163,12 @@ class CollectEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             output = root / "evidence.json"
-            result = run_script(COLLECT, "--root", str(root), "--output", str(output))
+            result = run_script(
+                COLLECT,
+                "--root", str(root),
+                "--section", "platform",
+                "--output", str(output),
+            )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(output.read_text())["schema_version"], 2)
             if os.name == "posix":

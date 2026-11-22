@@ -189,12 +189,19 @@ python3 scripts/validate-skill-structure.py --policy agentskills --agent core --
 python3 scripts/validate-skill-structure.py --policy repository --agent codex --require-evals ../align-skill
 python3 scripts/validate-skill-structure.py --policy repository --agent claude --require-evals ../align-skill
 python3 scripts/run-skill-evals.py ../align-skill --agent claude --suite triggers --output-dir /tmp/align-claude-evals
-python3 scripts/run-skill-evals.py ../align-skill --agent codex --suite quality --baseline-dir /path/to/baseline/align-skill --output-dir /tmp/align-codex-quality
+python3 scripts/run-skill-evals.py ../align-skill --agent codex --suite quality --model MODEL --repetitions 3 --baseline-dir /path/to/baseline/align-skill --output-dir /tmp/align-codex-quality
 ```
 
 Run from this skill directory. The native runner uses disposable homes and
 workspaces, bounded processes, actual tool traces and an independent quality
-judge. Authentication must be available through the selected agent's supported
+judge. Quality trials require an explicit model, alternate three paired runs by
+default and optionally use a frozen sibling-only catalog via `--catalog-dir`.
+Schema v2 reports include complete package fingerprints, bounded redacted tool
+records and separate agent/judge metrics. Executed case definitions come from
+the validated frozen candidate; reference-read evidence uses the same strict
+simple-command parser as skill loading. The shared native-accounting reducer
+retains unknown lineage/usage as incomplete; quality judgment does not establish
+performance qualification or trigger installation. Authentication must be available through the selected agent's supported
 API-key environment; it does not copy credentials from your normal home.
 Task-owned temporary roots are resolved before containment checks (including
 macOS system temp aliases); skill payload symlinks remain forbidden.

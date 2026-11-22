@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import statistics
 from pathlib import Path
 
 from cases import CASES, PARALLEL_ELIGIBLE
+from qualification_contract import evidence_digest, valid_conditions
 
 
 def score(reports: list[dict], reviews: dict) -> dict:
@@ -28,14 +28,8 @@ def score(reports: list[dict], reviews: dict) -> dict:
             reasons.append(f"exactly one frozen report required for {host}")
     fixture_ids = {}
     for report in reports:
-        if (
-            report.get("deadline_seconds") != 600
-            or report.get("repetitions") != 3
-            or not report.get("image")
-            or not report.get("model")
-            or not report.get("execution_contract")
-        ):
-            reasons.append("missing frozen execution conditions")
+        if not valid_conditions(report):
+            reasons.append("missing or invalid frozen execution conditions")
         if report.get("parallel_eligible_cases") != sorted(PARALLEL_ELIGIBLE):
             reasons.append("missing or changed predeclared parallel eligibility")
         if report.get("accounting_contract") != "native-tree-v1":
@@ -53,21 +47,7 @@ def score(reports: list[dict], reviews: dict) -> dict:
             reviewed = review.get("payload_hash") == report.get(
                 "payload_hashes", {}
             ).get(trial["arm"])
-            measured = {
-                k: v
-                for k, v in trial.items()
-                if k
-                not in {
-                    "case",
-                    "arm",
-                    "repetition",
-                    "fixture_sha256",
-                    "evidence_sha256",
-                }
-            }
-            digest = hashlib.sha256(
-                json.dumps(measured, sort_keys=True).encode()
-            ).hexdigest()
+            digest = evidence_digest(report, trial)
             reviewed = reviewed and review.get(
                 "evidence_sha256"
             ) == digest == trial.get("evidence_sha256")

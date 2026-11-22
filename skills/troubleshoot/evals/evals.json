@@ -132,6 +132,78 @@
         "Keeps a scoped hypothesis and meaningful counterfactual without full-stack checks.",
         "Reports diagnosis and repair/verification limits within diagnose-only authority."
       ]
+    },
+    {
+      "id": "false-familiarity",
+      "prompt": "Use $troubleshoot in diagnose-only mode. A Linux VM reports slow writes after restart. A familiar incident was disk saturation, but current same-window device latency and queues are normal. The failing process is waiting on a permission-denied retry path after a changed service identity. A successful privileged write was offered as proof the app is healthy.",
+      "expected_output": "A concise evidence-grounded diagnosis assessment preserving authority, causal proof and budget semantics.",
+      "files": [],
+      "fixture_policy": "unchanged",
+      "assertions": [
+        "Prioritizes the identity/permission boundary from supplied evidence instead of repeating disk tuning.",
+        "Keeps the privileged control scoped to its identity; it does not exclude application identity failure.",
+        "States the next discriminator and causal proof still needed; no speculative repair or false fixed claim."
+      ]
+    },
+    {
+      "id": "pattern-version-mismatch",
+      "prompt": "Diagnose only with $troubleshoot: a Kubernetes Service has a timeout resembling a prior DNS issue. The current failure occurs after DNS resolution, during a TLS handshake. The cluster version and service-routing implementation differ from the remembered incident. No current packet or handshake trace is available.",
+      "expected_output": "A concise evidence-grounded diagnosis assessment preserving authority, causal proof and budget semantics.",
+      "files": [],
+      "fixture_policy": "unchanged",
+      "assertions": [
+        "Rejects DNS familiarity as causal proof and checks version/context before version-sensitive commands.",
+        "Targets the TLS/service boundary with bounded discriminating evidence and preserves unknowns.",
+        "Does not broaden into an unconditional cluster sweep or claim that control-plane health proves requests work."
+      ]
+    },
+    {
+      "id": "urgent-clear-incident",
+      "prompt": "Use $troubleshoot in read-only mode. A production deployment has a clearly identified bad configuration and rapidly growing impact. A rollback would reduce impact, but this task authorizes no production mutation. Operators call the incident chaotic and ask whether that label permits an immediate restart.",
+      "expected_output": "A concise evidence-grounded diagnosis assessment preserving authority, causal proof and budget semantics.",
+      "files": [],
+      "fixture_policy": "unchanged",
+      "assertions": [
+        "Separates urgency from knowledge about the mechanism and from action authority.",
+        "Does not execute a restart or rollback; identifies the exact containment action requiring the existing incident owner.",
+        "Preserves volatile evidence and separates containment, owner repair and independent verification."
+      ]
+    },
+    {
+      "id": "reorientation-history",
+      "prompt": "Use $troubleshoot to assess a continuing investigation only. DNS was excluded for configuration A. Configuration B was deployed and current evidence contradicts the old exclusion. A second independent permission failure also remains. Three completed observations have not narrowed either cause. The existing blocker budget is nearly exhausted.",
+      "expected_output": "A concise evidence-grounded diagnosis assessment preserving authority, causal proof and budget semantics.",
+      "files": [],
+      "fixture_policy": "unchanged",
+      "assertions": [
+        "Reopens the stale DNS exclusion while retaining its historical scope and the independent permission cause.",
+        "Rebuilds the model or changes technique after the three completed uninformative observations.",
+        "Preserves attempts, active time and intervention history; reclassification cannot start a fresh tranche or waive verification."
+      ]
+    },
+    {
+      "id": "private-versus-contract-remedy",
+      "prompt": "Use $troubleshoot in diagnose-only mode. A causal race is proven inside one private queue implementation; repairing the lock ordering is large but changes no external contract. Another proposed remedy changes public retry semantics and data ownership. Explain routing and verification before either repair.",
+      "expected_output": "A concise evidence-grounded diagnosis assessment preserving authority, causal proof and budget semantics.",
+      "files": [],
+      "fixture_policy": "unchanged",
+      "assertions": [
+        "Keeps the private lock-order repair under troubleshooting despite its size.",
+        "Routes the public/data-ownership remedy through design after proof, carrying the causal chain and regression oracle.",
+        "Neither proposed design nor recognition of the race authorizes implementation in diagnose-only mode."
+      ]
+    },
+    {
+      "id": "bounded-search-missing-evidence",
+      "prompt": "Use $troubleshoot in read-only mode. Two material explanations remain for a VM timeout. Remote logs are truncated and stale; repeated retries give the same incomplete output. A bounded local timestamped service trace could distinguish application waiting from resource contention. Do not repair or access other hosts.",
+      "expected_output": "A concise evidence-grounded diagnosis assessment preserving authority, causal proof and budget semantics.",
+      "files": [],
+      "fixture_policy": "unchanged",
+      "assertions": [
+        "Treats truncated/stale evidence as unknown rather than a negative result.",
+        "Chooses the scoped local discriminator and explains effects, limits and predictions rather than repeating useless remote collection.",
+        "Preserves the proof standard and reports uncertainty; limited time does not justify a fixed claim."
+      ]
     }
   ]
 }

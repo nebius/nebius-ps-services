@@ -149,17 +149,33 @@ for changes that need more than static inspection.
 `scripts/run-skill-evals.py <skill_dir> --agent codex|claude --suite
 triggers|quality --output-dir <absolute-external-directory>` runs native CLI
 sessions in temporary homes and workspaces. Use `--case-id <id>` for one case.
-Quality runs additionally require `--baseline-dir <captured-skill-directory>`;
+Quality runs additionally require `--model <frozen-model-id>` and
+`--baseline-dir <captured-skill-directory>`;
 capture working bytes before modifying the target. Keep the baseline folder's
 skill name identical to the candidate's.
+
+Use `--repetitions 1..5` for bounded quality pairs (default three). Each case
+alternates baseline-first/candidate-first execution. A one-pair smoke check does
+not establish performance. Optional `--catalog-dir` accepts a prepared directory
+of at most 32 sibling skills, excluding the target; the same frozen catalog is
+copied into both arms. Keep single-target fallback and multi-skill routing lanes
+separate. No option changes the public interface of the skill under evaluation.
 
 The runner reads the canonical trigger CSV or `evals/evals.json`, validates
 contained fixtures, rejects symlinks and special files throughout the skill
 payload, and installs the selected skill into the temporary project. `.git` and
 `__pycache__` are excluded. It validates the copied payload before launching
 the agent and bounds each process to 180 seconds and eight MiB per output
-stream. It retains a small sanitized report with CLI version, available model identity,
-skill hash and per-case evidence state. It does not reuse the user's skill
+stream. Schema `skill-evaluation/v2` retains payload bytes/modes, evaluator/fixture and
+catalog hashes, requested/observed model identity, exact case IDs, repetition/order,
+per-arm outcome, bounded redacted output/tool evidence with digests, and separate
+judge evidence. Raw native reasoning and credential files are not retained.
+Load prompts, assertions and case selection from the validated frozen candidate,
+so executed cases match the reported payload fingerprints even if source changes.
+Malformed records, missing terminal events or bounded evidence omissions cannot
+silently produce passing evidence. Workspace verification includes hidden entries,
+file types, modes and empty directories, with streaming byte/entry/time bounds;
+`fixture_policy: unchanged` makes any observed mutation a deterministic failure. It does not reuse the user's skill
 catalog, configuration or credential files. `OPENAI_API_KEY`, `CODEX_API_KEY`
 and `ANTHROPIC_API_KEY` can supply authentication through native CLI behavior;
 normal account login is not copied into test homes.
@@ -169,12 +185,34 @@ correlated to their tool-use IDs; denied or incomplete attempts do not count.
 For Codex command traces, only simple `cat`, `head`, or `sed` reads with actual
 skill-body content in the captured output count. Discarded output, empty reads,
 metadata-only output, and unsupported command forms remain unconfirmed.
+Apply the same simple-command parser to reference-read evidence; matching printed
+content from a compound command or redirected read does not confirm resource use.
 Self-reported activation does not count. Quality checks require confirmed skill
 loading in both arms, run candidate and captured baseline independently, then
-use a fresh judge session with no target
-skill installed. The judge checks assertions and preserved behavior against
-sanitized responses and bounded output files; a baseline comparison alone is
-not deterministic proof of every semantic guarantee.
+use a fresh judge session with no target skill installed. Anonymous A/B labels
+are randomized independently of execution order. The judge receives sanitized
+responses, bounded files and native tool records and must grade every assertion
+for both arms, with evidence and preservation comparisons in both directions.
+Large judge inputs use a bounded file in the disposable judge workspace, not
+a command-line argument. Standard credential formats are redacted on every
+retained text surface; use only reviewed public/synthetic inputs. Pattern-based
+redaction does not certify arbitrary confidential input as safe to publish.
+A semantic judgment cannot override a deterministic mutation failure. Reports
+retain the evidence for independent review; no final-answer claim establishes
+that a tool, specialist or investigation was actually used.
+
+Agent elapsed time covers the complete bounded native process, including all
+in-run corrections; judge elapsed/usage is separate. The shared
+`scripts/native_accounting.py` reducer counts disjoint participants or one inclusive
+usage total exactly once. Partial observed tokens stay distinct from aggregate
+usage. Incomplete lineage, missing usage or unsupported tool-schema evidence
+cannot qualify performance. Codex descendant accounting remains unqualified.
+Provider cache state and effective native tool schemas are not controlled by this
+runner; its report exposes those limits. Use frozen local documentation/tool inputs
+for controlled comparisons, and a separate reviewed environment for live retrieval.
+Actual native Plan Mode checks remain a separate process lane; a read-only
+filesystem or prompt assertion does not establish Plan Mode. The generic runner
+never promotes or installs a skill itself.
 
 `STATIC_PASS`, installed-package proof, native CLI installation, `RUNTIME_PASS`
 and `QUALITY_PASS` are separate. Missing credentials, native trace, baseline or

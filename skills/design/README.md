@@ -74,6 +74,20 @@ skeleton, the handoff may include the component/materialization/runtime graph
 for a later explicit `$scaffold-project` invocation. `design` does not create
 that scaffold and the scaffold workflow does not call back into design.
 
+## Decision Approach And Qualification
+
+The seven phases reuse verified evidence and completed specialist decisions.
+A relevant familiar pattern is checked against constraints and failure modes;
+uncertain interactions require a bounded validation plan. Search stops when the
+requirements and tradeoffs are covered with no decision-changing evidence gap.
+These Cynefin-, RPD- and bounded-rationality-inspired rules are provisional
+heuristics, not proof of model expertise or a measured performance improvement.
+
+The core keeps authority, routing, phase exits and outputs. The existing workflow
+reference owns detailed checklists and plan content and is required for standard
+and deep designs; README and HTML references remain conditional. See [preservation and qualification](evals/refactor-qualification.md)
+for original/editorial/framework comparisons and installation gates.
+
 ## Files
 
 - `references/readme-design.md`: conditional README structure, information
@@ -85,9 +99,10 @@ that scaffold and the scaffold workflow does not call back into design.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 - `references/design-workflow.md`: detailed phase checklist, `research`,
   `app-stack`, `ai-agent-design`, `ai-stack`, and `nebius` handoff/fallback guidance,
-  `system-design-rules` decision-review guidance, depth guidance,
+  `system-design-rules` decision-review guidance, provisional decision approaches,
   vertical-slice strategy, and `/plan` handoff template.
 - `evals/trigger-prompts.csv`: canonical should-trigger and should-not-trigger examples.
+- `scripts/test_skill_contract.py`: structural preservation checks, distinct from native proof.
 - `evals/process-cases.md`: supplemental workflow and runtime-check cases.
 - `evals/evals.json` and `evals/fixtures/`: quality assertions and synthetic
   projects for code precedence, refactoring, and execution boundaries.
@@ -154,17 +169,18 @@ conditional reference reads and the help short circuit.
 
 Portable HTML cases cover all three layout profiles, the shared theme and
 portability contract, report snapshot/filter semantics and presentation fallback.
-The definitions contain 47 trigger cases (28 positive, 19 negative) and 20
+The definitions contain 49 trigger cases (30 positive, 19 negative) and 28
 quality cases. Offline `file://`, no-JavaScript, relocation, request, keyboard,
 responsive and print checks require an actual implemented artifact; these
 planning cases do not establish browser behavior.
 
 Structure and fixture checks are static evidence. Fresh trigger and comparative
 quality runs require native authenticated runners; do not copy real host
-credentials into disposable evaluation homes. The isolated runner installs only
-this skill, so absent specialists use the documented research fallback and
-spec-owner handoffs remain explicit. Multi-skill cases need fresh sessions with
-the relevant sibling skills and successful loading traces. Single-skill results
+credentials into disposable evaluation homes. By default, the isolated runner
+installs only this skill; absent specialists use the documented research fallback
+and spec-owner handoffs remain explicit. Its optional frozen sibling catalog
+supports multi-skill cases in fresh sessions, with successful loading traces
+required for actual specialist use. Single-skill results
 do not prove ordering, result reuse or absence of recursive selection.
 Host Plan Mode and read-order behavior require an actual host session and trace
 review; a prompt claiming to be Plan Mode or a final summary is not proof.

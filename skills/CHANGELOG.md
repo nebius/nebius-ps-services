@@ -4,6 +4,32 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Fix six design/troubleshooting review findings: align standard-depth routing,
+  withhold unsafe truncated stream tails, redact nested evidence keys without
+  dropping collisions, and return incomplete collector exit codes. Bind diagnostic
+  v2 reviews to frozen execution conditions and trial identities, reject invalid
+  isolation/resource settings, and deny same-owner reads of the synthetic canary.
+  These source regressions do not establish native qualification or activation.
+
+- Align design and troubleshooting evaluation guidance with the shared runner's
+  frozen sibling catalogs and ordered tool evidence. Correct design case counts
+  and preserve separate native-mode, transient-write and live-provider proof limits.
+  Bind executed cases to frozen definitions, reject compound-command reference-read
+  claims and run design preservation checks in the existing skills CI job.
+
+- Consolidate duplicated `design` phase detail and add provisional, evidence-based
+  decision approaches to `design` and `troubleshoot`. Combine pattern-fit checks,
+  discriminating observations and bounded search while preserving planning and
+  repair authority, existing phases, causal proof, budgets, reporting, specialist
+  ownership, and README/portable-HTML behavior. Add preservation maps and behavioral
+  cases; performance remains unqualified until matched native comparisons pass.
+- Extend the shared native evaluator with model selection, alternating repeated
+  pairs, frozen sibling catalogs and complete package fingerprints. Retain bounded
+  redacted tool evidence, separate agent/judge metrics and blinded assertions, fail
+  incomplete traces explicitly, and verify read-only workspace changes independently.
+  Share the existing tree-accounting reducer with diagnostics without weakening its
+  incomplete-Codex-lineage gate; no managed installations are implied by static checks.
+
 - Allow explicitly requested `being-fixed` progress labeling for repairs already
   authorized and underway. Define scoped creation, additive updates, independent
   readback and owner-controlled removal; review and planning alone never start

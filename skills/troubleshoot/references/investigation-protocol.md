@@ -81,10 +81,25 @@ Observed result and evidence validity:
 Model update and remaining alternatives:
 ```
 
-Rank by discriminatory value, safety, execution cost and availability. Use
+Rank by discriminatory value, evidence reliability, effects/safety, execution
+cost and availability. Use
 qualitative reasoning, not invented probabilities. Prefer observations with
 mutually exclusive results and comparisons immediately before/after a boundary.
 Change one relevant variable at a time unless a designed experiment requires more.
+
+When a pattern seems familiar, check artifact/version, effective configuration,
+workload and timing against the pattern's preconditions. Mentally trace the
+candidate mechanism and choose evidence that could disprove it or distinguish a
+competing owner. Matching words, high confidence or a plausible fix are not causal
+proof. Keep baseline, material alternatives, counterfactual, owner repair and
+independent verification even on this faster path.
+
+Choose an adequate next observation that can change the decision rather than
+exhaustively ranking every possible probe. Do not invent likelihoods, require a
+minimum hypothesis count or repeat settled research. If the predicted result
+cannot change the next branch, skip the observation. Reserve practical time for
+repair verification and reporting within the existing budget; this is planning
+guidance, not another hard limit or permission to stop early with a fixed claim.
 
 A low-information experiment is a completed observation that neither distinguishes
 hypotheses nor narrows the causal boundary. After three consecutive such results,

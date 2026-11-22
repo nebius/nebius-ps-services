@@ -3,7 +3,15 @@
 import copy
 import unittest
 
-from accounting import aggregate, native_accounting
+import importlib.util
+from pathlib import Path
+
+path = Path(__file__).resolve().parents[3] / "align-skill/scripts/native_accounting.py"
+spec = importlib.util.spec_from_file_location("native_accounting", path)
+accounting = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(accounting)
+aggregate = accounting.aggregate
+native_accounting = accounting.native_accounting
 
 
 class AccountingTests(unittest.TestCase):

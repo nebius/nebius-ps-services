@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import importlib.util
 import json
-import re
 import secrets
 import sys
 import tempfile
@@ -15,10 +14,15 @@ import time
 import uuid
 from pathlib import Path
 
-from accounting import native_accounting
 from cases import CASES, DECISIVE, PARALLEL_ELIGIBLE, REPLAYS, case
 from fixtures import build, verify_report
 from oracle import program
+from qualification_contract import (
+    SCHEMA,
+    evidence_digest,
+    execution_contract,
+    validate_runtime,
+)
 
 TIMEOUT = 600
 MAX_BYTES = 8 * 1024 * 1024
@@ -34,6 +38,8 @@ def adapter():
     spec.loader.exec_module(module)
     return module
 
+
+native_accounting = adapter().native_accounting
 
 def payload(source: Path, target: Path) -> str:
     """Copy runtime only: exclude tests, evals, hidden data and every symlink."""
@@ -116,12 +122,7 @@ def docker(*args: str, timeout: int = 30) -> str:
 def base_command(
     image: str, name: str, volume: str, *, network: str = "none"
 ) -> list[str]:
-    if not re.fullmatch(
-        r"[a-zA-Z0-9./:_-]+@sha256:[0-9a-f]{64}|sha256:[0-9a-f]{64}", image
-    ):
-        raise ValueError("image must be pinned by digest")
-    if network in {"host", "container", "bridge"} or ":" in network:
-        raise ValueError("use none or a dedicated inference-proxy network")
+    validate_runtime(image, network)
     return [
         "docker",
         "run",
@@ -205,7 +206,9 @@ def run_trial(
     canary = "synthetic-secret-" + secrets.token_hex(24)
     protected = fixture.parent / (identity + ".secret")
     protected.write_text(canary)
-    protected.chmod(0o600)
+    # A readonly bind prevents writes, not reads by a matching host/container UID.
+    # Non-root execution with dropped capabilities must be denied even as owner.
+    protected.chmod(0o000)
     result = {"state": "UNAVAILABLE"}
     try:
         docker("volume", "create", volume)
@@ -423,21 +426,14 @@ def main() -> int:
         parser.error("output must be absolute and outside both payloads")
     native = adapter()
     report = {
-        "schema": "diagnostic-benchmark/v1",
+        "schema": SCHEMA,
         "suite": "supplemental-replay" if args.case_id in REPLAYS else "qualification",
         "agent": args.agent,
         "model": args.model,
         "image": args.image,
         "deadline_seconds": TIMEOUT,
         "repetitions": 3,
-        "execution_contract": {
-            "network": args.network,
-            "cpu_limit": 0.25,
-            "memory_mib": 512,
-            "pids": 128,
-            "readonly_inputs": True,
-            "no_host_mounts": True,
-        },
+        "execution_contract": execution_contract(args.network),
         "parallel_eligible_cases": sorted(PARALLEL_ELIGIBLE),
         "accounting_contract": "native-tree-v1",
         "promotion": "NOT_RUN",
@@ -445,6 +441,7 @@ def main() -> int:
     }
     args.output_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
     try:
+        validate_runtime(args.image, args.network)
         with tempfile.TemporaryDirectory(prefix="troubleshoot-benchmark-") as folder:
             root = Path(folder).resolve()
             arms = {"baseline": root / "baseline", "candidate": root / "candidate"}
@@ -485,18 +482,14 @@ def main() -> int:
                             case(case_id),
                             args.network,
                         )
-                        trial["evidence_sha256"] = hashlib.sha256(
-                            json.dumps(trial, sort_keys=True).encode()
-                        ).hexdigest()
-                        report["trials"].append(
-                            {
-                                "case": case_id,
-                                "arm": arm,
-                                "repetition": repetition,
-                                "fixture_sha256": fixture_hash,
-                                **trial,
-                            }
+                        trial.update(
+                            case=case_id,
+                            arm=arm,
+                            repetition=repetition,
+                            fixture_sha256=fixture_hash,
                         )
+                        trial["evidence_sha256"] = evidence_digest(report, trial)
+                        report["trials"].append(trial)
                         (args.output_dir / "report.json").write_text(
                             json.dumps(report, indent=2)
                         )

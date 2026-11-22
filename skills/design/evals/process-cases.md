@@ -77,15 +77,18 @@ browser, offline or print checks before an artifact is implemented and tested.
 
 Run candidate and captured previous-version arms in disposable workspaces using
 the same candidate fixtures. Do not substitute HEAD for accepted working bytes.
-The runner installs only the target skill; unavailable specialist scopes use the
-research fallback, with direct ranked research when research is also missing.
+The runner installs only the target skill by default; unavailable specialist
+scopes use the research fallback, with direct ranked research when research is
+also missing. Use its optional frozen sibling catalog for the multi-skill lane.
 Spec-owner handoffs remain explicit and never gain a second document writer.
 Do not claim absent skills ran.
 
 Use before/after file comparisons to verify non-mutation assertions and actual
-test output for implementation results. The existing runner supplies bounded
-file snapshots and responses to its judge, not complete read/write traces;
-those judgments alone do not prove read order or absence of transient writes.
+test output for implementation results. The runner supplies bounded file snapshots,
+responses and ordered native tool records to its judge. Inspect their completeness
+and successful tool results before claiming read order; final-state comparisons
+alone do not prove the absence of transient writes, and unsupported or incomplete
+traces cannot establish that guarantee.
 Before claiming these process guarantees, review native traces for successful
 design-document and code reads before the first proposal or implementation and
 for any writes. Self-reported inspection is insufficient.
@@ -175,10 +178,12 @@ returned decisions and synthesized plan for these scenarios:
    only, provider-only and SDLC-owned requests retain their respective owners.
 
 Source definitions, static validators and final self-reports cannot prove these
-process claims. The current isolated runner copies one skill and exposes only
-summarized results; use separate fresh-session traces for this matrix or mark
-it NOT_RUN/UNAVAILABLE. Report source checks, actual activation, comparative
-quality and cloud evidence independently.
+process claims. Use the runner's frozen sibling-catalog lane and inspect successful
+native reads, handoffs and ordered tool evidence for this matrix. Missing trace
+coverage or capabilities require separate fresh-session checks or an explicit
+NOT_RUN/UNAVAILABLE result. Actual host Plan Mode and live-provider behavior remain
+separate lanes. Report source checks, actual activation, comparative quality and
+cloud evidence independently.
 
 ## Documentation Retrieval Cases
 

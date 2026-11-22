@@ -18,7 +18,9 @@
         "Uses implemented code as the current baseline and explains that a plain list would break consumer.export_ids.",
         "Plans total_count within the envelope and regression coverage for the existing consumer and empty input, rather than modifying code to match stale prose.",
         "Leaves all supplied files unchanged and returns a maintain-project-specs correction handoff instead of directly editing project documents."
-      ]
+      ],
+      "fixture_policy": "unchanged",
+      "performance_group": "simple-standard"
     },
     {
       "id": 2,
@@ -37,7 +39,9 @@
         "Uses the catalog project design and service/consumer implementation as the relevant evidence; does not adopt the neighbor XML contract.",
         "Reports the catalog document/code discrepancy and follows the implemented envelope.",
         "Keeps technology choices fixed and leaves fixture files unchanged."
-      ]
+      ],
+      "fixture_policy": "unchanged",
+      "performance_group": "simple-standard"
     },
     {
       "id": 3,
@@ -52,7 +56,9 @@
         "Discloses that project design documentation is missing rather than claiming it was read.",
         "Uses list_items and export_ids to plan an envelope-compatible addition and does not infer no users or greenfield status from missing docs.",
         "Does not create design documents or modify implementation files."
-      ]
+      ],
+      "fixture_policy": "unchanged",
+      "performance_group": "simple-standard"
     },
     {
       "id": 4,
@@ -69,7 +75,9 @@
         "Proposes replacing the comma-string boundary with a lossless structured representation and updates all affected internal callers before dependent feature work.",
         "Uses the explicit no-user context, adds no legacy aliases, wrappers or dual paths, and includes comma-containing and empty-identifier-list regression cases.",
         "Leaves fixtures unchanged and supplies resulting design decisions to maintain-project-specs without writing documents."
-      ]
+      ],
+      "fixture_policy": "unchanged",
+      "performance_group": "simple-standard"
     },
     {
       "id": 5,
@@ -85,7 +93,8 @@
         "Explains the concrete delimiter bug with source references.",
         "Does not infer unused status from the folder name, asks about users or dependent consumers, and marks the replacement decision unresolved while allowing independent analysis.",
         "Does not silently introduce compatibility wrappers or claim the refactor is implementation-ready; all files remain unchanged."
-      ]
+      ],
+      "fixture_policy": "unchanged"
     },
     {
       "id": 6,
@@ -101,7 +110,8 @@
         "Recognizes existing consumers and the explicit string-contract commitment, and does not remove or change that supported interface without a decision.",
         "Reports the delimiter defect, explains the contract-versus-correctness tradeoff and distinguishes an intentional future transition from current implemented behavior.",
         "Does not treat code precedence as evidence that the defect is correct and does not modify fixtures."
-      ]
+      ],
+      "fixture_policy": "unchanged"
     },
     {
       "id": 7,
@@ -117,7 +127,8 @@
         "Acknowledges explicit authorization for the limited compatibility wrapper instead of treating the no-shim default as an absolute ban.",
         "Plans one canonical lossless internal representation, explains the legacy wrapper limit, and covers comma-containing identifiers in the new path.",
         "Does not infer implementation authority from the request for a plan; all supplied files remain unchanged."
-      ]
+      ],
+      "fixture_policy": "unchanged"
     },
     {
       "id": 8,
@@ -155,7 +166,8 @@
         "Reports code/document drift and produces an envelope-compatible plan.",
         "Identifies maintain-project-specs as the canonical publication owner and does not directly edit the supplied project design document or requirements.",
         "Makes no code, test or configuration changes and does not misread the request to save a design as implementation authority."
-      ]
+      ],
+      "fixture_policy": "unchanged"
     },
     {
       "id": 10,
@@ -168,7 +180,8 @@
         "Adapts the outline to this small local tool: does not add empty configuration, deployment or architecture sections, and avoids repeating the introduction in an unnecessary Overview.",
         "Does not invent support channels, a license, existing policy files or working documentation links; any proposed deeper-document destinations are identified as future work.",
         "Leaves the workspace unchanged and produces a plan rather than implementing the CLI or writing a README."
-      ]
+      ],
+      "fixture_policy": "unchanged"
     },
     {
       "id": 11,
@@ -189,7 +202,9 @@
         "Preserves the existing unittest command and consumer contract, uses relative links to actual documentation destinations, and routes correction of stale canonical design to maintain-project-specs rather than copying stale claims into the README.",
         "Keeps the full architecture, API/configuration reference and runbook detail with their owners; does not invent unneeded configuration, support channels, license terms or policy files.",
         "Makes no implementation or documentation writes and distinguishes checks actually performed from proposed validation."
-      ]
+      ],
+      "fixture_policy": "unchanged",
+      "performance_group": "simple-standard"
     },
     {
       "id": 12,
@@ -204,7 +219,8 @@
         "Plans responsive reflow, contained two-dimensional scrolling and complete continuous printing; distinguishes design defaults from accessibility thresholds.",
         "Includes all ten artifact acceptance areas and explicit renamed/relocated copy and attempted-request checks, without claiming offline, browser or print validation occurred.",
         "Leaves the workspace unchanged, does not invent existing implementation and treats the approved native stack as fixed."
-      ]
+      ],
+      "fixture_policy": "unchanged"
     },
     {
       "id": 13,
@@ -219,7 +235,8 @@
         "Plans single-file direct offline opening with embedded dependencies, no automatic requests or neighboring files, portable state and safe serialization/text insertion; recognizes that hidden embedded data travels with the file.",
         "Plans complete findings/evidence in print with explicit full-snapshot scope rather than only the filtered screen view, alongside keyboard, responsive and intended-browser checks.",
         "Covers all ten artifact acceptance areas with independent data calculations, relocated/renamed file and attempted-network-request checks; distinguishes proposed checks from observed evidence and leaves files unchanged."
-      ]
+      ],
+      "fixture_policy": "unchanged"
     },
     {
       "id": 14,
@@ -234,7 +251,8 @@
         "Makes component exploration and previous/next keyboard-accessible, combines selection color with another cue, provides obvious presentation-mode exit, preserves deep/skip links and history, and avoids an unconditional global character-only shortcut.",
         "Uses deliberate complete-print pagination and suitable orientation without forcing A3; includes details outside the selected view and keeps essential print content available without JavaScript.",
         "Includes all ten artifact acceptance areas with the stated projection viewport, narrow layout/enlarged text, reduced motion, renamed/relocated files, attempted requests and actual-browser reporting; makes no validation or implementation claims and leaves the workspace unchanged."
-      ]
+      ],
+      "fixture_policy": "unchanged"
     },
     {
       "id": 15,
@@ -247,7 +265,8 @@
         "Freezes AI behavior and policy before AI component selection and reuses any returned component decision as fixed input to app-stack rather than selecting it twice.",
         "Keeps complete design ownership with design and distinguishes actual consultations from proposed or unavailable handoffs.",
         "Does not implement, provision, configure authentication or demand credentials for documentation-only planning."
-      ]
+      ],
+      "fixture_policy": "unchanged"
     },
     {
       "id": 16,
@@ -259,7 +278,8 @@
         "Preserves approved behavior and application technologies; does not start agent-topology design or unrelated application-stack selection.",
         "Integrates the returned or evidence-backed fallback component decision with interfaces and acceptance checks in one design.",
         "Does not claim an unavailable skill was invoked."
-      ]
+      ],
+      "fixture_policy": "unchanged"
     },
     {
       "id": 17,
@@ -271,7 +291,8 @@
         "Skips app-stack selection and both AI specialists with the appropriate fixed-stack or no-AI rationale.",
         "Preserves fixed technologies and distinguishes provider evidence from project-specific capacity, quota and readiness.",
         "Does not request credentials or run inventory, provisioning preflight or cloud actions merely for design."
-      ]
+      ],
+      "fixture_policy": "unchanged"
     },
     {
       "id": 18,
@@ -283,7 +304,8 @@
         "Does not select models or agent runtimes; records that no AI component is required.",
         "Uses ai-agent-design only if classification actually requires resolution, with an honest fallback if unavailable.",
         "Preserves the approved runtime and designs deterministic approval, recovery and verification boundaries."
-      ]
+      ],
+      "fixture_policy": "unchanged"
     },
     {
       "id": 19,
@@ -296,7 +318,8 @@
         "Prioritizes official vendor sources and consults reputable community sources for the stated coverage gap while labeling provenance and uncertainty.",
         "Does not fabricate citations or treat community-only limitations as verified provider behavior; unresolved material facts limit readiness.",
         "Keeps design synthesis with design and performs no implementation or external changes."
-      ]
+      ],
+      "fixture_policy": "unchanged"
     },
     {
       "id": 20,
@@ -308,7 +331,8 @@
         "Does not introduce AI behavior, model selection or Nebius provider requirements.",
         "Keeps complete design synthesis with design and records skipped irrelevant specialist scopes.",
         "Returns a plan without implementation or provisioning."
-      ]
+      ],
+      "fixture_policy": "unchanged"
     },
     {
       "id": 21,
@@ -321,7 +345,8 @@
         "Preserves higher-priority host rules, checks relevant versions and cites original official pages for retrieved claims.",
         "Does not install integrations, repair authentication, use Context7 or include confidential content in public queries.",
         "Retains the existing design output and scope boundaries."
-      ]
+      ],
+      "fixture_policy": "unchanged"
     },
     {
       "id": 22,
@@ -334,7 +359,97 @@
         "Preserves higher-priority host rules, checks relevant versions and cites original official pages for retrieved claims.",
         "Does not install integrations, repair authentication, use Context7 or include confidential content in public queries.",
         "Retains the existing design output and scope boundaries."
-      ]
+      ],
+      "fixture_policy": "unchanged"
+    },
+    {
+      "id": 23,
+      "prompt": "Use $design to plan total_count in evals/fixtures/catalog. Someone recognizes a familiar list API pattern and proposes returning a bare list. The existing export consumer must remain supported. The Python stack is fixed. Do not implement.",
+      "expected_output": "A familiar pattern is rejected because it violates the actual consumer contract.",
+      "files": [
+        "evals/fixtures/catalog/README.md",
+        "evals/fixtures/catalog/consumer.py",
+        "evals/fixtures/catalog/docs/design.md",
+        "evals/fixtures/catalog/docs/requirements.md",
+        "evals/fixtures/catalog/service.py",
+        "evals/fixtures/catalog/test_catalog.py"
+      ],
+      "assertions": [
+        "Inspects the envelope and consumer before accepting a familiar pattern; identifies the concrete mismatch.",
+        "Chooses an envelope-compatible plan with empty-input and consumer regression checks, without broad stack reselection.",
+        "Preserves planning-only authority and reports the canonical documentation discrepancy."
+      ],
+      "fixture_policy": "unchanged",
+      "performance_group": "simple-standard"
+    },
+    {
+      "id": 24,
+      "prompt": "Use $design to plan a small fixed-stack standard-library Python CLI that counts JSON array entries. One input file, no network or persistence. Existing behavior and every dependency are supplied here. A successful result prints the array length, including zero; invalid JSON exits nonzero. No implementation yet.",
+      "expected_output": "A concise sufficient design and plan with useful alternatives and no irrelevant technology research.",
+      "files": [],
+      "assertions": [
+        "Keeps the fixed standard-library stack and defines success/error behavior and validation.",
+        "Provides a concrete plan with a meaningful simplest/current alternative without invented complexity or repeated specialist selection.",
+        "Does not execute or claim implementation, and stops searching when supplied facts cover the decision."
+      ],
+      "fixture_policy": "unchanged",
+      "performance_group": "simple-standard"
+    },
+    {
+      "id": 25,
+      "prompt": "Use $design to plan a telemetry archive. The current hard constraints require retaining every raw event for one year and prohibit storing raw events beyond 24 hours. Neither requirement is negotiable without a product-owner decision. No implementation.",
+      "expected_output": "An explicit hard-constraint conflict with independent planning and a precise decision request.",
+      "files": [],
+      "assertions": [
+        "Identifies the incompatible retention constraints without silently relaxing either.",
+        "Does not call the plan implementation-ready or substitute a weighted score for the missing decision.",
+        "Continues useful independent design and names the exact owner decision needed."
+      ],
+      "fixture_policy": "unchanged"
+    },
+    {
+      "id": 26,
+      "prompt": "Use $design to plan replacement of a stateful scheduler. Interactions between retries, delayed acknowledgements and ownership transfer are not yet measured. Production migration is difficult to reverse. A familiar architecture looks plausible, but no probe is authorized now.",
+      "expected_output": "A reversible decision and bounded validation plan before irreversible commitment.",
+      "files": [],
+      "assertions": [
+        "Distinguishes unmeasured interactions from a verified familiar solution and identifies what evidence changes the decision.",
+        "Plans a bounded representative probe with failure signals, limits, acceptance criteria, rollback and revisit triggers.",
+        "Executes no experiment or live migration and marks readiness conditional on the missing evidence."
+      ],
+      "fixture_policy": "unchanged"
+    },
+    {
+      "id": 27,
+      "prompt": "Use $design to plan total_count in evals/fixtures/catalog. Keep the approved stack and existing consumer contract. All implementation inputs are present. We have a short planning window; do not research alternative databases or deployment platforms unless a concrete requirement demands it. No implementation.",
+      "expected_output": "A bounded code-grounded plan that spends effort on correctness and acceptance.",
+      "files": [
+        "evals/fixtures/catalog/README.md",
+        "evals/fixtures/catalog/consumer.py",
+        "evals/fixtures/catalog/docs/design.md",
+        "evals/fixtures/catalog/docs/requirements.md",
+        "evals/fixtures/catalog/service.py",
+        "evals/fixtures/catalog/test_catalog.py"
+      ],
+      "assertions": [
+        "Reads the relevant code and document discrepancy and plans the envelope-preserving addition.",
+        "Skips irrelevant database/platform selection and avoids re-reading unchanged evidence without a reason.",
+        "Includes meaningful acceptance, files, documentation owner and risk checks despite the short window."
+      ],
+      "fixture_policy": "unchanged",
+      "performance_group": "simple-standard"
+    },
+    {
+      "id": 28,
+      "prompt": "Use $design to plan a fictional multi-layer application. Earlier in this task ai-agent-design froze authorization and behavior, and ai-stack selected components. New evidence shows only the queue retention limit conflicts with a replay requirement. Keep unaffected decisions fixed. Architecture and application stack are not approved for scaffolding yet.",
+      "expected_output": "A bounded conflict returned to its owner while preserving completed decisions.",
+      "files": [],
+      "assertions": [
+        "Reopens the queue/replay decision and its dependents without recursively reselecting all AI/application components.",
+        "Preserves deterministic authorization and identifies the material unresolved constraint.",
+        "Does not present an approved scaffold execution handoff before architecture and stack approval."
+      ],
+      "fixture_policy": "unchanged"
     }
   ]
 }
