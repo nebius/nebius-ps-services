@@ -1763,14 +1763,17 @@ to the same actions/selectors; assessment alone stays read-only, while comments,
 labels, saved plans and closure follow the requested effect authority. Named
 standalone invocations retain the effects below. Use `--project vpngw` or an exact recognized root to
 select one product; ambiguous multi-product roots ask for a choice. Explicit
-`--project .` selects all projects. Use --filter "bug,review:confirmed" for
+`--project .` selects all projects. Use --filter "bug,reviewed" for
 issues carrying every listed label. Numbers and filters intersect project scope.
 All matching open issues are selected unless --issue-batch explicitly caps them;
 project priorities change processing order only.
 
 Default review investigates discussion, contracts, source/tests/docs and relevant
 external evidence, distinguishes bug/gap/new-feature/enhancement claims, and
-publishes concise findings with type, review-outcome and related-group labels.
+publishes concise findings with independent reviewed status, supported types,
+optional whole-issue findings and related-group labels. Reviewed is green and
+means assessed, with no design or delivery commitment; bug stays red. Use
+feature-request for new capabilities and enhancement for existing improvements.
 Scoped missing labels may be created; issue state stays unchanged. Related
 labels and direct links do not imply duplicate status or shared-plan membership.
 

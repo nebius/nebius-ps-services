@@ -56,7 +56,7 @@ do not repeat completed effects or conceal the earlier classification limit.
 
 After research, record evidenced relationships: shared underlying problems,
 workflow boundaries or material dependencies. Read related discussions together
-and preserve each issue's type, outcome, confidence and evidence. Mere keywords
+and preserve each issue's review status, type, finding, confidence and evidence. Mere keywords
 or product membership do not establish relatedness. No transitive merge is
 implied by an overlapping issue. Cross-repository evidence uses links only;
 repository-local labels never represent a cross-repository group.
@@ -95,7 +95,7 @@ claim; do not let an unsupported alarming title set severity.
 
 Without `--action create-plan`, do not write plans or an implementation
 overview. Review stops at findings; close proceeds to the separate
-[closure](closure.md) checks. With it, one plan covers eligible actionable confirmed
+[closure](closure.md) checks. With it, one plan covers eligible evidenced actionable
 members of each compatible batch under [triage](triage.md); record deferred,
 duplicate, rejected and unresolved members separately.
 If a missing decision or member dependency is material to the shared change,
@@ -111,7 +111,7 @@ split them instead of forcing one plan.
 ## Progress and completion
 
 Keep a compact issue registry in working context: full identity, observed state,
-primary/affected projects, evidence limits, batch, type, outcome, relationships, optional plan path and
+primary/affected projects, evidence limits, batch, review status, type, finding, relationships, optional plan path and
 verified/pending effect status. The project overview is a review/approval snapshot, not a live backlog ledger.
 Do not introduce a committed delivery ledger,
 private runtime or separate state machine. Existing permitted task-state support

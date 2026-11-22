@@ -4212,7 +4212,7 @@ and close issues only when a fresh assessment justifies the disposition.
   priority. Missing evidence is uncertainty; whole-issue conclusions require
   every material claim. Related groups require evidence, not shared keywords.
 - AC-005: Named standalone review authorizes concise deduplicated comments
-  and justified type, outcome and relationship labels, including scoped
+  and justified review-status, type, finding and relationship labels, including scoped
   policy-defined missing labels. Implicitly selected review performs only
   requested effects under AC-011. Preserve unrelated labels and documented
   semantics. Selection labels
@@ -4255,6 +4255,31 @@ and close issues only when a fresh assessment justifies the disposition.
   The lifecycle owner removes only this progress label after verified merged
   resolution and closure, or when it explicitly ends the repair. Labels never
   grant implementation, publication or closure authority.
+
+- AC-013: Keep assessment status, issue type and finding independent. Green
+  reviewed records a substantive assessment, including an identified evidence
+  gap, without acceptance, feasibility, design or delivery commitment. Types
+  are bug, gap, feature-request, enhancement, documentation and question; new
+  capability and improvement remain distinct. At most one whole-issue finding
+  is needs-information, already-fixed, already-supported, duplicate,
+  out-of-scope, deferred or not-planned. Evidence-supported unresolved work
+  needs no separate finding. Uncertain types remain unset; multiple types
+  require distinct claims. Whole-issue findings require complete coverage.
+- AC-014: The label policy owns canonical names, descriptions and colors.
+  Reviewed remains 0e8a16 and bug d73a4a. Deferred and not-planned require an
+  explicit maintainer decision or accepted policy, never an agent-invented
+  roadmap decision. Reassessment replaces only superseded managed findings;
+  reviewed is independent of their mutual exclusion and never enables planning,
+  implementation or closure by itself. Preserve PR/shared label semantics and
+  leave unsafe automation-triggering label effects pending without aliases.
+- AC-015: Repository catalog cleanup is a separately authorized maintenance
+  operation, never a normal issue action. Refresh definitions, memberships and
+  known consumers; migrate old review outcomes to reviewed plus their finding
+  and consolidate feature-enhancement into enhancement. Preserve historical
+  meaning, unrelated labels and issue/PR state, verify destination membership
+  before deleting obsolete definitions, and reconcile uncertain/partial effects
+  before retry. Migration does not constitute fresh issue assessment. Canonical
+  spellings have no legacy aliases; literal filters never translate old names.
 
 #### Negative Criteria
 

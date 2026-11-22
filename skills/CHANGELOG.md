@@ -4,6 +4,15 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Separate GitHub issue assessment status from type and optional finding.
+  Green `reviewed` means assessed without design or delivery commitment; keep
+  red `bug`, new-capability `feature-request`, and existing-capability
+  `enhancement`. Use plain finding labels including `already-fixed` and
+  `needs-information`; require explicit maintainer policy for deferral/rejection.
+  Preserve whole-issue evidence, independent planning/closure authority and
+  unrelated PR/automation labels. Catalog cleanup remains separately requested
+  maintenance, with no legacy aliases or automatic global label deletion.
+
 - Fix six design/troubleshooting review findings: align standard-depth routing,
   withhold unsafe truncated stream tails, redact nested evidence keys without
   dropping collisions, and return incomplete collector exit codes. Bind diagnostic

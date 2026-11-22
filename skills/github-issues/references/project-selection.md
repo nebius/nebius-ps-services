@@ -63,7 +63,7 @@ Keep the primary owner and affected-project list separate. A shared-library
 issue affecting `services/vpngw` stays owned by the shared library. Its plan and
 execution remain under that owner, with scoped changes to affected consumers
 declared explicitly. Count each issue once under its primary owner. Being
-outside the selected project is a filter exclusion, not a review:not-planned
+outside the selected project is a filter exclusion, not a not-planned
 assessment or a reason to change issue state.
 
 - No issue/filter selector: enumerate all open repository candidates and all

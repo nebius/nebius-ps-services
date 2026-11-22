@@ -2,7 +2,7 @@
 
 When comments are authorized under the core Invocation Policy, publish one
 concise issue-specific finding after research, independently of any
-requested planning. Include supported type/outcome, decisive evidence and
+requested planning. Include assessment status, supported type/finding, decisive evidence and
 confidence/gaps, plus exact related-issue links and the relationship rationale
 when relevant. Avoid boilerplate checklists, raw logs, implementation steps and
 delivery promises. Preserve disclosure boundaries for source/issue links.
@@ -11,13 +11,13 @@ comments; do not treat an unrequested comment as a failed or pending effect.
 
 | Finding | Comment content |
 | --- | --- |
-| Confirmed | Supported unresolved problem and evidence; no implementation acceptance promise. |
+| Unresolved work | Supported unresolved problem and evidence; no implementation acceptance promise. |
 | Needs information | Exact missing version, reproduction, contract or product decision. |
 | Already supported | Applicable supported usage path covering every material requested outcome. |
-| Already resolved | Applicable verified revision/release and coverage of every material defect/gap. |
+| Already fixed | Applicable verified revision/release and coverage of every material defect/gap. |
 | Duplicate | Verified canonical issue link and why all material claims are covered. |
-| Deferred | Validity, priority/cost rationale and reconsideration condition. |
-| Out of scope / not planned | Specific supported boundary, contradiction or accepted policy reason. |
+| Deferred | Explicit maintainer decision or accepted policy and reconsideration condition. |
+| Out of scope / not planned | Specific supported boundary or explicit maintainer decision/accepted policy. |
 
 Review and create-plan retain observed issue state. Close separately follows
 [closure](closure.md), including verified explanation before mutation. Use plain findings, not bot

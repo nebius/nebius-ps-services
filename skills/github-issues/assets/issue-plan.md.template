@@ -27,7 +27,7 @@ cwd or store machine-specific absolute paths in this plan.>
 
 ## Member decisions and acceptance
 
-| Issue identity | Type / review outcome and evidence | Severity / planning rationale | Acceptance criteria and validation |
+| Issue identity | Review status / type / finding and evidence | Severity / planning rationale | Acceptance criteria and validation |
 | --- | --- | --- | --- |
 | <repository and issue> | <verified facts, source and confidence> | <individual assessment> | <observable criteria and checks for this member> |
 

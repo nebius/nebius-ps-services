@@ -11235,7 +11235,7 @@ restricted runner. FEAT-068 separately verifies unused LFS configuration with
 sentinel executables; actual LFS content remains unsupported.
 
 <!-- /FEATURE: FEAT-052 -->
-<!-- FEATURE: FEAT-053 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=8 -->
+<!-- FEATURE: FEAT-053 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=9 -->
 ### FEAT-053: GitHub issue selection, review, planning and closure
 
 #### Requirements Covered
@@ -11244,13 +11244,58 @@ sentinel executables; actual LFS content remains unsupported.
 
 #### Context Evidence
 
-The inspected instruction-only baseline uses review-github-issues, one --label,
+Version 9 changes the issue vocabulary in the instruction-only github-issues
+package. Its label policy, callers, evaluations and live repository definitions
+were inspected together; PR automation owns a separate retained label family.
+The version 6 instruction-only baseline used review-github-issues, one --label,
 implicit five-item label batches and boolean --create-plan, with no standalone
 closure. Version 6 intentionally replaces that interface while preserving
 research, classifications, project ownership and saved-plan delivery contracts.
 Existing target edits are the baseline; unrelated work remains untouched.
 
 #### Design Details
+
+Version 9 separates review status from supported type and optional finding.
+The canonical catalog is github-issues/references/labels.md. Reviewed records
+an assessment and retains green 0e8a16; bug retains red d73a4a. Keep gap,
+feature-request, enhancement, documentation and question as the other types.
+Replace feature-enhancement with enhancement. Findings use needs-information,
+already-fixed, already-supported, duplicate, out-of-scope, deferred and
+not-planned without review prefixes. Actionable unresolved work has no special
+finding. Needs-information may coexist with reviewed and no established type.
+Types describe distinct supported claims; only whole-issue findings are mutually
+exclusive. Preserve existing full-claim, version and evidence requirements.
+
+Use explicit maintainer decisions or accepted policy for deferral/rejection.
+Planning eligibility remains evidence-based, independently of reviewed; an
+assessment does not promise feasibility, approval, design or implementation.
+Reassess changed evidence, replace only superseded managed findings and retain
+unrelated labels. If a canonical label triggers forbidden automation, leave
+that effect pending; do not invent a prefixed fallback or bypass closure checks.
+The shared needs-information meaning remains compatible with PR assessment.
+
+Update all current instructions, references, examples, filter and behavior
+cases together. Keep existing actions/selectors and generic literal filtering;
+no runtime, new public cleanup action, aliases or compatibility paths are added.
+Keep the host agent and research/design adviser architecture unchanged.
+
+The separately authorized catalog migration refreshes definitions, issue/PR
+memberships and known consumers, snapshots metadata privately, then creates or
+renames canonical definitions, adds reviewed for evidenced prior assessments,
+merges enhancement memberships and verifies effects before removing old names.
+Preserve closed state without inferring resolution and distinguish migration
+from a fresh review. Correct question versus needs-information descriptions.
+Preserve PR, automation, community, progress and relationship labels. Remove
+unused vague legacy definitions only after proving no memberships or consumers.
+After uncertain writes, read back before retry; a partial result remains partial.
+Regular issue actions still forbid repository-wide rename/deletion/recoloring.
+
+Validation covers independent reviewed status, missing evidence, type boundaries,
+mixed/partially resolved claims, explicit deferral, safe per-label replacement,
+automation collisions and no expanded planning/closure authority. Validate both
+native package policies, changed Markdown/links and paired specs; run focused
+behavior cases, align the changed surfaces, and install only the scoped skill.
+Record static, simulated, installed and live migration evidence separately.
 
 Version 8 admits only an explicitly requested progress-label effect after a
 separate owner has authorized and begun implementation. Reuse `being-fixed`
@@ -11304,7 +11349,7 @@ edits and actual owners; plans never become delivery or closure authority.
 Close uses fresh whole-issue evidence: resolved/supported maps to completed,
 verified duplicate maps to duplicate with the canonical API issue ID, and
 accepted maintainer policy for out-of-scope/not-planned maps to not_planned.
-Deferred, confirmed unresolved, mixed and uncertain outcomes remain open.
+Deferred, evidenced unresolved, mixed and uncertain outcomes remain open.
 Labels, dirty source and unmerged PRs are evidence leads, not resolution proof.
 Check applicable accepted revisions/versions and fresh maintainer objections
 or reopening; do not invent release/live gates. Read back an evidence-backed
@@ -11326,6 +11371,11 @@ provider, scheduler or storage service is introduced.
 
 #### Selected Option
 
+For version 9, one independent reviewed marker records assessment while types
+and optional findings retain their own evidence requirements. Keep one canonical
+catalog without aliases. Align only managed issue vocabulary on GitHub while
+preserving independently owned PR, automation and community labels.
+
 One action selector separates selection from effects and avoids conflicting
 boolean action combinations. One shared research/selection workflow feeds
 three explicit exits. GitHub owns observed issue state; files own requested
@@ -11333,12 +11383,22 @@ plans. Preserve the existing read-only adviser boundary for PR callers.
 
 #### Alternatives Considered
 
+Renaming confirmed alone would omit assessed issues with other findings and
+retain its old actionable-work meaning. Prefix fallbacks preserve synonyms and
+can bypass automation checks. Treating the issue catalog as a repository-wide
+allowlist would remove labels required by other workflows. Reject all three.
+
 Separate action flags allow confusing combinations and multiply validation
 rules. Keeping --label/five-item defaults fails the requested all-match filter.
 Blind label-based closure trusts stale classifications. Legacy aliases create
 two public paths and are not requested. Additional lifecycle actions are deferred.
 
 #### Implementation Boundaries
+
+Version 9 updates the issue skill, its current consumers and evaluation fixtures,
+README and Unreleased notes, plus a separately authorized live catalog migration.
+It adds no routine cleanup action, model/runtime change or issue-state writes.
+The version 6 package migration below is already implemented historical scope.
 
 Rename the package, metadata, public examples and references; update plugin
 manifests, direct callers, catalog and Unreleased notes. Retain historical
@@ -11388,6 +11448,15 @@ checks nor generated responses establish live closure behavior.
 
 #### Implementation Evidence
 
+Version 9 implements independent reviewed status, six supported types and seven
+optional whole-issue findings in the core skill, label/triage policies, affected
+references, examples and templates. The catalog and Unreleased notes agree.
+There are 141 quality definitions and 52 trigger cases, including nine new
+behavior cases. Explicit maintainer deferral/rejection and canonical-label
+automation collision behavior replace the old ambiguous expectations.
+A scoped Codex install copied all 17 payload files; unrelated installed files
+and hook registration remained unchanged. Prior-version evidence below is historical.
+
 Version 8 aligns core instructions, label policy, local and catalog README,
 Unreleased notes and two added quality/trigger definitions. The complete skill
 has 132 quality definitions and 49 trigger cases. No runtime or public action
@@ -11409,6 +11478,28 @@ plugin manifests, catalog, usage docs and Unreleased notes use the new interface
 No executable parser, scheduler or product runtime was introduced.
 
 #### Verification Evidence
+
+Version 9 passed Codex/Claude repository-policy structure checks, current local
+reference links, unique quality/trigger definitions, project-configured Markdown
+and whitespace checks, paired canonical-spec validation, nested read-only review
+and scoped security inspection. Installed payload digests match all 17 source
+files. Native model quality and fresh-session loading remain unverified because
+the isolated runner has no API credentials; static definitions are not executed
+model behavior, and delivery remains implemented rather than native-qualified.
+
+Eight synthetic migration checks passed and were independently rerun: full
+preservation/idempotence, lost write response, existing destination collision,
+state drift, used retirement candidate, withdrawn-label drift, definition drift
+and verified partial-progress resumption. Exact preflight and recorded owned
+checkpoints prevent restoring a maintainer-withdrawn legacy finding.
+
+The authorized live catalog migration independently verified 14 canonical
+name/description/color definitions, updated memberships on 15 previously assessed
+issues, and preserved 14 unrelated definitions. All 286 inspected issue/PR states
+and bodies remained unchanged. No comments, plans, closures or fresh issue
+assessments were attributed to that migration. Historical findings stayed
+historical; closed state was not converted into resolution evidence. These are
+live catalog-operation results, not native issue-review workflow qualification.
 
 Version 8 passed scoped Codex/Claude structure checks, actual pinned npx
 skills discovery, copied payload parity, repeat installation and isolation,
@@ -11523,12 +11614,18 @@ The scoped installed payload was refreshed and verified against source.
 
 #### Rollout And Rollback
 
-Validate old-to-new migration in disposable homes before scoped native install.
-Verify ownership and new payload parity before retiring the old managed skill;
-never delete unmanaged content or introduce aliases. Preserve existing plans.
-Restore only task-owned changes from the captured baseline if necessary,
-retaining concurrent edits and observed external effects. No live effects are
-part of this refactor.
+For version 9, validate source and synthetic migration behavior before scoped
+installation and separately authorized live catalog reconciliation. Refresh the
+known automation, exact definitions and all issue/PR memberships before effects.
+Checkpoint only independently verified owned transitions; unrecorded drift stops
+the next effect. Add destination memberships before removing obsolete labels.
+Keep private metadata snapshots for explicitly requested recovery and preserve
+unrelated labels, states and concurrent work; never automatically reverse live
+effects or introduce compatibility aliases. Keep native workflow qualification
+separate from static, installed and catalog-operation evidence.
+
+The earlier version 6 package rename used ownership-checked disposable install
+migration, preserved existing plans and retired only the old managed package.
 
 <!-- /FEATURE: FEAT-053 -->
 

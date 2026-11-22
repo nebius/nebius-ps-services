@@ -163,7 +163,7 @@ Use existing access; stop the affected operation on denied/uncertain capability.
 Do not repair authentication, roles or credentials. Restricted/locked/archived
 issues remain pending when the required operation cannot complete.
 
-Bind the exact repository and selected issue, supported type/outcome, concise
+Bind the exact repository and selected issue, supported review status/type/finding, concise
 comment and exact label intents. Leave all unrelated fields unset. Review/planning never write state, state_reason or duplicate associations.
 Only close may write state=closed, its justified state_reason and, for a
 verified duplicate, duplicate_issue_id under [closure](closure.md). Never write
@@ -203,7 +203,7 @@ independently verified explanation; no write is inferred from implicit loading.
    implementation steps, raw logs, confidential data or private local paths.
 2. Independently retrieve the returned comment or locate the exact body by
    author and issue. A successful write response alone is not proof.
-3. Apply justified type/outcome/relationship labels under their policy; verify
+3. Apply justified review-status/type/finding/relationship labels under their policy; verify
    definitions and each addition/removal independently. Unsupported or failed
    labeling does not invalidate an independently verified comment.
 4. Independently read labels and issue state. Report findings and effects
