@@ -11,6 +11,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.7.0] - 2026-11-21
+
 - Avoid unnecessary active BGP VM-HA self-fencing during DHCP renewal when
   fresh native evidence proves the DHCP broad APIPA route cannot divert any
   configured peer or VPN workload. Keep passive, promotion, static, mixed-mode,
