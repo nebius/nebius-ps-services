@@ -436,7 +436,7 @@ def composed(tmp_path, monkeypatch, *, advertise=True, protected_checkpoint=True
         providers=SimpleNamespace(apply_lock_operation_id=lambda: None),
     )
 
-    def observe():
+    def observe(*, publish=True):
         snapshot = _snapshot(
             now=now[0],
             cluster_id="cluster-a",
@@ -457,10 +457,12 @@ def composed(tmp_path, monkeypatch, *, advertise=True, protected_checkpoint=True
             routes_reconciled_context=ports.routes.receipt_context(),
             route_runtime_id=ports.binding.route_runtime_id,
         )
-        snapshots.last_snapshot = snapshot
+        if publish:
+            snapshots.last_snapshot = snapshot
         return snapshot
 
     snapshots.observe = observe
+    snapshots.observe_tunnel_authority = lambda: observe(publish=False)
     checkpoints = main.VMHACheckpointFileStore(state_dir / "controller-checkpoint.json")
     checkpoints.save(checkpoints.load())
 
@@ -613,16 +615,19 @@ def test_production_factory_retains_route_authority_for_missing_daemon_configura
         snapshot = production.controller.snapshots.observe()
         if loss_timing == "after-readiness":
             assert snapshot.readiness.promotion_ready
-            assert snapshot.routes_reconciled_context is None
             mixed = production.controller.controller.policy.decide(snapshot, checkpoint)
             if routes_retained:
+                # Native readiness is sampled after route proofs. A failure
+                # injected after that final sample belongs to the next tick;
+                # the current snapshot consistently describes the prior state.
+                assert snapshot.routes_reconciled_context is not None
                 assert mixed.action is None, mixed.reasons
-                assert mixed.forwarding_enabled and mixed.state.value == "degraded"
-                assert mixed.reasons == ("local-evidence-unknown",)
+                assert mixed.forwarding_enabled and mixed.state.value == "active"
                 assert mixed.checkpoint.repair_attempt is None
                 production.controller.snapshots.last_snapshot = snapshot
-                assert not production.controller._write_status(mixed)["promotion_ready"]
+                assert production.controller._write_status(mixed)["promotion_ready"]
             else:
+                assert snapshot.routes_reconciled_context is None
                 assert mixed.action.kind is ActionKind.DISABLE_ACTIVE
             production.controller.snapshots.providers = providers
             snapshot = production.controller.snapshots.observe()
@@ -840,6 +845,7 @@ def test_mixed_cold_static_exception_requires_complete_bgp_policy_evidence(
     ports.routes.static_manifest = replace(
         ports.routes.static_manifest, prefixes=frozenset({"10.2.0.0/16"})
     )
+    ports.routes.static_required_prefixes = ports.routes.static_manifest.prefixes
     ports.routes.passive_bgp_policy_provider = lambda: policy
     ports.data_plane.tunnel_cold_passive = True
     ports.data_plane.static_tunnel_names = ("static",)

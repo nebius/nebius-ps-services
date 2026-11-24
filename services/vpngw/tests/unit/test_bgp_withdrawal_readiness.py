@@ -110,6 +110,7 @@ def test_ha_readiness_distinguishes_protection_history_from_current_obligation(t
         mode=lambda: DataPlaneMode.ACTIVE,
     )
     runtime.static_manifest = SimpleNamespace(prefixes=frozenset())
+    runtime.static_required_prefixes = frozenset()
     runtime.bgp_policies = [{"remote_prefixes": ["10.2.0.0/16"] if state == "required" else []}]
     runtime.expected_import_policy_digest = "a" * 64
     runtime.static_readiness_provider = None

@@ -42,7 +42,7 @@ def request_record(request: Any, **scope: Any) -> dict:
 
 def intent(plan: dict) -> dict:
     """The pre-activation authority; BGP selection happens only inside it."""
-    return {
+    result = {
         key: plan[key]
         for key in (
             "project",
@@ -57,6 +57,10 @@ def intent(plan: dict) -> dict:
             "options",
         )
     }
+    for key in ("enforced_predecessors_next", "enforced_restoration_evidence", "ha_conversion"):
+        if key in plan:
+            result[key] = plan[key]
+    return result
 
 
 def inspect(
@@ -71,6 +75,8 @@ def inspect(
     ownership: dict[str, dict],
     infrastructure: dict,
     absence: AbsenceEvidence | None = None,
+    private_copies: tuple[str, ...] = (),
+    ha_conversion: dict | None = None,
 ) -> dict:
     from nebius.api.nebius.common.v1 import ResourceMetadata
     from nebius.api.nebius.vpc.v1 import (
@@ -91,8 +97,25 @@ def inspect(
         or not {record["snapshot"]["parent_id"] for record in ownership.values()} <= set(routes)
     ):
         raise RuntimeError("Route planning requires complete exact target-table inventories")
+    if ha_conversion is not None:
+        from .ha_to_ordinary_routes import verify as verify_ha_conversion
+
+        verify_ha_conversion(ha_conversion)
+    converted_sources = (ha_conversion or {}).get("routes", {})
+    if (
+        ha_conversion is not None
+        and converted_sources
+        and not {t["workload_subnet_id"] for t in ha_conversion["targets"]} <= set(private_copies)
+    ):
+        raise RuntimeError("HA route conversion requires complete private table copies")
     selected = policy.select(learned)
     desired = {table: dict(selected) for table in active_tables}
+    mandatory = {}
+    for table in active_tables if policy.enforced else ():
+        targets = tuple(t["subnet_id"] for t in infrastructure["targets"] if t["table_id"] == table)
+        mandatory[table] = policy.mandatory(targets, infrastructure.get("enforced_sources", {}))
+        if not set(targets) & set(private_copies):
+            desired[table].update(mandatory[table])
     observed: dict[str, dict] = {}
     by_prefix: dict[str, dict[str, Any]] = {}
     requests: dict[str, dict] = {}
@@ -111,13 +134,20 @@ def inspect(
             observed[item["id"]] = item
             by_prefix[table][destination] = route
             owned(route, ownership, project=project, gateway=gateway)
+            if item["id"] in converted_sources and converted_sources[item["id"]] != item:
+                raise RuntimeError("HA source route changed before conversion")
+    if not set(converted_sources) <= observed.keys():
+        raise RuntimeError("HA source route disappeared before conversion")
     # Deployment observations retain admitted destinations. The runtime owner
     # may withdraw only with its complete, consecutive absence evidence.
     for identifier, record in sorted(ownership.items()):
         item = record["snapshot"]
         table, destination, index = item["parent_id"], item["destination"], record["instance_index"]
         withdrawn = absence is not None and absence.admits(policy, learned, destination)
-        retained = table in desired and policy.retains(destination, index) and not withdrawn
+        enforced = mandatory.get(table, {}).get(destination) == index
+        retained = table in desired and (
+            enforced or policy.retains(destination, index) and not withdrawn
+        )
         summary = (
             next(
                 (
@@ -172,10 +202,13 @@ def inspect(
             if not allocation:
                 raise RuntimeError("Route destination has no exact current gateway allocation")
             current = by_prefix[table].get(destination)
+            if current is not None and str(current.metadata.id) in converted_sources:
+                current = None
             key = digest([table, destination])[:32]
             for narrower, overlapping in by_prefix[table].items():
                 if (
                     narrower != destination
+                    and str(overlapping.metadata.id) not in converted_sources
                     and ipaddress.IPv4Network(narrower).subnet_of(
                         ipaddress.IPv4Network(destination)
                     )
@@ -235,6 +268,8 @@ def inspect(
         "released": [],
         "options": {"force_copy": False},
     }
+    if ha_conversion is not None:
+        result["ha_conversion"] = ha_conversion
     if absence is not None:
         result["options"]["absence"] = {
             "binding": absence.binding,

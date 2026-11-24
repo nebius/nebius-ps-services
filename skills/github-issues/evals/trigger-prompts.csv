@@ -33,14 +33,14 @@ explicit-filter-create-plan,true,/github-issues --project api --filter bug --act
 default-review-classification,true,Use $github-issues to research this product and label findings without plans.
 refactor-skill-not-triage,false,Implement the agreed refactor of github-issues defaults and its --action create-plan workflow; do not run issue triage.
 explicit-review-action,true,$github-issues --action review
-explicit-filter-and,true,"$github-issues --filter ""bug,review:confirmed"""
-explicit-close-action,true,"$github-issues --filter ""review:already-resolved"" --action close"
+explicit-filter-and,true,"$github-issues --filter ""bug,reviewed"""
+explicit-close-action,true,"$github-issues --filter ""already-fixed"" --action close"
 explicit-claude-close,true,"/skills:github-issues --issues 10,11 --action close"
 closure-design-only,false,Design the github-issues close policy; do not act on issues.
 explain-filters,false,Explain AND versus OR label matching without running GitHub actions.
 implicit-assessment,true,Assess GitHub issue 17 in example-org/widget against the current implementation and report whether it is still valid. Do not change GitHub.
 implicit-triage,true,"Triage the open GitHub issues for this product, add justified assessment labels and post concise findings."
-implicit-filter,true,Review all open GitHub issues in example-org/widget carrying both bug and review:confirmed labels; report findings here only.
+implicit-filter,true,Review all open GitHub issues in example-org/widget carrying both bug and reviewed labels; report findings here only.
 implicit-create-plan,true,Research GitHub issues 10 and 11 in example-org/widget and save a shared remediation plan if they belong together. Do not implement it or post to GitHub.
 implicit-close,true,Review GitHub issue 17 in example-org/widget and close it if every reported defect is resolved; post the explanation and apply justified labels.
 implicit-review-no-plans,true,"Investigate this product GitHub backlog and label confirmed bugs. Do not post comments, create plans or close anything."
@@ -48,3 +48,6 @@ implicit-source-refactor,false,Fix the github-issues skill so its implicit invoc
 implicit-advice-only,false,Explain how GitHub issue labels can help organize a backlog without assessing or changing any real issues.
 explicit-admitted-progress,true,Use $github-issues to mark issue 17 being-fixed while the separately authorized repair is underway.
 progress-label-explanation,false,Explain what being-fixed means; do not change issues or implement anything.
+implicit-reviewed-filter,true,Assess open GitHub issues in example-org/widget labeled reviewed and enhancement; report findings only.
+label-taxonomy-design,false,Redesign the github-issues label catalog so reviewed is separate from bug and already-fixed; do not triage issues.
+repository-label-cleanup,false,Rename and merge repository label definitions while preserving historical issue and PR memberships; do not review issues.

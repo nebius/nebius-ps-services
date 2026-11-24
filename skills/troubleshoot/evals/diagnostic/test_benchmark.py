@@ -1,18 +1,19 @@
 """Offline harness regressions; no model or container needed for these tests."""
 
 import copy
-import hashlib
-import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import cases
 import fixtures
 import runner
 import score
 from oracle import program
+from qualification_contract import SCHEMA, evidence_digest, execution_contract
 from smoke import REPAIRS
 
 
@@ -67,6 +68,37 @@ class BenchmarkTests(unittest.TestCase):
             self.assertIn(flag, command)
         self.assertNotIn("/var/run/docker.sock", " ".join(command))
         self.assertNotIn("--privileged", command)
+
+    @unittest.skipIf(os.geteuid() == 0, "same-owner denial requires non-root")
+    def test_canary_is_unreadable_even_when_trial_uid_matches_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp) / "fixture"
+            fixture.mkdir()
+
+            def inspect_canary(*_args):
+                protected = next(Path(tmp).glob("*.secret"))
+                with self.assertRaises(PermissionError):
+                    protected.read_bytes()
+                raise RuntimeError("stop before container launch")
+
+            with (
+                mock.patch.object(runner, "docker", side_effect=inspect_canary),
+                mock.patch.object(runner, "bounded", return_value={"status": "ok"}),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "stop before container launch"
+                ):
+                    runner.run_trial(
+                        None,
+                        "sha256:" + "a" * 64,
+                        "test",
+                        "codex",
+                        Path(tmp),
+                        fixture,
+                        {},
+                        "none",
+                    )
+            self.assertEqual(list(Path(tmp).glob("*.secret")), [])
 
     def test_all_cases_and_replays_have_public_fixtures(self):
         self.assertEqual(len(cases.CASES), 12)
@@ -169,29 +201,25 @@ class BenchmarkTests(unittest.TestCase):
                 for rep in range(3)
                 for arm in ("baseline", "candidate")
             ]
-            for trial in trials:
-                measured = {
-                    k: v
-                    for k, v in trial.items()
-                    if k not in {"case", "arm", "repetition", "fixture_sha256"}
-                }
-                trial["evidence_sha256"] = hashlib.sha256(
-                    json.dumps(measured, sort_keys=True).encode()
-                ).hexdigest()
             reports.append(
                 {
+                    "schema": SCHEMA,
+                    "suite": "qualification",
                     "agent": host,
                     "deadline_seconds": 600,
                     "repetitions": 3,
                     "image": "sha256:" + "a" * 64,
                     "model": "frozen-test-model",
-                    "execution_contract": {"readonly_inputs": True},
+                    "execution_contract": execution_contract("none"),
                     "parallel_eligible_cases": sorted(cases.PARALLEL_ELIGIBLE),
                     "accounting_contract": "native-tree-v1",
                     "payload_hashes": {"baseline": "b", "candidate": "c"},
                     "trials": trials,
                 }
             )
+        for report in reports:
+            for trial in report["trials"]:
+                trial["evidence_sha256"] = evidence_digest(report, trial)
         self.assertEqual(score.score(reports, {})["promotion"], "NOT_QUALIFIED")
         reviews = {
             f"{r['agent']}/{t['case']}/{t['repetition']}/{t['arm']}": {
@@ -209,12 +237,60 @@ class BenchmarkTests(unittest.TestCase):
         for field, value in (
             ("payload_hashes", {"baseline": "b", "candidate": "wrong"}),
             ("model", None),
+            ("model", "changed-after-review"),
+            ("image", "unreviewed:latest"),
+            ("image", "sha256:" + "d" * 64),
+            (
+                "execution_contract",
+                {"network": "host", "readonly_inputs": False, "no_host_mounts": False},
+            ),
         ):
             changed = copy.deepcopy(reports)
             changed[1][field] = value
-            self.assertEqual(
-                score.score(changed, reviews)["promotion"], "NOT_QUALIFIED"
-            )
+            with self.subTest(header=field, value=value):
+                self.assertEqual(
+                    score.score(changed, reviews)["promotion"], "NOT_QUALIFIED"
+                )
+        # Invalid conditions fail even with reviews rebound to those conditions.
+        for field, value in (
+            ("schema", "diagnostic-benchmark/v1"),
+            ("suite", "supplemental-replay"),
+            ("image", "unreviewed:latest"),
+            ("model", " "),
+            *(
+                ("execution_contract", {**execution_contract("none"), key: value})
+                for key, value in (
+                    ("network", "host"),
+                    ("network", ""),
+                    ("network", "container:other"),
+                    ("network", "bridge"),
+                    ("cpu_limit", 1),
+                    ("memory_mib", 1024),
+                    ("pids", 256),
+                    ("readonly_inputs", False),
+                    ("no_host_mounts", False),
+                    ("readonly_inputs", 1),
+                )
+            ),
+        ):
+            changed = copy.deepcopy(reports)
+            rebound = copy.deepcopy(reviews)
+            changed[1][field] = value
+            for report in changed:
+                for trial in report["trials"]:
+                    trial["evidence_sha256"] = evidence_digest(report, trial)
+                    key = f"{report['agent']}/{trial['case']}/{trial['repetition']}/{trial['arm']}"
+                    rebound[key]["evidence_sha256"] = trial["evidence_sha256"]
+            with self.subTest(invalid_condition=field, value=value):
+                self.assertEqual(
+                    score.score(changed, rebound)["promotion"], "NOT_QUALIFIED"
+                )
+        # Coordinated fixture changes across every pair still invalidate old reviews.
+        changed = copy.deepcopy(reports)
+        for report in changed:
+            for trial in report["trials"]:
+                trial["fixture_sha256"] = "different-fixture"
+        self.assertEqual(score.score(changed, reviews)["promotion"], "NOT_QUALIFIED")
         changed = copy.deepcopy(reports)
         changed[1]["trials"][0]["fixture_sha256"] = "different-fixture"
         self.assertEqual(score.score(changed, reviews)["promotion"], "NOT_QUALIFIED")
@@ -239,21 +315,7 @@ class BenchmarkTests(unittest.TestCase):
                     if trial["arm"] != "candidate":
                         continue
                     trial[field] = value
-                    measured = {
-                        k: v
-                        for k, v in trial.items()
-                        if k
-                        not in {
-                            "case",
-                            "arm",
-                            "repetition",
-                            "fixture_sha256",
-                            "evidence_sha256",
-                        }
-                    }
-                    trial["evidence_sha256"] = hashlib.sha256(
-                        json.dumps(measured, sort_keys=True).encode()
-                    ).hexdigest()
+                    trial["evidence_sha256"] = evidence_digest(report, trial)
                     key = f"{report['agent']}/{trial['case']}/{trial['repetition']}/{trial['arm']}"
                     rebound[key]["evidence_sha256"] = trial["evidence_sha256"]
             with self.subTest(gate=field, value=value):
@@ -280,21 +342,7 @@ class BenchmarkTests(unittest.TestCase):
                     and trial["case"] not in cases.PARALLEL_ELIGIBLE
                 ):
                     trial["elapsed_seconds"] = 12
-                    measured = {
-                        k: v
-                        for k, v in trial.items()
-                        if k
-                        not in {
-                            "case",
-                            "arm",
-                            "repetition",
-                            "fixture_sha256",
-                            "evidence_sha256",
-                        }
-                    }
-                    trial["evidence_sha256"] = hashlib.sha256(
-                        json.dumps(measured, sort_keys=True).encode()
-                    ).hexdigest()
+                    trial["evidence_sha256"] = evidence_digest(report, trial)
                     key = f"{report['agent']}/{trial['case']}/{trial['repetition']}/{trial['arm']}"
                     rebound[key]["evidence_sha256"] = trial["evidence_sha256"]
         assessed = score.score(changed, rebound)

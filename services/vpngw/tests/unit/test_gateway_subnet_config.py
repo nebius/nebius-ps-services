@@ -734,7 +734,7 @@ def test_agent_capability_document_is_read_only_and_machine_readable(
             "vm-ha-rebound-policy-v1",
             "vm-ha-live-peer-replacement-v5",
             "vm-ha-standby-replacement-inhibition-v2",
-            "vm-ha-standby-restoration-v2",
+            "vm-ha-standby-restoration-v3",
         ],
         "schema": "nebius-vpngw.agent-capabilities.v1",
     }

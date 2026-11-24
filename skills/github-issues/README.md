@@ -15,10 +15,10 @@ remains until its lifecycle owner verifies merged resolution or ends the repair.
 ```text
 $github-issues
 $github-issues --action review --project api
-$github-issues --filter "bug,review:confirmed"
+$github-issues --filter "bug,reviewed"
 $github-issues --project api --issues 10,11 --filter bug
-$github-issues --filter "review:confirmed" --action create-plan
-$github-issues --filter "review:already-resolved" --action close
+$github-issues --filter "reviewed" --action create-plan
+$github-issues --filter "already-fixed" --action close
 $github-issues --filter bug --issue-batch 10
 $github-issues --repo example-org/alpha,example-org/beta --project api
 $github-issues --project . --priority services/api,libraries/shared
@@ -85,24 +85,35 @@ relevant external technical claims against current authoritative sources and
 state unavailable evidence. Research depth follows unresolved material questions;
 it is not a fixed query quota or an unrelated full-web crawl.
 
-Separate type from assessment:
+Separate assessment status, type and optional finding. `reviewed` is green
+(`0e8a16`) and means an assessment was recorded; it makes no acceptance,
+feasibility, design or delivery promise. A substantive assessment identifying a
+precise missing fact can be reviewed; merely opening/skipping an issue or being
+unable to perform required research cannot earn that marker.
 
 | Type | Meaning |
 | --- | --- |
-| `bug` | Incorrect implemented supported behavior. |
+| `bug` | Incorrect implemented supported behavior; red (`d73a4a`). |
 | `gap` | Missing or incomplete behavior already promised by an accepted contract. |
 | `feature-request` | New capability outside the existing supported contract. |
-| `feature-enhancement` | Extension or improvement of an existing capability. |
+| `enhancement` | Extension or improvement of an existing capability. |
 | `documentation` | Missing, incorrect or unclear documentation. |
-| `question` | Usage guidance or clarification. |
+| `question` | Usage guidance or clarification, distinct from missing review evidence. |
 
-Review outcomes use `review:confirmed`, `review:needs-information`,
-`review:already-supported`, `review:already-resolved`, `review:duplicate`,
-`review:out-of-scope`, `review:deferred` or `review:not-planned`.
-Confirmed means evidence-supported, not approved delivery. Fully existing
-functionality is already-supported, not automatically an enhancement. Whole-issue
-supported/resolved/duplicate outcomes require every material claim to be covered;
-a mixed report retains its outstanding work and explicit uncertainty.
+Optional findings are `needs-information`, `already-supported`, `already-fixed`,
+`duplicate`, `out-of-scope`, `deferred` and `not-planned`. At most one applies to
+the whole issue; it coexists with reviewed and the supported types. Unresolved
+work needs no special finding: `reviewed` + `bug` is sufficient. Uncertain type
+may remain unset with `reviewed` + `needs-information`. Deferral/rejection requires
+an explicit maintainer decision or accepted policy, not an agent's priority choice.
+Whole-issue supported/fixed/duplicate findings require every material claim to be
+covered; a mixed report retains outstanding work and explicit uncertainty.
+
+The [label policy](references/labels.md) owns names, descriptions and colors.
+Routine triage creates only needed missing definitions and preserves unrelated
+labels. Repository-wide rename, merge, recolor or deletion is separate explicitly
+requested maintenance; PR, automation and community labels remain independently
+owned. Canonical names have no legacy aliases or filter translation.
 
 Severity, validity, confidence and priority remain separate. Rare serious defects
 remain actionable. Age, popularity or failure to reproduce does not invalidate a
@@ -134,18 +145,18 @@ issues to writes or planning. Report exclusions and incomplete coverage.
 
 ## Review and requested plans
 
-Default invocation authorizes concise review comments and justified type,
-review-outcome and relationship labels. Reuse exact documented equivalents or
+Default invocation authorizes concise review comments and justified
+review-status, type, finding and relationship labels. Reuse exact documented equivalents or
 create only the defined missing labels. Preserve unrelated labels, inspect known
 automation triggers and independently verify each effect. Review and create-plan
-preserve state, including duplicate/already-resolved findings; no action reopens. Label failure does
+preserve state, including duplicate/already-fixed findings; no action reopens. Label failure does
 not invalidate an independently completed review comment.
 
 Without `--action create-plan`, do not invoke design, write/update plans or overviews,
 or offer implementation approval. Existing plans do not enable that path.
 
-With it, research feeds design as an internal adviser. Plan actionable,
-non-deferred confirmed work after resolving material product decisions and
+With it, research feeds design as an internal adviser. Plan evidenced actionable,
+non-deferred work after resolving material product decisions and
 dependencies. Save each compatible batch under its real owner at
 `docs/github-issues/batch-<anchor>-<topic>.md`, including singleton batches.
 Reuse matching files with stable names, preserve human edits and reconcile

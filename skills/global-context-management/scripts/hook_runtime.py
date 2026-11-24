@@ -149,6 +149,7 @@ def project_hook_entries(hooks: dict, home: Path, agent: str) -> dict:
                         and tokens[2:5] == ["--agent", agent, "--hook"] and tokens[5] in HOOKS):
                     if agent == "claude":
                         handler.pop("statusMessage", None)
+                        handler.pop("additionalContextLimit", None)
                     continue
                 name = Path(tokens[1]).name if len(tokens) == 2 and tokens[0] == "python3" else ""
                 managed_paths = {str(home / "hooks" / name), "${CODEX_HOME:-$HOME/.codex}/hooks/" + name}
@@ -160,6 +161,7 @@ def project_hook_entries(hooks: dict, home: Path, agent: str) -> dict:
                                       + " --agent " + agent + " --hook " + shlex.quote(name))
                 if agent == "claude":
                     handler.pop("statusMessage", None)
+                    handler.pop("additionalContextLimit", None)
     return projected
 
 

@@ -286,6 +286,12 @@ class RouteReconciliationContext:
 
 
 @dataclass(frozen=True)
+class RestorationRouteAuthority:
+    ownership_incarnation: int
+    operator_request_id: str | None = None
+
+
+@dataclass(frozen=True)
 class ControllerSnapshot:
     now: float
     boot_id: str
@@ -315,6 +321,7 @@ class ControllerSnapshot:
     tunnel_recovery_remaining: float | None = None
     wall_time: float | None = None
     established_routes_context: RouteReconciliationContext | None = None
+    restoration_route_authority: RestorationRouteAuthority | None = None
 
     def __post_init__(self) -> None:
         if not all(
@@ -822,6 +829,10 @@ class VMHAController:
                 ActionKind.CONFIRM_CANDIDATE_OWNERSHIP,
             )
         local_ownership_safe = self._local_ownership_safe(snapshot, checkpoint)
+        if local_owns and snapshot.apply_locked:
+            # Fencing/passive materialization needs no authority to forward.
+            # Stale owner history must not deadlock an exact guarded upgrade.
+            return self._owner_decision(snapshot, checkpoint, self._parity_reasons(snapshot))
         if local_owns and not local_ownership_safe:
             if snapshot.data_plane_mode in {DataPlaneMode.ACTIVE, DataPlaneMode.ORIGINATING}:
                 return self._action(
@@ -2190,6 +2201,18 @@ class VMHAController:
                 and continuity is not None
                 and continuity.ownership_confirmed
             )
+        if (
+            snapshot.restoration_route_authority is not None
+            and snapshot.restoration_route_authority.ownership_incarnation
+            == checkpoint.ownership_incarnation
+            and (
+                not checkpoint.ownership_continuity_invalidated
+                or snapshot.restoration_route_authority.operator_request_id is not None
+            )
+            and cloud.transfer_complete(snapshot.local_node_id)
+        ):
+            # Fresh restoration reconciliation remains subject to all route/forwarding gates.
+            return True
         if snapshot.configured_role is ConfiguredRole.ACTIVE:
             # A stable configured-active baseline may be adopted after a fresh
             # exact cloud read, but invalidated route evidence is still forced

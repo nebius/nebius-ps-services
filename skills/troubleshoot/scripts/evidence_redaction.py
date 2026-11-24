@@ -149,8 +149,15 @@ def redact_value(value: Any, sensitive: bool = False) -> Any:
     if isinstance(value, list):
         return [redact_value(item) for item in value]
     if isinstance(value, dict):
-        return {
-            str(key): redact_value(item, is_sensitive_name(str(key)))
-            for key, item in value.items()
-        }
+        result = {}
+        for key, item in value.items():
+            original = str(key)
+            label = redact_text(original)
+            displayed = label
+            suffix = 2
+            while displayed in result:
+                displayed = f"{label} [{suffix}]"
+                suffix += 1
+            result[displayed] = redact_value(item, is_sensitive_name(original))
+        return result
     return value

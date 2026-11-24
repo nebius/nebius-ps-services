@@ -6,6 +6,14 @@ import ipaddress
 from dataclasses import dataclass
 from typing import Any
 
+try:
+    from _vpngw_enforced_routing import (  # type: ignore[import-not-found]
+        compile_policies,
+        static_destinations,
+    )
+except ModuleNotFoundError:
+    from .enforced_routing import compile_policies, static_destinations
+
 
 @dataclass(frozen=True)
 class TunnelPath:
@@ -26,6 +34,18 @@ class ConnectionPolicy:
     paths: tuple[TunnelPath, ...]
     destinations: frozenset[str]
     unavailable_reason: str | None = None
+    enforced_sources: tuple[str, ...] = ()
+    enforced_destinations: frozenset[str] = frozenset()
+    enforced_table: int = 254
+    ingress: str = "eth0"
+    ordinary_shared: frozenset[str] = frozenset()
+
+    def table_for(self, destination: str) -> int:
+        return self.enforced_table if destination in self.enforced_destinations else 254
+
+    @property
+    def ordinary_destinations(self) -> frozenset[str]:
+        return (self.destinations - self.enforced_destinations) | self.ordinary_shared
 
     @property
     def preferred(self) -> str:
@@ -48,6 +68,16 @@ def connection_policies(cfg: dict[str, Any]) -> tuple[ConnectionPolicy, ...]:
     """Project per-member topology, preserving the canonical enabled-tunnel order."""
     index = 0
     result: list[ConnectionPolicy] = []
+    enforced = {policy.connection: policy for policy in compile_policies(cfg)}
+    ha = cfg.get("vm_ha") or {}
+    ingress = next(
+        (
+            node["network_interface_name"]
+            for node in (ha.get("runtime_binding") or {}).get("nodes", [])
+            if node["node_id"] == (ha.get("node") or {}).get("node_id")
+        ),
+        "eth0",
+    )
     for connection in cfg.get("connections", []):
         mode = connection.get("routing_mode") or cfg.get("defaults", {}).get("routing", {}).get(
             "mode", "bgp"
@@ -68,6 +98,12 @@ def connection_policies(cfg: dict[str, Any]) -> tuple[ConnectionPolicy, ...]:
                 or (connection.get("bgp") or {}).get("remote_prefixes")
                 or []
             )
+            if mode == "static":
+                prefixes = static_destinations(connection, tunnel)
+            elif str(connection["name"]) in enforced:
+                prefixes = sorted(
+                    set(prefixes) | set(enforced[str(connection["name"])].destinations)
+                )
             paths.append(
                 TunnelPath(
                     name=tunnel["name"],
@@ -101,6 +137,9 @@ def connection_policies(cfg: dict[str, Any]) -> tuple[ConnectionPolicy, ...]:
             str(ipaddress.IPv4Network(p, strict=False))
             for p in connection.get("remote_prefixes") or []
         ).union(*(p.destinations for p in paths))
+        enforcement = enforced.get(str(connection["name"]))
+        if enforcement:
+            required = required.union(enforcement.destinations)
         reason = None
         if modes != {mode}:
             reason = "mixed-tunnel-routing-modes"
@@ -117,6 +156,11 @@ def connection_policies(cfg: dict[str, Any]) -> tuple[ConnectionPolicy, ...]:
                 tuple(paths),
                 required,
                 reason,
+                enforcement.source_subnets if enforcement else (),
+                frozenset(enforcement.destinations) if enforcement else frozenset(),
+                enforcement.table if enforcement else 254,
+                ingress,
+                frozenset(enforcement.ordinary_shared) if enforcement else frozenset(),
             )
         )
     checked = []
@@ -145,6 +189,11 @@ def connection_policies(cfg: dict[str, Any]) -> tuple[ConnectionPolicy, ...]:
                 policy.paths,
                 policy.destinations,
                 reason,
+                policy.enforced_sources,
+                policy.enforced_destinations,
+                policy.enforced_table,
+                policy.ingress,
+                policy.ordinary_shared,
             )
         )
     return tuple(checked)

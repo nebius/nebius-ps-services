@@ -21,6 +21,13 @@ def source() -> str:
         "agent/vm_ha_checkpoint.py",
         "checkpoint_upgrade.py",
         "ha_repair.py",
+        "agent/vm_ha/store.py",
+        "agent/vm_ha/auto_healing.py",
+        "agent/vm_ha/promotion_receipt.py",
+        "agent/vm_ha/retry_window.py",
+        "agent/vm_ha/rearm_request.py",
+        "agent/vm_ha/restoration.py",
+        "restoration_upgrade.py",
     ):
         name = prefix + "." + relative[:-3].replace("/", ".")
         raw = (root / relative).read_text().replace("from nebius_vpngw.", f"from {prefix}.")
@@ -33,6 +40,7 @@ def source() -> str:
     result += (
         f"from {prefix} import checkpoint_upgrade as checkpoint_upgrade\n"
         f"from {prefix} import ha_repair as checkpoint_repair\n"
+        f"from {prefix} import restoration_upgrade as restoration_upgrade\n"
     )
     return result
 
@@ -150,6 +158,16 @@ upgrade=checkpoint_upgrade
 path=repair.STATE/'controller-checkpoint.json'
 if repair.BOOT.read_text().strip()!=request['boot_id']:
     raise RuntimeError('checkpoint package boot changed')
+restoration_needed=restoration_upgrade.convert(repair.STATE,artifact=request['artifact'],
+    boot=request['boot_id'],publish=False)
+if restoration_needed and request['publish']:
+    with repair.writer_locks(deadline=time.monotonic()+5):
+        manager=ops.Manager(time.monotonic()+15)
+        if not all(manager.stopped(unit) for unit in (*ops.MANAGEMENT,*ops.HA_WRITERS)):
+            raise RuntimeError('restoration conversion writers are active')
+        restoration_upgrade.convert(repair.STATE,artifact=request['artifact'],
+            boot=request['boot_id'],publish=True)
+
 if not path.exists() and not path.is_symlink():
     if (repair.STATE/'status.json').exists() or Path('/etc/nebius-vpngw/vm-ha-enabled').exists():
         raise RuntimeError('started HA host checkpoint missing')
@@ -171,4 +189,46 @@ else:
     print(json.dumps({'checkpoint':'converted' if needed and request['publish'] else 'admitted'}))
 """
     )
+    ssh._inspect_vm_ha_host(target, instance.hostname, local, script=script)
+
+
+def inspect_restoration_recovery(
+    ssh: Any, target: str, instance: Any, local: dict, expected: dict
+) -> str:
+    """Validate private durable authority without trusting a public reason string."""
+    script = (
+        source()
+        + "import json\nfrom pathlib import Path\n"
+        + "print(json.dumps({'digest':restoration_upgrade.recovery_evidence("
+        + "Path('/var/lib/nebius-vpngw/vm-ha'),"
+        + repr(expected)
+        + ")}))\n"
+    )
+    result = ssh._inspect_vm_ha_host(target, instance.hostname, local, script=script)
+    value = result.get("digest")
+    import re
+
+    if not isinstance(value, str) or re.fullmatch(r"[a-f0-9]{64}", value) is None:
+        raise ValueError("restoration recovery evidence is unavailable")
+    return value
+
+
+def prepare_restoration_recovery(
+    ssh: Any, target: str, instance: Any, local: dict, expected: dict, operation_id: str
+) -> None:
+    """Use the approved package lane's stopped writers to prepare operator intent."""
+    from ..ordinary_operations import streamed_bootstrap
+
+    script = (
+        source() + streamed_bootstrap() + "import time\nimport _vpngw_ordinary_operations as ops\n"
+    )
+    script += "expected=" + repr(expected) + "\noperation_id=" + repr(operation_id) + "\n"
+    script += """
+with checkpoint_repair.writer_locks(deadline=time.monotonic()+5):
+    manager=ops.Manager(time.monotonic()+15)
+    if not all(manager.stopped(unit) for unit in (*ops.MANAGEMENT,*ops.HA_WRITERS)):
+        raise RuntimeError('restoration recovery preparation writers are active')
+    restoration_upgrade.prepare_recovery(checkpoint_repair.STATE, expected, operation_id=operation_id)
+print('{}')
+"""
     ssh._inspect_vm_ha_host(target, instance.hostname, local, script=script)

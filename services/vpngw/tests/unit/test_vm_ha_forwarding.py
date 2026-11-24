@@ -182,3 +182,34 @@ def test_apipa_safety_inventory_includes_configured_local_and_retained_workloads
     assert protection.protected_prefixes() == frozenset(
         {"169.254.64.0/24", "169.254.128.0/24", "10.1.0.0/16"}
     )
+
+
+@pytest.mark.parametrize("correct", [False, True])
+def test_shared_admission_requires_table_and_interface_on_the_same_route(
+    tmp_path, monkeypatch, correct
+):
+    from dataclasses import replace
+
+    prefix = "10.200.2.0/24"
+    policy = replace(
+        connection_policies(config("bgp"))[0],
+        enforced_sources=("10.0.1.0/24",),
+        enforced_destinations=frozenset({prefix}),
+        enforced_table=51002,
+        ordinary_shared=frozenset({prefix}),
+    )
+    protection = DestinationProtection(
+        tmp_path / "ledger", cluster="cluster", policies=(policy,), local_prefixes=()
+    )
+    monkeypatch.setattr(protection, "install", lambda: None)
+    rows = [
+        {"dst": prefix, "dev": "xfrm0", "table": 254},
+        {"dst": prefix, "dev": "xfrm0" if correct else "foreign0", "table": 51002},
+    ]
+    protection.run = lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, json.dumps(rows))
+    if correct:
+        protection.admit(frozenset({prefix}))
+        assert protection._ledger() == {prefix: "site"}
+    else:
+        with pytest.raises(RuntimeError, match="ambiguous"):
+            protection.admit(frozenset({prefix}))

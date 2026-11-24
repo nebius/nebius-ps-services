@@ -54,6 +54,38 @@ def config(mode="static"):
     }
 
 
+@pytest.mark.parametrize("enforced", [False, True])
+@pytest.mark.parametrize("selected", [None, "backup"])
+def test_passive_policy_accepts_rendered_connection_imports(tmp_path, enforced, selected):
+    from types import SimpleNamespace
+
+    from nebius_vpngw.agent.frr_renderer import FRR_CONF, FRRRenderer
+    from nebius_vpngw.agent.vm_ha.tunnel_runtime import ControllerTunnelRuntime
+    from nebius_vpngw.agent.vm_ha_controller import DataPlaneMode
+
+    cfg = config("bgp")
+    cfg["gateway"]["local_prefixes"] = ["10.0.0.0/16"]
+    if enforced:
+        cfg["connections"][0]["enforced_routing"] = {
+            "source_subnets": ["10.0.1.0/24"],
+            "destinations": ["10.1.0.0/16"],
+        }
+    if selected:
+        cfg["_ha_tunnel_selections"] = {"site": selected}
+    files = {}
+    FRRRenderer().render_and_apply(cfg, activate=False, rendered_files=files)
+    runtime = object.__new__(ControllerTunnelRuntime)
+    runtime.cfg = cfg
+    runtime.state_dir = tmp_path
+    runtime.ports = SimpleNamespace(data_plane=SimpleNamespace(mode=lambda: DataPlaneMode.PASSIVE))
+    runtime.effects = SimpleNamespace(run=lambda _args: files[FRR_CONF])
+    assert runtime.passive_bgp_policy_matches() is True
+
+    # A stale preference or table binding must still request canonical refresh.
+    files[FRR_CONF] = files[FRR_CONF].replace("-200 in", "-999 in")
+    assert runtime.passive_bgp_policy_matches() is False
+
+
 AUTH = Authority("cluster", "node-a", "allocation", "epoch", 1, "a" * 64)
 
 
@@ -139,17 +171,19 @@ def _authority_read_runtime(tmp_path, mode, failure, fail_at):
     )
     reads = []
 
-    def observe():
+    def observe(*, publish=True):
         reads.append(len(reads) + 1)
         if len(reads) == fail_at:
             raise failure
-        snapshots.last_snapshot = snapshot
+        if publish:
+            snapshots.last_snapshot = snapshot
         return snapshot
 
     # A stale foreign-owner snapshot must not turn unavailable evidence into
     # confirmed drift or retire the outstanding operation.
     snapshots = SimpleNamespace(
         observe=observe,
+        observe_tunnel_authority=lambda: observe(publish=False),
         last_snapshot=SimpleNamespace(
             cloud=SimpleNamespace(authoritative=True, observed_owner_node_id="foreign"),
             local_node_id=AUTH.owner,
@@ -235,13 +269,13 @@ def test_unavailable_native_effect_revalidation_preserves_pending_phase(tmp_path
     selector = TunnelController(runtime.cfg, tmp_path / "tunnel-selection.json", Effects())
     selector.request("failover", "backup", AUTH, 100)
     original = selector.state["operation"].copy()
-    observe = runtime.controller.snapshots.observe
+    observe = runtime.controller.snapshots.observe_tunnel_authority
 
     def unavailable():
         raise error
 
     def guarded_effect(*_args):
-        runtime.controller.snapshots.observe = unavailable
+        runtime.controller.snapshots.observe_tunnel_authority = unavailable
         runtime.revalidate(AUTH)
         pytest.fail("An unavailable read must not admit a native effect")
 
@@ -257,7 +291,7 @@ def test_unavailable_native_effect_revalidation_preserves_pending_phase(tmp_path
     assert pending["deadline"] <= original["deadline"]
     assert effects.calls == []
 
-    runtime.controller.snapshots.observe = observe
+    runtime.controller.snapshots.observe_tunnel_authority = observe
     setattr(effects, method, original_effect)
     runtime.step()
     assert len(effects.calls) == 1
@@ -2204,7 +2238,9 @@ def test_native_static_backup_route_uses_new_effect_deadline_after_old_episode_e
         ("scope", tuple(path.name for path in policy.paths), connection_wide)
     )
     effects._require_healthy_static_path = lambda *args: None
-    effects._path_health = lambda *args, **kwargs: Health.DOWN
+    effects._path_health = lambda policy, target, **kwargs: (
+        Health.DOWN if target == "preferred" else Health.HEALTHY
+    )
     effects._swan_config = lambda cfg: rendered.append(cfg)
 
     def run(argv, timeout):
@@ -2389,6 +2425,7 @@ def test_configured_backup_cached_health_needs_new_native_ping_each_confirmation
         "missing-child",
         "wrong-selectors",
         "ping-failed",
+        "slow-authority",
     ],
 )
 def test_native_default_backup_is_gateway_only_with_exact_path_evidence(
@@ -2417,6 +2454,13 @@ def test_native_default_backup_is_gateway_only_with_exact_path_evidence(
     if fault == "wrong-selectors":
         evidence["policies"] = evidence["policies"].replace("src 0.0.0.0/0", "src 203.0.113.0/24")
     calls = []
+
+    clock = [100.0]
+
+    def revalidate(authority):
+        if fault == "slow-authority":
+            clock[0] += 6
+        return fault != "stale-authority"
 
     def runner(argv, timeout):
         calls.append(tuple(argv))
@@ -2459,16 +2503,17 @@ def test_native_default_backup_is_gateway_only_with_exact_path_evidence(
     effects = NativeTunnelEffects(
         cfg,
         tmp_path,
-        lambda authority: fault != "stale-authority",
+        revalidate,
         active_revalidate=lambda authority: fault != "stale-authority",
         routing_lock=tmp_path / "routes.lock",
         command_runner=runner,
+        clock=lambda: clock[0],
     )
     selector = TunnelController(cfg, tmp_path / STATE_NAME, effects)
     selector.bind(AUTH)
     result = effects.probe_backup(connection_policies(cfg)[0], "backup", AUTH)
-    assert (result is Health.HEALTHY) is (fault is None)
-    if fault is None:
+    assert (result is Health.HEALTHY) is (fault in {None, "slow-authority"})
+    if fault in {None, "slow-authority"}:
         assert len([call for call in calls if call[0] == "ping"]) == 1
     assert all(
         call[0] in {"ip", "ping"} or call == inventory_command() or call[1] == "--initiate"
@@ -2619,3 +2664,28 @@ def test_static_retry_requires_fresh_restoration_proof_after_terminal_cleanup(tm
     assert selector.state["sequence"] == 1
     assert selector.state["operation"]["id"] == original_id
     assert selector.state["selected"] == {"site": "preferred"}
+
+
+def test_tunnel_authority_uses_separate_projection_without_route_publication(tmp_path):
+    from nebius_vpngw.deploy.vm_ha_cloud import RetryableHACloudError
+
+    runtime, _effects, _reads, snapshot = _authority_read_runtime(
+        tmp_path, "static", RetryableHACloudError("unused"), 100
+    )
+    snapshots = runtime.controller.snapshots
+    published = snapshots.last_snapshot
+    narrow_reads = []
+
+    def full_observation():
+        raise RuntimeError("unused cloud route collectors consumed the proof window")
+
+    def authority_observation():
+        narrow_reads.append(True)
+        return snapshot
+
+    snapshots.observe = full_observation
+    snapshots.observe_tunnel_authority = authority_observation
+    assert runtime.authority() == AUTH
+    assert narrow_reads == [True]
+    assert snapshots.last_snapshot is published
+    assert runtime._last_authority_snapshot is snapshot

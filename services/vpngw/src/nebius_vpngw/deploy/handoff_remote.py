@@ -220,10 +220,7 @@ def settle_predecessor_routes(expected: dict | None, artifact: str) -> None:
     lock = repair.exact_lock(expected)
     remote.command(
         settlement_command(
-            {
-                key: lock[key]
-                for key in ("cluster_id", "node_id", "generation_id", "operation_id")
-            },
+            {key: lock[key] for key in ("cluster_id", "node_id", "generation_id", "operation_id")},
             artifact,
         ),
         limit=120,
@@ -270,6 +267,20 @@ def inspect(expected: dict[str, Any], *, inhibited: bool = False) -> dict[str, A
     # dependency admission cannot interpret that transition; its owner can.
     if not all(manager.stopped(name) for name in ops.HA_WRITERS):
         raise ops.OperationBlocked("ordinary_handoff_ha_writer_without_marker")
+    import yaml
+
+    from nebius_vpngw.enforced_handoff import evidence as enforcement_evidence
+
+    handoff_binding = None
+    if pending:
+        binding_path = STAGING / (journal["id"] + ".json")
+        # Stop-only handoffs have no package binding. Present evidence still
+        # uses the strict reader, including dangling links and malformed files.
+        if binding_path.exists() or binding_path.is_symlink():
+            handoff_binding = repair.read_json(binding_path)
+    enforcement = enforcement_evidence(
+        repair, yaml.safe_load(remote.CONFIG.read_bytes()), binding=handoff_binding
+    )
     environment = {"network": manager.network()} if pending else manager.environment()
     return {
         "journal": ops.digest(journal),
@@ -281,6 +292,7 @@ def inspect(expected: dict[str, Any], *, inhibited: bool = False) -> dict[str, A
         "boot_id": ops.BOOT.read_text().strip(),
         "config_sha256": remote.sha(remote.CONFIG.read_bytes()),
         "route_runtime": routes,
+        **({"enforced_routing": enforcement} if enforcement else {}),
     }
 
 
@@ -650,6 +662,11 @@ class Holder:
                 self.verify_prepared_predecessor()
                 verify_package(manifest)
                 self.convert_checkpoint()
+                import yaml
+
+                from nebius_vpngw.enforced_handoff import transfer
+
+                transfer(self, binding, binding_path, yaml.safe_load(raw), repair)
                 binding["activation"] = publication
                 repair.publish(binding_path, json.dumps(binding, sort_keys=True).encode())
                 repair.publish(remote.CONFIG, raw)
@@ -1504,6 +1521,8 @@ def main(*, durable: bool = False, observation_deadline: float | None = None) ->
                         binding["prepared"] = saved["prepared"]
                     if "activation" in saved:
                         binding["activation"] = saved["activation"]
+                    if "enforced_transfer" in saved:
+                        binding["enforced_transfer"] = saved["enforced_transfer"]
                 repair.publish(saved_path, json.dumps(binding).encode())
             ops.Journal().write(new, expected=ops.digest(old))
             operation = ops.Operation(new, manager)
@@ -1555,6 +1574,23 @@ def main(*, durable: bool = False, observation_deadline: float | None = None) ->
                 reply({"published": True})
             elif action["action"] == "verify-prepared":
                 reply(holder.verify_prepared(action))
+            elif action["action"] in {"prepare-enforcement", "verify-enforcement"}:
+                from nebius_vpngw.enforced_handoff import prepared
+
+                with repair.writer_locks(deadline=time.monotonic() + 30):
+                    holder.verify_prepared_predecessor()
+                    if holder.plan is None:
+                        raise RuntimeError("HA package preparation is incomplete")
+                    verify_package(holder.plan["desired"])
+                    reply(
+                        prepared(
+                            holder,
+                            action,
+                            repair,
+                            ops,
+                            install=action["action"] == "prepare-enforcement",
+                        )
+                    )
             elif action["action"] == "complete":
                 if (
                     not holder.prepared
@@ -1564,6 +1600,9 @@ def main(*, durable: bool = False, observation_deadline: float | None = None) ->
                     raise RuntimeError("HA handoff activation is incomplete")
                 repair.exact_lock(dict(request["ha"], operation_id=action["operation"]))
                 with remote.routing_lock():
+                    from nebius_vpngw.enforced_handoff import complete as complete_enforcement
+
+                    complete_enforcement(holder, repair)
                     retire_runtime_routes(request)
                     operation.complete()
                 reply({"complete": True})

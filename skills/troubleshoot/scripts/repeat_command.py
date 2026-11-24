@@ -144,8 +144,17 @@ def run_once(argv: list[str], timeout: float, max_tail_bytes: int) -> dict[str, 
         if result["returncode"] == 0
         else "nonzero"
     )
-    stdout = redact_text(result["stdout"].decode("utf-8", errors="replace"))
-    stderr = redact_text(result["stderr"].decode("utf-8", errors="replace"))
+
+    def safe_stream(name: str) -> str:
+        # A raw tail can lose the label or PEM header needed for redaction.
+        # Withhold the entire truncated stream; even a complete trailing line
+        # can be part of a multiline credential whose context was discarded.
+        if result[name + "_bytes_seen"] > len(result[name]):
+            return ""
+        return redact_text(result[name].decode("utf-8", errors="replace"))
+
+    stdout = safe_stream("stdout")
+    stderr = safe_stream("stderr")
     return {
         "outcome": outcome,
         "exit_code": result["returncode"],

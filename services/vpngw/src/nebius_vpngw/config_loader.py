@@ -333,6 +333,7 @@ def connection_static_remote_prefixes(
     """
 
     prefixes = {str(prefix) for prefix in connection.get("remote_prefixes") or []}
+    prefixes.update((connection.get("enforced_routing") or {}).get("destinations", []))
     for tunnel in connection.get("tunnels") or []:
         role = str(tunnel.get("ha_role") or "active").strip().lower().replace("_", "-")
         if role == "disable":
@@ -366,6 +367,8 @@ def _build_vm_ha_cluster_record(local_cfg: dict) -> VMHAClusterRecord | None:
     if len(members) != 2:
         raise ValueError("VM-HA resolved plans require exactly two members")
 
+    from .enforced_routing import ordinary_shared
+
     defaults_mode = ((local_cfg.get("defaults") or {}).get("routing") or {}).get("mode", "bgp")
     static_routes: list[dict[str, t.Any]] = []
     bgp_policies: list[dict[str, t.Any]] = []
@@ -377,6 +380,14 @@ def _build_vm_ha_cluster_record(local_cfg: dict) -> VMHAClusterRecord | None:
                 {
                     "connection": connection.get("name"),
                     "remote_prefixes": connection_static_remote_prefixes(connection),
+                    **(
+                        {
+                            "enforced_routing": connection["enforced_routing"],
+                            "ordinary_shared": list(ordinary_shared(connection, connection_mode)),
+                        }
+                        if connection.get("enforced_routing")
+                        else {}
+                    ),
                 }
             )
         elif connection_mode == "bgp":
@@ -393,6 +404,14 @@ def _build_vm_ha_cluster_record(local_cfg: dict) -> VMHAClusterRecord | None:
                         else []
                     ),
                     "remote_asn": bgp.get("remote_asn"),
+                    **(
+                        {
+                            "enforced_routing": connection["enforced_routing"],
+                            "ordinary_shared": list(ordinary_shared(connection, connection_mode)),
+                        }
+                        if connection.get("enforced_routing")
+                        else {}
+                    ),
                     "remote_prefixes": sorted(
                         connection.get("remote_prefixes") or bgp.get("remote_prefixes") or []
                     ),

@@ -38,6 +38,21 @@ and falsifying evidence, a timeout or output bound, and a defined next branch.
 The workflow prohibits indefinite tails, arbitrary sleeps, passive terminal
 waiting, and broad unfiltered log dumps.
 
+## Decision Approach
+
+Technical route, decision approach and urgency remain independent. Use a familiar
+pattern to prioritize a candidate and a check that can disprove it; analyze a
+predictable mechanism; use bounded experiments for uncertain interactions; orient
+with discriminating evidence when the context is insufficient. Reclassify when
+evidence changes, retaining budgets/history and reopening invalidated exclusions.
+
+Cynefin, recognition-primed decision making and bounded rationality motivate this
+lightweight policy within the existing loop. They do not prove model expertise,
+permit emergency mutations or replace baseline, alternatives, counterfactual proof,
+owner repair and independent verification. Time reserved for verification is
+planning guidance, not a new early-stop gate. The [joint qualification plan](../design/evals/refactor-qualification.md)
+compares original, editorial-only and framework candidates before installation.
+
 ## Evidence-Gated Completion
 
 Troubleshooting records examined boundaries and material unexamined boundaries with
@@ -291,6 +306,12 @@ Do not pass secrets in argv. Redaction is best-effort: treat output artifacts as
 sensitive and review them before sharing or committing. Runner exit `0` means
 measurement completed; inspect `pass_count` and `pass_rate` for command results.
 Exit `2` means a helper or launch error and `130` means interruption.
+The collector also exits `2` when any requested observation is unavailable,
+failed, skipped or truncated, retaining the available partial evidence.
+Truncated runner streams have empty tails: a discarded prefix can contain the
+label needed to recognize a credential. Byte counts and truncation flags remain;
+signatures cannot distinguish contents withheld this way. Comparison output
+redacts nested keys as well as values and disambiguates colliding display labels.
 Comparison paths use JSON Pointer, including the empty string for the document
 root. The comparator counts all differences but retains only the requested
 bounded number and reports whether the list was truncated.

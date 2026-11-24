@@ -378,8 +378,10 @@ def test_empty_frr_bgp_summary_is_an_exact_empty_peer_set() -> None:
     assert _configured_bgp_summary_sessions({"unexpected": {}}) is None
 
 
+@pytest.mark.parametrize("enforced_only", [False, True])
 def test_static_cold_readiness_accepts_empty_frr_bgp_summary(
     tmp_path: Path,
+    enforced_only: bool,
 ) -> None:
     config = _runtime_config(tmp_path)
     config["connections"] = [
@@ -397,8 +399,22 @@ def test_static_cold_readiness_accepts_empty_frr_bgp_summary(
             ],
         }
     ]
+    record = {"connection": "site-a", "remote_prefixes": ["10.20.0.0/16"]}
+    if enforced_only:
+        block = {
+            "source_subnets": ["10.96.0.0/13"],
+            "destinations": ["0.0.0.0/0", "1.1.1.1/32"],
+        }
+        record.update(remote_prefixes=block["destinations"], enforced_routing=block)
+        config["gateway"] = {"local_prefixes": block["source_subnets"]}
+        config["connections"][0].update(
+            remote_prefixes=block["destinations"], enforced_routing=block
+        )
+        config["runtime_binding"]["enforced_sources"] = {
+            "site-a": [config["runtime_binding"]["route_targets"][0]["workload_subnet_id"]]
+        }
     static_json = json.dumps(
-        [{"connection": "site-a", "remote_prefixes": ["10.20.0.0/16"]}],
+        [record],
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -481,10 +497,31 @@ def test_static_cold_readiness_accepts_empty_frr_bgp_summary(
     observed = ports.routes.readiness()
 
     assert local.configured_bgp_sessions == frozenset()
+    if enforced_only:
+        assert ports.routes.static_manifest.prefixes == frozenset()
     assert observed.candidate_preparation_required is True
     assert observed.cold_standby_ready is True
     assert observed.transfer_ready is True
     assert observed.promotion_ready is False
+    if enforced_only:
+        assert set(observed.required_destinations) == {"0.0.0.0/0", "1.1.1.1/32"}
+        # A partially materialized connection is not an exactly cold standby,
+        # and the default cannot substitute for the explicit finite route.
+        ports.data_plane.observe = lambda: replace(
+            local, usable_xfrm_prefixes=frozenset({"0.0.0.0/0"})
+        )
+        partial = ports.routes.readiness()
+        assert partial.candidate_preparation_required is True
+        assert partial.cold_standby_ready is False
+        assert partial.static_ready is False
+        assert partial.xfrm_ready is False
+        ports.data_plane.observe = lambda: replace(
+            local, usable_xfrm_prefixes=frozenset({"0.0.0.0/0", "1.1.1.1/32"})
+        )
+        prepared = ports.routes.readiness()
+        assert prepared.candidate_preparation_required is False
+        assert prepared.static_ready is True
+        assert prepared.xfrm_ready is True
     # A healthy BGP session never substitutes for Static absence in mixed mode.
     ports.routes.bgp_policies = [{"remote_prefixes": []}]
     for proof in (None, False, True):
@@ -4288,9 +4325,11 @@ def test_static_passive_rearm_finishes_with_no_loaded_connection_or_ike_sa(
 
 
 @pytest.mark.parametrize("cleanup_failure", [False, True])
+@pytest.mark.parametrize("protection_failure", [False, True])
 def test_static_candidate_tunnel_activation_keeps_forwarding_fenced(
     tmp_path: Path,
     cleanup_failure: bool,
+    protection_failure: bool,
 ) -> None:
     forwarding = "0"
     ike_ids: list[int] = []
@@ -4321,6 +4360,16 @@ def test_static_candidate_tunnel_activation_keeps_forwarding_fenced(
             return CommandResult(0)
         raise AssertionError(argv)
 
+    protection_calls = []
+
+    def protect():
+        # A restarted cold standby has no kernel firewall table. Restore it
+        # before loading tunnels or publishing routes, still under the fence.
+        assert forwarding == "0" and ike_ids == []
+        protection_calls.append("installed")
+        if protection_failure:
+            raise RuntimeError("destination protection installation failed")
+
     cleanup_calls = []
 
     def cleanup(action, candidate):
@@ -4339,6 +4388,7 @@ def test_static_candidate_tunnel_activation_keeps_forwarding_fenced(
         tunnel_cold_passive=True,
         static_tunnel_names=("static-tunnel",),
         inactive_static_reconciler=cleanup,
+        destination_protection=SimpleNamespace(install=protect),
     )
     passive = ControllerAction(
         ActionKind.ENTER_PASSIVE,
@@ -4358,12 +4408,23 @@ def test_static_candidate_tunnel_activation_keeps_forwarding_fenced(
         operation_id="prepare-op",
     )
 
+    if protection_failure:
+        with pytest.raises(RuntimeError, match="destination protection installation failed"):
+            runtime.prepare_candidate(prepare)
+        assert forwarding == "0"
+        assert runtime.mode() is DataPlaneMode.PASSIVE
+        assert protection_calls == ["installed"]
+        assert not ike_ids and not cleanup_calls
+        assert not any("--load-all" in argv for argv in calls)
+        return
+
     if cleanup_failure:
         with pytest.raises(RuntimeError, match="unproven inactive kernel teardown"):
             runtime.prepare_candidate(prepare)
     else:
         runtime.prepare_candidate(prepare)
 
+    assert protection_calls == ["installed"]
     assert forwarding == "0"
     assert runtime.mode() is DataPlaneMode.PASSIVE
     assert ike_ids == [9]

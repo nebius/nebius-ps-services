@@ -21,10 +21,10 @@ A source ancestor without checking a later revert/regression is insufficient.
 
 | Fresh whole-issue outcome | State reason | Additional requirement |
 | --- | --- | --- |
-| already-resolved / already-supported | completed | Every material defect or requested outcome has applicable verified coverage. |
+| already-fixed / already-supported | completed | Every material defect or requested outcome has applicable verified coverage. |
 | duplicate | duplicate | Every material claim is covered by an accessible verified canonical issue. |
 | out-of-scope / not-planned | not_planned | Accepted maintainer policy or explicit disposition supports excluding the work. |
-| confirmed / deferred / needs-information / mixed unresolved claims | None | Keep open; explain the outstanding claim or evidence gap. |
+| unresolved work / deferred / needs-information / mixed claims | None | Keep open; explain the outstanding claim or evidence gap. |
 
 A label or the agent's unsupported preference is not accepted maintainer policy.
 Do not close a valid deferred request merely because it is low priority. Project

@@ -43,15 +43,29 @@ def _observe_plan(discovery: Discovery, observation: dict, *, defer_bgp: bool) -
         routes=observation["routes"],
         ownership=discovery.journal.inventory(),
         infrastructure=observation["infrastructure"],
+        private_copies=tuple(observation.get("conversion_requests", {})),
+        ha_conversion=observation.get("ha_conversion"),
     )
     plan["options"] = {"force_copy": discovery.force_copy}
-    return convert(
+    converted = convert(
         plan,
         observation.get("conversion_requests", {}),
         # Runtime BGP ownership needs private tables even before a peer supplies
         # its first prefix. Preserve the reviewed conversion at execution time.
-        required=bool(plan["requests"] or discovery.force_copy or policy.dynamic),
-    ), unknown
+        required=bool(
+            plan["requests"]
+            or discovery.force_copy
+            or policy.dynamic
+            or policy.enforced
+            or observation.get("ha_conversion")
+        ),
+    )
+    from .enforced_predecessors import augment
+
+    previous = observation.get("ha_conversion", {}).get(
+        "predecessors", discovery.journal.enforced_predecessors()
+    )
+    return augment(converted, observation, previous), unknown
 
 
 @dataclass

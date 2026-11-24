@@ -1,6 +1,6 @@
 ---
 name: design
-description: "Design non-SDLC features, architectures, ADRs, proven contract-changing remediations, or standalone portable HTML artifacts. Ground plans in code and docs; implement only on explicit request. Use research for due diligence, ai-agent-design for AI behavior, app-stack/ai-stack for stack choices, and nebius for Nebius constraints. Route unknown failures to troubleshoot and checklist reviews to system-design-rules."
+description: "Design non-SDLC features, architectures, ADRs, or portable HTML; extract and research local draft packages into project specs with --extract-once. Ground plans in code and docs; implement only on explicit request. Use research for due diligence, ai-agent-design for AI behavior, app-stack/ai-stack for stack choices, and nebius for Nebius constraints. Route unknown failures to troubleshoot and checklist reviews to system-design-rules."
 ---
 
 # Design
@@ -24,8 +24,11 @@ authorization.
 Public usage: `$design <design request>` plans by default;
 `$design <design request> and implement it` also requests the optional
 implementation continuation. The request is natural-language task scope, not
-a mode flag. `$design --help` and `$design -h` show help only. No additional
-public flags.
+a mode flag. `$design --extract-once <source-folder> [--project-root <target-folder>]`
+researches and reconciles one frozen draft package into project documentation,
+then reports and stops. The target defaults to invocation cwd. This explicitly
+requests documentation writes only; never combine it with implementation.
+`$design --help` and `$design -h` show help only. These are the only public flags.
 
 ## Agent Compatibility
 
@@ -50,7 +53,9 @@ including unused prototypes with existing code, and for standalone artifacts.
 ## Execution And Document Ownership
 
 Default to non-mutating design/plan work, whether invoked explicitly or
-implicitly. Read files and run safe non-mutating checks; return the design and
+implicitly. The explicit `--extract-once` action permits documentation-only
+publication through the owners below when host mode allows writes. Read files
+and run safe non-mutating checks; return the design and
 plan in the response. Do not implement code, tests, configuration, migrations,
 infrastructure, or workflows merely because the plan describes those changes.
 
@@ -65,8 +70,11 @@ host Plan Mode permits planning only. This skill cannot switch or override it.
 document updates. Supply it with decisions, conflicts and delivery evidence;
 do not directly write project design documents, even when persistence is
 requested. During read-only planning, return that handoff without executing
-publication. When implementation is authorized and permitted, use the owner
-for canonical reconciliation before implementation and evidence afterward.
+publication. When extraction documentation or implementation is authorized and
+permitted,
+use the owner for canonical reconciliation; return delivery evidence afterward
+only for actual implementation. Extraction may prepare supplementary contracts
+and reports, never bypass canonical pair publication.
 If the owner is unavailable, report the pending handoff without inventing a
 second writer. Preserve its advisory status and any enclosing workflow's gates.
 
@@ -136,6 +144,13 @@ second writer. Preserve its advisory status and any enclosing workflow's gates.
 
 ## Required Reads
 
+For `--extract-once`, first read `references/document-extraction.md` and follow
+its unattended intake, source/research coverage, publication and reporting contract.
+Apply all seven phases with extraction outputs; stop after documentation/reporting.
+Do not ask design questions during extraction: research resolutions and aggregate
+remaining decisions with original-source locators for final review. Operational
+access/permission and host safety limits remain binding.
+
 Before proposing any solution, resolve the exact selected project and read:
 
 1. Applicable ancestor and project instructions and the project's README.
@@ -154,9 +169,11 @@ claim accordingly; do not claim it was reviewed. Missing docs or sparse code
 do not prove greenfield status. Only skip source inspection after confirming
 that no relevant implementation exists.
 
-Read `references/design-workflow.md` for medium or deep designs, greenfield
+Read `references/design-workflow.md` for standard or deep designs, greenfield
 applications, multiple unfamiliar technologies, unclear architecture choices,
-or any design that will become a committed document.
+or any design that will become a committed document. Also read it when a familiar
+pattern conflicts with evidence, hard constraints conflict, or uncertain interactions
+require a probe plan. Use its decision approach within the existing phases.
 
 When designing a new project, materially changing how a project is used, or
 explicitly designing creation or restructuring of its `README.md`, read
@@ -190,215 +207,122 @@ research-fallback rules in `references/design-workflow.md` before deciding.
 
 ## Workflow
 
-Always move through these phases in order. Keep each phase proportional to risk
-and uncertainty, but do not skip the phase entirely.
+Move through all seven phases in order, at depth proportional to risk and
+uncertainty. A phase with no remaining work can have a one-sentence exit;
+do not repeat completed reads or settled decisions. Detailed checklists and the
+plan template belong to `references/design-workflow.md` under Required Reads.
 
 ### Phase 1: Understand Requirements
 
-Restate the objective, users, expected behavior, success criteria, constraints,
-non-goals, and open questions. If requirements are ambiguous but progress is
-possible, state assumptions and proceed; ask only for answers that materially
-change the design.
-
-For a `troubleshoot` handoff, treat the proven causal chain, violated invariant,
-and regression oracle as design inputs rather than reopening diagnosis. Return
-to `troubleshoot` only if design work uncovers concrete contradictory evidence.
+Restate objective, users, behavior, success criteria, constraints, non-goals and
+material questions. Use safe reversible assumptions when answers would not change
+the decision. For a `troubleshoot` handoff, treat the proven causal chain, violated
+invariant, and regression oracle as design inputs rather than reopening diagnosis.
+Return to troubleshooting only for concrete contradictory evidence.
+Choose a provisional approach per consequential decision: verified pattern, analysis,
+or bounded learning. Keep urgency and design depth separate; if uncertain, orient
+with the cheapest decision-changing evidence. Exit: objective and acceptance criteria.
 
 ### Phase 2: Understand Existing System
 
-Use the required reads to map modules, interfaces, data owners, workflows,
-dependencies, tests and deployment paths. When design documents and implemented
-code conflict, code always wins as the current-state baseline. Tell the user
-what the document claims, what the code implements, the supporting paths or
-symbols, and the effect on the proposed design. Route documentation corrections
-to `maintain-project-specs`; never change code solely to match conflicting prose.
+Follow Required Reads. Map affected modules, callers, interfaces, data owners,
+configuration, tests and deployment paths. Code wins as the current-state baseline
+when documents disagree: report both claims, supporting paths and design impact;
+route canonical corrections to `maintain-project-specs`. This does not certify
+bugs or override requirements or safety. Confirm no users or dependent consumers
+before the unused-greenfield exception; missing docs/code do not prove non-use.
+Ask if usage is unknown and the decision depends on it.
+Exit: evidence-grounded boundaries, conflicts and explicit gaps.
 
-Code precedence does not certify bugs as correct or override user requirements
-or safety rules. Separate the observed baseline from intentional proposed
-changes. Missing implementation is a discovery fact, not proof of no users.
-Confirm no users or dependent consumers before applying the unused-greenfield
-refactor exception; ask if usage is unknown and the decision depends on it.
+### Phase 3: Research Every Requirement And Design Item
 
-### Phase 3: Use `research` For Missing Knowledge
-
-List every unfamiliar or version-sensitive technology, library, framework,
-SDK, API, CLI, cloud service, database, package manager, protocol, standard,
-problem statement, feature requirement, or topic that affects the design.
-
-When the `research` skill is installed and relevant, use it for this phase.
-`design` owns the design synthesis and `/plan` handoff; `research` owns
-technical due diligence on topics, requirements, products, standards,
-architecture patterns, and technology choices.
-
-Only perform direct research inside `design` for tiny clarifications or when
-`research` is unavailable or not applicable. In that fallback path, verify
-items against current official vendor documentation. Prefer configured
-official-documentation tools and MCP servers when available, such as OpenAI docs
-for Codex/OpenAI topics, Microsoft Learn for Microsoft/Azure topics and
-Terraform registry tools for Terraform. Use only documentation tools available
-in the current session. If absent, failing or insufficient, use Tavily Search
-or Extract against official version-appropriate sources; if Tavily cannot help,
-disclose the limitation and use official-web search or retrieval. Preserve
-higher-priority host rules and never install an integration just for a lookup.
-
-Record only design-relevant findings: constraints, supported patterns,
-version-specific APIs, limits, migration considerations, security implications,
-and unknowns. Mark anything unverified instead of treating it as fact.
+Always load and apply `research`, including for simple or source-free design.
+Assess every requirement, design decision and technical claim at proportional
+depth. Group related questions and reuse applicable evidence; retain explicit
+item coverage. Local intent is validated against supplied goals and acceptance;
+version-sensitive vendor behavior needs current primary evidence. Research owns
+due diligence and design owns synthesis. Follow vendor tools, Tavily, then
+disclosed official-web fallback. Do not install integrations for lookup.
+If research is unavailable, disclose it, apply its source hierarchy where
+possible and keep unsupported material decisions unresolved. Never claim actual
+skill use from a name alone. Stop expanding only when decisive gaps are resolved
+or further available retrieval cannot resolve them. Exit: evidence-backed item
+assessments, uncertainties, and follow-up validation needs.
 
 ### Phase 4: Use Specialist Skills
 
-Resolve each applicable named skill from the active catalog or its sibling
-skill folder. Load its full `SKILL.md` through the host's skill mechanism or
-file reader, follow its required references and apply its scoped advisory
-workflow. Mentioning a skill or reading its description is not using it.
-Reuse a skill already loaded in this task; skill use does not require a
-subagent or authorize delegation, implementation or live changes.
-
-Pass requirements, quality attributes, current implementation, fixed decisions,
-operational constraints, research evidence and the bounded decision needed.
-Consume the returned decision and evidence; `design` owns cross-layer synthesis
-and the complete plan. Follow this order for applicable scopes:
-
-1. Consult `nebius` for provider constraints before finalizing Nebius-dependent
-   choices, including for a fixed provider. Use its design-only advisory path;
-   no credentials, cloud inventory or provisioning preflight are required.
-2. Use `ai-agent-design` for unsettled AI behavior, topology, authority,
-   contracts, context, memory, recovery, evaluation or governance. Preserve its
-   four-class capability map and frozen subsystem contract. It obtains the
-   `ai-stack` component decision when model-backed capabilities remain.
-3. Use `ai-stack` directly when only AI component choices remain. Reuse any
-   decision returned by `ai-agent-design`; do not request it a second time.
-   Deterministic-only outcomes skip AI selection. Any classification made by
-   a direct stack-only invocation remains provisional under its own contract.
-4. Use `app-stack` for undecided or reconsidered application layers, including
-   frontend, API/runtime, services, data, asynchronous work, deployment and
-   observability. Pass completed AI decisions as fixed inputs so its nested
-   routing does not select them again. Retain component status and rationale.
-
-Skip settled application/AI decisions unless the request reopens them; do not
-skip relevant Nebius constraints solely because the provider is fixed. Reuse
-completed handoffs and never recurse into an active owning workflow. New
-blocking evidence returns a bounded conflict to the decision owner.
-
-If an applicable specialist is unavailable, use `research` for the bounded
-missing evidence, then synthesize the fallback in `design`. Prioritize official
-vendor sources, then reputable established community sources for missing or
-insufficient coverage. Label provenance, assumptions and unverified claims.
-If `research` is also unavailable, apply that hierarchy directly. Report the
-fallback honestly; unresolved material facts limit plan readiness, and no
-fallback bypasses permissions, explicit-only invocation or workflow ownership.
+Load and apply each applicable skill's full instructions and required references;
+a name or description is not invocation. Pass the bounded decision, requirements,
+implementation, fixed choices and evidence. Reuse loaded skills and returned
+results. A handoff grants no delegation, implementation or live authority.
+Consult `nebius` before dependent choices even for a fixed provider; then resolve
+AI behavior through `ai-agent-design`, reuse its `ai-stack` result or call
+`ai-stack` only for remaining component choices, then give `app-stack` those
+fixed decisions. Deterministic-only outcomes skip AI selection. Skip settled
+application/AI scopes unless reopened; never recurse into an active owner.
+Read the workflow reference for exact handoff and missing-specialist fallback.
+Exit: actual used/skipped/unavailable status, decisions, evidence and limitations.
 
 ### Phase 5: Design Solution
 
-Design the smallest solution that satisfies the requirements and fits the
-existing system. Define:
-
-- components and responsibilities
-- technologies and why each is needed
-- interfaces, APIs, commands, events, schemas, or data contracts
-- data ownership, persistence, migrations, and lifecycle
-- control flow and failure handling
-- security, privacy, permissions, and secret handling
-- observability, operations, rollout, rollback, and supportability
-- tests, validation, and acceptance checks
-
-For an AI application, apply the principle **deterministic where possible,
-agentic where necessary** per capability rather than once for the whole
-product. Keep ordinary application logic, APIs, data stores, RBAC, approvals,
-tool authorization, and known transitions deterministic. It is normal for one
-application to contain all four behavior classes: deterministic code, direct
-model calls, deterministic workflows with model calls at explicit steps, and a
-bounded agent for genuinely dynamic work. Read
-`references/design-workflow.md` for the full decision table and tree.
-
-For applications whose layers are connected in a serial flow such as
-frontend -> API -> database, default to a vertical-slice design. Describe the
-end-to-end user or system flow, each layer's responsibility, contracts between
-layers, data lifecycle, and validation path together. Use horizontal
-foundation-first steps only for true prerequisites such as schema contracts,
-auth, migrations, shared harnesses, or safety preflights that block the slice.
-
-Check the proposal against the inspected callers, interfaces, data ownership,
-persistence, configuration and workflows. Redesign unintended conflicts before
-finalizing; identify intentional requested changes and their regression checks.
-Do not call a plan implementation-ready while material conflicts remain open.
-
-For a confirmed unused greenfield application with a demonstrated anti-pattern,
-explain the concrete harm and plan the necessary prerequisite refactor before
-dependent feature work. Use one canonical implementation without legacy aliases,
-wrappers or compatibility shims unless explicitly requested. Existing users or
-unknown usage do not qualify for this exception. A refactor plan alone grants
-no implementation, destructive-operation or live-change authority.
-
-Name exact integration points and likely files/modules for any existing code,
-including prototypes. Where no implementation exists, name the initial project
-structure and bootstrap sequence at a design level.
+Check a relevant existing pattern against requirements, interfaces, environment
+and failure modes before reusing it. Familiarity is a candidate, never proof.
+Reject hard-constraint violations before exploring more options. Choose the
+smallest adequate solution; uncertain interactions need bounded validation, success
+signals and revisit triggers in the plan, not unapproved experiments.
+Define components, necessary technologies, interfaces, data ownership/lifecycle,
+control flow, failures, security, observability, operations, rollout/rollback and
+acceptance checks. Name files/modules and integration points, or initial project
+shape and bootstrap sequence when no implementation exists.
+Classify each AI capability as deterministic code, direct model call,
+deterministic workflow with model calls, or bounded agent; justify model autonomy.
+Keep known transitions, RBAC, approvals and tool authorization deterministic.
+For serial multi-layer flows, design vertical slices with end-to-end contracts,
+data lifecycle and validation; foundation-first work is only for real prerequisites.
+Resolve unintended conflicts; identify intentional transitions and regression checks.
+For a confirmed unused prototype, explain an anti-pattern's concrete harm and plan
+the necessary prerequisite refactor with one canonical implementation, no shims
+unless explicitly requested. Unknown or existing usage does not qualify.
+Exit: a coherent proposal with no hidden material conflicts.
 
 ### Phase 6: Apply `system-design-rules` And Evaluate Alternatives
 
-Before finalizing a standard, deep, architecture-heavy, ADR-like, or otherwise
-hard-to-reverse design, use `system-design-rules` when it is installed and
-relevant. Treat it as an advisory design checklist over the proposed solution,
-boundaries, API/data ownership, reliability, security, observability, cost,
-operability, rollout, and ownership decisions.
-
-For light, local, reversible designs, apply only the relevant checklist
-categories yourself or record why a full `system-design-rules` pass is not
-needed. Keep checklist-only reviews of an existing proposal routed directly to
-`system-design-rules`; inside `design`, use its findings to improve the design
-and plan.
-
-Compare at least the baseline/current approach, the recommended design, and
-one simpler or more conservative alternative when meaningful. Explain what each
-option improves, worsens, costs, risks, and when to revisit it. Prefer
-reversible choices when evidence is weak.
+Use `system-design-rules` for standard/deep, architecture-heavy, ADR-like or
+hard-to-reverse decisions when installed and relevant. For light local reversible
+work apply relevant categories or explain why the full review is unnecessary.
+Compare baseline, recommendation and a simpler/conservative alternative when
+meaningful: improvements, drawbacks, cost, risk, reversibility and revisit trigger.
+Reopen only affected decisions when evidence changes; preserve fixed inputs and
+return conflicts to their owner. Exit: justified selection and review findings.
 
 ### Phase 7: Create Implementation Plan
 
-For planning-only work, use the host's planning mode or plan tool when available;
-otherwise return the complete plan in the response. If implementation is already
-explicitly requested, use a plan tool or response without switching into a
-write-prohibiting mode. If host Plan Mode is already active, remain planning-only.
-The plan handoff must include:
+Produce the Output Contract below using a host plan tool when available; otherwise
+label it `/plan handoff`. For design-only work use host planning mode if available.
+If implementation is authorized, do not enter a write-prohibiting mode merely to
+plan; an already-active host Plan Mode still forbids execution.
+Include ordered vertical slices and true prerequisites, exact files/modules,
+validation commands, docs/changelog and README impact, rollout/rollback and risks.
+For standalone HTML include the selected profile and all ten artifact acceptance
+checks from its required reference. After architecture and stack approval, an
+optional scaffolding handoff includes repository
+shape, capabilities, materialization/runtime units, external services, cross-cutting
+artifacts, owners and component statuses to `scaffold-project`. That handoff is
+one-way; missing decisions return to their owner, never recursive invocation or
+automatic Agentic SDLC startup.
+Exit: a complete actionable plan, or named blockers preventing readiness.
 
-- final design summary
-- selected-project document/code evidence, discrepancies where code wins,
-  conflict resolutions, intentional changes and pending spec-owner handoffs
-- selected option and rejected alternatives
-- assumptions and unresolved questions
-- `app-stack` decision or fixed-stack/skipped rationale
-- `ai-agent-design` decision or fixed-agent-subsystem/skipped rationale
-- `ai-stack` decision or fixed-AI-stack/skipped rationale
-- AI behavior classification for each capability: deterministic code, direct
-  model call, deterministic workflow containing model calls, or agent
-- `system-design-rules` findings or skipped-review rationale
-- ordered implementation steps
-- vertical slice order and any prerequisite foundation steps
-- expected files or modules to inspect or modify
-- tests and validation commands to add or run
-- for standalone HTML, the selected profile, portability, interaction, print and
-  browser acceptance plan from `references/portable-html-design.md`
-- documentation and changelog updates when in scope, including README impact
-  from changes to purpose, setup, configuration, usage, architecture,
-  compatibility or operational behavior
-- rollout, rollback, and risk checks
-- when repository scaffolding is required, an optional scaffold handoff with
-  repository shape, logical capabilities, materialization units, runtime
-  units, external services, cross-cutting artifacts, owners, and component
-  statuses
+## Progress
 
-If `/plan` is not available in the current surface, output a section titled
-`/plan handoff` containing the exact plan content to give to `/plan`.
-
-The scaffold handoff is one-way. `design` may produce it after architecture and
-stack approval, but `scaffold-project` must return missing design decisions
-instead of invoking `design` recursively. Do not start Agentic SDLC from this
-handoff.
+For every design, measure elapsed wall time from intake through the final report.
+Use `references/design-workflow.md` for stage/layer/counter updates and timing;
+small designs can report start and completion. Never fabricate percentages or
+runtime validation. Extraction uses the supporting progress helper in its reference.
 
 ## Optional Implementation Continuation
 
 After Phase 7, use the following continuation only when implementation was
-explicitly requested and the host permits writes:
+explicitly requested and the host permits writes, and `--extract-once` is absent:
 
 1. Recheck the affected code and conflict findings if the workspace changed
    since planning; preserve unrelated edits.
@@ -453,7 +377,9 @@ URLs, customer data, raw logs, or one-off local state.
 Return the shape that best fits the task, but include these elements unless a
 short answer is explicitly requested:
 
-- Requirements summary and assumptions.
+- Requirements summary and assumptions; measured total elapsed time.
+- For extraction, the source-linked layer summary and consolidated unresolved
+  decisions/evidence-gap report from its reference, then stop.
 - Selected project, documents and implemented paths inspected, evidence gaps,
   and confirmed usage status when the greenfield exception is relevant.
 - Document/code discrepancies with source references and code as the baseline;
@@ -485,6 +411,7 @@ short answer is explicitly requested:
 
 ## References
 
+- Read `references/document-extraction.md` for the explicit unattended extraction action.
 - Read `references/design-workflow.md` for the detailed phase checklist,
   brownfield and greenfield paths, `research`, `app-stack`,
   `ai-agent-design`, `ai-stack`, and `nebius` handoffs and research fallbacks,

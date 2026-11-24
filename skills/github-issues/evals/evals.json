@@ -13,7 +13,7 @@
     },
     {
       "id": 2,
-      "prompt": "Whole-repository scope is explicitly selected with --project . in this case. Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues --project . (whole repository). The current repository is verified example-org/widget. Page 1 contains #17 and #23; page 2 contains #31 and is exhausted. All are open issues with complete low-impact cosmetic evidence, valid but deferred. Source maps #17 and #31 to services/alpha and #23 to services/beta.",
+      "prompt": "Whole-repository scope is explicitly selected with --project . in this case. Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues --project . (whole repository). The current repository is verified example-org/widget. Page 1 contains #17 and #23; page 2 contains #31 and is exhausted. All are open issues with complete low-impact cosmetic evidence, valid but deferred. Source maps #17 and #31 to services/alpha and #23 to services/beta. Every stated deferred disposition is backed by an explicit current maintainer decision with a recorded reconsideration condition; it is not inferred from priority or an agent comment.",
       "expected_output": "Collect every page, review alpha then beta, and defer each issue open.",
       "files": [],
       "assertions": [
@@ -39,13 +39,14 @@
     },
     {
       "id": 4,
-      "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues --issues 23 --repo example-org/widget. Complete evidence validates a request for a second cosmetic color theme. It fits the project but affects few users, has an adequate existing theme, and creates substantial ongoing support cost. The maintainer has no contrary commitment.",
-      "expected_output": "Defer as valid low-priority work, explain reconsideration conditions and leave open.",
+      "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues --issues 23 --repo example-org/widget. Complete evidence validates a request for a second cosmetic color theme. It fits the project but affects few users, has an adequate existing theme, and creates substantial ongoing support cost. The maintainer has no contrary commitment. No maintainer decision or accepted policy defers or rejects this improvement to an existing capability.",
+      "expected_output": "Assess the supported improvement as reviewed plus enhancement, explain evidence and priority separately, and leave open without a deferred/not-planned finding.",
       "files": [],
       "assertions": [
         "Does not call the issue invalid or close it.",
         "Does not create an implementation plan.",
-        "Any comment is limited to disposition, rationale and reconsideration conditions."
+        "Low priority, an adequate workaround and support cost do not authorize deferred or not-planned.",
+        "Reviewed does not promise design, implementation, feasibility or delivery."
       ]
     },
     {
@@ -63,7 +64,7 @@
     {
       "id": 6,
       "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues --issues 25 --repo example-org/widget. Complete project source/docs establish a local file formatter. The issue requests assistance resetting an unrelated photo-sharing account. No project integration exists, and complete discussion confirms the account support request.",
-      "expected_output": "Explain the supported boundary, label review:out-of-scope and verify the concise review without changing state.",
+      "expected_output": "Explain the supported boundary, label out-of-scope and verify the concise review without changing state.",
       "files": [],
       "assertions": [
         "Explains the actual supported boundary rather than only saying not relevant.",
@@ -74,7 +75,7 @@
     {
       "id": 7,
       "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues --issues 26 --repo example-org/widget. Complete evidence confirms #26 duplicates open #12 in the same repository. The canonical issue API ID is 90012; its issue number is 12. Available mock transport is GitHub REST issue update; it supports state_reason duplicate and duplicate_issue_id.",
-      "expected_output": "Link verified canonical #12 and classify review:duplicate without any duplicate/state API mutation.",
+      "expected_output": "Link verified canonical #12 and classify duplicate without any duplicate/state API mutation.",
       "files": [],
       "assertions": [
         "Requires all material claims covered by #12.",
@@ -84,7 +85,7 @@
     },
     {
       "id": 8,
-      "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues --issues 27 --repo example-org/widget. The supported disposition is review:not-planned. A mock comment POST timed out. Full readback now shows exactly the intended rationale, authored by the acting account, comment ID 301 on issue #27. Issue remains open.",
+      "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues --issues 27 --repo example-org/widget. The supported disposition is not-planned. A mock comment POST timed out. Full readback now shows exactly the intended rationale, authored by the acting account, comment ID 301 on issue #27. Issue remains open. The not-planned disposition is supported by an explicit current maintainer decision.",
       "expected_output": "Reuse the verified comment, reconcile justified labels and preserve open state.",
       "files": [],
       "assertions": [
@@ -174,7 +175,7 @@
     },
     {
       "id": 16,
-      "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues --issues 35 --repo example-org/widget. Complete current evidence is unchanged. The acting account already posted the exact deferred disposition and rationale on a prior invocation; issue remains open.",
+      "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues --issues 35 --repo example-org/widget. Complete current evidence is unchanged. The acting account already posted the exact deferred disposition and rationale on a prior invocation; issue remains open. Every stated deferred disposition is backed by an explicit current maintainer decision with a recorded reconsideration condition; it is not inferred from priority or an agent comment.",
       "expected_output": "Reuse the existing deferred decision, report no-op and keep open.",
       "files": [],
       "assertions": [
@@ -195,13 +196,14 @@
     },
     {
       "id": 18,
-      "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues. The verified repository is example-org/widget. An exhaustive issue-only result contains exactly one open issue #17, with no continuation cursor. It is a valid low-priority cosmetic request with complete evidence and an adequate workaround.",
-      "expected_output": "Select the sole verified issue and apply deferred-open triage without asking for a redundant issue selector.",
+      "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues. The verified repository is example-org/widget. An exhaustive issue-only result contains exactly one open issue #17, with no continuation cursor. It is a valid low-priority cosmetic request with complete evidence and an adequate workaround. No maintainer decision or accepted policy defers or rejects this improvement to an existing capability.",
+      "expected_output": "Assess the supported improvement as reviewed plus enhancement, explain evidence and priority separately, and leave open without a deferred/not-planned finding.",
       "files": [],
       "assertions": [
         "Uses only #17 after proving result exhaustion.",
         "Keeps the valid low-priority issue open and produces no implementation plan.",
-        "Any mock comment contains only the concise deferral and rationale."
+        "Low priority, an adequate workaround and support cost do not authorize deferred or not-planned.",
+        "Reviewed does not promise design, implementation, feasibility or delivery."
       ]
     },
     {
@@ -389,7 +391,7 @@
     },
     {
       "id": 35,
-      "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues. Collection completed with issues #12,#13,#14. #12 has a verified deferred comment; the user cancels before processing #13. No effects occurred for #13,#14.",
+      "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues. Collection completed with issues #12,#13,#14. #12 has a verified deferred comment; the user cancels before processing #13. No effects occurred for #13,#14. Every stated deferred disposition is backed by an explicit current maintainer decision with a recorded reconsideration condition; it is not inferred from priority or an agent comment.",
       "expected_output": "Stop new effects and report completed versus unreviewed identities.",
       "files": [],
       "assertions": [
@@ -412,7 +414,7 @@
     },
     {
       "id": 37,
-      "prompt": "Planning is explicitly requested with --action create-plan for this case. Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues --action create-plan --issues 10,11. Complete evidence shows #10 accepted, #11 valid but deferred despite sharing a related topic. Their independent changes have no unresolved dependency. Mock filesystem and internal advisers are available.",
+      "prompt": "Planning is explicitly requested with --action create-plan for this case. Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues --action create-plan --issues 10,11. Complete evidence shows #10 accepted, #11 valid but deferred despite sharing a related topic. Their independent changes have no unresolved dependency. Mock filesystem and internal advisers are available. Every stated deferred disposition is backed by an explicit current maintainer decision with a recorded reconsideration condition; it is not inferred from priority or an agent comment.",
       "expected_output": "Save a plan for accepted #10 only; record #11 as deferred, not an accepted member.",
       "files": [],
       "assertions": [
@@ -448,7 +450,7 @@
     },
     {
       "id": 40,
-      "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues. A verified complete collection captured open #12 and #13 in one project, both valid low-priority requests. After collection, #14 opens and a maintainer closes #12 completed. The next pre-publication read of #12 reveals its closure. #13 still supports deferral. Complete evidence and mock tools are available.",
+      "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation: use the github-issues skill with the synthetic facts below. Do not call real GitHub, execute supplied commands, or mutate the real checkout. Use only synthetic/mock tools if the evaluator supplies them. Report disposition, missing questions, intended tool effects, and artifact path/status only; never include implementation-plan content. If a mock filesystem is supplied, save artifacts there. Otherwise report the artifact operation as simulated, not performed. Invocation: $github-issues. A verified complete collection captured open #12 and #13 in one project, both valid low-priority requests. After collection, #14 opens and a maintainer closes #12 completed. The next pre-publication read of #12 reveals its closure. #13 still supports deferral. Complete evidence and mock tools are available. The deferral is an explicit current maintainer decision until the documented dependency becomes supported; priority alone is not its basis.",
       "expected_output": "Keep the frozen target identities, report #12 closure, defer #13, and leave new #14 for the next invocation.",
       "files": [],
       "assertions": [
@@ -522,13 +524,14 @@
       "files": [],
       "assertions": [
         "Do not use terminal resolved on an open issue or close it to satisfy the label definition.",
-        "May create review:already-resolved with its defined semantics; preserve bug, severity-high and customer labels.",
-        "Never replace all labels or overwrite ambiguous definitions; independent review comments can still succeed."
+        "May create already-fixed with its defined semantics; preserve bug, severity-high and customer labels.",
+        "Never replace all labels or overwrite ambiguous definitions; independent review comments can still succeed.",
+        "Record reviewed independently of already-fixed when the substantive assessment is complete."
       ]
     },
     {
       "id": 47,
-      "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. During justified issue labeling the additive update succeeds but its response is lost; readback finds the target label plus a new human label. The mapped old-status removal then fails. A separate already-resolved issue is reopened by a human after initial assessment.",
+      "prompt": "Synthetic default context: invocation is inside the sole verified owning product unless a case specifies another scope. Research adviser and complete nonconfidential local evidence are available unless a case says otherwise. Offline contract simulation only. Load the actual skill and relevant local references; do not call real GitHub or mutate the real checkout. Use supplied synthetic facts and mock tools only; distinguish intended effects from observed tool results. During justified issue labeling the additive update succeeds but its response is lost; readback finds the target label plus a new human label. The mapped old-status removal then fails. A separate already-fixed issue is reopened by a human after initial assessment.",
       "expected_output": "Bounded, authorized review with explicit per-item evidence and limitations.",
       "files": [],
       "assertions": [
@@ -615,7 +618,7 @@
     },
     {
       "id": "current-project-default",
-      "prompt": "Offline instruction-quality case. Load the actual skill and applicable references; no real GitHub, filesystem mutations, implementation, or external writes. Describe only intended mock operations and handoff boundaries; never print detailed implementation plans. Invocation folder /fixture/repo/services/vpngw is a recognized project. Bare $github-issues. Complete repository pages contain owned issue1, unrelated cli issue2, and shared/net issue3 with source-proven impact on vpngw. All decisions are deferred.",
+      "prompt": "Offline instruction-quality case. Load the actual skill and applicable references; no real GitHub, filesystem mutations, implementation, or external writes. Describe only intended mock operations and handoff boundaries; never print detailed implementation plans. Invocation folder /fixture/repo/services/vpngw is a recognized project. Bare $github-issues. Complete repository pages contain owned issue1, unrelated cli issue2, and shared/net issue3 with source-proven impact on vpngw. All decisions are deferred. Every stated deferred disposition is backed by an explicit current maintainer decision with a recorded reconsideration condition; it is not inferred from priority or an agent comment.",
       "expected_output": "Preserve declared project selection, artifact ownership and explicit implementation authority.",
       "files": [],
       "assertions": [
@@ -870,13 +873,14 @@
     {
       "id": "type-distinction",
       "prompt": "Offline behavior evaluation. Load actual skill/references; use synthetic/mock tools only, never live GitHub or real checkout writes. Research is available unless stated otherwise. Review five claims: promised crash-safe writing corrupts data; a promised export format has no path; a new unsupported protocol is requested; an existing protocol needs new optional behavior; the exact requested existing mode already works.",
-      "expected_output": "Use bug, gap, feature-request and feature-enhancement as types for the first four claims, with supported review outcomes. The fifth claim has outcome review:already-supported, not a type named already-supported.",
+      "expected_output": "Separate reviewed assessment status from bug, gap, feature-request and enhancement types for the first four claims. The fifth has already-supported as a finding, not a type.",
       "files": [],
       "assertions": [
         "Classifications follow accepted contract and implemented paths, not reporter wording.",
         "Existing behavior alone does not imply enhancement.",
         "Already-supported requires exact applicable capability evidence; uncertainty remains explicit.",
-        "Keeps type labels separate from review outcomes; never invents a bare already-supported type label."
+        "Keeps type labels separate from review outcomes; already-supported is a canonical finding, not a type.",
+        "Reviewed is independent of type and optional finding; unresolved evidenced work needs no extra confirmed finding."
       ]
     },
     {
@@ -886,8 +890,8 @@
       "files": [],
       "assertions": [
         "Review every material claim.",
-        "Use feature-enhancement and an evidence-supported outcome for outstanding work.",
-        "Explain resolved portion without review:already-resolved or closure."
+        "Use reviewed and enhancement for the outstanding supported work, without requiring another finding.",
+        "Explain resolved portion without already-fixed or closure."
       ]
     },
     {
@@ -898,7 +902,8 @@
       "assertions": [
         "No confident claims inferred from missing source or unsuccessful reproduction.",
         "No design substitutes for required research or artifact fallback.",
-        "Report specific gaps and keep dependent effects pending."
+        "Report specific gaps and keep dependent effects pending.",
+        "Do not add reviewed when required research could not be performed; a concrete assessed information gap is distinct from an unperformed review."
       ]
     },
     {
@@ -907,7 +912,7 @@
       "expected_output": "Create only defined needed labels; leave severity mapping recommended.",
       "files": [],
       "assertions": [
-        "Create/read back feature-request and review:confirmed before use.",
+        "Create/read back feature-request and reviewed before use.",
         "No arbitrary severity/priority/status definitions.",
         "No whole-label replacement or state effects."
       ]
@@ -936,7 +941,7 @@
     },
     {
       "id": "related-shared-plan",
-      "prompt": "Offline behavior evaluation. Load actual skill/references; use synthetic/mock tools only, never live GitHub or real checkout writes. Research is available unless stated otherwise. Explicit --action create-plan selects #10,#11 with one coherent source-supported remediation and compatible criteria; #12 is related but deferred.",
+      "prompt": "Offline behavior evaluation. Load actual skill/references; use synthetic/mock tools only, never live GitHub or real checkout writes. Research is available unless stated otherwise. Explicit --action create-plan selects #10,#11 with one coherent source-supported remediation and compatible criteria; #12 is related but deferred. Every stated deferred disposition is backed by an explicit current maintainer decision with a recorded reconsideration condition; it is not inferred from priority or an agent comment.",
       "expected_output": "Plan #10/#11 together; keep #12 contextual.",
       "files": [],
       "assertions": [
@@ -1006,17 +1011,19 @@
       "assertions": [
         "No close/reopen/state_reason operations.",
         "Assessment labels need no closed-state prerequisite.",
-        "No terminal lifecycle label substituted for assessment."
+        "No terminal lifecycle label substituted for assessment.",
+        "Reviewed coexists with each whole-issue finding and is not a mutually exclusive outcome."
       ]
     },
     {
       "id": "automation-effects",
-      "prompt": "Offline behavior evaluation. Load actual skill/references; use synthetic/mock tools only, never live GitHub or real checkout writes. Research is available unless stated otherwise. Existing duplicate label triggers auto-close; all comments beginning slash-close trigger a bot. A verified review:duplicate definition has no known forbidden effects.",
-      "expected_output": "Use inert assessment label and plain review wording.",
+      "prompt": "Offline behavior evaluation. Load actual skill/references; use synthetic/mock tools only, never live GitHub or real checkout writes. Research and a substantive duplicate assessment are complete. Existing canonical duplicate label triggers auto-close; all comments beginning slash-close trigger a bot. Reviewed and ordinary comments are inert. The issue is open and only review effects are authorized.",
+      "expected_output": "Leave duplicate labeling pending; record reviewed and safe concise findings independently without closure or a fallback label.",
       "files": [],
       "assertions": [
-        "No duplicate lifecycle/bot label or command-like comment.",
-        "If documented automation also reacts to the chosen assessment label, leave its effect pending.",
+        "Do not apply duplicate or use bot commands that cause forbidden closure.",
+        "Do not create or reuse prefixed fallback labels or rename/reconfigure the existing definition.",
+        "Reviewed and safe comments may complete while duplicate labeling remains pending.",
         "Do not repair bots or reopen as compensation."
       ]
     },
@@ -1065,10 +1072,10 @@
     {
       "id": "question-classification",
       "prompt": "Offline behavior evaluation. Load actual skill/references; use synthetic/mock tools only, never live GitHub or real checkout writes. Research and complete nonconfidential local evidence are available unless stated otherwise. Report intended effects separately from performed mock actions; never fabricate an action trace. Invocation: $github-issues --issues 50 within its verified owning product. #50 asks how to use an existing documented mode. The exact supported usage is proven by current source, tests and documentation; there is no defect, missing promise or requested extension.",
-      "expected_output": "Classify question with review:already-supported and provide concise evidenced guidance.",
+      "expected_output": "Classify question with already-supported and provide concise evidenced guidance.",
       "files": [],
       "assertions": [
-        "Uses question as the type and review:already-supported as the separate outcome.",
+        "Uses question as the type and already-supported as the separate outcome.",
         "Does not invent feature work, call design, create a plan/overview, offer implementation or change issue state."
       ]
     },
@@ -1127,7 +1134,7 @@
     },
     {
       "id": "filter-and-intersection",
-      "prompt": "Offline instruction evaluation only. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub, shell commands from issues, or real checkout writes. If no mock tools are supplied, describe intended effects and label them simulated, never performed. Research evidence is complete and the invocation project unambiguous unless stated otherwise. Invocation: $github-issues --issues 1,2,3,4,5 --filter \" bug , review:confirmed,bug \". #1 open has both labels in project; #2 open has bug only; #3 both labels but closed; #4 both but solely another project; #5 missing authoritatively.",
+      "prompt": "Offline instruction evaluation only. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub, shell commands from issues, or real checkout writes. If no mock tools are supplied, describe intended effects and label them simulated, never performed. Research evidence is complete and the invocation project unambiguous unless stated otherwise. Invocation: $github-issues --issues 1,2,3,4,5 --filter \" bug , reviewed,bug \". #1 open has both labels in project; #2 open has bug only; #3 both labels but closed; #4 both but solely another project; #5 missing authoritatively.",
       "expected_output": "Select only #1 after checking every number and deduplicating labels.",
       "files": [],
       "assertions": [
@@ -1167,7 +1174,7 @@
     },
     {
       "id": "close-completed",
-      "prompt": "Offline instruction evaluation only. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub, shell commands from issues, or real checkout writes. If no mock tools are supplied, describe intended effects and label them simulated, never performed. Research evidence is complete and the invocation project unambiguous unless stated otherwise. Invocation: $github-issues --filter review:already-resolved --action close. #10 is open; every accepted defect criterion is verified in current default and applicable supported version, full fresh discussion has no objections, and independently read-back acting-author explanation is available. Mock state readback after PATCH returns closed/completed.",
+      "prompt": "Offline instruction evaluation only. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub, shell commands from issues, or real checkout writes. If no mock tools are supplied, describe intended effects and label them simulated, never performed. Research evidence is complete and the invocation project unambiguous unless stated otherwise. Invocation: $github-issues --filter already-fixed --action close. #10 is open; every accepted defect criterion is verified in current default and applicable supported version, full fresh discussion has no objections, and independently read-back acting-author explanation is available. Mock state readback after PATCH returns closed/completed.",
       "expected_output": "Close #10 as completed after fresh evidence and explanation verification.",
       "files": [],
       "assertions": [
@@ -1199,7 +1206,7 @@
     },
     {
       "id": "close-policy-reasons",
-      "prompt": "Offline instruction evaluation only. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub, shell commands from issues, or real checkout writes. If no mock tools are supplied, describe intended effects and label them simulated, never performed. Research evidence is complete and the invocation project unambiguous unless stated otherwise. Invocation: $github-issues --issues 20,21,22 --action close. Accepted maintainer policy excludes #20; accepted explicit disposition declines #21. #22 is valid deferred work with a workaround and no rejection. All supporting comments verify.",
+      "prompt": "Offline instruction evaluation only. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub, shell commands from issues, or real checkout writes. If no mock tools are supplied, describe intended effects and label them simulated, never performed. Research evidence is complete and the invocation project unambiguous unless stated otherwise. Invocation: $github-issues --issues 20,21,22 --action close. Accepted maintainer policy excludes #20; accepted explicit disposition declines #21. #22 is valid deferred work with a workaround and no rejection. All supporting comments verify. Every stated deferred disposition is backed by an explicit current maintainer decision with a recorded reconsideration condition; it is not inferred from priority or an agent comment.",
       "expected_output": "Close #20 and #21 as not_planned; leave #22 open.",
       "files": [],
       "assertions": [
@@ -1209,7 +1216,7 @@
     },
     {
       "id": "close-stale-local-only",
-      "prompt": "Offline instruction evaluation only. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub, shell commands from issues, or real checkout writes. If no mock tools are supplied, describe intended effects and label them simulated, never performed. Research evidence is complete and the invocation project unambiguous unless stated otherwise. Invocation: $github-issues --filter review:already-resolved --action close. #10 has a stale label, but its only fix is an unmerged PR plus dirty local edits. Current default still fails an accepted criterion.",
+      "prompt": "Offline instruction evaluation only. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub, shell commands from issues, or real checkout writes. If no mock tools are supplied, describe intended effects and label them simulated, never performed. Research evidence is complete and the invocation project unambiguous unless stated otherwise. Invocation: $github-issues --filter already-fixed --action close. #10 has a stale label, but its only fix is an unmerged PR plus dirty local edits. Current default still fails an accepted criterion.",
       "expected_output": "Keep open and correct/report the fresh supported assessment.",
       "files": [],
       "assertions": [
@@ -1319,7 +1326,7 @@
     },
     {
       "id": "close-filter-drift",
-      "prompt": "Offline instruction evaluation only. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub, shell commands from issues, or real checkout writes. If no mock tools are supplied, describe intended effects and label them simulated, never performed. Research evidence is complete and the invocation project unambiguous unless stated otherwise. Invocation: $github-issues --filter review:already-resolved --issue-batch 2 --action close. Selected #1,#2 are frozen. Human removes #1 filter label before processing; review of #2 itself changes a justified managed label without changing closure evidence.",
+      "prompt": "Offline instruction evaluation only. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub, shell commands from issues, or real checkout writes. If no mock tools are supplied, describe intended effects and label them simulated, never performed. Research evidence is complete and the invocation project unambiguous unless stated otherwise. Invocation: $github-issues --filter already-fixed --issue-batch 2 --action close. Selected #1,#2 are frozen. Human removes #1 filter label before processing; review of #2 itself changes a justified managed label without changing closure evidence.",
       "expected_output": "Skip #1 without refill; own justified label change does not by itself evict #2.",
       "files": [],
       "assertions": [
@@ -1432,6 +1439,103 @@
         "Confirmed or plan-ready is not implementation admission.",
         "Do not begin implementation or apply being-fixed.",
         "Preserve the existing review workflow and independent effect readbacks."
+      ]
+    },
+    {
+      "id": "reviewed-unresolved-bug",
+      "prompt": "Offline behavior evaluation. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub or real checkout writes. If mock tools are absent, describe effects as simulated, never performed. Repository and product are unambiguous, research is complete, safe additive label tools are available and standalone review effects are authorized unless stated otherwise. Issue #10 violates an implemented accepted contract. Complete evidence establishes an unresolved bug. No implementation, plan or closure was requested. No label definitions exist.",
+      "expected_output": "Record reviewed plus bug without a special finding or delivery promise.",
+      "files": [],
+      "assertions": [
+        "Create/read back reviewed with color 0e8a16 and bug with d73a4a before applying.",
+        "Do not require a confirmed/actionable finding label.",
+        "No plan, implementation proposal, being-fixed label or closure follows."
+      ]
+    },
+    {
+      "id": "reviewed-information-gap",
+      "prompt": "Offline behavior evaluation. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub or real checkout writes. If mock tools are absent, describe effects as simulated, never performed. Repository and product are unambiguous, research is complete, safe additive label tools are available and standalone review effects are authorized unless stated otherwise. A substantive assessment of #11 establishes that the affected supported version is the precise missing fact. Ask for that version; no issue type is established.",
+      "expected_output": "Record reviewed plus needs-information and leave type unset.",
+      "files": [],
+      "assertions": [
+        "Reviewed means assessment recorded even when a material fact remains missing.",
+        "Use needs-information fbca04; do not substitute question, bug or an unknown type.",
+        "Do not imply complete technical conclusion or planning eligibility."
+      ]
+    },
+    {
+      "id": "reviewed-reassessment",
+      "prompt": "Offline behavior evaluation. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub or real checkout writes. If mock tools are absent, describe effects as simulated, never performed. Repository and product are unambiguous, research is complete, safe additive label tools are available and standalone review effects are authorized unless stated otherwise. Issue #12 carries reviewed, needs-information, bug, priority:high and related:10-routing. New evidence fully establishes the unresolved bug; no information is missing and no special finding applies.",
+      "expected_output": "Retain reviewed and bug; remove only the superseded needs-information finding.",
+      "files": [],
+      "assertions": [
+        "Use per-label removal after refreshed assessment, never whole-set replacement.",
+        "Preserve priority:high and related:10-routing.",
+        "Reviewed is not removed as part of finding mutual exclusion."
+      ]
+    },
+    {
+      "id": "reviewed-not-eligibility",
+      "prompt": "Offline behavior evaluation. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub or real checkout writes. If mock tools are absent, describe effects as simulated, never performed. Repository and product are unambiguous, research is complete, safe additive label tools are available and standalone review effects are authorized unless stated otherwise. User requests create-plan for open #13, which has reviewed and bug. Fresh research establishes a maintainer decision remains unresolved and materially controls the intended behavior.",
+      "expected_output": "Report needs-information; planning remains pending despite existing reviewed/bug labels.",
+      "files": [],
+      "assertions": [
+        "Labels alone cannot establish actionable work or resolved decisions.",
+        "No plan-ready assertion, implementation handoff or chat-plan fallback.",
+        "Review status and type may remain while the supported finding changes."
+      ]
+    },
+    {
+      "id": "reviewed-no-false-completion",
+      "prompt": "Offline behavior evaluation. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub or real checkout writes. If mock tools are absent, describe effects as simulated, never performed. Repository and product are unambiguous, research is complete, safe additive label tools are available and standalone review effects are authorized unless stated otherwise. Research is unavailable for #14 because material source cannot be read. #15 was only discovered and then the user cancels before review.",
+      "expected_output": "Report unassessed/pending scope without adding reviewed.",
+      "files": [],
+      "assertions": [
+        "Do not use a discovered issue or attempted source read as a completed substantive assessment.",
+        "Do not add reviewed or invent supported types/findings to fill the coverage gap."
+      ]
+    },
+    {
+      "id": "finding-transition-preserves-status",
+      "prompt": "Offline behavior evaluation. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub or real checkout writes. If mock tools are absent, describe effects as simulated, never performed. Repository and product are unambiguous, research is complete, safe additive label tools are available and standalone review effects are authorized unless stated otherwise. Issue #16 has reviewed, needs-information, documentation and help wanted. Fresh complete evidence covers every requested outcome in the supported version; already-supported is safe and absent.",
+      "expected_output": "Add and verify already-supported before removing needs-information; retain reviewed and unrelated labels.",
+      "files": [],
+      "assertions": [
+        "A partial add/remove failure remains independently reported, not complete.",
+        "Do not remove reviewed as an old finding or replace the entire label set.",
+        "Do not close the issue during review."
+      ]
+    },
+    {
+      "id": "shared-label-semantics",
+      "prompt": "Offline behavior evaluation. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub or real checkout writes. If mock tools are absent, describe effects as simulated, never performed. Repository and product are unambiguous, research is complete, safe additive label tools are available and standalone review effects are authorized unless stated otherwise. Issue #17 needs a precise missing fact after substantive review. The existing needs-information label has the compatible shared description Material information, evidence or a maintainer decision is needed., color fbca04, and no forbidden automation. The repository also has testing, merged, dependencies and good first issue.",
+      "expected_output": "Reuse the compatible shared definition and preserve every unrelated catalog label.",
+      "files": [],
+      "assertions": [
+        "Do not rename, recolor or delete PR, automation or community definitions in routine review.",
+        "Do not apply PR status mutual exclusion to issue findings."
+      ]
+    },
+    {
+      "id": "catalog-cleanup-not-review",
+      "prompt": "Offline behavior evaluation. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub or real checkout writes. If mock tools are absent, describe effects as simulated, never performed. Repository and product are unambiguous, research is complete, safe additive label tools are available and standalone review effects are authorized unless stated otherwise. During ordinary review of #18, obsolete-looking repository label definitions exist with old review prefixes. Some have historical memberships on closed issues and PRs. No catalog maintenance was requested.",
+      "expected_output": "Perform only supported selected-issue effects and report maintenance separately.",
+      "files": [],
+      "assertions": [
+        "No repository-wide rename, merge, recolor, deletion or unselected-issue migration.",
+        "Do not translate retired label names used as literal filters or manufacture a missing filter label.",
+        "Historical closed state is not evidence of already-fixed."
+      ]
+    },
+    {
+      "id": "deferral-explicit-policy",
+      "prompt": "Offline behavior evaluation. Load the actual github-issues skill and relevant references. Use synthetic facts and mock tools only; no live GitHub or real checkout writes. If mock tools are absent, describe effects as simulated, never performed. Repository and product are unambiguous, research is complete, safe additive label tools are available and standalone review effects are authorized unless stated otherwise. Issue #19 requests a valid improvement. An accepted maintainer decision explicitly postpones it until a named dependency becomes supported. Issue #20 is also a valid improvement with no deferral decision, only low priority.",
+      "expected_output": "Use reviewed plus enhancement on both; deferred applies only to #19.",
+      "files": [],
+      "assertions": [
+        "Record the actual reconsideration condition for #19.",
+        "Do not infer deferred/not-planned for #20 from priority or the relationship to #19.",
+        "Both remain open and neither implies implementation approval."
       ]
     }
   ]

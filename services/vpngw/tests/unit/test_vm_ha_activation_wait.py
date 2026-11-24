@@ -250,3 +250,94 @@ def test_unknown_then_failed_peer_never_claims_full_verification_ran(monkeypatch
     assert "full verification passed" not in captured.err
     assert "continued to full verification" not in captured.err
     assert clock[0] == 60.0
+
+
+@pytest.mark.parametrize("changes,expected", [(True, 150.0), (False, 120.0)])
+def test_owner_progress_separates_stall_window_from_operation_deadline(
+    monkeypatch, clock, changes, expected
+):
+    from nebius_vpngw.deploy.controller_observation import activation_progress_key
+
+    def fetch(**kwargs):
+        assert 0 < kwargs["timeout_seconds"] <= 15
+        return {
+            "state": "promoting",
+            "pending_operation_id": str(int(clock[0] // 40)) if changes else "unchanged",
+            "heartbeat": {"timestamp": clock[0]},
+            "ready": clock[0] >= 150,
+        }
+
+    monkeypatch.setattr(cli, "_fetch_vm_ha_agent_status", fetch)
+    kwargs = dict(
+        predicate=lambda p: p["ready"], timeout_seconds=300, progress_key=activation_progress_key
+    )
+    if changes:
+        assert cli._wait_for_vm_ha_agent_status(**kwargs)["ready"]
+    else:
+        with pytest.raises(VerificationFailure):
+            cli._wait_for_vm_ha_agent_status(**kwargs)
+    assert clock[0] == expected
+
+
+def test_repeated_activation_states_do_not_replenish_stall_window(monkeypatch, clock):
+    from nebius_vpngw.deploy.controller_observation import activation_progress_key
+
+    monkeypatch.setattr(
+        cli, "_fetch_vm_ha_agent_status", lambda **_: {"state": str(int(clock[0]) % 2)}
+    )
+    with pytest.raises(VerificationFailure):
+        cli._wait_for_vm_ha_agent_status(
+            predicate=lambda _: False,
+            timeout_seconds=10,
+            stall_timeout_seconds=3,
+            poll_seconds=1,
+            progress_key=activation_progress_key,
+        )
+    assert clock[0] == 4
+
+
+def test_activation_progress_cannot_extend_absolute_operation_deadline(monkeypatch, clock):
+    from nebius_vpngw.deploy.controller_observation import activation_progress_key
+
+    monkeypatch.setattr(
+        cli, "_fetch_vm_ha_agent_status", lambda **_: {"pending_operation_id": str(clock[0])}
+    )
+    with pytest.raises(VerificationFailure):
+        cli._wait_for_vm_ha_agent_status(
+            predicate=lambda _: False,
+            timeout_seconds=300,
+            deadline=5,
+            stall_timeout_seconds=3,
+            poll_seconds=1,
+            progress_key=activation_progress_key,
+        )
+    assert clock[0] == 5
+
+
+def test_activation_late_progress_cannot_revive_expired_observation(monkeypatch, clock):
+    from nebius_vpngw.deploy.controller_observation import activation_progress_key
+
+    def fetch(**_):
+        clock[0] += 4
+        return {"pending_operation_id": "changed", "ready": True}
+
+    monkeypatch.setattr(cli, "_fetch_vm_ha_agent_status", fetch)
+    with pytest.raises(VerificationFailure) as caught:
+        cli._wait_for_vm_ha_agent_status(
+            predicate=lambda p: p["ready"],
+            timeout_seconds=20,
+            stall_timeout_seconds=3,
+            progress_key=activation_progress_key,
+        )
+    assert caught.value.latest.predicate == "status-arrived-after-deadline"
+
+
+def test_activation_progress_ignores_heartbeat_and_clocks_but_tracks_route_receipts():
+    from nebius_vpngw.deploy.controller_observation import activation_progress_key
+
+    before = {"state": "promoting", "heartbeat": {"sequence": 1}, "observed_at": 1}
+    later = {**before, "heartbeat": {"sequence": 2}, "observed_at": 2}
+    assert activation_progress_key(before) == activation_progress_key(later)
+    assert activation_progress_key(later) != activation_progress_key(
+        {**later, "route_reconciliation": {"operation_id": "reconciled"}}
+    )

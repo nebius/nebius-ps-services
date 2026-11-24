@@ -174,6 +174,13 @@ def _validate_cidr(value: str) -> str:
         raise ValueError("Enter a valid network in CIDR notation, such as 10.0.0.0/16.") from error
 
 
+def _validate_enforced_cidr(value: str) -> str:
+    try:
+        return str(ipaddress.IPv4Network(value, strict=True))
+    except ValueError as error:
+        raise ValueError("Enter a canonical IPv4 network CIDR, such as 10.0.1.0/24.") from error
+
+
 def _validate_private_subnet(value: str) -> str:
     if not value:
         return value
@@ -585,6 +592,41 @@ def _connection_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
             default=str(old.get("routing_mode") or "bgp"),
             help_text="BGP learns peer routes dynamically; static requires explicit remote prefixes.",
         )
+        enforced: dict[str, t.Any] | None = None
+        previous_enforced = old.get("enforced_routing") or {}
+        if prompt.ask_bool(
+            "Enforce routing for selected workload subnets",
+            default=bool(previous_enforced),
+            help_text=(
+                "Default No leaves routing unchanged. Yes sends selected sources and destinations "
+                "through this connection or drops them when its route/path is unavailable."
+            ),
+        ):
+            enforced = {
+                "source_subnets": _csv_values(
+                    prompt,
+                    "Enforced source subnets (comma-separated)",
+                    default=previous_enforced.get("source_subnets", []),
+                    required=True,
+                    validator=_validate_enforced_cidr,
+                    help_text=(
+                        "Enter exact whole workload subnet CIDRs covered by Local prefixes. "
+                        "Apply verifies cloud subnet identities. Exclude the gateway subnet."
+                    ),
+                ),
+                "destinations": _csv_values(
+                    prompt,
+                    "Enforced destinations (comma-separated)",
+                    default=previous_enforced.get("destinations", []),
+                    required=True,
+                    validator=_validate_enforced_cidr,
+                    help_text=(
+                        "Use IPv4 CIDRs; 0.0.0.0/0 includes Internet traffic. The remote site owns "
+                        "onward routing, return routes and NAT. BGP must advertise each exact "
+                        "prefix and permit it in the import filter. Same-VPC traffic stays local."
+                    ),
+                ),
+            }
         if routing_mode == "bgp":
             if not local_asn_prompted:
                 gateway["local_asn"] = int(
@@ -621,9 +663,16 @@ def _connection_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
             remote_prefixes = _csv_values(
                 prompt,
                 "Remote prefixes (comma-separated)",
-                default=t.cast(list[str], old.get("remote_prefixes") or ["192.168.0.0/16"]),
-                help_text="Networks behind the peer that must be installed as static routes.",
-                required=True,
+                default=t.cast(
+                    list[str],
+                    old.get("remote_prefixes") or ([] if enforced else ["192.168.0.0/16"]),
+                ),
+                help_text=(
+                    "Additional networks behind the peer. Enforced destinations need not be repeated."
+                    if enforced
+                    else "Networks behind the peer that must be installed as static routes."
+                ),
+                required=not bool(enforced),
                 validator=_validate_cidr,
             )
             bgp = {"enabled": False, "remote_asn": None, "advertise_local_prefixes": True}
@@ -737,6 +786,7 @@ def _connection_phase(candidate: dict[str, t.Any], prompt: _Prompter) -> None:
                 "remote_prefixes": remote_prefixes or None,
                 "bgp": bgp,
                 "tunnels": tunnels,
+                **({"enforced_routing": enforced} if enforced else {}),
             }
         )
     candidate["connections"] = connections
@@ -768,6 +818,14 @@ def _review_phase(
     table.add_row("Gateway", f"{group['name']} ({group['instance_count']} VM(s))")
     table.add_row("Connections", str(len(connections)))
     table.add_row("Tunnels", str(sum(len(item["tunnels"]) for item in connections)))
+    for connection in connections:
+        if policy := connection.get("enforced_routing"):
+            table.add_row(
+                f"Enforced routing: {connection['name']}",
+                f"Sources: {', '.join(policy['source_subnets'])}\n"
+                f"Destinations: {', '.join(policy['destinations'])}\n"
+                "Use this connection or drop; remote site provides onward routing/NAT.",
+            )
     table.add_row(
         "VM-level HA", "enabled" if (group.get("vm_ha") or {}).get("enabled") else "disabled"
     )

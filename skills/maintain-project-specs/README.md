@@ -32,6 +32,20 @@ or basis is supplied, even when a sibling project has registered an owner in
 the same Git repository. The no-op project guard preserves supplied identities;
 registered owners still enforce objective, basis and checkout at every write.
 
+## Plain folders and extraction
+
+`design --extract-once` can publish a researched documentation baseline into an
+existing plain folder. `inspect` returns a typed filesystem basis; `publish`
+accepts `--expected-filesystem-basis` instead of `--expected-head`. The shared
+transaction retains paired CAS, safe replay, no-follow writes and rollback.
+Filesystem receipts cannot serve as Git workflow receipts. Existing Git targets
+retain committed HEAD and registered publication ownership. No Git initialization,
+commit or SDLC startup is performed. `validate --output` remains Git-lifecycle-only.
+
+Source inventories and pure roadmap checks are reusable without program state.
+Supplementary extraction artifacts remain separate from canonical publication;
+unresolved findings never become an admissible source-bundle manifest.
+
 ## What Advisory Means
 
 - SessionStart uses bounded, no-follow, owner-controlled regular-file reads. It

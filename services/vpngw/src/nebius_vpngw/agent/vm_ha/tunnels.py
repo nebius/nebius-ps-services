@@ -1024,6 +1024,7 @@ class TunnelController(Generic[AuthorityT]):
         if policy.mode == "bgp" and op["verb"] in {"failback", "release"}:
             target = None
         try:
+            verify_now = op["phase"] not in {"suspend", "activate", "restore"}
             if op["phase"] == "suspend":
                 op["effects_started"] = True
                 self._save()
@@ -1048,7 +1049,19 @@ class TunnelController(Generic[AuthorityT]):
                     op["attempt_deadline"] = (
                         min(current_time(), op["deadline"]) + STATIC_VERIFICATION_SECONDS
                     )
-            else:
+                    verification_deadline = op["attempt_deadline"]
+                    # Persist the read-only phase before its native verifier
+                    # loads it. Take a fresh first sample now, while this pass
+                    # owns the writer, rather than spending the fixed window
+                    # waiting for two more scheduled controller passes.
+                    self._save()
+                    if not self.effects.revalidate(authority):
+                        return
+                    if current_time() >= verification_deadline:
+                        self._expire_selection(policy)
+                        return
+                    verify_now = True
+            if verify_now:
                 restoring = op["phase"] == "verify-restore"
                 if (
                     restoring

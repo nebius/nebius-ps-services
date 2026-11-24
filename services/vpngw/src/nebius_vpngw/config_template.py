@@ -151,6 +151,14 @@ connections:
     vendor: "gcp"
     routing_mode: "bgp"
     # remote_prefixes: ["10.0.0.0/8"]  # optional allowlist for BGP
+    # Optional: selected workload subnets must use this connection or drop.
+    # Each source must match a whole explicit subnet covered by local_prefixes.
+    # Omit this block for ordinary routing; create-config defaults to No.
+    # enforced_routing:
+    #   source_subnets: ["10.100.0.0/24", "10.101.0.0/24"]
+    #   destinations: ["0.0.0.0/0", "192.0.2.0/24"]
+    # BGP: the peer must advertise each exact destination through existing filters.
+    # Static: destinations provide route intent, including a default route.
     bgp:
       enabled: true
       remote_asn: 64514

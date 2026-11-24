@@ -57,3 +57,12 @@ matter?".
 - `system-design-rules` owns checklist-style review of an existing proposal.
 - `$sdlc-start <objective>` and the relevant `sdlc-*` skills own Agentic SDLC context packs
   and committed SDLC artifacts.
+
+## Design evidence coverage
+
+Design calls research for every requirement and design item, including small
+source-free designs, at proportional depth. Related items share evidence.
+Return item-level provenance, version/date applicability, contradictions and
+uncertainty; local intent is distinct from vendor behavior. During unattended
+extraction, return unresolved questions as findings to design instead of asking
+the user. Design owns decisions, canonical handoff and progress reporting.

@@ -71,7 +71,7 @@ class _FakeResponse(BytesIO):
 def _write_vm_ha_agent_wheel(
     wheel: os.PathLike[str],
     *,
-    restoration_capability: str = "vm-ha-standby-restoration-v2",
+    restoration_capability: str = "vm-ha-standby-restoration-v3",
     include_agent_main: bool = True,
     dead_capability_handler: bool = False,
     include_module_entrypoint: bool = True,
@@ -678,7 +678,7 @@ class _ManagedMTLSClient:
                     "features": [
                         "managed-peer-ingress-v2",
                         "vm-ha-live-peer-replacement-v5",
-                        "vm-ha-standby-restoration-v2",
+                        "vm-ha-standby-restoration-v3",
                         "independent-heartbeat-v6",
                     ],
                     "schema": "nebius-vpngw.agent-capabilities.v1",
@@ -2443,6 +2443,9 @@ def test_vm_ha_deactivation_is_ordered_and_fail_closed() -> None:
     _runner, removal, create_parent = _locked_remote_action(client.commands[-1])
     assert create_parent is True
     assert removal.index("disable --now nebius-vpngw-vm-ha-rearm.service") < removal.index(
+        "rm -f /etc/nebius-vpngw/vm-ha-enabled"
+    )
+    assert removal.index("preserve_for_ordinary") < removal.index(
         "rm -f /etc/nebius-vpngw/vm-ha-enabled"
     )
     assert removal.index("30-vm-ha.conf") < removal.index("daemon-reload")

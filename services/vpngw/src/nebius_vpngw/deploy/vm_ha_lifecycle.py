@@ -386,6 +386,7 @@ def vm_ha_effective_resource_bindings(
                 "prehost-superseded-",
                 "staged-replacement-",
                 "runtime-created-package-manifests:",
+                "enforced-route-lock:",
                 # Activation validates retained repair receipts; they are not
                 # cloud resource identities and remain in the full record.
                 "repair-reset:",
@@ -408,6 +409,9 @@ def vm_ha_effective_resource_bindings(
             "corrective-release-authority",
             "corrective-release-reserved",
             "apply-lock-cycle",
+            "enforced-route-plan",
+            "enforced-route-cutover",
+            "enforced-route-preparation",
         }
     }
     member_cycles: dict[str, set[int]] = {}
@@ -2358,6 +2362,14 @@ def _validate_successor(
         for key, value in vm_ha_replacement_ownership_bindings(previous).items()
     ):
         raise ValueError("VM-HA lifecycle replacement ownership cannot be removed or rebound")
+    from .ha_enforced_rebind import validate_successor as validate_enforced_rebind
+
+    if validate_enforced_rebind(previous, successor):
+        return
+    from .ha_enforced_preparation import validate_successor as validate_enforced_preparation
+
+    if validate_enforced_preparation(previous, successor):
+        return
     from .vm_ha_prepared_replacement import validate_successor as validate_prepared_replacement
 
     if validate_prepared_replacement(previous, successor):
@@ -2560,7 +2572,7 @@ def _validate_destroyed_reprovision_successor(
     if before is None or after is None:
         raise ValueError("VM-HA destroyed reprovision transaction is incomplete")
     allowed_fresh_binding = re.compile(
-        r"^(?:public-allocation:.+:.+|route-targets-digest|heartbeat-initial-artifact|runtime-command-(?:approval|execution)|runtime-package-manifests|credential-(?:service-account|authorized-key|sha256):.+)$"
+        r"^(?:public-allocation:.+:.+|route-targets-digest|heartbeat-initial-artifact|runtime-command-(?:approval|execution)|runtime-package-manifests|credential-(?:service-account|authorized-key|sha256):.+|enforced-route-plan)$"
     )
     expected_public_bindings = vm_ha_destroyed_retained_public_bindings(previous)
     actual_public_bindings = {
@@ -2607,6 +2619,9 @@ def _validate_destroyed_reprovision_successor(
         )
     ):
         raise ValueError("VM-HA destroyed lifecycle cannot start an inexact reprovision")
+    from .ha_enforced_rebind import validate_reprovision_plan
+
+    validate_reprovision_plan(successor)
 
 
 def _validate_missing_standby_replacement_successor(

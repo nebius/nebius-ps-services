@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import ipaddress
 from copy import deepcopy
 from typing import Any
 
@@ -27,9 +28,18 @@ def table_label(table: str) -> str:
 
 def convert(plan: dict, conversions: dict[str, dict], *, required: bool = True) -> dict:
     from nebius.api.nebius.common.v1 import ResourceMetadata
-    from nebius.api.nebius.vpc.v1 import CreateRouteTableRequest, RouteTableSpec
+    from nebius.api.nebius.vpc.v1 import (
+        AllocationNextHop,
+        CreateRouteRequest,
+        CreateRouteTableRequest,
+        DestinationMatch,
+        NextHop,
+        RouteSpec,
+        RouteTableSpec,
+    )
 
     from .ordinary_route_plan import request_record
+    from .ordinary_route_policy import Policy
 
     plan = deepcopy(plan)
     plan["conversions"] = deepcopy(conversions)
@@ -38,6 +48,7 @@ def convert(plan: dict, conversions: dict[str, dict], *, required: bool = True) 
         return plan
     original_requests = deepcopy(plan["requests"])
     original_coverage = deepcopy(plan["coverage"])
+    policy = Policy.parse(plan["policy"]) if plan["policy"].get("enforced") else None
     sources = {item["source"] for item in conversions.values()}
     plan["requests"] = {
         key: record
@@ -55,6 +66,13 @@ def convert(plan: dict, conversions: dict[str, dict], *, required: bool = True) 
     for copy_id, conversion in sorted(conversions.items()):
         source = conversion["source"]
         target = slot(copy_id)
+        mandatory = (
+            policy.mandatory(
+                tuple(conversion["subnets"]), plan["infrastructure"].get("enforced_sources", {})
+            )
+            if policy
+            else {}
+        )
         plan["requests"][table_label(copy_id)] = request_record(
             CreateRouteTableRequest(
                 metadata=ResourceMetadata(
@@ -79,6 +97,7 @@ def convert(plan: dict, conversions: dict[str, dict], *, required: bool = True) 
             if (
                 original["type"] == "CreateRouteRequest"
                 and original["request"]["metadata"]["parent_id"] == source
+                and original["request"]["spec"]["destination"]["cidr"] not in mandatory
             ):
                 plan["requests"]["create-" + digest([copy_id, label])[:32]] = {
                     **deepcopy(original),
@@ -90,18 +109,56 @@ def convert(plan: dict, conversions: dict[str, dict], *, required: bool = True) 
                 # Relinquish original-table authority only after the complete
                 # copy/attachment transaction; never delete from a shared table.
                 plan["released"].append(identifier)
-            if identifier in retired:
+            if identifier in retired or identifier in plan.get("ha_conversion", {}).get(
+                "routes", {}
+            ):
                 continue
+            destination = original["request"]["spec"]["destination"]["cidr"]
+            if destination in mandatory:
+                continue  # Exact predecessor is retained in the frozen conversion.
+            if any(
+                ipaddress.IPv4Network(destination).subnet_of(ipaddress.IPv4Network(p))
+                and original["request"]["spec"].get("next_hop", {}).get("allocation", {}).get("id")
+                != plan["allocations"].get(str(index))
+                for p, index in mandatory.items()
+            ):
+                raise RuntimeError(
+                    "Enforced coverage conflicts with a more-specific predecessor route"
+                )
             record = deepcopy(original)
             record["table_source"] = copy_id
             record["copy_of"] = identifier
             if owned:
                 record["instance_index"] = owned["instance_index"]
             plan["requests"]["copy-" + digest([copy_id, identifier])[:32]] = record
+        for destination, index in mandatory.items():
+            allocation = plan["allocations"].get(str(index))
+            if not allocation:
+                raise RuntimeError("Enforced destination lacks an exact gateway allocation")
+            key = digest([copy_id, destination])[:32]
+            plan["requests"]["enforce-" + key] = request_record(
+                CreateRouteRequest(
+                    metadata=ResourceMetadata(parent_id=source, name="vpngw-" + key),
+                    spec=RouteSpec(
+                        destination=DestinationMatch(cidr=destination),
+                        next_hop=NextHop(allocation=AllocationNextHop(id=allocation)),
+                    ),
+                ),
+                instance_index=index,
+                replaces=None,
+                table_source=copy_id,
+            )
+            plan["coverage"][key] = {
+                "table": target,
+                "destination": destination,
+                "allocation": allocation,
+                "kind": "create",
+                "route": None,
+            }
         for subnet, record in sorted(conversion["subnets"].items()):
             plan["requests"]["attach-" + subnet] = {**deepcopy(record), "table_source": copy_id}
         for key, item in original_coverage.items():
-            if item["table"] == source:
+            if item["table"] == source and item["destination"] not in mandatory:
                 plan["coverage"][digest([copy_id, key])] = {**item, "table": target}
     plan["released"] = sorted(set(plan["released"]))
     return plan

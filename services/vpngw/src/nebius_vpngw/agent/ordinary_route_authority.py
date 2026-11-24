@@ -218,6 +218,14 @@ class RouteAuthority:
             if ledger._before is not None:
                 ledger.archive()
             ledger.state["bindings"] = deepcopy(journal_state["bindings"])
+            if journal_state.get("enforced_predecessors"):
+                ledger.state["enforced_predecessors"] = deepcopy(
+                    journal_state["enforced_predecessors"]
+                )
+            else:
+                ledger.state.pop("enforced_predecessors", None)
+            if journal_state.get("ha_route_source"):
+                ledger.state["ha_route_source"] = journal_state["ha_route_source"]
             ledger.state["transaction"] = None
             ledger.save()
         return self.snapshot()
@@ -434,7 +442,9 @@ def action(request: dict) -> dict:
                 raise RouteAuthorityConflict(
                     "Installed configuration changed before runtime retirement"
                 )
-            return owner.retire(request["holder"], request["generation"], request["journal"])
+            result = owner.retire(request["holder"], request["generation"], request["journal"])
+            _retire_enforcement()
+            return result
         desired = binding.validate(request["binding"])
         binding.authority(
             desired, ordinary.CONFIG.read_bytes(), operations.BOOT.read_text().strip()
@@ -447,4 +457,24 @@ def action(request: dict) -> dict:
         from ..routing_semantics import bind_ordinary_locked
 
         bind_ordinary_locked(desired)
-        return owner.release(request["holder"], desired, request["journal"])
+        result = owner.release(request["holder"], desired, request["journal"])
+        _retire_enforcement()
+        return result
+
+
+def _retire_enforcement() -> None:
+    """Called under the guest lock after importing the settled cloud receipt."""
+    import yaml
+
+    from . import ordinary
+
+    cfg = yaml.safe_load(ordinary.CONFIG.read_bytes())
+    if not isinstance(cfg, dict):
+        raise RouteAuthorityConflict("Enforcement retirement requires ordinary configuration")
+    if cfg.get("vm_ha") is not None:
+        if ordinary.destination_protection(cfg).enforced().read():
+            raise RouteAuthorityConflict(
+                "HA handoff must transfer ordinary enforcement before retirement"
+            )
+        return
+    ordinary.destination_protection(cfg).enforced().retire()

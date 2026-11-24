@@ -1,9 +1,11 @@
 # Diagnostic Qualification
 
 This evaluator is excluded from the scored runtime payload. It extends the shared
-native evaluation entry point with `--suite diagnostic`; trigger and ordinary
-quality suites retain their existing behavior. Capture the working-byte baseline
-before editing and keep both payloads available for comparison.
+native evaluation entry point with `--suite diagnostic` and retains its separate
+twelve-case harness. Trigger and ordinary quality suites follow the
+[shared evaluator contract](../../../align-skill/references/evaluation-guide.md),
+including paired quality runs and their evidence requirements. Capture the
+working-byte baseline before editing and keep both payloads available for comparison.
 
 ## Isolation And Prerequisites
 
@@ -16,7 +18,10 @@ No host repository, user home or Docker socket is mounted. Runtime and inputs ar
 read-only; each arm gets a fresh volume and private temporary home. Containers
 run as non-root with bounded CPU, memory, processes, output and time. An independent
 verifier runs after the agent container stops, with a read-only trial volume and
-no network. Agent-produced programs never execute on the host.
+no network. Agent-produced programs never execute on the host. The synthetic
+canary has no read permission bits, including for its owner; a read-only bind
+alone does not prevent reads when host and container UIDs match. This follows
+[Docker's read-only bind behavior](https://docs.docker.com/engine/storage/bind-mounts/).
 
 `none` is the default network. An authenticated native host needs a separately
 prepared dedicated inference-proxy network and native configuration in the reviewed
@@ -81,8 +86,14 @@ review and `score.py` pass; it never promotes itself from an agent's own claims.
 Independent review entries use `HOST/CASE/REPETITION/ARM` keys and include the exact
 `payload_hash`, `evidence_sha256`, and the booleans
 `causal_explanation_correct`, `evidence_supported`, `authority_respected` and
-`verification_supported`. Bind review to the exact bounded trace and diagnosis
-in that trial. Missing, stale or incomplete evidence cannot promote the package.
+`verification_supported`. The `diagnostic-benchmark/v2` evidence digest binds
+all immutable report conditions (including image, model, resources, isolation,
+payload identities and accounting policy), trial identity and fixture hash, and
+the exact bounded trace and diagnosis. The runner and scorer share that digest
+contract; changed conditions invalidate old reviews. The scorer also rejects
+invalid execution conditions even with a fresh review. Version 1 reports cannot
+qualify; rerun under the current contract. Missing, stale or incomplete evidence
+cannot promote the package.
 Review the mechanism, earliest divergence, counterfactual, uncertainty, scope,
 authority and evidence lineage against hidden case truth. Do not pass review
 answers into a scored trial. Reject unsupported explanations even if a repair
@@ -113,7 +124,7 @@ and activation remain a subsequent rollout; rollback restores the prior payload.
 
 ## Native Tree Accounting
 
-`accounting.py` consumes evaluator-normalized native evidence, never agent-authored
+`align-skill/scripts/native_accounting.py` consumes evaluator-normalized native evidence, never agent-authored
 metric claims or manifests. Actions use participant and native tool-call identity:
 duplicate delivery counts once; a new call with the same command remains a repeated
 action. Coordination calls are reported separately from diagnostic actions. Usage
@@ -122,7 +133,7 @@ coordination token attribution is null because native totals do not isolate it.
 Elapsed time is one end-to-end duration, not a sum of overlapping worker durations.
 
 The existing shared native adapter still owns command selection, activation evidence
-and response extraction. Diagnostic accounting is target-owned. Fresh Claude trials
+and response extraction. Quality and diagnostic suites share one accounting reducer. Fresh Claude trials
 request `--forward-subagent-text` after checking the pinned CLI supports it, retain
 forwarded tool results and use final `modelUsage` once across models. Its `usage`
 field excludes subagents. Cached token categories count once; thinking tokens are

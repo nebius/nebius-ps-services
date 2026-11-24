@@ -38,7 +38,9 @@ def _parser() -> argparse.ArgumentParser:
     publish_parser.add_argument("--project-root", type=Path, required=True)
     publish_parser.add_argument("--requirements-candidate", type=Path, required=True)
     publish_parser.add_argument("--design-candidate", type=Path, required=True)
-    publish_parser.add_argument("--expected-head", required=True)
+    basis = publish_parser.add_mutually_exclusive_group(required=True)
+    basis.add_argument("--expected-head")
+    basis.add_argument("--expected-filesystem-basis")
     publish_parser.add_argument("--expected-requirements-sha256", required=True)
     publish_parser.add_argument("--expected-design-sha256", required=True)
     publish_parser.add_argument("--operation-id", required=True)
@@ -80,6 +82,7 @@ def main(argv: list[str]) -> int:
                 requirements_candidate=requirements,
                 design_candidate=design,
                 expected_git_head=args.expected_head,
+                expected_filesystem_basis=args.expected_filesystem_basis,
                 expected_requirements_sha256=args.expected_requirements_sha256,
                 expected_design_sha256=args.expected_design_sha256,
                 operation_id=args.operation_id,

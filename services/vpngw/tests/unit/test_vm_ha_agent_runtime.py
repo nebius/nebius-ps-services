@@ -525,7 +525,7 @@ def test_controller_status_proves_processed_quiescent_mtls_inhibition(tmp_path: 
         "vm-ha-mtls-rotation-quiescence-v1",
         "vm-ha-live-peer-replacement-v5",
         "vm-ha-standby-replacement-inhibition-v2",
-        "vm-ha-standby-restoration-v2",
+        "vm-ha-standby-restoration-v3",
     ]
     assert status["transfer_inhibition_operation_id"] == operation_id
     assert status["transfer_inhibition_quiescent"] is True
@@ -7220,3 +7220,128 @@ def test_periodic_ha_maintenance_waits_for_transient_writer_and_rechecks_authori
     # Every acquired descriptor was released, including the inhibited return.
     with ha_repair.writer_locks(state, deadline=time.monotonic() + 0.1):
         pass
+
+
+def test_tunnel_authority_projection_is_fresh_and_preserves_full_publication(tmp_path):
+    from dataclasses import replace
+
+    events = []
+    now = [10.0]
+    owner = ["node-a"]
+    apply_owner = [None]
+    ready = [LocalReadiness(True, True, True, True, protection_ready=True)]
+    guard = tmp_path / "guard.json"
+    guard.write_text(json.dumps({"guard_boot_id": "boot-a"}))
+    base = CloudObservation(
+        True, "allocation-a", "node-a", "node-b", ComputeState.STOPPED, True, True, True, "7"
+    )
+
+    def cloud():
+        events.append("cloud")
+        now[0] += 1
+        return replace(base, observed_owner_node_id=owner[0])
+
+    def route(kind):
+        events.append(kind)
+        now[0] += 9  # Repeated route collection would expire confirmation proofs.
+        return None
+
+    published = []
+    adapter = VMHASnapshotAdapter(
+        config=_runtime_config(),
+        providers=VMHASnapshotProviders(
+            peer=lambda: (None, now[0]),
+            readiness=lambda: ready[0],
+            cloud=cloud,
+            data_plane=lambda: DataPlaneMode.ACTIVE,
+            routes=lambda: route("routes"),
+            established_routes=lambda: route("established"),
+            apply_lock_operation_id=lambda: apply_owner[0],
+        ),
+        state_dir=tmp_path,
+        clock=lambda: now[0],
+        boot_id=lambda: "boot-a",
+    )
+    adapter.observation_observer = published.append
+    full = adapter.observe()
+    assert events == ["cloud", "routes", "established"] and published == [full]
+    events.clear()
+    started = now[0]
+    apply_owner[0] = "new-writer"
+    ready[0] = LocalReadiness(False, False, False, False)
+    guard.write_text(json.dumps({"guard_boot_id": "changed-boot"}))
+    narrow = adapter.observe_tunnel_authority()
+    assert events == ["cloud"] and now[0] - started == 1
+    assert narrow.apply_locked and not narrow.readiness.service_healthy
+    assert narrow.guard_boot_id == "changed-boot"
+    assert narrow.peer_received_at == narrow.now == now[0]
+    assert adapter.last_snapshot is full and published == [full]
+    assert adapter.last_apply_operation_id is None
+    assert narrow.routes_reconciled_context is None
+    assert narrow.established_routes_context is None
+    owner[0] = "node-b"
+    assert adapter.observe_tunnel_authority().cloud.observed_owner_node_id == "node-b"
+    assert events == ["cloud", "cloud"]
+    assert adapter.last_snapshot is full and published == [full]
+    events.clear()
+    updated = adapter.observe()
+    assert events == ["cloud", "routes", "established"]
+    assert adapter.last_snapshot is updated and published == [full, updated]
+    assert adapter.last_apply_operation_id == "new-writer"
+
+
+@pytest.mark.parametrize("collector", ["routes", "established"])
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [(False, True), (True, False), (True, None)],
+    ids=["hygiene-recovered", "hygiene-became-unsafe", "native-observation-lost"],
+)
+def test_snapshot_native_readiness_reflects_changes_during_route_collection(
+    tmp_path: Path, collector: str, before: bool, after: bool | None
+) -> None:
+    """Slow cloud reads must not publish obsolete local safety observations."""
+    native_hygiene = [before]
+    now = [10.0]
+    (tmp_path / "guard.json").write_text(json.dumps({"guard_boot_id": "boot-a"}))
+    cloud = CloudObservation(
+        True, "allocation-a", "node-a", "node-b", ComputeState.STOPPED, True, True, True, "7"
+    )
+
+    def route(kind):
+        now[0] += 5
+        if kind == collector:
+            # Model DHCP/maintenance or native-read failure while the cloud
+            # route observation is in flight, without altering controller state.
+            native_hygiene[0] = after
+        return None
+
+    def readiness():
+        value = native_hygiene[0]
+        return LocalReadiness(
+            True,
+            True,
+            True,
+            True,
+            protection_ready=True,
+            routing_hygiene_ready=value is True,
+            sample_complete=value is not None,
+        )
+
+    adapter = VMHASnapshotAdapter(
+        config=_runtime_config(),
+        providers=VMHASnapshotProviders(
+            peer=lambda: (None, now[0]),
+            readiness=readiness,
+            cloud=lambda: cloud,
+            data_plane=lambda: DataPlaneMode.ACTIVE,
+            routes=lambda: route("routes"),
+            established_routes=lambda: route("established"),
+        ),
+        state_dir=tmp_path,
+        clock=lambda: now[0],
+        boot_id=lambda: "boot-a",
+    )
+    snapshot = adapter.observe()
+    assert snapshot.readiness.routing_hygiene_ready is (after is True)
+    assert snapshot.readiness.sample_complete is (after is not None)
+    assert snapshot.readiness.promotion_ready is (after is True)

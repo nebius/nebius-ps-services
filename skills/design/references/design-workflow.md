@@ -1,9 +1,72 @@
 # Design Workflow Reference
 
-Use this reference for medium or deep designs, greenfield applications,
+Use this reference for standard or deep designs, greenfield applications,
 multiple unfamiliar technologies, unclear architecture choices, non-trivial
 `system-design-rules` decision review, or any design that will become a
 committed artifact.
+
+## Choose An Approach Within The Existing Phases
+
+Use the following provisional approach for each consequential decision, not one
+label for the whole project. It is independent of light/standard/deep design,
+urgency, technical routing and authority. Explain the practical consequence to
+the user when useful; do not require a taxonomy essay or a second decision ledger.
+
+| Evidence about the decision | Next useful work | Reconsider when |
+| --- | --- | --- |
+| A known pattern fits verified constraints and context | Check fit, mentally trace normal and failure paths, then use the adequate candidate | A version, interface, workload or failure assumption differs |
+| A mechanism or tradeoff is discoverable through analysis | Inspect dependencies, compare meaningful alternatives and consult the owning specialist | Analysis exposes interacting unknowns or contradicts the model |
+| Interactions prevent a reliable prediction | Plan a bounded reversible probe with signals, limits, rollback and next branches | Probe evidence supports a narrower decision or shows unacceptable effects |
+| Context is insufficient or contradictory | Gather the cheapest reliable evidence that changes the decision | The evidence supports one of the approaches above |
+
+These adapt Cynefin sensemaking, recognition-primed decision making and bounded
+rationality. They are heuristics, not a validated combined algorithm or a promise
+of faster model performance. A crisis can concern a clear mechanism; urgency does
+not establish chaos. Stabilization needs existing exact authority and the incident
+owner. Design-only work plans experiments; it does not execute them.
+
+### Check Recognition Before Reuse
+
+Start from a relevant implemented pattern or evidence-backed prior solution.
+Check requirements, interfaces, versions/configuration, scale, security/data
+boundaries, failure modes, affected consumers and contradictory evidence. Trace
+how the candidate meets acceptance criteria and what would falsify its suitability.
+If it fails, revise or reject it and compare the next adequate candidate. Do not
+mistake model fluency or subjective confidence for experienced human recognition.
+An unfamiliar or misleadingly familiar context calls for analysis or learning.
+
+### Bound Search Without Weakening Acceptance
+
+Screen hard constraints before scoring preferences. Investigate an unknown only
+when resolving it could change the selected option, feasibility, safety, acceptance,
+rollout or reversibility. Reuse still-valid evidence and completed specialist work.
+Prefer the first adequately supported option satisfying all hard constraints over
+an exhaustive search for a theoretical optimum. Retain baseline, recommendation
+and a meaningful simpler/conservative alternative; do not invent redundant options.
+
+Stop expanding research after requirements are covered, relevant tradeoffs are
+understood and no material decision-changing gap remains. This does not waive
+required source verification or review. Conflicting hard constraints mean an
+explicit unresolved decision, not silent relaxation. Limited time can justify a
+provisional plan with a named gap, never a false implementation-ready claim.
+
+For uncertain interaction behavior, plan the minimum informative validation:
+question, expected signals, bounded target, effects/authority, timeout, rollback,
+acceptance criteria, branches and revisit trigger. Prefer reversible commitments
+until the evidence warrants harder-to-reverse ones. New evidence reopens only the
+affected decision and its dependents; it does not restart every phase, discard
+accepted constraints or recursively reselect another owner's components.
+
+### Source Basis And Limits
+
+- [Cynefin authors: sensemaking and domain approaches](https://thecynefin.co/effective-decision-making-support-tool)
+- [Klein: recognition-primed decisions](https://www.gary-klein.com/rpd)
+- [Kahneman and Klein: conditions for intuitive expertise](http://www.hansfagt.dk/Kahneman_and_Klein(2009).pdf)
+- [Simon: bounded rationality and satisficing](https://www.nobelprize.org/uploads/2018/06/simon-lecture.pdf)
+
+Human decision research motivates these checks. Native paired evaluations must
+establish whether they improve this skill; lower instruction size alone is not
+latency or quality evidence.
 
 ## AI Application Control-Flow Rule
 
@@ -19,45 +82,10 @@ sufficient level:
    observations, including an unknown step count controlled by the model, or
    the task needs a model-driven observe-act-observe loop.
 
-Use this decision table:
-
-| Question | If yes | If no |
-| --- | --- | --- |
-| Is model judgment unnecessary? | Deterministic code | Continue |
-| Can one model request solve the task? | Direct model call | Continue |
-| Does application code own the operation and continuation rules? | Deterministic workflow | Continue |
-| Must the model choose which application tool or action to use? | Agent candidate | Normal workflow |
-| Must the model decide the next step from previous results? | Agent | Workflow |
-| Must the model decide whether an unknown-count loop continues? | Agent | Workflow |
-| Does the task need a model-driven observe-act-observe loop? | Agent | Direct call or workflow |
-| Does it require delegation between specialists? | An agent runtime may help | Probably unnecessary |
-| Does it require persistent agent sessions? | An agent runtime may help | Direct API may suffice |
-| Is latency or cost predictability critical? | Prefer direct call or workflow | Agent may be acceptable |
-
-Apply this tree in order:
-
-```text
-New task
-  -> Is model judgment required?
-       no  -> deterministic code
-       yes -> Can one model call solve it?
-                yes -> direct model API
-                no  -> Do we know the steps?
-                         yes -> deterministic workflow, with model calls
-                         no  -> Must the model choose actions or next steps?
-                                  yes -> agent
-                                  no  -> deterministic workflow
-```
-
-The application architecture can use all four behavior classes at once:
-
-```text
-Application
-  -> deterministic code
-  -> direct model calls
-  -> deterministic AI workflows
-  -> agentic tasks
-```
+Choose the first sufficient class in order. Tool use, several model calls,
+delegation, persistent sessions or a workflow graph do not by themselves require
+model autonomy. If latency or cost predictability matters, prefer direct calls or
+known workflows where they meet the requirements.
 
 Keep APIs, PostgreSQL or other authoritative state, RBAC, approvals, tool
 authorization, and known business transitions outside model discretion.
@@ -128,17 +156,21 @@ Inspect all relevant prototype code. Only skip source discovery when no
 relevant implementation exists; then design from requirements and intended
 deployment or operating context without inventing local constraints.
 
-### 3. Use `research` For Missing Knowledge
+### 3. Research Every Requirement And Design Item
 
-List unfamiliar or version-sensitive facts before designing. When the
-`research` skill is installed and relevant, use it for topic,
-feature-requirement, architecture-pattern, product, standard, and technology
-due diligence. Bring the resulting evidence back into `design` for synthesis,
-option selection, and `/plan` creation.
+Always load and apply `research` for each design, at proportional depth. Inventory
+requirements, decisions and technical claims; ensure every item has an evidence
+assessment. Group related questions and reuse still-applicable sources instead
+of repeating fresh lookups per item. Validate product intent against accepted
+local evidence and acceptance methods; validate technical feasibility, versions,
+constraints and failure behavior against primary sources. Keep unsupported claims
+explicit. A simple design can use one bounded pass; a draft package uses the
+source-bound review ledger in document-extraction.md.
 
-Only do direct research inside `design` for tiny clarifications or when
-`research` is unavailable or not applicable. In that fallback path, research
-against current official documentation whenever available.
+If the skill is unavailable, disclose that limit, follow its source hierarchy
+with available tools and never claim the required consultation occurred. Do not
+install integrations or guess missing evidence. Research returns facts and
+uncertainty; design owns selected solutions and implementation readiness.
 
 Use official-source priority:
 
@@ -432,57 +464,29 @@ handoff rather than writing specs yourself or inventing a lifecycle gate.
 Preserve enclosing workflow gates. Commits, publishing, scaffolding workflows
 and live changes retain their existing owners and authorization boundaries.
 
-## Depth Guidance
+## Measured progress for every design
 
-Use `light` when all are true: local change, no new state, no new external
-dependency, low reversibility cost, and existing patterns are obvious.
+Capture the start timestamp before intake and report total elapsed wall time at
+completion. Use real clock observations, not estimated duration. During work,
+report stage and current layer/item group, reviewed/total items when the denominator
+is known, open findings and elapsed HH:MM:SS. A text bar represents reviewed-item
+coverage, not readiness or time remaining. Before inventory is complete, show
+counts with an unknown denominator. Do not silently reset counts on scope changes.
+The private helper preserves omitted layer, count and finding fields on stage or
+resume updates. Use `--unknown-total` to explicitly clear a known denominator
+when scope discovery resumes; state the reason for any explicit count revision.
 
-Use `standard` when any are true: user-facing behavior, public or internal API,
-data model change, new workflow, integration, migration, or meaningful testing
-strategy.
+Update at stage transitions, material findings and within 60 seconds while the
+agent controls execution. Use yielding calls where available; report delayed
+updates after non-yielding calls. Small designs need only start and completion.
+No terminal animation, background process or custom host widget is required.
 
-Use `deep` when any are true: security boundary, sensitive data, production
-migration, irreversible schema or API change, high scale, compliance, cross-team
-ownership, new platform, or costly rollback.
-
-## Common Handoffs
-
-- Open-ended idea still needs exploration: summarize and hand off to
-  `brainstorm`.
-- Existing proposal needs critique: summarize and hand off to
-  `system-design-rules`.
-- Non-trivial design needs a decision checklist before plan handoff: use
-  `system-design-rules` inside the `design` workflow, then return to synthesis
-  and `/plan` creation.
-- Active Agentic SDLC run owns committed requirements/design: route to
-  `sdlc-create-design` or `sdlc-create-plan`.
-- Design is complete and implementation was explicitly requested: follow the
-  optional continuation when host mode permits, using the relevant specialist.
-  Otherwise return the plan without code writes.
-- Canonical design persistence or documentation drift: return decisions and
-  corrections to `maintain-project-specs`, the sole canonical document writer.
-- Approved design needs a complete or multi-component repository skeleton:
-  include the scaffold handoff and route the authorized creation through
-  `scaffold-project`, including single-component creation. Do not scaffold directly or start Agentic SDLC.
-- Design needs substantial topic, feature-requirement, product, standard, or
-  technology due diligence: use `research`, then return to `design` for
-  synthesis and `/plan` handoff.
-- Design needs to select or reconsider the application stack or technology for
-  any layer: use `app-stack`, then return to `design` for cross-layer synthesis
-  and `/plan` handoff.
-- Design needs agent-subsystem behavior, topology, policy, or contracts: use
-  `ai-agent-design`; it calls `ai-stack` for component selection, then returns
-  the complete subsystem to `design` for cross-layer synthesis and `/plan`.
-- Design needs only model access, training, inference, interoperability,
-  retrieval, or AI technology selection: use `ai-stack` directly, then return
-  to `design` for cross-layer synthesis and `/plan` handoff.
-- The application stack is approved and no stack decision remains: keep the
-  fixed stack and continue `design` without `app-stack`.
-- Nebius services, infrastructure or integrations affect the solution, even
-  with a fixed provider: use the `nebius` design-only consultation before
-  finalizing dependent choices, then return its guidance to `design`.
-- An applicable specialist is unavailable: use `research` for official-first
-  evidence and marked community fallback, then synthesize in `design` without
-  claiming specialist execution or bypassing authorization boundaries.
-- Design exposes changed docs or contracts after implementation: run `align` on
-  the changed surfaces.
+The extraction helper records observed wall-clock intervals and phase durations.
+Resumed wall time includes the interruption; explain long gaps and do not sum
+parallel durations. Pass the private helper's `progress --resume` after an
+interruption. The gap contributes to total wall time and `unobserved_seconds`,
+not a phase.
+Keep progress state in private scratch and the concise resume pointer in existing
+task state.
+Research and normal design can use the same helper when available; otherwise
+use observed timestamps and equivalent chat output without inventing precision.

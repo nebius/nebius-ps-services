@@ -8305,7 +8305,7 @@ def test_vm_ha_status_validation_binds_generation_runtime_and_apply_lock() -> No
     )
     payload = {
         "schema": "nebius-vpngw/vm-ha-status-v1",
-        "controller_capabilities": ["vm-ha-standby-restoration-v2"],
+        "controller_capabilities": ["vm-ha-standby-restoration-v3"],
         "cluster_id": "cluster-a",
         "node_id": "node-a",
         "configured_role": "active",
@@ -8417,7 +8417,7 @@ def test_vm_ha_status_validation_uses_runtime_generation_when_psk_is_unresolved(
     )
     payload = {
         "schema": "nebius-vpngw/vm-ha-status-v1",
-        "controller_capabilities": ["vm-ha-standby-restoration-v2"],
+        "controller_capabilities": ["vm-ha-standby-restoration-v3"],
         "cluster_id": "cluster-a",
         "node_id": "node-a",
         "configured_role": "active",
@@ -8497,7 +8497,7 @@ def test_vm_ha_display_status_validates_every_controller_and_rearm_state(
     is_owner = rearm_phase != "not-owner"
     payload = {
         "schema": "nebius-vpngw/vm-ha-status-v1",
-        "controller_capabilities": ["vm-ha-standby-restoration-v2"],
+        "controller_capabilities": ["vm-ha-standby-restoration-v3"],
         "cluster_id": "cluster-a",
         "node_id": "node-b",
         "configured_role": "passive",
@@ -8647,7 +8647,7 @@ def test_vm_ha_planned_status_requires_exact_runtime_and_standby_evidence() -> N
     )
     payload = {
         "schema": "nebius-vpngw/vm-ha-status-v1",
-        "controller_capabilities": ["vm-ha-standby-restoration-v2"],
+        "controller_capabilities": ["vm-ha-standby-restoration-v3"],
         "cluster_id": "cluster-a",
         "node_id": "node-b",
         "configured_role": "passive",
@@ -8926,7 +8926,7 @@ def test_missing_standby_plan_waits_for_exact_identity_preflight(pending_samples
     )
     ready = {
         "schema": "nebius-vpngw/vm-ha-status-v1",
-        "controller_capabilities": ["independent-heartbeat-v6", "vm-ha-standby-restoration-v2"],
+        "controller_capabilities": ["independent-heartbeat-v6", "vm-ha-standby-restoration-v3"],
         "cluster_id": "cluster-a",
         "node_id": "node-a",
         "configured_role": "active",
@@ -9618,6 +9618,90 @@ def test_vm_ha_cloud_authority_binds_owner_members_alias_and_routes() -> None:
     }
     assert _vm_ha_cloud_authority(two_target_state, complete_routes).condition == "exact"
 
+    # Enforced routes are mandatory only on their declared source subnets.
+    # The same finite prefix may remain an ordinary route on unselected sources.
+    enforced_prefix = "192.0.2.0/24"
+    enforced_plan = {
+        "project": state.project_id,
+        "gateway": state.gateway_name,
+        "cluster": state.cluster_id,
+        "allocation": state.allocation_id,
+        "targets": [target, second_target],
+        "desired": {target["workload_subnet_id"]: [enforced_prefix]},
+        "sources": {},
+        "requests": {},
+        "predecessors": {},
+        "ordinary_sources": {},
+        "ordinary_predecessors": {},
+    }
+    enforced_state = replace(
+        two_target_state,
+        transaction=replace(
+            two_target_state.transaction,
+            resource_bindings=tuple(
+                sorted(
+                    [
+                        *two_target_state.transaction.resource_bindings,
+                        ("enforced-route-plan", json.dumps(enforced_plan)),
+                    ]
+                )
+            ),
+        ),
+    )
+    selected_route = {
+        **observation["routes"][0],
+        "prefix": enforced_prefix,
+        "authority_labels": NebiusSDKRouteBackend._authority_labels(
+            cluster_id=state.cluster_id,
+            allocation_id=state.allocation_id,
+            route_target=VMHARouteTarget.model_validate(target),
+            route_kind="enforced",
+        ),
+    }
+    selected_only = {**complete_routes, "routes": [*complete_routes["routes"], selected_route]}
+    assert _vm_ha_cloud_authority(enforced_state, selected_only).condition == "exact"
+    shared_route = {**complete_routes["routes"][1], "prefix": enforced_prefix}
+    shared = {**selected_only, "routes": [*selected_only["routes"], shared_route]}
+    assert _vm_ha_cloud_authority(enforced_state, shared).condition == "exact"
+    assert (
+        _vm_ha_cloud_authority(
+            enforced_state, {**selected_only, "routes": [selected_route]}
+        ).condition
+        == "exact"
+    )
+    # Ordinary BGP withdrawal leaves the persistent selected route valid.
+    assert _vm_ha_cloud_authority(enforced_state, selected_only).condition == "exact"
+    for invalid in (
+        complete_routes,  # missing selected route
+        {**complete_routes, "routes": [*complete_routes["routes"], shared_route]},
+        {**shared, "routes": [*shared["routes"], {**selected_route, "prefix": "198.51.100.0/24"}]},
+        {**shared, "routes": [*shared["routes"], {**shared_route, "prefix": "203.0.113.0/24"}]},
+    ):
+        assert _vm_ha_cloud_authority(enforced_state, invalid).condition == "blocked"
+    assert _vm_ha_cloud_authority(two_target_state, selected_only).condition == "blocked"
+    for change in (
+        {"cluster": "foreign"},
+        {"allocation": "foreign"},
+        {"desired": {"unknown-subnet": [enforced_prefix]}},
+        {"desired": {target["workload_subnet_id"]: ["192.0.2.1/24"]}},
+    ):
+        bad_state = replace(
+            enforced_state,
+            transaction=replace(
+                enforced_state.transaction,
+                resource_bindings=tuple(
+                    sorted(
+                        [
+                            *two_target_state.transaction.resource_bindings,
+                            ("enforced-route-plan", json.dumps({**enforced_plan, **change})),
+                        ]
+                    )
+                ),
+            ),
+        )
+        with pytest.raises(ValueError):
+            _vm_ha_cloud_authority(bad_state, selected_only)
+
     wrong_next_hop = {
         **complete_routes,
         "routes": [dict(route) for route in complete_routes["routes"]],
@@ -9671,7 +9755,7 @@ def _vm_ha_view_record(
     peer_node_id = "node-passive" if node_id == "node-active" else "node-active"
     return {
         "node_id": node_id,
-        "controller_capabilities": ["vm-ha-standby-restoration-v2"],
+        "controller_capabilities": ["vm-ha-standby-restoration-v3"],
         "generation_id": "a" * 64,
         "digests": {
             "configuration": "a" * 64,

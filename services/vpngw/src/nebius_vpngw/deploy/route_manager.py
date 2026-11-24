@@ -13,6 +13,9 @@ from pathlib import Path
 
 from rich import print
 
+if t.TYPE_CHECKING:
+    from nebius.api.nebius.vpc.v1 import Route, Subnet
+
 from ..config_loader import ResolvedDeploymentPlan, connection_static_remote_prefixes
 from ..nebius_pagination import collect_nebius_pages, nebius_resource_id
 from ..schema import VMHAMigrationRouteBinding, VMHARouteTarget
@@ -334,23 +337,26 @@ class NebiusSDKRouteBackend:
             AllocationNextHop,
         )
 
-    def _raw_routes(self, route_table_id: str) -> tuple[object, ...]:
+    def _raw_routes(self, route_table_id: str) -> tuple[Route, ...]:
         client_type, list_request, *_rest = self._client_types()
         client = client_type(self.sdk)
         with vm_ha_observation_budget():
-            return collect_nebius_pages(
-                lambda page_token: read_vm_ha_cloud(
-                    lambda kwargs: client.list(
-                        list_request(
-                            parent_id=route_table_id,
-                            page_size=1000,
-                            page_token=page_token,
-                        ),
-                        **kwargs,
-                    ).wait()
+            return t.cast(
+                "tuple[Route, ...]",
+                collect_nebius_pages(
+                    lambda page_token: read_vm_ha_cloud(
+                        lambda kwargs: client.list(
+                            list_request(
+                                parent_id=route_table_id,
+                                page_size=1000,
+                                page_token=page_token,
+                            ),
+                            **kwargs,
+                        ).wait()
+                    ),
+                    context="VM HA route",
+                    item_identity=nebius_resource_id,
                 ),
-                context="VM HA route",
-                item_identity=nebius_resource_id,
             )
 
     def verify_target(self, target: VMHARouteTarget) -> None:
@@ -2304,6 +2310,8 @@ class RouteManager:
         authority: VMHAStaticRouteAuthority,
         expected_prefixes: frozenset[str],
         sdk: t.Any,
+        *,
+        enforced_by_subnet: t.Mapping[str, frozenset[str]] | None = None,
     ) -> bool:
         """Independently prove exact current-cluster static routes in VPC."""
 
@@ -2317,11 +2325,14 @@ class RouteManager:
             (target, prefix): 0
             for target in authority.route_targets
             for prefix in expected_prefixes
+            | (enforced_by_subnet or {}).get(target.workload_subnet_id, frozenset())
         }
         authority_keys = backend._AUTHORITY_LABEL_KEYS
         cluster_fingerprint = backend._authority_fingerprint(authority.cluster_id)
         allocation_fingerprint = backend._authority_fingerprint(authority.allocation_id)
         for target in authority.route_targets:
+            mandatory = (enforced_by_subnet or {}).get(target.workload_subnet_id, frozenset())
+            required = expected_prefixes | mandatory
             target_payload = json.dumps(
                 target.model_dump(mode="json"),
                 sort_keys=True,
@@ -2345,11 +2356,13 @@ class RouteManager:
                     ) from error
                 present_authority_keys = authority_keys & labels.keys()
                 current_static = False
+                current_enforced = False
                 if present_authority_keys:
                     labels_well_formed = bool(
                         authority_keys <= labels.keys()
                         and labels.get(backend._AUTHORITY_MANAGED_LABEL) == "vm-ha-v1"
-                        and labels.get(backend._AUTHORITY_KIND_LABEL) in {"bgp", "static"}
+                        and labels.get(backend._AUTHORITY_KIND_LABEL)
+                        in {"bgp", "static", "enforced"}
                         and all(
                             re.fullmatch(r"[0-9a-f]{32}", labels.get(key, ""))
                             for key in (
@@ -2375,6 +2388,7 @@ class RouteManager:
                                 "allocation authority."
                             )
                         current_static = labels[backend._AUTHORITY_KIND_LABEL] == "static"
+                        current_enforced = labels[backend._AUTHORITY_KIND_LABEL] == "enforced"
                 if prefix_network is None:
                     if present_authority_keys:
                         raise RouteManagementError(
@@ -2386,9 +2400,13 @@ class RouteManager:
                     raise RouteManagementError(
                         "The VPC route table contains an extra current-cluster static route."
                     )
-                if prefix not in expected_prefixes:
+                if current_enforced and prefix not in mandatory:
+                    raise RouteManagementError(
+                        "The VPC route table contains an extra enforced route."
+                    )
+                if prefix not in required:
                     continue
-                if not current_static:
+                if not (current_enforced if prefix in mandatory else current_static):
                     raise RouteManagementError(
                         f"A foreign route already occupies required destination {prefix}."
                     )
@@ -3520,6 +3538,32 @@ class RouteManager:
                 "Could not initialize the independent VM-HA route observation."
             ) from error
 
+        from ..enforced_routing import compile_policies, resolve_sources
+
+        enforcement = compile_policies(local_cfg)
+        enforced_by_subnet: dict[str, frozenset[str]] = {}
+        if enforcement:
+            from nebius.api.nebius.vpc.v1 import GetSubnetRequest, SubnetServiceClient
+
+            subnets = {}
+            for target in authority.route_targets:
+                subnet = (
+                    SubnetServiceClient(sdk)
+                    .get(GetSubnetRequest(id=target.workload_subnet_id), **vm_ha_request_kwargs())
+                    .wait()
+                )
+                if subnet.spec.ipv4_private_pools.use_network_pools:
+                    continue
+                subnets[target.workload_subnet_id] = tuple(
+                    str(p) for p in self._effective_subnet_cidrs(subnet)
+                )
+            sources = resolve_sources(enforcement, subnets, gateway_subnet_id="")
+            for policy in enforcement:
+                for subnet in sources[policy.connection]:
+                    enforced_by_subnet[subnet] = enforced_by_subnet.get(
+                        subnet, frozenset()
+                    ) | frozenset(policy.destinations)
+
         def completed(
             observed_authority: VMHAStaticRouteAuthority,
             observed_statuses: t.Mapping[str, t.Mapping[str, object]],
@@ -3532,6 +3576,7 @@ class RouteManager:
                 observed_authority,
                 manifest.prefixes,
                 sdk,
+                **({"enforced_by_subnet": enforced_by_subnet} if enforced_by_subnet else {}),
             )
             if not (receipt_current and cloud_current):
                 return False
@@ -3994,8 +4039,8 @@ class RouteManager:
         *,
         target_network_id: str,
         gateway_subnet_name: str,
-    ) -> tuple[list[tuple[object, list[ipaddress.IPv4Network]]], list[str]]:
-        selected: list[tuple[object, list[ipaddress.IPv4Network]]] = []
+    ) -> tuple[list[tuple[Subnet, list[ipaddress.IPv4Network]]], list[str]]:
+        selected: list[tuple[Subnet, list[ipaddress.IPv4Network]]] = []
         diagnostics: list[str] = []
         explicit_cidrs_by_subnet_name: dict[str, list[ipaddress.IPv4Network]] = {}
 

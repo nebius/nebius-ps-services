@@ -50,7 +50,7 @@ report the missing capability instead of claiming comprehensive research.
 
 Default output is a concise review with evidence links and any precise missing
 information, not architecture or implementation steps. Only `--action create-plan`
-passes actionable confirmed scope and the completed evidence to design.
+passes evidenced actionable scope and the completed evidence to design.
 
 ## Source basis
 

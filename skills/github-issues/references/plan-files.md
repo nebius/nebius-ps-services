@@ -50,7 +50,7 @@ keeps the selected planning pending.
 
 Without `--action create-plan`, leave all plan files and overviews untouched, including
 existing ready plans. Review findings and labels/comments need no artifact.
-Use [triage eligibility](triage.md) for actionable confirmed members. A related
+Use [triage eligibility](triage.md) for evidenced actionable members. A related
 group may require several plans, or none. Related labels never define acceptance
 membership. In this artifact, accepted members means scope accepted for this
 proposed plan, not operator authorization, delivery commitment or issue closure.

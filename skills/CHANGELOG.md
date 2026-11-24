@@ -4,6 +4,69 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Align project-instruction symlink tests with the spec owner's earlier policy
+  rejection and retain direct coverage of discovery's independent no-follow guard.
+- Add GitHub LOC Modifications reporting with `--loc-modifications-report`,
+  organization/user-owned repository selection through `--owner`, and optional
+  `--top K`. Aggregate merged-PR additions plus deletions into one column;
+  preserve visible-scope, whole-PR attribution, ties and partial-evidence limits.
+  Keep normal activity reporting and shared backlog behavior unchanged.
+
+- Fix host-memory checks in Linux systemd login scopes by requiring native
+  non-container evidence instead of treating every non-root cgroup as a container.
+  Container and unavailable-observation cases continue to block heavy work.
+- Fix design extraction review findings: enforce the artifact byte cap during
+  ingestion and declare required sibling skills for publication evals. Missing
+  eval prerequisites yield `UNAVAILABLE` before native runs; publication assertions
+  remain intact.
+- Align extraction review and progress checks: preserve omitted counters, require
+  precise finding locators and a planning finding for an omitted roadmap, and
+  accept requirement coverage across the union of mapped features.
+- Add unattended `design --extract-once SOURCE [--project-root TARGET]` for a
+  researched, source-traceable documentation baseline and consolidated gap report.
+  Require item-level research coverage and measured progress for every design.
+- Extend canonical paired publication to explicit filesystem targets without Git
+  setup; preserve Git workflow guards, stable identities, CAS and rollback.
+- Share pure roadmap checks and add deterministic extraction, publication and
+  docs-only evaluation boundaries, including unreadable-source and target-drift cases.
+- Omit the Codex-only `additionalContextLimit` field from managed Claude hook
+  projections so scoped skill updates preserve existing Claude registrations.
+
+- Separate GitHub issue assessment status from type and optional finding.
+  Green `reviewed` means assessed without design or delivery commitment; keep
+  red `bug`, new-capability `feature-request`, and existing-capability
+  `enhancement`. Use plain finding labels including `already-fixed` and
+  `needs-information`; require explicit maintainer policy for deferral/rejection.
+  Preserve whole-issue evidence, independent planning/closure authority and
+  unrelated PR/automation labels. Catalog cleanup remains separately requested
+  maintenance, with no legacy aliases or automatic global label deletion.
+
+- Fix six design/troubleshooting review findings: align standard-depth routing,
+  withhold unsafe truncated stream tails, redact nested evidence keys without
+  dropping collisions, and return incomplete collector exit codes. Bind diagnostic
+  v2 reviews to frozen execution conditions and trial identities, reject invalid
+  isolation/resource settings, and deny same-owner reads of the synthetic canary.
+  These source regressions do not establish native qualification or activation.
+
+- Align design and troubleshooting evaluation guidance with the shared runner's
+  frozen sibling catalogs and ordered tool evidence. Correct design case counts
+  and preserve separate native-mode, transient-write and live-provider proof limits.
+  Bind executed cases to frozen definitions, reject compound-command reference-read
+  claims and run design preservation checks in the existing skills CI job.
+
+- Consolidate duplicated `design` phase detail and add provisional, evidence-based
+  decision approaches to `design` and `troubleshoot`. Combine pattern-fit checks,
+  discriminating observations and bounded search while preserving planning and
+  repair authority, existing phases, causal proof, budgets, reporting, specialist
+  ownership, and README/portable-HTML behavior. Add preservation maps and behavioral
+  cases; performance remains unqualified until matched native comparisons pass.
+- Extend the shared native evaluator with model selection, alternating repeated
+  pairs, frozen sibling catalogs and complete package fingerprints. Retain bounded
+  redacted tool evidence, separate agent/judge metrics and blinded assertions, fail
+  incomplete traces explicitly, and verify read-only workspace changes independently.
+  Share the existing tree-accounting reducer with diagnostics without weakening its
+  incomplete-Codex-lineage gate; no managed installations are implied by static checks.
+
 - Allow explicitly requested `being-fixed` progress labeling for repairs already
   authorized and underway. Define scoped creation, additive updates, independent
   readback and owner-controlled removal; review and planning alone never start

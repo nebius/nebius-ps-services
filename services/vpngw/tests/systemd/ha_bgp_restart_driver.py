@@ -188,7 +188,7 @@ def run():
         config=vm,
     )
 
-    def observe():
+    def observe(*, publish=True):
         now = time.time()
         snapshot = _snapshot(
             now=now,
@@ -212,10 +212,12 @@ def run():
             routes_reconciled_context=ports.routes.receipt_context(),
             route_runtime_id=ports.binding.route_runtime_id,
         )
-        snapshots.last_snapshot = snapshot
+        if publish:
+            snapshots.last_snapshot = snapshot
         return snapshot
 
     snapshots.observe = observe
+    snapshots.observe_tunnel_authority = lambda: observe(publish=False)
     checkpoints = main.VMHACheckpointFileStore(root / "controller-checkpoint.json")
     checkpoints.save(checkpoints.load())
     runtime = main.VMHAControllerRuntime(

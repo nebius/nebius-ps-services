@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from ..enforced_routing import bgp_import_map_name, bgp_policy_lines, compile_policies
 from ..ha_tunnel_policy import tunnel_exports, tunnel_preferred
 from ..schema import BGPDefaults
 from .local_commands import run
@@ -298,6 +299,20 @@ class FRRRenderer:
             lines.append("!")
 
         # Start router bgp configuration
+        enforced = {p.connection: p for p in compile_policies(cfg)}
+        for conn in cfg.get("connections", []):
+            policy = enforced.get(conn["name"])
+            mode = conn.get("routing_mode") or cfg.get("defaults", {}).get("routing", {}).get(
+                "mode", "bgp"
+            )
+            if policy is None or mode != "bgp":
+                continue
+            for preference in (200, 100):
+                lines.extend(
+                    line
+                    for line in bgp_policy_lines(policy, preference)
+                    if preference == 200 or not line.startswith("ip prefix-list")
+                )
         lines.append(f"router bgp {local_asn}")
         lines.append(f" timers bgp {keep} {hold}")
         if router_id:
@@ -399,7 +414,9 @@ class FRRRenderer:
                 if remote_ip:
                     # Inbound: Set local-preference for THIS router's path preference
                     local_pref = 200 if tunnel_preferred(cfg, conn, tun) else 100
-                    lines.append(f"  neighbor {remote_ip} route-map SET-LOCAL-PREF-{local_pref} in")
+                    policy = enforced.get(conn["name"])
+                    inbound = bgp_import_map_name(policy, local_pref)
+                    lines.append(f"  neighbor {remote_ip} route-map {inbound} in")
 
                     # Every enabled peer receives one explicit outbound policy.
                     # Allowed peers get the local-prefix filter plus MED; every

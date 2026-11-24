@@ -97,6 +97,16 @@ class DestinationProtection:
         self.path, self.cluster, self.policies, self.run = path, cluster, policies, run
         self.local = tuple(sorted({network(p) for p in local_prefixes}))
 
+    def enforced(self):
+        from ..enforced_routing import PolicyRouting
+
+        return PolicyRouting(
+            self.path.with_name("enforced-routing.json"),
+            cluster=self.cluster,
+            policies=self.policies,
+            run=self.run,
+        )
+
     def _ledger(self) -> dict[str, str]:
         try:
             fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -129,7 +139,7 @@ class DestinationProtection:
     def _destinations(self, ledger: dict[str, str]) -> dict[str, tuple[str, ...]]:
         owners: dict[str, str] = dict(ledger)
         for policy in self.policies:
-            for prefix in policy.destinations:
+            for prefix in policy.ordinary_destinations:
                 if prefix in owners and owners[prefix] != policy.name:
                     raise RuntimeError("destination protection ownership is ambiguous")
                 owners[prefix] = policy.name
@@ -152,11 +162,22 @@ class DestinationProtection:
         Caller supplies only policy-validated eligible prefixes (or exact owned
         predecessor publications). Every new entry needs kernel route provenance.
         """
+        from ..enforced_routing import table_matches
+
         ledger = self._ledger()
-        missing = prefixes - ledger.keys()
+        enforced = {d for p in self.policies for d in p.enforced_destinations - p.ordinary_shared}
+        missing = prefixes - ledger.keys() - enforced
         if missing:
             result = self.run(
-                ["ip", "-j", "-4", "route", "show", "table", "main"],
+                [
+                    "ip",
+                    "-j",
+                    "-4",
+                    "route",
+                    "show",
+                    "table",
+                    "all" if any(p.ordinary_shared for p in self.policies) else "main",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -168,17 +189,18 @@ class DestinationProtection:
                 raise RuntimeError("destination provenance is malformed")
             for prefix in sorted(missing):
                 network(prefix)
-                devices = {
-                    r.get("dev")
-                    for r in routes
-                    if isinstance(r, dict)
-                    # iproute2 omits /32 for host routes in its JSON output.
-                    and network(r.get("dst", "0.0.0.0/0").replace("default", "0.0.0.0/0")) == prefix
-                }
                 candidates = [
                     p
                     for p in self.policies
-                    if p.mode == "bgp" and any(path.interface in devices for path in p.paths)
+                    if p.mode == "bgp"
+                    and any(
+                        isinstance(r, dict)
+                        and network(r.get("dst", "0.0.0.0/0").replace("default", "0.0.0.0/0"))
+                        == prefix
+                        and any(path.interface == r.get("dev") for path in p.paths)
+                        and table_matches(r, p.table_for(prefix))
+                        for r in routes
+                    )
                 ]
                 if len(candidates) != 1:
                     raise RuntimeError("destination provenance is ambiguous")
@@ -191,25 +213,37 @@ class DestinationProtection:
 
     def retire(self, published: frozenset[str]) -> None:
         """Called only after verified route reconciliation under current config."""
-        configured = frozenset(p for policy in self.policies for p in policy.destinations)
+        enforced = frozenset(
+            p
+            for policy in self.policies
+            for p in policy.enforced_destinations - policy.ordinary_shared
+        )
+        configured = (
+            frozenset(p for policy in self.policies for p in policy.destinations) - enforced
+        )
         ledger = self._ledger()
         retained = {
             p: owner
             for p, owner in ledger.items()
-            if p in published
-            or p in configured
-            or any(policy.name == owner and policy.mode == "bgp" for policy in self.policies)
+            if p not in enforced
+            and (
+                p in published
+                or p in configured
+                or any(policy.name == owner and policy.mode == "bgp" for policy in self.policies)
+            )
         }
         if retained != ledger:
             atomic_write_json(
                 self.path, {"schema": SCHEMA, "cluster": self.cluster, "admitted": retained}
             )
             self.install()
+        self.enforced().retire()
 
     def _expected(self) -> list[dict]:
         return objects(self._destinations(self._ledger()), self.local)
 
     def verify(self) -> None:
+        self.enforced().verify()
         result = self.run(
             ["nft", "-j", "list", "table", "inet", TABLE], capture_output=True, text=True, timeout=5
         )
@@ -277,9 +311,10 @@ class DestinationProtection:
         return reason == "ready"
 
     def install(self) -> None:
+        self.enforced().install()
         ledger = self._ledger()
         for policy in self.policies:
-            for prefix in policy.destinations:
+            for prefix in policy.ordinary_destinations:
                 if prefix in ledger and ledger[prefix] != policy.name:
                     raise RuntimeError("destination protection ownership changed")
                 ledger[prefix] = policy.name

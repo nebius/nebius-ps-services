@@ -397,6 +397,21 @@ def write_atomic(path: Path, content: str) -> None:
             temporary.unlink()
 
 
+def collection_complete(value: Any) -> bool:
+    """Worker transport success does not imply complete requested observations."""
+    if isinstance(value, list):
+        return all(collection_complete(item) for item in value)
+    if not isinstance(value, dict):
+        return True
+    if "status" in value and value["status"] != "ok":
+        return False
+    if value.get("detection_available") is False or value.get("supported") is False:
+        return False
+    if value.get("is_work_tree") is True and value.get("status_available") is not True:
+        return False
+    return all(collection_complete(item) for item in value.values())
+
+
 def main() -> int:
     args = parse_args()
     try:
@@ -432,7 +447,7 @@ def main() -> int:
     except OSError:
         print("collect_evidence.py: input or output I/O failed", file=sys.stderr)
         return 2
-    return 0 if result["status"] == "ok" else 2
+    return 0 if result["status"] == "ok" and collection_complete(payload) else 2
 
 
 if __name__ == "__main__":

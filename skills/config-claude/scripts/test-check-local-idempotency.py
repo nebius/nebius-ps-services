@@ -49,6 +49,19 @@ def snapshot(root: Path) -> dict:
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_projection_matches_claude_context_limit_policy(self):
+        source = {"SessionStart": [{"hooks": [{
+            "type": "command", "command": 'python3 "${CODEX_HOME:-$HOME/.codex}/hooks/project_specs_lifecycle.py"',
+            "timeout": 30, "additionalContextLimit": 1600,
+        }]}]}
+        for plugin in (False, True):
+            with self.subTest(plugin=plugin):
+                result = config.projected(source, Path("/tmp/claude"), plugin=plugin)
+                handler = result["SessionStart"][0]["hooks"][0]
+                self.assertNotIn("additionalContextLimit", handler)
+                self.assertEqual(handler["timeout"], 30)
+        self.assertEqual(source["SessionStart"][0]["hooks"][0]["additionalContextLimit"], 1600)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="config-claude-check-")
         self.addCleanup(self.temp.cleanup)

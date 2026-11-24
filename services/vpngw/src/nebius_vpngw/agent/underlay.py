@@ -419,18 +419,26 @@ def preflight_reconfigure(cfg: dict[str, Any], *, configuration: bool = True) ->
     known = set(previous["destinations"]) if previous else set()
     old = Network(**previous["network"]) if previous else network
     routes = []
+    from .enforced_routing import normalize_rule
+
+    rules_owner = enforcement(cfg)
+    owned_rules = rules_owner.rules(rules_owner.read())
     # networkd's reconfiguration cleans every table and family on the link,
     # plus manager-owned routes and policy rules. Main-table readiness alone
     # cannot establish that this wider operation preserves foreign state.
     for family in ("-4", "-6"):
-        rules = _json(["ip", "-j", family, "-details", "rule", "show"])
+        rules = _json(["ip", "-j", family, "-details", "-N", "rule", "show"])
         rows = _json(["ip", "-j", family, "route", "show", "table", "all"])
         if any(
             not isinstance(values, list) or any(not isinstance(row, dict) for row in values)
             for values in (rules, rows)
         ):
             raise UnderlayError("networkd reconfiguration routing inventory is malformed")
-        if any(rule.get("protocol") != "kernel" for rule in rules):
+        if any(
+            rule.get("protocol") not in ("kernel", "2", 2)
+            and not (family == "-4" and normalize_rule(rule) in owned_rules)
+            for rule in rules
+        ):
             raise UnderlayError("network reconfiguration may remove a foreign policy rule")
         for row in rows:
             if row.get("protocol") == "kernel":
@@ -464,6 +472,19 @@ def preflight_reconfigure(cfg: dict[str, Any], *, configuration: bool = True) ->
             "network reconfiguration would affect an unmanaged physical route; "
             "review and persist or remove that route before apply"
         )
+
+
+def enforcement(cfg: dict[str, Any], *, configured: bool = False):
+    from ..ha_tunnel_policy import connection_policies
+    from .enforced_routing import PolicyRouting
+
+    ha = cfg.get("vm_ha")
+    return PolicyRouting(
+        STATE.parent / ("vm-ha" if ha is not None else "ordinary") / "enforced-routing.json",
+        cluster=ha["cluster_id"] if ha else "ordinary",
+        policies=connection_policies(cfg) if configured else (),
+        run=run,
+    )
 
 
 def netplan_content(interface: str = "eth0") -> str:
@@ -647,6 +668,10 @@ def reconcile_locked(cfg: dict[str, Any], *, reconfigure: bool = False) -> int:
             time.sleep(0.2)
         if str(_dropin(network)) != str(path):
             raise UnderlayError("networkd matching file changed during reconciliation")
+        if enforcement(cfg).read():
+            # networkd may remove non-kernel rules; the persistent nft guard
+            # remains in place throughout reconstruction of the owned RPDB.
+            enforcement(cfg, configured=True).install()
         # Retire only exact predecessor tuples, never a destination-wide delete.
         for retired in record["retire"]:
             old = Network(**retired["network"])

@@ -1,6 +1,6 @@
 # Issue label management
 
-Apply scoped type, review-outcome and relationship labels and missing definitions
+Apply scoped review-status, type, finding and relationship labels and missing definitions
 below only within the core Invocation Policy's effect authority. Implicit
 assessment alone grants none; skip unrequested labels without blocking the
 assessment or requested plans. PR-caller mode returns read-only
@@ -11,12 +11,13 @@ remain binding.
 ## Establish semantics and safe effects
 
 Read repository label descriptions and accepted workflow/automation policy.
-Reuse existing labels only for exact documented semantic matches. A generic
-`enhancement` label does not necessarily distinguish new from extended features.
+Reuse existing labels only for exact documented semantic matches. An existing generic
+`enhancement` definition may include new capabilities; reuse it only when its
+documented meaning agrees with improvements to existing capabilities.
 Names alone are insufficient. `--filter` requires all literal labels and is selection, never a decision; do not
 create a missing selection label to manufacture a target set.
 
-Assessment labels such as review:already-resolved and review:duplicate are valid
+Assessment labels such as already-fixed and duplicate are valid
 on open issues. They do not mean actual closure. Do not reuse a lifecycle label
 whose definition requires closure for an assessment. When advising an authorized
 PR owner, actual terminal lifecycle labels still require observed closed state.
@@ -24,18 +25,39 @@ PR owner, actual terminal lifecycle labels still require observed closed state.
 Inspect relevant repository automation and documented comment commands before
 reusing mappings. Do not intentionally trigger closure, assignment, implementation
 or another forbidden effect through a label/comment. Even close must use its
-verified explicit state transition, never automation that bypasses its checks. Use the defined inert
-assessment label when an existing equivalent triggers prohibited behavior. If
-known automation also reacts to that label or every comment, leave the affected
-effect pending. Do not install automation or claim unknown external automation
+verified explicit state transition, never automation that bypasses its checks.
+If a canonical label or comment triggers a forbidden effect, leave that effect
+pending while continuing independent safe effects. Never invent or reuse a
+prefixed fallback label, change automation or route around its effects. Do not install automation or claim unknown external automation
 was exhaustively audited. An unexpected downstream effect is reported, never
 silently compensated by reopening or expanding authority.
 
 Preserve unrelated labels. Remove only superseded labels in an explicitly
 managed/documented family when evidence supports replacement. Types can coexist
-for distinct claims; the managed review outcome is mutually exclusive. Ambiguous
+for distinct claims. At most one whole-issue finding applies; `reviewed` is
+independent and must not be removed when replacing a finding. Evidence-supported
+unresolved work needs no finding label. Remove a superseded managed finding
+when reassessment supports that transition, including a transition to no finding.
+Ambiguous
 existing meanings or name collisions stay unchanged and pending, not renamed,
 overwritten or silently assigned a different meaning.
+
+## Assessment status and findings
+
+`reviewed` records a substantive assessment with a documented result or precise
+information gap; it does not mean accepted, feasible, designed, planned or
+scheduled. An assessment may conclude `needs-information` with no certain type.
+Merely listing, opening or skipping an issue never warrants `reviewed`. Required
+research that could not be performed must not be presented as completed review;
+report that gap without adding the marker. Existing markers are historical
+metadata, not proof that current evidence was reassessed.
+
+Types describe supported claims; findings describe whole-issue dispositions.
+For example, `reviewed` + `bug` records an assessed unresolved bug;
+`reviewed` + `bug` + `already-fixed` records verified full resolution.
+`reviewed` + `needs-information` can stand without a type. None grants planning,
+implementation or closure authority. Deferred/not-planned findings require an
+explicit maintainer decision or accepted policy, not an agent's priority choice.
 
 ## Missing definitions allowed
 
@@ -50,20 +72,37 @@ public-safe and under GitHub's 100-character limit.
 | `bug` | Supported implemented behavior violates its accepted contract. | `d73a4a` |
 | `gap` | An accepted capability or required path is missing or incomplete. | `d93f0b` |
 | `feature-request` | Requests a new capability outside the existing supported contract. | `a2eeef` |
-| `feature-enhancement` | Extends or improves an existing capability beyond its current contract. | `84b6eb` |
+| `enhancement` | Extends or improves an existing capability beyond its current contract. | `84b6eb` |
 | `documentation` | Supported behavior needs missing, corrected or clearer documentation. | `0075ca` |
 | `question` | Requests usage guidance, explanation or clarification. | `d876e3` |
-| `review:confirmed` | Evidence supports actionable unresolved work; no delivery commitment. | `0e8a16` |
-| `review:needs-information` | Material evidence or a product decision is missing. | `fbca04` |
-| `review:already-supported` | Every material requested outcome is already supported. | `c5def5` |
-| `review:already-resolved` | Every material reported defect or gap has verified resolution. | `c5def5` |
-| `review:duplicate` | Every material claim is covered by a verified canonical issue. | `cfd3d7` |
-| `review:out-of-scope` | Evidence places the request outside the supported product boundary. | `e4e669` |
-| `review:deferred` | Valid work is deferred with explicit reconsideration conditions. | `fef2c0` |
-| `review:not-planned` | Evidence or accepted policy rules out the requested work. | `e4e669` |
+| `reviewed` | Assessment recorded; no approval, feasibility or delivery commitment. | `0e8a16` |
+| `needs-information` | Material information, evidence or a maintainer decision is needed. | `fbca04` |
+| `already-supported` | Every material requested outcome is already supported. | `c5def5` |
+| `already-fixed` | Every material reported defect or gap has verified resolution. | `c5def5` |
+| `duplicate` | Every material claim is covered by a verified canonical issue or pull request. | `cfd3d7` |
+| `out-of-scope` | Evidence places the request outside the supported product boundary. | `cfd3d7` |
+| `deferred` | Maintainer decision or accepted policy postpones work with reconsideration conditions. | `fef2c0` |
+| `not-planned` | Explicit maintainer decision or accepted policy excludes the requested work. | `cfd3d7` |
 
 A missing severity, priority or ownership label remains a recommendation.
-No arbitrary new label families are authorized.
+No arbitrary new label families are authorized. This table is the canonical
+catalog for this skill; other workflows can own additional repository labels.
+Shared `needs-information` and `duplicate` definitions support issue and PR use,
+but issue duplicate findings still require a canonical issue under [closure](closure.md).
+Do not apply PR lifecycle transitions to issues or recolor shared definitions
+through routine triage. Ambiguous semantics remain pending.
+
+Repository-wide catalog reconciliation, rename, merge, recolor and deletion
+require separately requested maintenance; none is a public action of this skill.
+Such maintenance must refresh definitions, memberships on open/closed issues and
+PRs, and known automation consumers before effects. Snapshot metadata privately,
+preserve unrelated labels/state, verify destination membership before removing
+obsolete definitions, and reconcile partial/uncertain effects before retry.
+Backfill reviewed only from prior assessment evidence; migrating historical
+findings is not fresh review and closed state never proves already-fixed.
+The canonical names have no legacy aliases; literal filters do not translate
+retired names. Preserve unrelated PR, automation, community, progress and
+relationship labels rather than treating this catalog as the repository allowlist.
 
 ## Separately authorized implementation progress
 
@@ -142,9 +181,10 @@ closed issues are assessed without reopening or redundant closure notices.
 
 ## Vendor basis
 
-Checked 2026-11-19: [GitHub label operations](https://docs.github.com/rest/issues/labels)
+Checked 2026-11-22: [GitHub label operations](https://docs.github.com/rest/issues/labels)
 distinguish creation, additive issue labels, individual removal and whole-set
-replacement. Discover actual tool schemas; do not assume an update API is
+replacement. [Managing labels](https://docs.github.com/en/issues/using-labels-and-milestones-to-track-work/managing-labels)
+confirms deletion removes issue and PR associations. Discover actual tool schemas; do not assume an update API is
 additive. Shared related labels are this skill's convention, not native GitHub
 relationships. [Sub-issues](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/adding-sub-issues)
 represent hierarchy and are not created by this workflow.

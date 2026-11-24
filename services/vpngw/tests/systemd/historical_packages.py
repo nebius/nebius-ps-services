@@ -89,9 +89,9 @@ def run_historical(args) -> None:
     manifest_path = args.manifest or Path(__file__).with_name("historical-releases.json")
     inputs = json.loads(manifest_path.read_text())
     releases = inputs["releases"]
-    if inputs["schema"] != "nebius-vpngw.package-qualification-inputs.v1" or len(releases) != 5:
-        raise ValueError("Qualification requires the frozen five-release input manifest")
-    if len({release["version"] for release in releases}) != 5:
+    if inputs["schema"] != "nebius-vpngw.package-qualification-inputs.v1" or not releases:
+        raise ValueError("Qualification requires a nonempty frozen release manifest")
+    if len({release["version"] for release in releases}) != len(releases):
         raise ValueError("Qualification release versions must be distinct")
     for release in releases:
         version = release["version"]

@@ -126,8 +126,9 @@ INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
    oracle. Preserve volatile evidence; distinguish stabilization from diagnosis.
    Provisionally route as code, infrastructure, mixed or undetermined. Configuration,
    compatibility, permissions and resources are possible causes across all routes.
-   Start at the implicated component and immediate dependencies, then revise the
-   route when evidence crosses boundaries. Exit: failure contract and initial boundary.
+   Choose a provisional approach separately: recognition, analysis, bounded learning
+   or orientation; urgency is independent. Follow triage guidance within this loop.
+   Start at the implicated component/dependencies. Exit: failure contract and boundary.
 2. **Establish the baseline — BASELINE.** Identify the executed artifact and
    effective configuration. Use the smallest safe reproducer or characterize incident
    evidence when replay is unsafe. Record input, seed, status, duration and signature;
@@ -136,9 +137,10 @@ INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
    state transition through relevant inputs, ownership, dependencies, retries and
    lifecycle. Separate facts, inferences and unknowns. Each material hypothesis has
    support, contradiction, a distinguishing prediction, falsifier and status; no
-   minimum count. Exit: a next observation that separates meaningful alternatives.
+   minimum count. Recognition prioritizes a candidate/discriminator, never proof.
+   Exit: a next observation that separates meaningful alternatives.
 4. **Investigate and narrow — EXPERIMENTS, LOCALIZED.** Choose the cheapest useful
-   observation by discriminatory value, safety, cost and availability. Record its
+   observation by discriminatory value, reliability, effects, cost and availability. Record its
    question, competing predictions, bounds, effects and next branch. Change one
    relevant variable unless a designed experiment requires otherwise. Compare
    boundary inputs/outputs; narrow component, time, input, environment or sequence.
@@ -156,7 +158,7 @@ INTAKE -> DISCOVERY -> BASELINE -> MODEL -> HYPOTHESES -> EXPERIMENTS
      Relevant change or contradictory evidence reopens affected exclusions.
    - After three consecutive completed observations that neither distinguish
      hypotheses nor narrow a boundary, rebuild the model or change technique.
-     This never resets or extends the remediation budget.
+     Reclassification preserves budgets/history; reopen invalidated exclusions.
    Exit: earliest observed divergence localized or decisive evidence gap identified.
    Cancel unnecessary workers; reconcile outstanding evidence before concluding.
 5. **Establish causality — PROVEN.** Explain trigger → violated invariant → symptom;

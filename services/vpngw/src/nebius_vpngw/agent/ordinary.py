@@ -245,7 +245,12 @@ def observe_local(cfg: dict[str, Any]) -> str:
                     )
                     == network
                     and row.get("dev") == name
-                    and str(row.get("table", "main")) in {"main", "254"}
+                    and str(row.get("table", "main"))
+                    in (
+                        {"main", "254"}
+                        if endpoint.get("route_tables", {}).get(prefix, 254) == 254
+                        else {str(endpoint["route_tables"][prefix])}
+                    )
                     for row in routes
                 )
             )

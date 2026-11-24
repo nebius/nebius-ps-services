@@ -241,6 +241,9 @@ def write_validation_receipt(
             "spec receipt output requires the current private session",
         )
     target = Path(os.path.abspath(output.expanduser()))
+    if receipt.get("schema") == "maintain-project-specs.filesystem-inspection.v1":
+        raise ProjectSpecError("FILESYSTEM_RECEIPT_OUTPUT_UNSUPPORTED",
+                               "filesystem inspection is returned directly; Git lifecycle receipt output is unavailable")
     git_root = Path(str(receipt["git_root"]))
     expected = Path(
         os.path.abspath(lifecycle_dir(git_root, session_id) / "spec-receipt.json")

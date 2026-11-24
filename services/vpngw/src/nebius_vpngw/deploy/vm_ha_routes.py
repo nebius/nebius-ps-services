@@ -36,6 +36,7 @@ def _normalized_prefixes(prefixes: Iterable[str]) -> frozenset[str]:
 class ManagedRouteKind(str, Enum):
     STATIC = "static"
     BGP = "bgp"
+    ENFORCED = "enforced"
 
 
 class RouteMutationKind(str, Enum):
@@ -125,7 +126,12 @@ class LogicalStaticRouteManifest:
         for record in records:
             if not isinstance(record, dict) or not isinstance(record.get("remote_prefixes"), list):
                 raise ValueError("Committed static-route manifest record is invalid")
-            prefixes.extend(str(prefix) for prefix in record["remote_prefixes"])
+            enforced = set((record.get("enforced_routing") or {}).get("destinations", ()))
+            prefixes.extend(
+                str(prefix)
+                for prefix in record["remote_prefixes"]
+                if prefix not in enforced or prefix in record.get("ordinary_shared", ())
+            )
         return cls(digest=actual_digest, prefixes=_normalized_prefixes(prefixes))
 
     @classmethod
@@ -661,6 +667,8 @@ class VMHARouteReconciler:
         takeover_hold_down_seconds: float,
         withdrawal_stability_observations: int,
         route_targets: tuple[VMHARouteTarget, ...],
+        enforced_by_subnet: Mapping[str, frozenset[str]] | None = None,
+        ordinary_shared: frozenset[str] = frozenset(),
     ) -> None:
         if not cluster_id or not node_id:
             raise ValueError("cluster_id and node_id are required")
@@ -675,6 +683,12 @@ class VMHARouteReconciler:
         self.takeover_hold_down_seconds = takeover_hold_down_seconds
         self.withdrawal_stability_observations = withdrawal_stability_observations
         self.route_targets = route_targets
+        self.enforced_by_subnet = dict(enforced_by_subnet or {})
+        self.ordinary_shared = ordinary_shared
+        if not set(self.enforced_by_subnet) <= {t.workload_subnet_id for t in route_targets}:
+            raise ValueError("Enforced routing exceeds declared route targets")
+        for prefixes in self.enforced_by_subnet.values():
+            _normalized_prefixes(prefixes)
 
     def plan(
         self,
@@ -745,7 +759,10 @@ class VMHARouteReconciler:
         existing_bgp = {
             route.prefix for route in owned_routes if route.ownership.kind is ManagedRouteKind.BGP
         }
-        eligible_bgp = bgp.eligible_prefixes
+        enforced_prefixes = frozenset(
+            p for prefixes in self.enforced_by_subnet.values() for p in prefixes
+        )
+        eligible_bgp = bgp.eligible_prefixes - (enforced_prefixes - self.ordinary_shared)
         hold_down_active = now - state.takeover_started_at < self.takeover_hold_down_seconds
         previous_absence = state.absence_counts()
         next_absence: dict[str, int] = {}
@@ -767,13 +784,24 @@ class VMHARouteReconciler:
         desired_kinds.update(
             {prefix: ManagedRouteKind.STATIC for prefix in static_manifest.prefixes}
         )
+        desired_by_target = {
+            target: {
+                **desired_kinds,
+                **{
+                    p: ManagedRouteKind.ENFORCED
+                    for p in self.enforced_by_subnet.get(target.workload_subnet_id, ())
+                },
+            }
+            for target in self.route_targets
+        }
+        all_desired = frozenset(p for prefixes in desired_by_target.values() for p in prefixes)
         mutations: list[RouteMutation] = []
         blocked_reasons = list(bgp.blocked_reasons)
         foreign_conflicts = sorted(
             (
                 (target, prefix)
                 for target in self.route_targets
-                for prefix in desired_kinds
+                for prefix in desired_by_target[target]
                 if (target, prefix) in foreign_prefixes
             ),
             key=lambda item: (item[0].route_table_id, item[1]),
@@ -788,7 +816,7 @@ class VMHARouteReconciler:
                 blocked_reasons=tuple(dict.fromkeys(blocked_reasons)),
                 mutations=(),
                 held_bgp_prefixes=frozenset(held_bgp),
-                desired_prefixes=frozenset(desired_kinds),
+                desired_prefixes=all_desired,
                 next_state=state,
                 ownership=ownership,
                 route_targets=self.route_targets,
@@ -803,7 +831,7 @@ class VMHARouteReconciler:
 
         for route_target in self.route_targets:
             for prefix, route_kind in sorted(
-                desired_kinds.items(), key=lambda item: (item[1].value, item[0])
+                desired_by_target[route_target].items(), key=lambda item: (item[1].value, item[0])
             ):
                 existing_candidates = owned_by_prefix.get((route_target, prefix), [])
                 if not existing_candidates:
@@ -848,7 +876,7 @@ class VMHARouteReconciler:
         for route in owned_routes:
             if route.route_id in retained_route_ids:
                 continue
-            if route.prefix in desired_kinds:
+            if route.prefix in desired_by_target[route.route_target]:
                 mutations.append(
                     RouteMutation(
                         kind=RouteMutationKind.DELETE,
@@ -887,7 +915,7 @@ class VMHARouteReconciler:
             blocked_reasons=tuple(dict.fromkeys(blocked_reasons)),
             mutations=tuple(mutations),
             held_bgp_prefixes=frozenset(held_bgp),
-            desired_prefixes=frozenset(desired_kinds),
+            desired_prefixes=all_desired,
             next_state=next_state,
             ownership=ownership,
             route_targets=self.route_targets,

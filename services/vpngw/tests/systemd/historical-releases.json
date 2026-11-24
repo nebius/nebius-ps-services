@@ -36,6 +36,20 @@
       "url": "https://github.com/nebius/nebius-ps-services/releases/download/nebius-vpngw-v0.6.5/nebius_vpngw-0.6.5-py3-none-any.whl",
       "sha256": "a934296c24e209b9694be473f4c69f15abde805ee7b3581c89122f0418a6cd25",
       "published_at": "2026-11-16T13:53:54Z"
+    },
+    {
+      "version": "0.6.9",
+      "tag": "nebius-vpngw-v0.6.9",
+      "url": "https://github.com/nebius/nebius-ps-services/releases/download/nebius-vpngw-v0.6.9/nebius_vpngw-0.6.9-py3-none-any.whl",
+      "sha256": "b7a53c9e119eefe7fa8112c59223cda0f4c7d5bc4f7f140e6a96b14cd71170dc",
+      "published_at": "2026-11-19T06:14:07Z"
+    },
+    {
+      "version": "0.7.0",
+      "tag": "nebius-vpngw-v0.7.0",
+      "url": "https://github.com/nebius/nebius-ps-services/releases/download/nebius-vpngw-v0.7.0/nebius_vpngw-0.7.0-py3-none-any.whl",
+      "sha256": "4154c0b10274f86e92b37e1c0f303f945a92087e9a4018ec16b96ad6917d64fa",
+      "published_at": "2026-11-22T03:40:36Z"
     }
   ]
 }

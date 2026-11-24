@@ -22,6 +22,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from nebius_vpngw.agent.enforced_routing import table_matches
 from nebius_vpngw.agent.routing_guard import (
     has_table_220_rule,
     table_220_routes_from_all_json,
@@ -92,7 +93,8 @@ from nebius_vpngw.deploy.vm_ha_routes import (
     VerifiedAllocationOwnership,
     VMHARouteReconciler,
 )
-from nebius_vpngw.ha_tunnel_policy import connection_policies, covers
+from nebius_vpngw.enforced_routing import bgp_import_map_name, bgp_policy_lines, compile_policies
+from nebius_vpngw.ha_tunnel_policy import connection_policies, covers, tunnel_preferred
 from nebius_vpngw.schema import (
     VMHAMigrationRouteBinding,
     VMHARouteTarget,
@@ -1187,14 +1189,56 @@ def _usable_xfrm_devices(links: object, state: object, policies: object) -> set[
     return devices
 
 
-def _policy_digest(value: Mapping[str, Iterable[str]]) -> str:
+def _policy_digest(value: Mapping[str, Iterable[str]], enforced: dict | None = None) -> str:
     normalized = {
         peer: sorted(str(ipaddress.ip_network(prefix, strict=True)) for prefix in prefixes)
         for peer, prefixes in sorted(value.items())
     }
+    payload = {"prefixes": normalized, "enforced": enforced} if enforced else normalized
     return hashlib.sha256(
-        json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode("ascii")
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("ascii")
     ).hexdigest()
+
+
+def _enforced_import_policy(running_config: str, sessions: frozenset[str]) -> dict:
+    """Fingerprint all clauses of each bound enforcement map and its filters."""
+    maps: dict[str, list[list[str]]] = {}
+    lists: dict[str, list[str]] = {}
+    bindings: dict[str, str] = {}
+    active: list[str] | None = None
+    for raw in running_config.splitlines():
+        line = raw.strip()
+        match = re.fullmatch(r"route-map (\S+) (permit|deny) (\d+)", line)
+        if match:
+            active = [line]
+            maps.setdefault(match[1], []).append(active)
+        elif line.startswith("!") or (raw and not raw[0].isspace()):
+            active = None
+        elif active and line and line != "exit":
+            active.append(line)
+        match = re.fullmatch(r"ip prefix-list (\S+) (.*)", line)
+        if match:
+            lists.setdefault(match[1], []).append(match[2])
+        match = re.fullmatch(r"neighbor (\S+) route-map (\S+) in", line)
+        if match and match[1] in sessions:
+            if match[1] in bindings:
+                raise RuntimeError("FRR import route-map binding is ambiguous")
+            bindings[match[1]] = match[2]
+    result = {}
+    for peer, name in sorted(bindings.items()):
+        if not name.startswith("ENFORCED-"):
+            continue
+        # FRR serializes independent match/set commands in its own order.
+        # Normalize only within each clause: preserve sequence, permit/deny,
+        # command multiplicity and which clause owns every action.
+        clauses = [line for entry in maps.get(name, []) for line in (entry[0], *sorted(entry[1:]))]
+        filters = {}
+        for clause in clauses:
+            if clause.startswith("match ip address prefix-list "):
+                for identifier in clause.split()[4:]:
+                    filters[identifier] = lists.get(identifier, [])
+        result[peer] = {"name": name, "clauses": clauses, "filters": filters}
+    return result
 
 
 def _observed_import_policy_digest(running_config: str, sessions: frozenset[str]) -> str:
@@ -1221,7 +1265,7 @@ def _observed_import_policy_digest(running_config: str, sessions: frozenset[str]
         if list_name is not None and list_name not in prefix_lists:
             raise RuntimeError("FRR import policy references a missing prefix list")
     try:
-        return _policy_digest(policy)
+        return _policy_digest(policy, _enforced_import_policy(running_config, sessions))
     except ValueError:
         raise RuntimeError("FRR import policy contains an invalid prefix") from None
 
@@ -1764,6 +1808,9 @@ class SystemDataPlaneRuntime:
         static_prefixes: set[str] = set()
         usable_xfrm: set[str] = set()
         usable_xfrm_devices = _usable_xfrm_devices(xfrm_links, xfrm, xfrm_policies)
+        enforced_policies = (
+            self.destination_protection.policies if self.destination_protection else ()
+        )
         if isinstance(routes, list):
             for route in routes:
                 if not isinstance(route, Mapping):
@@ -1777,11 +1824,22 @@ class SystemDataPlaneRuntime:
                     and not route.get("nexthops")
                 )
                 if isinstance(prefix, str):
-                    static_prefixes.add(prefix)
                     try:
-                        network = ipaddress.ip_network(prefix, strict=False)
+                        network = ipaddress.ip_network(
+                            "0.0.0.0/0" if prefix == "default" else prefix, strict=False
+                        )
                     except ValueError:
                         continue
+                    owner = next(
+                        (p for p in enforced_policies if str(network) in p.enforced_destinations),
+                        None,
+                    )
+                    table = owner.enforced_table if owner else 254
+                    if not table_matches(route, table) or (
+                        owner and device not in {p.interface for p in owner.paths}
+                    ):
+                        continue
+                    static_prefixes.add(str(network))
                     if (
                         network.version == 4
                         and isinstance(device, str)
@@ -1822,7 +1880,13 @@ class SystemDataPlaneRuntime:
             and broad_apipa.stdout.strip()
         ):
             try:
-                protected = self.destination_protection.protected_prefixes() | frozenset(learned)
+                enforced = frozenset(
+                    p for policy in enforced_policies for p in policy.enforced_destinations
+                )
+                protected = self.destination_protection.protected_prefixes() | (
+                    frozenset(learned) - enforced
+                )
+                owned_rules = self.destination_protection.enforced()
                 dhcp_apipa_paths_proven = harmless_dhcp_route(
                     peers=self.bgp_peer_routes,
                     configured_peers=self.configured_bgp_sessions,
@@ -1833,6 +1897,7 @@ class SystemDataPlaneRuntime:
                     run=self._run,
                     ip_command=self.commands.ip,
                     networkctl_command=self.commands.networkctl,
+                    owned_rule=owned_rules.owns_rule if owned_rules.read() else None,
                 )
             except (OSError, RuntimeError, ValueError):
                 pass  # Unknown destination ownership remains fail-closed.
@@ -2156,6 +2221,11 @@ class SystemDataPlaneRuntime:
         try:
             if self._forwarding() or self.mode() is not DataPlaneMode.PASSIVE:
                 raise RuntimeError("candidate tunnel preparation requires passive fenced mode")
+            # Kernel protection is lost when a cold standby reboots. Route
+            # reconciliation precedes enable_active and requires this proof,
+            # so restore it here while the forwarding fence is still closed.
+            if self.destination_protection is not None:
+                self.destination_protection.install()
             if self.candidate_preparer is not None:
                 self.candidate_preparer()
             load = self._run(self.commands.swanctl, "--load-all", "--noprompt")
@@ -2825,9 +2895,30 @@ class BoundRouteRuntime:
         self.static_manifest = LogicalStaticRouteManifest.from_committed_json(
             static_manifest_json, expected_digest=binding.static_routes_digest
         )
+        # Source-selected destinations still require Static tunnel preparation
+        # and native readiness, although they are excluded from ordinary cloud
+        # route publication. Keep those two obligations separate.
+        self.static_required_prefixes = self.static_manifest.prefixes | frozenset(
+            prefix
+            for record in json.loads(static_manifest_json)
+            for prefix in (record.get("enforced_routing") or {}).get("destinations", ())
+        )
         self.bgp_policies = json.loads(bgp_policy_json)
         if not isinstance(self.bgp_policies, list):
             raise ValueError("Committed BGP policy manifest must be a list")
+        declarations = {
+            record["connection"]: record["enforced_routing"]
+            for record in [*json.loads(static_manifest_json), *self.bgp_policies]
+            if record.get("enforced_routing")
+        }
+        if set(declarations) != set(binding.enforced_sources):
+            raise ValueError("Committed enforced routing lacks exact source-subnet bindings")
+        self.enforced_by_subnet: dict[str, frozenset[str]] = {}
+        for connection, block in declarations.items():
+            for subnet in binding.enforced_sources[connection]:
+                self.enforced_by_subnet[subnet] = self.enforced_by_subnet.get(
+                    subnet, frozenset()
+                ) | frozenset(block["destinations"])
         self.expected_import_policy_digest = expected_import_policy_digest
         self.clock = clock
         self.static_readiness_provider: Callable[[], bool] | None = None
@@ -2839,6 +2930,10 @@ class BoundRouteRuntime:
             takeover_hold_down_seconds=takeover_hold_down_seconds,
             withdrawal_stability_observations=withdrawal_stability_observations,
             route_targets=binding.route_targets,
+            enforced_by_subnet=self.enforced_by_subnet,
+            ordinary_shared=frozenset(
+                p for record in self.bgp_policies for p in record.get("ordinary_shared", ())
+            ),
         )
 
     def _admit_effect(self) -> str | None:
@@ -2870,6 +2965,9 @@ class BoundRouteRuntime:
             ):
                 raise ValueError("Committed BGP policy record is invalid")
             required.update(str(prefix) for prefix in policy["remote_prefixes"])
+            enforced = policy.get("enforced_routing")
+            if enforced is not None:
+                required.update(str(prefix) for prefix in enforced["destinations"])
         return BGPRouteReadiness.normalize(
             configured_sessions=observed.configured_bgp_sessions,
             established_sessions=observed.established_bgp_sessions,
@@ -2902,10 +3000,10 @@ class BoundRouteRuntime:
                 protection_ready=protection_ready,
             )
         bgp = self._bgp(observed)
-        static_ready = self.static_manifest.prefixes.issubset(observed.usable_xfrm_prefixes)
+        static_ready = self.static_required_prefixes.issubset(observed.usable_xfrm_prefixes)
         if self.static_readiness_provider is not None:
             static_ready = static_ready and self.static_readiness_provider()
-        required_xfrm_prefixes = self.static_manifest.prefixes | bgp.required_prefixes
+        required_xfrm_prefixes = self.static_required_prefixes | bgp.required_prefixes
         protection = getattr(self.data_plane, "destination_protection", None)
         if protection is not None:
             # Withdrawal retains plaintext-drop intent without retaining a route
@@ -2990,14 +3088,14 @@ class BoundRouteRuntime:
             and export_ready,
         )
         candidate_preparation_required = bool(
-            self.static_manifest.prefixes and passive_mode and not readiness.static_ready
+            self.static_required_prefixes and passive_mode and not readiness.static_ready
         )
         cold_standby_ready = bool(
             candidate_preparation_required
             and observed.service_healthy
             and readiness.bgp_ready
             and observed.static_suspended is True
-            and not (self.static_manifest.prefixes & observed.usable_xfrm_prefixes)
+            and not (self.static_required_prefixes & observed.usable_xfrm_prefixes)
             and routing_hygiene_ready
         )
         return replace(
@@ -3048,7 +3146,12 @@ class BoundRouteRuntime:
         )
         changed = False
         for migration in self.binding.migration_routes:
-            route_kind = desired_kinds.get(migration.prefix)
+            route_kind = (
+                ManagedRouteKind.ENFORCED
+                if migration.prefix
+                in self.enforced_by_subnet.get(migration.route_target.workload_subnet_id, ())
+                else desired_kinds.get(migration.prefix)
+            )
             if route_kind is None:
                 continue
             expected = ManagedRouteOwnership(
@@ -4294,6 +4397,9 @@ def _expected_import_policy_digest(config: Mapping[str, object], bgp_records: li
         if isinstance(record, Mapping) and record.get("connection")
     }
     policy: dict[str, Iterable[str]] = {}
+    enforcement = {p.connection: p for p in compile_policies(dict(config))}
+    enforced_maps: dict[tuple[int, int], list[str]] = {}
+    enforced_bindings: list[str] = []
     connections = config.get("connections")
     if not isinstance(connections, list):
         connections = []
@@ -4314,7 +4420,30 @@ def _expected_import_policy_digest(config: Mapping[str, object], bgp_records: li
             peer = str(tunnel.get("inner_remote_ip") or "")
             if peer:
                 policy[peer] = expected_by_connection[connection_name]
-    return _policy_digest(policy)
+                selected = enforcement.get(connection_name)
+                if selected:
+                    preference = (
+                        200
+                        if tunnel_preferred(dict(config), dict(connection), dict(tunnel))
+                        else 100
+                    )
+                    enforced_maps[selected.table, preference] = bgp_policy_lines(
+                        selected, preference
+                    )
+                    enforced_bindings.append(
+                        f" neighbor {peer} route-map {bgp_import_map_name(selected, preference)} in"
+                    )
+    enforced_lines: list[str] = []
+    for lines in enforced_maps.values():
+        enforced_lines.extend(
+            line
+            for line in lines
+            if not line.startswith("ip prefix-list") or line not in enforced_lines
+        )
+    enforced_lines.extend(enforced_bindings)
+    return _policy_digest(
+        policy, _enforced_import_policy("\n".join(enforced_lines), frozenset(policy))
+    )
 
 
 def _live_peer_binding_from_mtls(

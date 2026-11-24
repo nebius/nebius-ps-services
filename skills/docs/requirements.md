@@ -963,6 +963,15 @@ causal proof, safe repair and independent verification.
   ambiguous symptoms, conditional parallelism, contradictory/stale/missing evidence,
   vendor signals, permission escapes, cancellation and budget exhaustion.
 
+- AC-019: Keep technical route, decision approach and urgency separate. Use
+  recognition only to prioritize a grounded hypothesis and discriminator; retain
+  baseline, material alternatives, counterfactual proof, causal-owner repair and
+  independent verification. Reclassification never resets budgets or evidence.
+- AC-020: Integrate provisional sensemaking, recognition and bounded search in
+  the existing loop, without another state machine, ledger, public flag or early
+  stopping gate. Preserve original qualification cases and compare editorial-only
+  with framework candidates; install only versions with complete passing evidence.
+
 #### Negative Criteria
 
 - NC-001: Status commands, passing tests or symptom disappearance alone do not
@@ -2128,6 +2137,15 @@ costly migration or runtime benchmark on the entire skill catalog.
   skill before reading content, and malformed-case diagnostics identify rows
   without echoing IDs or prompts into logs.
 
+- AC-016: Native quality comparisons select a model explicitly, freeze complete
+  candidate/baseline/fixture and optional sibling-catalog inputs, and run bounded
+  alternating repetitions. Retain exact case identity, byte/mode fingerprints,
+  outcomes and bounded redacted provenance-bound evidence for independent review.
+- AC-017: Require complete native evidence and both anonymous assertion grades;
+  deterministic safety checks cannot be waived by a judge. Separate agent/judge
+  elapsed time and usage; unknown descendant accounting, cache comparability,
+  native Plan Mode and tool schemas remain explicit qualification limitations.
+
 #### Negative Criteria
 
 - NC-001: Basic catalog validation must not require immediate evaluation
@@ -3255,9 +3273,10 @@ visual theme and layouts appropriate to documents, reports and presentations.
   prototype as unused greenfield. A proven anti-pattern may be replaced through
   a planned prerequisite refactor with one canonical implementation and no
   compatibility shims unless the user explicitly requests them.
-- AC-005: Design defaults to non-mutating planning. Explicit implementation
-  requests permit continuation after design through suitable implementation
-  skills only when the active host mode and permissions allow it.
+- AC-005: Ordinary design defaults to non-mutating planning. Explicit
+  implementation requests permit continuation through suitable implementation
+  skills when host mode and permissions allow it. The explicit extraction
+  action in REQ-087 permits documentation publication and stops before code.
 - AC-006: maintain-project-specs remains the sole canonical document owner;
   design returns decisions and evidence without directly publishing project
   requirements or design documents. Preserve existing specialist and SDLC routes.
@@ -3311,6 +3330,19 @@ visual theme and layouts appropriate to documents, reports and presentations.
   Distinguish fallback, provenance, assumptions and unverified claims from
   actual specialist use. If research is unavailable, apply that hierarchy
   directly; unresolved material facts remain explicit planning limitations.
+
+- AC-020: Preserve existing design capabilities while reducing repeated reads and
+  option search. Use a provisional decision approach, evidence-checked pattern
+  reuse and bounded search without skipping the seven phases or hard constraints.
+  Stop research only when no unresolved decision-changing gap remains; uncertain
+  interactions require a bounded validation plan, acceptance signals and revisit
+  triggers, not unapproved execution.
+- AC-021: Compare original, editorial-only and framework candidates on frozen
+  fixtures and dependency catalogs. Require all capability assertions and zero
+  unauthorized effects or false completion. Target at least 20% lower median
+  agent elapsed time on predeclared simple/standard successful pairs, no overall
+  median latency increase and at most 25% median aggregate token growth. Preserve
+  failures, variability and missing accounting; judge cost is reported separately.
 
 #### Negative Criteria
 
@@ -4181,7 +4213,7 @@ and close issues only when a fresh assessment justifies the disposition.
   priority. Missing evidence is uncertainty; whole-issue conclusions require
   every material claim. Related groups require evidence, not shared keywords.
 - AC-005: Named standalone review authorizes concise deduplicated comments
-  and justified type, outcome and relationship labels, including scoped
+  and justified review-status, type, finding and relationship labels, including scoped
   policy-defined missing labels. Implicitly selected review performs only
   requested effects under AC-011. Preserve unrelated labels and documented
   semantics. Selection labels
@@ -4224,6 +4256,31 @@ and close issues only when a fresh assessment justifies the disposition.
   The lifecycle owner removes only this progress label after verified merged
   resolution and closure, or when it explicitly ends the repair. Labels never
   grant implementation, publication or closure authority.
+
+- AC-013: Keep assessment status, issue type and finding independent. Green
+  reviewed records a substantive assessment, including an identified evidence
+  gap, without acceptance, feasibility, design or delivery commitment. Types
+  are bug, gap, feature-request, enhancement, documentation and question; new
+  capability and improvement remain distinct. At most one whole-issue finding
+  is needs-information, already-fixed, already-supported, duplicate,
+  out-of-scope, deferred or not-planned. Evidence-supported unresolved work
+  needs no separate finding. Uncertain types remain unset; multiple types
+  require distinct claims. Whole-issue findings require complete coverage.
+- AC-014: The label policy owns canonical names, descriptions and colors.
+  Reviewed remains 0e8a16 and bug d73a4a. Deferred and not-planned require an
+  explicit maintainer decision or accepted policy, never an agent-invented
+  roadmap decision. Reassessment replaces only superseded managed findings;
+  reviewed is independent of their mutual exclusion and never enables planning,
+  implementation or closure by itself. Preserve PR/shared label semantics and
+  leave unsafe automation-triggering label effects pending without aliases.
+- AC-015: Repository catalog cleanup is a separately authorized maintenance
+  operation, never a normal issue action. Refresh definitions, memberships and
+  known consumers; migrate old review outcomes to reviewed plus their finding
+  and consolidate feature-enhancement into enhancement. Preserve historical
+  meaning, unrelated labels and issue/PR state, verify destination membership
+  before deleting obsolete definitions, and reconcile uncertain/partial effects
+  before retry. Migration does not constitute fresh issue assessment. Canonical
+  spellings have no legacy aliases; literal filters never translate old names.
 
 #### Negative Criteria
 
@@ -4408,7 +4465,7 @@ Report source, installation, fresh host, live application and actual merge evide
 
 <!-- /REQUIREMENT: REQ-058 -->
 
-<!-- REQUIREMENT: REQ-059 status=active priority=P1 type=feature -->
+<!-- REQUIREMENT: REQ-059 status=satisfied priority=P1 type=feature -->
 ### REQ-059: Evidence-backed GitHub activity and open backlog reports
 
 #### User Story
@@ -4418,7 +4475,7 @@ Contributors need concise manager-ready reports of completed issue and PR activi
 #### Acceptance Criteria
 
 - AC-001: Provide github-report with --date YYYY-MM-DD, one comma-separated --repo OWNER/REPO list, optional --project REPO_RELATIVE_FOLDER, optional --user TEXT and side-effect-free -h/--help. Default to all eligible GitHub User accounts, excluding API-identified bots, current checkout and the previous 90 times 24 hours through collection start. Explicit dates start at local midnight and accept today or earlier. Match one nonempty literal user substring case-insensitively against observed login or public profile name after repository/project eligibility; null names are valid, and duplicate flags/control characters are rejected before reads.
-- AC-002: Group by repository, then by user login in stable alphabetical order. Each eligible user has Worked PRs and Worked Issues, retaining empty headings for open-only contributors. Render one shared Open Backlog with Open PRs and Open Issues after user groups; --user never changes backlog membership, attribution or counts. Use the existing six columns. Shared completed items appear under every qualifying contributor with only that user's roles and evidence. Repository totals use distinct selected completed item IDs union all retained backlog IDs; overlapping user counts are not additive. Preserve whole-PR metrics and coverage, with no rankings, opening highlights or My role column.
+- AC-002: Group by repository, then by user login in stable alphabetical order. Each eligible user has Worked PRs and Worked Issues, retaining empty headings for open-only contributors. Render one shared Open Backlog with Open PRs and Open Issues after user groups; --user never changes backlog membership, attribution or counts. Use the existing six columns. Shared completed items appear under every qualifying contributor with only that user's roles and evidence. Repository totals use distinct selected completed item IDs union all retained backlog IDs; overlapping user counts are not additive. Preserve whole-PR metrics and coverage, with no rankings, opening highlights or My role column in normal activity mode.
 - AC-003: Attribute authored/coauthored commits, PR authorship, reviews, discussion and evidenced issue triage through GitHub identity and dated evidence. Include earlier authored/contributed work merged in the window with an explicit delivery label. Mentions and assignments alone do not establish work.
 - AC-004: Independently paginate current open issues/PRs without a date cutoff and interval activity once per repository, deduplicating before enrichment. Open items appear only in shared backlog, including bot-created and untouched items. In progress identifies all evidenced human contributors with role/date, independently of --user. Completed work includes dated activity and earlier authorship/commit contributions merged in the period. Verified issue fixes require the individual user's authored/commit-contributed closing PR and complete current completed-closure evidence; review alone never grants fix credit. Retain frozen dates and internal observation/coverage metadata.
 - AC-005: Keep reporting read-only and independent of any private CLI. Use existing authentication, fixed read queries and safe argument handling; never execute issue text, install tools, repair auth, publish, or persist real reports automatically.
@@ -4426,6 +4483,10 @@ Contributors need concise manager-ready reports of completed issue and PR activi
 - AC-006: Resolve folder scope from observed PR paths, formal same-repository issue relationships, then bounded title/description assessment corroborated by collected repository paths or README evidence. Keep observed and inferred provenance distinct; complete contradictory PR file evidence wins. With --project, include supported matches and unresolved items inline as Project uncertain, exclude supported nonmatches and report uncertain counts separately from supported matches. Remove the Unclassified section. Use host inference only for bounded folder assessments and narrative; deterministic validation owns identity, eligibility, dates, attribution, metrics, section placement and counts. Preserve partial file/tree evidence; unavailable inference leaves uncertainty, never silent exclusion.
 
 - AC-007: Use exactly two header lines per repository: User plus Repository and optional Folder; Date with start/end local timestamps and numeric offsets. Omit Account, Personal activity, Observed, API collection and separate Timezone header lines. Preserve material partial/unknown evidence in the footer. No-match results retain the full shared backlog; incomplete discovery says no matching contributors observed, never proves exhaustive absence. Do not infer identity from free-text Git names/emails.
+
+- AC-008: Add --loc-modifications-report as a separate read-only mode. Rank stable GitHub User PR authors by the sum of whole merged-PR additions plus deletions in the frozen merge interval, across the complete selected visible scope. Display one LOC Modifications column, never separate addition/deletion columns. Include all tracked file types, zero-diff PRs, imports and repeated changes; do not claim individual line ownership, source-code-only totals or productivity. Exclude API-identified bots and expose missing identity/metric coverage.
+- AC-009: Add mutually exclusive --owner OWNER and --repo selectors. Owner selection works in both modes and enumerates all accessible repositories actually owned by that organization or user, including private, fork and archived repositories; never substitute collaborator/organization-member repositories. Retain current-checkout defaults without a scope selector. In LOC mode, --top K is an optional positive integer applied after full aggregation and optional --user substring filtering; omission shows all matches. Reject --top outside LOC mode and --project inside LOC mode before tool access. Preserve --date start-date semantics and repeated-flag rejection.
+- AC-010: Qualify partial LOC rankings as provisional among observed evidence, preserve unknown metrics as lower bounds, deduplicate stable PR/repository identities and resolve ties deterministically with a disclosed cutoff. Count visible-scope coverage separately from whole-owner access. Use bounded fixed read queries, safe identity/URL handling, no report persistence and no new dependency; retain the normal report's attribution, finalization and shared-backlog behavior.
 
 #### Negative Criteria
 
@@ -6038,6 +6099,59 @@ checks. Live destructive tests require an explicitly designated disposable
 release. Native discovery is separate from installed-byte evidence.
 
 <!-- /REQUIREMENT: REQ-086 -->
+
+<!-- REQUIREMENT: REQ-087 status=active priority=P0 type=feature -->
+### REQ-087: Unattended research-backed design extraction
+
+#### User Story
+
+As a designer, I need a complete draft package researched, reconciled and published as
+traceable implementation-ready documentation without mid-run design questions.
+
+#### Acceptance Criteria
+
+- AC-001: `$design --extract-once <source-folder> [--project-root <target-folder>]`
+  defaults to the invocation directory, freezes one source revision, writes
+  documentation only and stops after reporting.
+- AC-002: Every requirement and design item receives research coverage; related items
+  reuse applicable evidence. Ordinary design also requires research with depth
+  proportional to the decision.
+- AC-003: Resolve evidence-supported gaps autonomously; retain unresolved decisions with
+  stable finding IDs, exact source locators, affected REQ/FEAT IDs and required follow-
+  up. Ask no design questions during extraction.
+- AC-004: Preserve supplied phases or derive dependency-based phases; cover every
+  obligation and use vertical implementation slices with true prerequisites.
+- AC-005: Publish the canonical pair only through maintain-project-specs; retain
+  independent readiness and delivery states, stable IDs and human-owned content. Plain
+  folders use a typed filesystem identity without Git initialization.
+- AC-006: Progress reports stage, layer, reviewed-item counts, findings and measured
+  elapsed time; the final layer summary includes total elapsed and unresolved
+  decisions/evidence gaps.
+- AC-007: Reruns and interrupted continuations check source/target identities, preserve
+  previous reviewed work and user edits, and do not claim unresolved packages or
+  research as verified delivery.
+
+#### Negative Criteria
+
+- NC-001: No application implementation, commits, implicit SDLC startup, fabricated
+  evidence, silent source omissions, or permission bypass.
+
+#### Validation Method
+
+Validate canonical schemas, source and item coverage, source hashes, dependency graphs
+and publication receipts.
+
+#### Test Method
+
+Focused real-filesystem and Git transaction, inventory, evidence, reporting and roadmap
+tests plus skill quality cases.
+
+#### Evaluation Method
+
+Separate deterministic checks, installed parity and native extraction/research
+observations; keep unobserved behavior unverified.
+
+<!-- /REQUIREMENT: REQ-087 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD024 -->

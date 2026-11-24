@@ -559,6 +559,7 @@ class NebiusSDKCloudClient:
         submit: t.Callable[[], t.Any],
         wait_for_completion: bool = True,
         expected_resource_id: str | None = None,
+        retain_terminal_receipt: bool = False,
     ) -> None:
         journal = self.operation_journal
         if not wait_for_completion and (journal is None or not action_operation_id):
@@ -612,7 +613,8 @@ class NebiusSDKCloudClient:
                 operation, cloud_operation_id, expected_resource_id=expected_resource_id
             )
             assert journal is not None and accepted is not None
-            journal.clear(accepted)
+            if not retain_terminal_receipt:
+                journal.clear(accepted)
             return
         wait_vm_ha_operation(operation)
         self._require_operation_success(operation)
@@ -748,9 +750,78 @@ class NebiusSDKCloudClient:
             kind="start-instance",
             submit=lambda: InstanceServiceClient(self.sdk).start(
                 StartInstanceRequest(id=instance_id),
-                **self._request_kwargs(operation_id),
+                **{**self._request_kwargs(operation_id), "retries": 1},
             ),
         )
+
+    def submit_start(self, instance_id: str, operation_id: str) -> None:
+        """Submit once, journal acceptance, and yield while the operation runs."""
+        from nebius.api.nebius.compute.v1 import InstanceServiceClient, StartInstanceRequest
+
+        self._mutate(
+            action_operation_id=operation_id,
+            kind="start-instance",
+            submit=lambda: InstanceServiceClient(self.sdk).start(
+                StartInstanceRequest(id=instance_id),
+                **{**self._request_kwargs(operation_id), "retries": 1},
+            ),
+            wait_for_completion=False,
+            expected_resource_id=instance_id,
+            retain_terminal_receipt=True,
+        )
+
+    def observe_accepted_start(self, expected: AcceptedCloudOperation, instance_id: str) -> None:
+        """Persist a verified terminal outcome before retiring an accepted Start."""
+        from ..agent.vm_ha.store import atomic_write_json
+
+        journal = self.operation_journal
+        if journal is None or journal.load() != expected or expected.kind != "start-instance":
+            raise PermanentHACloudError("accepted Start identity changed")
+        result_path = journal.path.with_name("rearm-operation-result.json")
+        identity = {
+            "schema": "nebius-vpngw/vm-ha-start-result-v1",
+            "action_operation_id": expected.action_operation_id,
+            "cloud_operation_id": expected.cloud_operation_id,
+            "instance_id": instance_id,
+        }
+        if result_path.exists():
+            import json
+
+            previous = json.loads(result_path.read_text())
+            if (
+                isinstance(previous, dict)
+                and {k: v for k, v in previous.items() if k != "successful"} == identity
+                and type(previous.get("successful")) is bool
+            ):
+                if previous["successful"]:
+                    return
+                raise PermanentHACloudError("accepted Start finished unsuccessfully")
+        succeeded = self.read_start_outcome(expected.cloud_operation_id, instance_id)
+        atomic_write_json(result_path, {**identity, "successful": succeeded})
+        # Rearm acknowledges only after its durable checkpoint/authorization is
+        # settled. Retaining acceptance makes a crash here observation-only.
+        if not succeeded:
+            raise PermanentHACloudError("accepted Start finished unsuccessfully")
+
+    def read_start_outcome(self, cloud_operation_id: str, instance_id: str) -> bool:
+        """Observe one exact accepted Start; never submit or wait for completion."""
+        operation = self._resume_operation(cloud_operation_id)
+        if (
+            str(getattr(operation, "id", "")) != cloud_operation_id
+            or getattr(operation, "resource_id", None) != instance_id
+        ):
+            raise AmbiguousHACloudError("accepted Start resource identity changed")
+        done = getattr(operation, "done", None)
+        completed = done() if callable(done) else None
+        if type(completed) is not bool:
+            raise AmbiguousHACloudError("accepted Start completion is unavailable")
+        if not completed:
+            raise PendingHACloudOperation("accepted Start is pending")
+        try:
+            self._require_operation_success(operation)
+        except PermanentHACloudError:
+            return False
+        return True
 
     def get_allocation(self, allocation_id: str) -> t.Any:
         from nebius.api.nebius.vpc.v1 import AllocationServiceClient, GetAllocationRequest

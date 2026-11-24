@@ -30,7 +30,7 @@ from report_model import (  # noqa: E402
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
-        description="Read all human contributors' activity grouped by user and one shared open backlog using existing gh authentication.",
+        description="Read contributor activity and shared backlog, or rank merged-PR authors by LOC Modifications, using existing gh authentication.",
         allow_abbrev=False,
     )
     result.add_argument(
@@ -47,13 +47,31 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--project",
         action=Once,
-        help="One repository-relative folder; retain uncertain membership inline in user groups and shared backlog.",
+        help="Activity mode only: one repository-relative folder; retain uncertain membership inline.",
     )
     result.add_argument(
         "--repo",
         nargs="+",
         action=Once,
         help="One comma-separated OWNER/REPO list; optional spaces. Default: current checkout.",
+    )
+    result.add_argument(
+        "--loc-modifications-report",
+        action=Once,
+        nargs=0,
+        help="Rank merged-PR authors by overall LOC Modifications (additions plus deletions).",
+    )
+    result.add_argument(
+        "--owner",
+        action=Once,
+        metavar="OWNER",
+        help="All visible repositories owned by one organization or user; excludes --repo.",
+    )
+    result.add_argument(
+        "--top",
+        action=Once,
+        metavar="K",
+        help="Show at most K contributors after aggregation/filtering; LOC mode only. Default: all.",
     )
     # Internal bridge for the invoking agent; not a public skill flag.
     result.add_argument("--expected-user-id", type=int, help=argparse.SUPPRESS)
@@ -242,25 +260,63 @@ def collect(
 def main(argv=None) -> int:
     args = parser().parse_args(argv)
     try:
+        # Help exits before importing mode-specific resources or reading tools.
+        from loc_modifications_report import collect_loc, owner_selector, top_selector
+
         interval = window(args.date)
         selected = repositories(args.repo)
         project = project_selector(args.project)
         user = user_selector(args.user)
+        owner = owner_selector(args.owner)
+        top = top_selector(args.top)
+        loc_mode = args.loc_modifications_report is not None
+        if (
+            (owner and selected)
+            or (top is not None and not loc_mode)
+            or (loc_mode and project)
+        ):
+            raise ReportError(
+                "INVALID_COMBINATION",
+                "--owner excludes --repo; --top requires --loc-modifications-report; LOC mode does not accept --project.",
+            )
         if args.expected_user_id is not None and args.expected_user_id <= 0:
             raise ReportError(
                 "INVALID_IDENTITY",
                 "Expected user identity must be a positive GitHub database ID.",
             )
-        if not selected:
+        if not selected and not owner:
             selected = [checkout_repository()]
-        report = collect(
-            GitHub(),
-            selected,
-            interval,
-            args.expected_user_id,
-            project=project,
-            user=user,
-        )
+        api = GitHub()
+        inventory = None
+        expected_id = args.expected_user_id
+        if owner:
+            expected_id = api.viewer(expected_id)["databaseId"]
+            inventory = api.owner_repositories(owner)
+            selected = [item["nameWithOwner"] for item in inventory["nodes"]]
+        if loc_mode:
+            report = collect_loc(
+                api,
+                selected,
+                interval,
+                expected_id,
+                user=user,
+                top=top,
+                inventory=inventory,
+            )
+        else:
+            report = collect(
+                api, selected, interval, expected_id, project=project, user=user
+            )
+            if inventory is not None:
+                report["owner_inventory"] = inventory
+                report["limitations"].append(
+                    "Owner scope includes only accessible owned repositories, including forks and archives; hidden repositories are unknown."
+                )
+                if inventory["limits"]:
+                    report["coverage"] = "partial"
+                    report["limitations"].extend(
+                        "Owner inventory: " + limit for limit in inventory["limits"]
+                    )
         print(json.dumps(report, ensure_ascii=False))
         return 0 if report["coverage"] == "complete" else 3
     except ReportError as exc:

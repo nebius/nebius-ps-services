@@ -48,3 +48,10 @@ design-specialist-negative-01,false,Use the approved Nebius resource plan to cre
 design-specialist-negative-02,false,"Compare Nebius storage service constraints for this workload only; I need provider guidance, not a whole-product design or implementation plan."
 design-positive-doc-routing,true,Design a small SDK integration using current official documentation; use available vendor documentation tools or Tavily and return an implementation-ready plan without coding.
 design-sdlc-advisory,true,The SDLC design adapter requests advisory design reconciliation against its frozen source requirements; return decisions only.
+design-extract-positive-01,true,Use $design --extract-once /path/to/drafts and publish reviewed documentation into the current project.
+design-extract-positive-02,true,Use $design --extract-once /path/to/drafts --project-root /path/to/project and report unresolved decisions at the end.
+design-extract-help,true,Use $design --help to explain the extraction flag without starting work.
+design-extract-negative-01,false,Copy this folder unchanged into the backup directory.
+design-extract-negative-02,false,Implement the already approved project creation API without redesigning it.
+design-extract-bounded-package,true,Use $design --extract-once /path/to/large-drafts and report any files excluded by supported size or format limits with the reviewed documentation.
+design-artifact-size-repair,false,Fix the known byte-limit bug in the approved extraction helper and run its existing tests; no new design is needed.

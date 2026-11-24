@@ -21,6 +21,7 @@ from .contracts import (
     inspect_pair_bytes,
     project_identity,
     stable_json,
+    load_project_config,
     _read_file,
 )
 from .lifecycle import _outside_git, _secure_directory, codex_home
@@ -34,6 +35,14 @@ def _state_root(project: Path, git_root: Path) -> Path:
     scope = hashlib.sha256(str(project).encode()).hexdigest()[:16]
     root = codex_home() / "project-specs" / workspace / "transactions" / scope
     _outside_git(root, git_root, "project spec transaction state")
+    _secure_directory(root)
+    return root
+
+
+def _lock_root(project: Path, git_root: Path) -> Path:
+    root = codex_home() / "project-specs" / "publication-locks" / hashlib.sha256(str(project).encode()).hexdigest()
+    _outside_git(root, git_root, "project spec lock")
+    _outside_git(root, project, "project spec lock")
     _secure_directory(root)
     return root
 
@@ -63,7 +72,7 @@ def _acquire_lock(root: Path, *, shared: bool = False) -> int:
 def spec_pair_lock(project: Path, git_root: Path, *, shared: bool = False):
     """Serialize owner-aware readers and writers for one selected project."""
 
-    descriptor = _acquire_lock(_state_root(project, git_root), shared=shared)
+    descriptor = _acquire_lock(_lock_root(project, git_root), shared=shared)
     try:
         yield
     finally:
@@ -310,12 +319,17 @@ def _assert_publication_boundary(
     expected_head: str,
     expected_documents: dict[str, bytes | None],
     authority_check=lambda: None,
+    identity_check=None,
 ) -> None:
     authority_check()
     _assert_directory_binding(project, project_descriptor, "project")
     _assert_child_binding(project_descriptor, "docs", docs_descriptor, "docs")
     try:
-        _project, _git_root, _scope, current_head = project_identity(project)
+        if identity_check is not None:
+            identity_check()
+            current_head = expected_head
+        else:
+            current_head = project_identity(project)[3]
     except ProjectSpecError as error:
         raise ProjectSpecError(
             "CONCURRENT_MODIFICATION", "project identity changed during publication"
@@ -336,7 +350,8 @@ def _publish_spec_pair(
     *,
     requirements_candidate: bytes,
     design_candidate: bytes,
-    expected_git_head: str,
+    expected_git_head: str | None = None,
+    expected_filesystem_basis: str | None = None,
     expected_requirements_sha256: str,
     expected_design_sha256: str,
     operation_id: str,
@@ -347,8 +362,17 @@ def _publish_spec_pair(
 
     if OPERATION_RE.fullmatch(operation_id) is None:
         raise ProjectSpecError("SPEC_TRANSACTION_INVALID", "operation ID is invalid")
-    if re.fullmatch(r"[0-9a-f]{40,64}", expected_git_head) is None:
-        raise ProjectSpecError("SPEC_TRANSACTION_INVALID", "expected Git HEAD is invalid")
+    from .targets import resolve_target
+    target = resolve_target(project_root)
+    if target.kind == "git":
+        if expected_filesystem_basis is not None or not isinstance(expected_git_head, str) or re.fullmatch(r"[0-9a-f]{40,64}", expected_git_head) is None:
+            raise ProjectSpecError("SPEC_TRANSACTION_INVALID", "Git publication requires only expected Git HEAD")
+        if target.head != expected_git_head:
+            raise ProjectSpecError("CONCURRENT_MODIFICATION", "Git HEAD changed before publication")
+    elif expected_git_head is not None or expected_filesystem_basis != target.basis:
+        raise ProjectSpecError("CONCURRENT_MODIFICATION", "filesystem publication basis changed or was not supplied")
+    if load_project_config(target.project, require_git=target.kind == "git")["mode"] == "disabled":
+        raise ProjectSpecError("PROJECT_SPECS_DISABLED", "project specifications are disabled")
     for value in (expected_requirements_sha256, expected_design_sha256):
         if value != "absent" and re.fullmatch(r"[0-9a-f]{64}", value) is None:
             raise ProjectSpecError(
@@ -365,7 +389,8 @@ def _publish_spec_pair(
     except ProjectSpecError:
         # Rejected structure is exempt only after current authority and all
         # predecessor identities have been verified, before publication effects.
-        project, _, _, current_head = project_identity(project_root)
+        target.check()
+        project, current_head = target.project, target.head
         if current_head != expected_git_head:
             raise ProjectSpecError("CONCURRENT_MODIFICATION", "Git HEAD changed before candidate admission")
         for kind, expected in (("requirements", expected_requirements_sha256),
@@ -374,7 +399,7 @@ def _publish_spec_pair(
             actual = digest(_read_file(path, kind)[0]) if path.exists() or path.is_symlink() else "absent"
             if actual != expected:
                 raise ProjectSpecError("CONCURRENT_MODIFICATION", "spec predecessor changed before candidate admission")
-        feedback = _workflow_candidate(project_root, requirements_candidate, design_candidate)
+        feedback = _workflow_candidate(project_root, requirements_candidate, design_candidate) if target.kind == "git" else None
         if feedback and feedback["status"] in {"correction_pending", "classification_required"}:
             return feedback
         raise
@@ -384,18 +409,20 @@ def _publish_spec_pair(
         raise ProjectSpecError(
             "SPEC_TRANSACTION_INVALID", "both candidates must be canonically managed"
         )
-    project, git_root, scope, head = project_identity(project_root)
+    target.check()
+    project, git_root, scope, head = target.project, target.storage_root, target.scope, target.head
     if head != expected_git_head:
         raise ProjectSpecError("CONCURRENT_MODIFICATION", "Git HEAD changed before publication")
     docs = project / "docs"
     if docs.exists() and (docs.is_symlink() or not docs.is_dir()):
         raise ProjectSpecError("UNSAFE_SPEC", "docs must be a real directory")
     root = _state_root(project, git_root)
-    lock = _acquire_lock(root)
+    lock = _acquire_lock(_lock_root(project, git_root))
     project_descriptor: int | None = None
     docs_descriptor: int | None = None
     try:
-        _project, _git_root, _scope, locked_head = project_identity(project)
+        target.check()
+        locked_head = target.head
         if locked_head != expected_git_head:
             raise ProjectSpecError(
                 "CONCURRENT_MODIFICATION", "Git HEAD changed while awaiting publication"
@@ -432,6 +459,10 @@ def _publish_spec_pair(
             "after": after,
             "contract_status": inspected["status"],
         }
+        if target.kind == "filesystem":
+            receipt.pop("git_head")
+            receipt.update(schema="maintain-project-specs.filesystem-transaction.v1",
+                           filesystem_basis=target.basis)
         if _workflow_identity is not None:
             receipt["workflow_identity"] = _workflow_identity
         journal = root / f"{operation_id}.json"
@@ -455,6 +486,7 @@ def _publish_spec_pair(
                     expected_git_head,
                     originals,
                     _authority_check,
+                    target.check,
                 )
                 return receipt
             if any(
@@ -469,7 +501,7 @@ def _publish_spec_pair(
             raise ProjectSpecError(
                 "CONCURRENT_MODIFICATION", "specification bytes changed before publication"
             )
-        feedback = _workflow_candidate(project_root, requirements_candidate, design_candidate)
+        feedback = _workflow_candidate(project_root, requirements_candidate, design_candidate) if target.kind == "git" else None
         if feedback and feedback["status"] in {"correction_pending", "classification_required"}:
             return feedback
         if existing is None:
@@ -484,6 +516,7 @@ def _publish_spec_pair(
                 expected_git_head,
                 current_documents,
                 _authority_check,
+                target.check,
             )
             for kind in ("requirements", "design"):
                 if current_documents[kind] == candidates[kind]:
@@ -503,6 +536,7 @@ def _publish_spec_pair(
                     expected_git_head,
                     current_documents,
                     _authority_check,
+                    target.check,
                 )
         except Exception:
             try:
@@ -547,7 +581,13 @@ def publish_spec_pair(project_root: Path, *, expected_objective_sha256=None,
     """Enforce registered workflow ownership without gating unrelated work."""
     import subprocess
     import sys
-    project = project_root.resolve()
+    from .targets import resolve_target
+    target = resolve_target(project_root)
+    if target.kind == "filesystem":
+        if expected_objective_sha256 is not None or expected_basis_sha256 is not None:
+            raise ProjectSpecError("SPEC_CONFLICT", "filesystem publication cannot carry workflow authority")
+        return _publish_spec_pair(project_root, **arguments)
+    project = target.project
     result = subprocess.run(["git", "-C", str(project), "rev-parse", "--path-format=absolute", "--git-common-dir"],
                             capture_output=True, text=True, timeout=30, check=False, env=git_environment(project))
     common = Path(result.stdout.strip()) if result.returncode == 0 else None

@@ -68,6 +68,19 @@ to use it, and what tradeoffs matter for a real project.
 - Do not use for Agentic SDLC-owned context packs or committed design docs; use
   the relevant `sdlc-*` skill through `$sdlc-start <objective>` or `$sdlc-start continue [project-folder]`.
 
+## Design Caller Contract
+
+When called by `design`, assess its bounded requirement/decision group at a depth
+proportional to risk. Cover each supplied item explicitly; reuse applicable
+sources across related items. Return item IDs, claims, original sources, version
+and observation date, applicability, contradictions and unresolved questions.
+Product intent can be supported by local accepted evidence; technical vendor
+claims require current primary evidence. Do not invent stakeholder choices.
+For unattended extraction, return unresolved questions as source-linked findings
+to design instead of asking the user. Expand research for decisive gaps until
+resolved or further available retrieval cannot resolve them. The design owner
+selects architecture, publishes through the spec owner and reports progress.
+
 ## Inputs
 
 - Research topic, technology, architecture pattern, product, framework, RFC,

@@ -16,6 +16,7 @@ Nebius Security Groups attached to the gateway VMs. See [SSH access](#ssh-access
 - [Installation (Detailed)](#installation-detailed)
 - [Architecture](#architecture)
 - [Configuration](#configuration)
+  - [Enforced Routing](#enforced-routing)
 - [Commands](#commands)
 - [Routing Modes](#routing-modes)
 - [BGP Configuration](#bgp-configuration)
@@ -26,6 +27,7 @@ Nebius Security Groups attached to the gateway VMs. See [SSH access](#ssh-access
 - [System Monitoring](#system-monitoring)
 - [Security](#security)
 - [SSH access](#ssh-access)
+- [Firewall requirements](#firewall-requirements)
 - [Collecting a private support bundle](#collecting-a-private-support-bundle)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
@@ -201,13 +203,35 @@ preserved. An older agent can be upgraded even when it lacks the new ordinary
 confirmation capability. An actual update may interrupt VPN traffic.
 
 Install the new CLI release, then run `nebius-vpngw apply -c <config.yaml>` to
-upgrade the existing gateways. An unchanged apply reconciles supported drift or
+upgrade the existing gateways. VM-HA upgrades also convert retained standby recovery
+state through the same apply transaction. Both gateways use the exact CLI release;
+a stopped standby is restored through the serving owner's rearm service before
+its package upgrade. No separate state-migration command is needed. An unchanged apply reconciles supported drift or
 succeeds without unnecessary package installation or service restart. A release
 change alone does not require `--repair`. Interrupted updates keep their original
 artifact and operation records; apply settles the prior owners before admitting a
 new package update. Changes to resources, credentials, trust or interruption scope
 still require review. Uncertain writers and cloud operations remain explicit
 prerequisites.
+
+Standby auto-healing applies to either surviving owner, independent of the
+preferred-active configuration. Restoring the stopped VM leaves traffic on the
+current owner. A newer Compute revision requires a separate, freshly validated
+recovery proof; the original promotion receipt remains unchanged. Missing or
+changed ownership history cannot be treated as uninterrupted ownership. Normal
+apply can establish fresh operator recovery authority after verifying the exact
+pair and enabled policy, including after conversion from v0.6.9 or v0.7.0.
+
+Transient Start failures receive a 300-second submission window from the first
+eligible request, with five seconds between a failed request and its retry.
+Accepted operations are observed without resubmission. Restarts and automatic
+revalidation do not reset the budget; permanent errors remain blocked. Once
+Compute reports Running, a separate 300-second deadline covers standby readiness.
+Support bundles retain sanitized recovery authority, operation outcomes, timing
+and the first failure even when the stopped peer is unreachable.
+Interrupted recovery preserves its request identity, elapsed budget and retry delay.
+If a previously accepted Start has already succeeded, apply observes the existing
+recovery through standby readiness without submitting another Start.
 
 Apply can convert a validated legacy SSH trust receipt after proving the exact VM
 identities and pinned keys. A changed host key requires independent authenticated
@@ -257,6 +281,11 @@ exact owned recovery before installation can proceed.
 Subsequent ordinary applies recognize the exact product-owned underlay service
 dependency. Its contents remain part of environment identity; altered or unrelated
 management dependency drop-ins still block changes.
+The underlay service waits directly for networkd readiness before preparing
+physical routes and starting FRR. It does not wait for the aggregate network-online
+target: FRR precedes the network target, so that dependency would create a boot
+and shutdown ordering cycle. HA guard and physical-route verification remain
+required before controller and routing activation.
 
 First conversion initializes the canonical HA lock directories after excluding
 existing writers. Package verification can then use the same locks as HA repair,
@@ -388,6 +417,8 @@ If a package worker is still running after a CLI interruption, the resumed comma
 waits for guest deployment exclusion before continuing the same recorded work.
 For an interrupted HA handoff, confirmed repair can release an idle worker after
 verifying its original identity and every submitted request's completed outcome.
+Stop-only handoffs can resume before package staging creates a receipt; any saved
+receipt must still pass strict validation.
 It preserves the evidence without executing obsolete activation steps. Active
 work still receives bounded waiting; unknown ownership or process state reports
 the prerequisite to resolve before resuming repair.
@@ -474,7 +505,10 @@ records remain historical. Destroy settles recorded cloud operations, fences the
 exact Compute targets, removes receipt-owned repair quarantine and retires the
 old repair record. An apply that stopped before publishing a fresh lifecycle
 can also be retired after exact terminal absence is verified; its planned
-creation tokens are never treated as VM identities. Broken guest packages and
+creation tokens are never treated as VM identities. If that apply already created
+its members, retirement instead requires retained publication receipts matching
+the original command, artifact and exact Compute/disk identities, followed by
+fresh absence checks. Broken guest packages and
 unreachable SSH do not block this
 path once Compute fencing is proven. Missing permissions, uncertain identity or
 unresolved provider operations must be corrected first; recreating VMs cannot
@@ -609,6 +643,12 @@ exact promotion receipt and the installed cluster, allocation and member pair
 validate. The history stays intact; current apply locks, configuration and boot
 fences still authorize activation. Active, blocked, malformed or foreign
 restoration evidence remains a blocker.
+
+When native checks prove configuration complete and services healthy, a pending
+activation phase resumes under its existing fenced permit without restarting
+those services. Owner forwarding verification allows up to five minutes while
+new controller progress is observed, with a two-minute stall window. Heartbeats
+and repeated states do not extend that window or replenish repair attempts.
 
 If package installation completed but activation failed, a corrected artifact
 can use the guarded `apply` successor workflow. Preview binds the old package
@@ -1217,6 +1257,9 @@ upgrade canaries still provide separate deployment evidence.
 
 Managed HA reapply preserves the exact workload subnet and route-table scope.
 Changing local prefixes to select different route targets fails before mutation.
+Later enforced-routing changes retain completed HA transfer history after checking
+its promotion receipt and installed member identity. Unfinished or foreign
+restoration authority still blocks the stopped-writer cutover.
 If a previous apply stopped before staging either host, restore the original
 scope and run `apply --dry-run` to inspect recovery. An eligible recovery prints
 an exact `--recover-vm-ha-migration DIGEST`; use it with the normal disruption
@@ -2024,21 +2067,19 @@ tombstone, reconcile apply-owned drift, observe controller progress, or ask the
   replacement and directs the operator to `apply`, which owns the exact
   creation approval.
 
-One additional apply-owned recovery is supported for the recurring
-post-failover/failback skew: an exact ACTIVE cluster with one Running serving
-owner that is stale only because its controller lacks standby restoration, and
-one alias-free Stopped non-owner. The approved `artifact-standby-recovery`
-plan installs and reproves the bound artifact on the owner first, uses only the
-owner-side rearm service to restore Compute and SSH, installs the identical
-artifact on the standby, then resumes canonical non-owner-first apply and the
-normal two-sample health proof. It never grants the CLI direct Compute, route,
-allocation, or forwarding authority. The legacy owner's policy view is accepted
-only when rearm is inhibited specifically because the stopped peer cannot
-provide live policy evidence with blocked policy status, or a pre-v2 runtime
-rejected an already committed transfer after its mutable latest agreement
-refreshed during cutover while durable policy status remains transitional.
-Disabled, changing, invalid, or otherwise blocked policy and any additional
-drift stop the lane.
+Normal `apply` also handles an exact ACTIVE cluster with one Running owner and
+one alias-free Stopped peer when the owner needs the new restoration capability.
+The approval binds the exact CLI artifact, identities, policy and retained history.
+It observes any accepted Start to a terminal outcome before fencing the owner,
+records the predecessor, installs an exact apply lock, drains writers and upgrades
+the owner through guarded package installation. It then activates and verifies the
+fenced runtime, releases the exact lock, and lets the controller prove fresh recovery
+authority. Only the owner's rearm service starts the peer. The same approved request
+is observed through retry delays and CLI restarts without renewing its allowance.
+After Compute, SSH and standby readiness are proven, coordinated non-owner-first
+apply upgrades both gateways to the same artifact and verifies normal two-sample
+health. Unknown identity, disabled/conflicting policy, foreign writers or changed
+artifact bytes remain blocking. Promotion receipts are never rewritten.
 
 Because that composite recovery upgrades the serving owner before resuming
 canonical apply, it remains approval-required. Its concise impact states that
@@ -2616,11 +2657,13 @@ it targets whichever exact member is currently the non-owner through that
 owner-side reconciler and returns only after fresh current-boot
 `standby_ready` evidence less than 10 seconds old is available. Automatic rearm
 never changes ownership. Retryable or ambiguous provider failures retain one
-logical operation identity for five total submissions separated by 5, 15, 30,
-and 60 seconds; a permanent failure or exhausted retry budget closes the
-authorization as blocked. `apply` can reopen only that same exact blocked
-receipt under the unchanged committed-enabled policy. A crash after cloud
-acceptance is recovered only by exact terminal operation lookup. Apply,
+logical operation identity for a 300-second elapsed window, with five seconds
+between failed submissions and at most 60 submissions. Permanent errors block
+immediately. Process restart, reboot and automatic revalidation do not refill
+this budget. Accepted operations are observed by exact operation/resource identity
+and retained until their outcome is durably consumed; they are never resubmitted.
+Normal `apply` can create one fresh, policy-bound operator recovery while preserving
+the original promotion receipt and predecessor history. Apply,
 removal, retry submission, and rearm share one writer lock, so maintenance
 cannot race the final pre-start inhibition check. Deactivation keeps that
 root-only lock file and directory in place, removing only sibling HA state, so
@@ -2833,7 +2876,7 @@ healthy owner/standby pair and follows the selected text or JSON output format.
 
 Before `apply` can report healthy or a planned VM transfer can publish its
 request, each current controller must advertise
-`vm-ha-standby-restoration-v2`. The configuration-independent installed-agent
+`vm-ha-standby-restoration-v3`. The configuration-independent installed-agent
 capability document advertises the same feature for standby-policy recovery.
 Missing capability is treated as apply-owned artifact drift even when package
 versions and configuration generations match: deploy the current artifact with
@@ -2842,7 +2885,7 @@ transfer. VM-HA package preparation requires a current build or explicit local
 wheel; it never falls back to the wheel recorded by the existing installation.
 The uploader binds the local SHA-256, uses an isolated remote staging directory,
 verifies the remote bytes before installation, and accepts the installation only
-after a fresh capability probe advertises `vm-ha-standby-restoration-v2`.
+after a fresh capability probe advertises `vm-ha-standby-restoration-v3`.
 
 The latest two-member agreement is admission evidence only. Once a planned
 failover or failback is armed, later healthy heartbeats may refresh that cache
@@ -3352,7 +3395,8 @@ Example: if the peer advertises `10.10.0.0/16` but you configure only `10.10.10.
 
 **Static Mode:**
 
-- `remote_prefixes` is **required** (or specified per-tunnel in `static_routes`)
+- `remote_prefixes` is **required** (or specified per-tunnel in `static_routes`),
+  unless `enforced_routing.destinations` supplies all required static destinations
 - Used to install kernel routes via XFRM interfaces (rightsubnet stays 0.0.0.0/0)
 - You must enumerate each remote network manually
 - No dynamic route learning
@@ -3376,6 +3420,116 @@ connections:
         inner_local_ip: "169.254.20.1"
         inner_remote_ip: "169.254.20.2"
 ```
+
+### Enforced Routing
+
+Use `enforced_routing` on a connection to send selected workload traffic through
+that connection. Internet forwarding through a customer firewall is commonly
+called **forced tunneling** or **full tunneling**. Multiple private or public
+destination CIDRs are supported as well:
+
+```yaml
+connections:
+  - name: customer-firewall
+    # Existing routing, peer and tunnel configuration goes here.
+    enforced_routing:
+      source_subnets:
+        - "10.100.0.0/24"
+        - "10.101.0.0/24"
+      destinations:
+        - "0.0.0.0/0"
+        - "192.0.2.0/24"
+```
+
+Each source applies to every listed destination. Sources must identify whole,
+explicit Nebius workload subnets covered by `gateway.local_prefixes`. They cannot
+select the gateway subnet or a subnet that inherits the network's address pools.
+The block is optional; `create-config` asks for it per connection with default
+**No** and omits it when declined. Selecting a source on one connection does not
+select every subnet in `local_prefixes`.
+
+Run normal `apply` after enabling, changing or removing the block. It prepares
+guest rules and drop protection, copies and verifies subnet route tables, then
+switches the selected subnet attachments. Unrelated routes are preserved. A
+selected default replaces that workload subnet's `default-egress` route with the
+VPN allocation. The gateway subnet keeps its physical Internet path for IKE,
+IPsec transport and management; gateway-originated traffic is not selected by
+these forwarding rules.
+
+For BGP, the customer peer must advertise every exact enforced destination and
+the existing inbound allowlist must permit it. Configuration does not synthesize
+a default or widen a filter. HA readiness requires those destinations to be both
+learned and usable through their native tunnel routes, even without an ordinary
+`remote_prefixes` list. For static routing, the destination list supplies
+the required route intent, so an enforcement-only connection does not also need
+`remote_prefixes`. The customer firewall must supply onward Internet access,
+NAT where needed, and return routes to the selected workload subnets.
+For HA, verify the customer's effective return routes follow the active peer.
+A stale, preferred static return route can send replies to the former owner
+even when the customer has learned the correct BGP path.
+Static HA prepares and verifies these tunnels on a cold owner even when every
+destination is source-selected and no ordinary static route is declared.
+
+If the selected path or BGP route disappears, matching traffic drops. It cannot
+fall back to Nebius Internet egress or a different VPN connection. When a finite
+destination and a broader destination are both selected, withdrawing the finite
+route cannot redirect its traffic through the broader route, even on the same
+connection. Unselected
+subnets keep their declared routing. A finite prefix listed in both ordinary
+`remote_prefixes` and `enforced_routing.destinations` retains its ordinary VPN
+route for unselected subnets. An enforced `0.0.0.0/0` remains source-selected;
+it does not give unselected subnets a VPN default route. Nebius internal same-VPC routing remains
+provider-controlled; this feature cannot intercept it. IPv6, DNS names, ports
+and overlapping ownership across connections are unsupported.
+
+The `apply --dry-run` impact reports private route-table creation and workload
+subnet attachment changes before the upgrade. Leave enough
+[route-table quota](https://docs.nebius.com/vpc/resources/quotas-limits) for the
+candidate copies; retained tables also consume quota.
+Keep the same source and destination declaration when resuming an interrupted
+table transition through `apply` or `apply --repair`.
+
+HA status and the final `apply` health check validate enforced routes against
+each source subnet’s committed policy. Selected and unselected subnet route
+sets can differ; missing or unexpected managed routes still block readiness.
+Full controller snapshots collect cloud route proofs before sampling local
+readiness, so decisions reflect native health changes during those cloud reads.
+Unsafe or unavailable native routing still blocks readiness.
+BGP readiness checks the resolved tunnel device and peer, including routes
+installed by FRR through native Linux nexthop objects.
+Passive readiness uses the same connection-specific import bindings as the
+renderer, including the selected tunnel's local preference.
+Import-policy comparison accepts FRR's statement ordering within each clause
+while still checking every clause, action, match condition and binding.
+Before switching workload tables, `apply` retires the guest ledger entries for
+replaced tables while both writers are stopped and forwarding is fenced. Entries
+for unchanged tables remain intact; the cloud transaction retains the old routes
+for controlled cleanup.
+When routing mode or tunnel paths change, retirement checks the route's full
+owned path and protocol. Sharing a destination with the new policy does not
+preserve an obsolete route. The guest commits the new ownership record only
+after verifying that every remaining route belongs to the new policy.
+
+Removing the declaration with `apply`, or destroying the deployment, restores
+only a recorded unchanged predecessor route. A drifted predecessor blocks
+restoration. Removing enforcement preserves ordinary routing and BGP import
+policies. To return to direct Internet egress, also withdraw or explicitly filter
+unwanted Internet routes advertised by the peer; omitting the block does not
+withdraw those routes.
+
+Keep the private operator journals and resume an interrupted apply
+with the same declaration. If route preparation times out before subnet cutover,
+the resumed activation verifies its exact creation receipts before accepting the
+allocation revision caused by those routes. Unrelated cloud drift still blocks
+the resume. Retained workload route tables are preserved by
+`destroy`; it restores their displaced routes before deleting gateway resources.
+A later `apply` can recreate the gateway with a newly approved enforcement
+policy or ordinary routing; completed destruction history does not block ordinary
+discovery, and previous cutover receipts do not authorize the new deployment.
+
+See [Nebius routing](https://docs.nebius.com/vpc/routing/overview) and
+[custom gateway routing](https://docs.nebius.com/vpc/routing/custom-nat-gateway)
+for the provider's routing boundaries.
 
 ### Schema Validation
 
@@ -3850,6 +4004,19 @@ An XFRM interface alone does not establish health: the controller checks exact
 IKE/CHILD, kernel policies and states, interfaces, and destination routes.
 Unavailable evidence remains unknown.
 
+Static backup checks keep cloud ownership validation separate from the bounded
+local proof budget. A valid ownership read that takes several seconds does not
+expire the subsequent fresh native tunnel check before it starts.
+Tunnel authority checks collect fresh owner, readiness and peer evidence without
+repeating cloud route-proof reads. Full controller and heartbeat route evidence
+remain separate; the two-confirmation freshness limit stays unchanged.
+After automatic Static activation, the controller persists its fixed verification
+deadline and takes a fresh native and inner-peer sample in the same pass. A second
+fresh sample in a later pass is still required; writer contention cannot renew
+the deadline, and activation evidence does not count as verification.
+A restarted Static standby restores and verifies destination protection while
+forwarding remains fenced, before promotion can reconcile workload routes.
+
 Single-VM and HA BGP retain native automatic route selection and warm backup sessions. The
 existing bounded owner repair clears only a confirmed failed BGP session when a
 healthy encrypted alternative covers all required destinations. Healthy sessions
@@ -4177,7 +4344,8 @@ outer endpoints. This includes a DHCP `/32` interface with an off-subnet router.
 More-specific local routes preserve local reachability when a remote RFC1918
 summary contains those ranges; narrower remote destinations still use normal
 longest-prefix routing. This does not support duplicate addresses across sites,
-VRFs, multiple primary NICs, IPv6, or a new full-tunnel mode.
+VRFs, multiple primary NICs, or IPv6. To select workload Internet traffic for a
+tunnel, use [Enforced Routing](#enforced-routing).
 
 Install the updated CLI and use normal `apply`; there is no additional repair
 flag for persistent routing. The deployment verifies route persistence and
@@ -4977,9 +5145,12 @@ non-owner first while preserving the serving owner's forwarding and preventing
 concurrent ownership changes. `status` reports desired and
 observed memberships, drift, and unknown cloud evidence separately from VM health.
 
-The product does not create groups or edit their rules. Changes made directly in
-Nebius are reconciled to YAML on the next `apply`; update YAML when those changes
-should persist. Staged replacement and missing/failed standby recovery use this
+The product does not create groups or edit their rules. For HA, change attachments
+through YAML and the coordinated `apply` workflow above. Direct Compute NIC edits
+bypass HA coordination and can trigger fencing and failover. Edit
+customer-owned group rules through Nebius. Attachments changed directly in Nebius
+are reconciled to YAML on the next `apply`; update YAML when those changes should
+persist. Staged replacement and missing/failed standby recovery use this
 same policy. Ensure the selected groups permit required management, heartbeat
 and VPN traffic before applying them. An interrupted update retains its exact
 operation journal; rerun the same `apply` to resume. If the policy blocks SSH,
@@ -5057,6 +5228,75 @@ Fresh HA creation also requires the selected identity to match its bootstrap key
 Security groups are customer-owned external firewalls. YAML owns the desired
 attachments through `gateway_group.security_group_ids`; customers own group rules.
 Guest permits cannot override an external deny.
+
+#### Firewall requirements
+
+Security Groups filter traffic to the gateway NIC through both its public and
+private addresses. Restrict SSH without removing the VPN, HA, workload and outbound
+rules. An SSH-only group can interrupt VPN negotiation and HA communication.
+Use the following **stateful inbound** rules, with destination ports as shown:
+
+| Traffic | Protocol / destination port | Allowed source |
+| --- | --- | --- |
+| Public SSH management | TCP 22 | Corporate public egress IPs |
+| IPsec negotiation (IKE) | UDP 500 | Remote VPN peers' public IPs |
+| NAT-T (encrypted VPN traffic and IKE) | UDP 4500 | Remote VPN peers' public IPs |
+| VM-HA heartbeat | TCP 9443, **private addresses only** | The other gateway member's private IP; permit both directions |
+| Optional public ping | ICMP; no TCP/UDP port | Corporate public egress IPs or approved monitoring sources |
+| Routed workload ingress | Required workload protocols and ports | Authorized local workload CIDRs, consistent with `gateway.local_prefixes` |
+
+Use `/32` for each individual IPv4 source. VPN-peer IPs may differ from corporate
+SSH egress IPs. For HA, apply the complete policy to both members and retain
+outbound TCP 9443 to the peer's private address as well.
+
+Ping sends an inbound **echo request** (ICMP type 8); the echo reply is type 0.
+A stateful rule automatically permits response traffic, so a separate echo-reply
+rule is unnecessary. Nebius currently exposes an `ICMP` protocol rule, without an
+echo-type selector: this permits ICMP from the selected sources, not just ping.
+Stateless policies need explicit return-path rules. Preserve any additional ICMP
+needed for path MTU discovery; a small ping test does not qualify PMTU behavior.
+See [Nebius rule types and priorities](https://docs.nebius.com/vpc/security-groups/overview)
+and [ICMP echo messages](https://www.rfc-editor.org/rfc/rfc792.txt).
+
+Nebius maps public IPs to private IPs using
+[one-to-one NAT](https://docs.nebius.com/compute/virtual-machines/network#public-ip-addresses),
+so NAT-T is expected on this path. With
+[NAT-T](https://docs.strongswan.org/docs/latest/features/natTraversal.html), ESP is
+carried inside UDP 4500 and needs no separate TCP port or native-ESP permit.
+If native ESP is used instead, it requires **IP protocol 50**, not TCP/UDP port 50;
+that transport needs separate firewall qualification. IKE reauthentication can
+already use UDP 4500; retain UDP 500 for fresh establishment.
+**BGP TCP 179 runs inside the VPN tunnel and should not be opened on the public IP.**
+TCP 9443 likewise needs no public ingress rule.
+
+Also retain outbound access required by the VPN peers, routed workloads and
+gateway services, including the Nebius API, DNS and time synchronization.
+The live policy test used stateful allow-all egress and ingress from the configured
+local workload CIDRs; a stricter outbound/application policy needs separate checks.
+Review every attached group's effective rules and priorities: a broader allow can
+defeat the intended source restriction. Unmatched traffic is denied; the default
+group allows all ingress and egress. Prepare the complete rules before attaching
+the groups, keep independent Nebius API access for recovery, and verify a fresh SSH
+connection to each gateway after the coordinated update.
+
+Private-IP management needs a route to the gateway address and, when accessing
+over the VPN, matching traffic selectors/policy. Direct private SSH, such as from
+a bastion, also needs its source CIDR allowed by the Security Group. If the gateway
+subnet is not advertised and no alternative route exists, private access from the
+corporate network is not expected to work. Public-IP SSH with the source restrictions
+above is an option; a suitable private route or bastion can provide private
+management instead.
+
+Live-checked on 2026-11-23 with a Nebius VM-HA pair running gateway version
+`0.6.10.dev6`, connected to GCP HA VPN: fresh SSH allow/deny checks on both members,
+public ping denied before the ICMP rule and allowed afterward, authenticated private TCP 9443 heartbeats,
+fresh standby IKE establishment on UDP 500 followed by UDP 4500/ESP, four established
+IPsec/BGP sessions, and bidirectional workload pings. Public TCP 179 and 9443 had no
+allow rules and connection probes did not succeed. Native ESP, unsolicited
+peer-initiated IKE admission, restrictive egress and other gateway versions were not
+qualified by this test.
+
+#### Guest firewall and HA verification
 
 VM-HA pairs additionally require **TCP 9443 between the two gateway members'
 private addresses** in both directions: the members exchange their mutually
@@ -5860,7 +6100,8 @@ python3 tests/systemd/run.py --historical-package-upgrades \
   --report /path/to/qualification/package-matrix.json
 ```
 
-The checked-in release manifest pins five authentic stable source wheels.
+The checked-in release manifest pins authentic stable source wheels, including
+v0.6.9 and v0.7.0; qualification derives its cases from that manifest.
 Baseline dependencies are resolved from current repositories and recorded; this
 rebuilds the source release's environment, not its original release-date image.
 Each source release is installed into a cached predecessor image using its own

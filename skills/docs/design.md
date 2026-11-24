@@ -1783,7 +1783,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-008 -->
 
-<!-- FEATURE: FEAT-009 reqs=REQ-010 status=ready delivery=implemented priority=P0 version=6 -->
+<!-- FEATURE: FEAT-009 reqs=REQ-010 status=ready delivery=implemented priority=P0 version=7 -->
 ### FEAT-009: Adaptive troubleshooting with bounded helpers and measured qualification
 
 #### Requirements Covered
@@ -1825,6 +1825,21 @@ separate launch errors and interruptions from completed executions; timeouts cou
 as completed failures, empty completion rates are null, and timing/clusters retain
 outcomes. No independence assumption or compatibility output mode.
 
+Collector completion includes every requested observation: unavailable, failed,
+skipped or truncated nested evidence yields exit 2 while preserving partial data.
+Raw truncated repeated-command streams are withheld because lost context may
+contain a credential label or PEM header. Byte/truncation metadata remains;
+signatures cannot distinguish withheld contents. Nested displayed JSON keys are
+redacted without dropping collisions; sensitivity uses the original key.
+
+Diagnostic report v2 binds independent review to immutable execution conditions,
+trial and fixture identities, and complete measured evidence. Runner and scorer
+share one digest contract; altered conditions invalidate prior reviews. The scorer
+also validates pinned image, non-host network, fixed resource limits and read-only
+isolation even when review is rebound. Old v1 reports cannot qualify. Synthetic
+canary permission bits are zero so matching host/container UIDs cannot read it;
+read-only bind mounts and dropped capabilities preserve that denial.
+
 Seven phases group the unchanged states: define/classify (INTAKE, DISCOVERY),
 baseline (BASELINE), map/prioritize (MODEL, HYPOTHESES), narrow (EXPERIMENTS,
 LOCALIZED), causality (PROVEN), owner repair (REMEDIATED), verify/report (VERIFIED,
@@ -1857,6 +1872,26 @@ complete descendant evidence; duplicate delivery is counted once and conflicting
 records invalidate accounting. Root usage that includes children must not be added
 to child usage. Coordination actions/available usage are reported separately.
 Missing lineage, child completion or usage cannot pass efficiency qualification.
+
+Version 7 decision-method refactor:
+
+Add approach selection to existing triage and investigation references while
+keeping urgency and code/infrastructure routing independent. Recognition orders
+hypotheses; it never supplies causal proof or mutation authority. Uncertain or
+contradicted contexts reorient using discriminating observations without resetting
+attempts, active time, exclusions or intervention history. Verification reserve
+is planning guidance, not a new early-stop gate. Preserve the compact core,
+existing domains, helpers, hooks, report schema and twelve qualification cases.
+
+Upgrade the existing align-skill native evaluator for explicit model selection,
+bounded alternating repetitions, frozen sibling catalogs, full payload digests,
+strict trace completeness, sanitized timing/tool/usage evidence and blinded
+independent judging. Missing descendant accounting remains unknown. No credential
+copying, alternate runner, automatic integration installation or weakened gates.
+Use original, editorial and framework snapshots; qualify both native hosts before
+managed installation. Preserve deterministic safety and capability gates even if
+aggregate performance improves. Actual Plan Mode and live retrieval are separate
+lanes. Incomplete evidence blocks promotion, not independent source work.
 
 #### Selected Option
 
@@ -1932,6 +1967,24 @@ satisfy promotion criteria.
 
 #### Implementation Evidence
 
+Follow-up code review (2026-11-22) repairs truncated-stream disclosure,
+incomplete collector success, nested-key disclosure, unbound execution-condition
+reviews and same-owner canary readability. Runtime helpers keep their public
+schema and flags; diagnostic review identity advances to v2 without a legacy shim.
+The target-owned qualification contract is shared by runner and scorer.
+
+Revision 7 implements a provisional decision approach in the existing core and
+triage/investigation references. Technical route and urgency remain independent;
+recognition only prioritizes an evidence-checked hypothesis/discriminator. New
+evidence reopens affected exclusions while retaining history and shared budgets.
+The core is 300 lines, versus the captured 298-line baseline. All original 46
+trigger and 12 quality cases remain; six behavioral cases extend quality to 18.
+The twelve diagnostic cases and platform replays, helper contracts and all hook
+bytes are unchanged. The generic native accounting reducer moved unchanged to
+align-skill/scripts/native_accounting.py; diagnostics and quality share its owner.
+
+Earlier version evidence follows.
+
 Revision 6 implements seven operational phases in a 291-line core, provisional
 classification, scoped hypothesis exclusions and conditional native read-only
 investigators. Triage/parallel references preserve shared authority and budgets;
@@ -1966,6 +2019,61 @@ Direct helper, hook and harness tests run in skills CI. Actual user installation
 and runtime activation were not performed.
 
 #### Verification Evidence
+
+Follow-up closed-loop review (2026-11-22): six findings across both skills were
+reproduced before implementation and fixed with matching passing checks. Current
+validation passes 63 helper/contract, 20 diagnostic/accounting and 4 design tests
+(87 distinct tests), scoped Ruff/Markdown, portable/core/Codex/Claude structure,
+troubleshooting stateful structure and diff checks. Nested final code/security
+review finds no remaining blocking finding in the repair scope. The canary proof
+uses same-owner local permission denial at mocked orchestration, not Docker.
+No native model, container or live-provider trial was run; prior distribution
+checks are historical. Managed installation and activation remain pending under
+the accepted qualification gate. Delivery stays implemented, not verified.
+
+Earlier alignment evidence follows.
+
+Changed-scope alignment (2026-11-22): 28 shared-adapter, 4 design-contract,
+19 diagnostic accounting/harness, 58 troubleshooting helper/contract and 97 hook
+tests pass (206 distinct tests). Two added regression tests failed before repair:
+compound shell output could falsely confirm a reference read, and case definitions
+could drift before freezing. Both now pass: skill/resource reads share the strict
+simple-command parser and executed cases come from the validated frozen candidate.
+The existing skills CI job now includes the design preservation suite.
+
+Corrected design case counts and stale single-target evaluator descriptions.
+Portable/core, repository/Codex/Claude and troubleshooting stateful checks pass;
+scoped Ruff, Markdown, workflow YAML/shell syntax and diff checks pass. Disposable
+skills CLI 1.5.26 discovery, resource parity, repeat installation and isolation
+pass for both hosts. Final nested code-review and advisory security review found
+no remaining blocking finding. These checks establish source and distribution
+alignment only. Native trials were not repeated: no supported isolated API-key
+authentication was available, and normal account credentials were not copied.
+Quality/performance, actual Plan Mode, live behavior, managed installation and
+fresh activation remain unverified. Requirements stay active; delivery stays
+implemented until the existing qualification gates pass.
+
+Earlier changed-scope evidence follows.
+
+Prior changed-scope source validation (2026-11-21): 26 shared adapter,
+4 design contract, 19 diagnostic accounting/harness, 58 troubleshoot helper/contract
+and 97 hook tests pass (204 distinct tests). Focused code/security review found no
+remaining blocker after fixing mutation detection, evidence bounds/redaction,
+complete paired grades and large judge inputs. Agent Skills core, Codex and Claude
+structure checks pass for the three changed skills. Scoped Ruff, Markdown and diff
+checks pass. Disposable pinned skills CLI discovery, copied-resource parity,
+repeat installation and isolation pass for both hosts; this is distribution proof.
+
+Isolated Codex and Claude quality smoke attempts returned UNAVAILABLE because no
+native authentication was available in the disposable homes. Existing account
+credentials were not copied. The local container service is available, but a
+reviewed authenticated native benchmark image/route and complete Codex descendant
+accounting remain unqualified. Full paired quality, speed/token improvements,
+actual Plan Mode, live-provider behavior and runtime activation are not verified.
+Do not install the candidate until the declared qualification gates pass.
+Requirements remain active and delivery implemented, not verified.
+
+Historical evidence follows.
 
 Revision 6 local source validation (2026-11-08): 58 helper/contract, 97 hook,
 19 diagnostic accounting/harness and 11 shared-adapter tests pass (185 total).
@@ -3951,7 +4059,7 @@ No independent verification evidence was recorded before schema v2 migration.
 
 <!-- /FEATURE: FEAT-019 -->
 
-<!-- FEATURE: FEAT-020 reqs=REQ-021 status=ready delivery=unassessed priority=P0 version=2 -->
+<!-- FEATURE: FEAT-020 reqs=REQ-021 status=ready delivery=implemented priority=P0 version=3 -->
 ### FEAT-020: Incremental lean-skill alignment and evaluation evidence
 
 #### Requirements Covered
@@ -4051,6 +4159,22 @@ assertion-backed baseline comparison, plus `NOT_RUN`, `UNAVAILABLE`, and
 surface exists and quality comparison after material behavior changes when a
 baseline and runner exist. Missing higher-tier evidence remains explicit; any
 executed applicable failure blocks completion.
+
+Version 3 upgrades the existing native runner rather than adding a second runner.
+Quality requires an explicit model and baseline; bounded repetitions default to
+three alternating pairs. Freeze candidate, baseline, fixtures and a prepared
+sibling catalog before any trial. Report schema skill-evaluation/v2 includes
+byte/mode fingerprints, exact case IDs, arm order, outcome, bounded redacted tool
+records/artifacts with digests and separate judge metrics. No schema-v1 shim.
+
+A fresh judge sees randomized anonymous arms and must grade every assertion for
+both. Large judge input is a bounded disposable workspace file. Missing terminal
+records, malformed traces and explicit evidence omissions remain unavailable.
+Workspace mutation checks include hidden paths, modes, types and empty directories,
+with file/aggregate/entry/time bounds. Secret-format redaction covers every retained
+text surface; reviewed public/synthetic inputs remain required. The existing
+accounting reducer has one shared owner and does not invent Codex descendant
+usage. No structural validator, installer, auth or native configuration changes.
 
 #### Selected Option
 
@@ -4161,9 +4285,69 @@ installation or broad migration is implied by source proof.
 
 #### Implementation Evidence
 
+Version 3 upgrades the existing native runner rather than adding a second runner.
+Quality requires an explicit model and baseline; bounded repetitions default to
+three alternating pairs. Freeze candidate, baseline, fixtures and a prepared
+sibling catalog before any trial. Report schema skill-evaluation/v2 includes
+byte/mode fingerprints, exact case IDs, arm order, outcome, bounded redacted tool
+records/artifacts with digests and separate judge metrics. No schema-v1 shim.
+
+A fresh judge sees randomized anonymous arms and must grade every assertion for
+both. Large judge input is a bounded disposable workspace file. Missing terminal
+records, malformed traces and explicit evidence omissions remain unavailable.
+Workspace mutation checks include hidden paths, modes, types and empty directories,
+with file/aggregate/entry/time bounds. Secret-format redaction covers every retained
+text surface; reviewed public/synthetic inputs remain required. The existing
+accounting reducer has one shared owner and does not invent Codex descendant
+usage. No structural validator, installer, auth or native configuration changes.
+
+Earlier version evidence follows.
+
 No implementation evidence was recorded before schema v2 migration.
 
 #### Verification Evidence
+
+Changed-scope alignment (2026-11-22): 28 shared-adapter, 4 design-contract,
+19 diagnostic accounting/harness, 58 troubleshooting helper/contract and 97 hook
+tests pass (206 distinct tests). Two added regression tests failed before repair:
+compound shell output could falsely confirm a reference read, and case definitions
+could drift before freezing. Both now pass: skill/resource reads share the strict
+simple-command parser and executed cases come from the validated frozen candidate.
+The existing skills CI job now includes the design preservation suite.
+
+Corrected design case counts and stale single-target evaluator descriptions.
+Portable/core, repository/Codex/Claude and troubleshooting stateful checks pass;
+scoped Ruff, Markdown, workflow YAML/shell syntax and diff checks pass. Disposable
+skills CLI 1.5.26 discovery, resource parity, repeat installation and isolation
+pass for both hosts. Final nested code-review and advisory security review found
+no remaining blocking finding. These checks establish source and distribution
+alignment only. Native trials were not repeated: no supported isolated API-key
+authentication was available, and normal account credentials were not copied.
+Quality/performance, actual Plan Mode, live behavior, managed installation and
+fresh activation remain unverified. Requirements stay active; delivery stays
+implemented until the existing qualification gates pass.
+
+Earlier changed-scope evidence follows.
+
+Prior changed-scope source validation (2026-11-21): 26 shared adapter,
+4 design contract, 19 diagnostic accounting/harness, 58 troubleshoot helper/contract
+and 97 hook tests pass (204 distinct tests). Focused code/security review found no
+remaining blocker after fixing mutation detection, evidence bounds/redaction,
+complete paired grades and large judge inputs. Agent Skills core, Codex and Claude
+structure checks pass for the three changed skills. Scoped Ruff, Markdown and diff
+checks pass. Disposable pinned skills CLI discovery, copied-resource parity,
+repeat installation and isolation pass for both hosts; this is distribution proof.
+
+Isolated Codex and Claude quality smoke attempts returned UNAVAILABLE because no
+native authentication was available in the disposable homes. Existing account
+credentials were not copied. The local container service is available, but a
+reviewed authenticated native benchmark image/route and complete Codex descendant
+accounting remain unqualified. Full paired quality, speed/token improvements,
+actual Plan Mode, live-provider behavior and runtime activation are not verified.
+Do not install the candidate until the declared qualification gates pass.
+Requirements remain active and delivery implemented, not verified.
+
+Historical evidence follows.
 
 No independent verification evidence was recorded before schema v2 migration.
 
@@ -7302,7 +7486,7 @@ fresh native behavior is still outside the verified scope.
 
 <!-- /FEATURE: FEAT-036 -->
 
-<!-- FEATURE: FEAT-037 reqs=REQ-038 status=ready delivery=implemented priority=P1 version=4 -->
+<!-- FEATURE: FEAT-037 reqs=REQ-038 status=ready delivery=implemented priority=P1 version=6 -->
 ### FEAT-037: Code-grounded software and portable artifact design
 
 #### Requirements Covered
@@ -7332,7 +7516,10 @@ refactor without shims unless requested. Unknown usage does not qualify.
 After all seven phases, an explicit implementation request may continue through
 matching implementation skills, subject to host mode, permissions and existing
 safety boundaries. Design supplies canonical decisions and delivery evidence to
-the spec owner but never publishes project documents itself.
+the spec owner and never writes the canonical pair itself. The explicit
+extraction action in FEAT-086 permits supplementary documentation publication
+and routes canonical reconciliation through maintain-project-specs. All design
+items now require research coverage; related items may share applicable evidence.
 
 Use references/readme-design.md as the sole detailed README guidance owner.
 Load it for new-project design, material user-workflow changes or explicit README
@@ -7386,6 +7573,26 @@ source hierarchy directly. This grants no execution or authorization fallback.
 Report each applicable skill as used, skipped with a reason, or unavailable with
 research fallback; never infer actual loading from names in an answer.
 
+Version 5 decision-method refactor:
+
+Consolidate duplicated phase details into references/design-workflow.md while
+retaining concise core exits, routing, authority and complete output duties.
+Keep README and portable-HTML references unchanged. Add provisional approach
+selection per decision, evidence-based pattern fit and bounded option/research
+search. Unknown interaction behavior produces a validation plan, not live probes.
+Preserve all existing cases and add misleading familiarity, constraints, fixed
+stack, uncertainty and ownership scenarios. Add a structural preservation test.
+
+Upgrade the existing align-skill native evaluator for explicit model selection,
+bounded alternating repetitions, frozen sibling catalogs, full payload digests,
+strict trace completeness, sanitized timing/tool/usage evidence and blinded
+independent judging. Missing descendant accounting remains unknown. No credential
+copying, alternate runner, automatic integration installation or weakened gates.
+Use original, editorial and framework snapshots; qualify both native hosts before
+managed installation. Preserve deterministic safety and capability gates even if
+aggregate performance improves. Actual Plan Mode and live retrieval are separate
+lanes. Incomplete evidence blocks promotion, not independent source work.
+
 #### Selected Option
 
 Add focused core directives and conditional detail in the existing workflow
@@ -7407,9 +7614,9 @@ the offline artifact contract. Reject these in favor of three native profiles.
 
 #### Implementation Boundaries
 
-Change design and its evaluations plus the narrow nebius design-only advisory
-boundary and its docs/metadata/evals, catalog, changelog and this canonical pair.
-Keep ai-agent-design, ai-stack, app-stack, research, installers, shared validators
+Change design and troubleshoot instructions/evaluations, the scoped shared native
+evaluator/accounting owner, their docs, catalog, changelog and this canonical pair.
+Keep ai-agent-design, ai-stack, app-stack, research, installers, structure validators
 and real host configuration unchanged; preserve unrelated working changes.
 
 #### Test-First Success Criteria
@@ -7461,9 +7668,11 @@ remains UNAVAILABLE. Do not copy existing account credentials into test homes.
 
 #### Rollout And Rollback
 
-Publish source changes through the normal catalog workflow. Do not alter the
-real installed catalog or hooks in this change. Preserve a private pre-edit
-baseline for comparison and remove task-owned temporary files after validation.
+Publish source changes through the normal catalog workflow. Install only qualified
+selected packages from canonical source after reviewing disposable installer effects.
+Preserve a private baseline while qualification/rollback needs it; restore task-owned
+source bytes at their original identity before installer-owned rollback. Never
+forge source markers or overwrite concurrent changes. Fresh activation is separate.
 
 #### Done Definition
 
@@ -7472,6 +7681,24 @@ checks pass and executed failures are resolved. Runtime and quality limitations
 remain distinct from source or installation evidence.
 
 #### Implementation Evidence
+
+Follow-up code review (2026-11-22) corrects both required-reference routes from
+undefined medium depth to the existing standard depth. README guidance agrees;
+authority, seven phases, implementation routing and qualification gates are unchanged.
+
+Version 5 consolidates detailed phase checklists in the existing workflow
+reference and retains core routing, authority, seven phase exits and full output
+duties. The core decreases from 499 to 399 logical lines; core plus workflow
+reference decreases from 987 to 860. Compatible token cost is unavailable.
+Provisional sensemaking, evidence-checked recognition and bounded search operate
+inside the existing phases. Uncertain interactions produce validation plans, not
+unapproved execution. README/HTML reference bytes, public interfaces and all
+49 trigger cases remain unchanged. All 22 prior quality cases are preserved;
+six new cases bring the total to 28. A deterministic planning-case no-mutation
+oracle supplements semantic assertions. The preservation map and qualification
+plan declare original/editorial/framework comparisons and rollout constraints.
+
+Earlier version evidence follows.
 
 Version 4 specialist routing is implemented in the source skill and workflow
 reference. Actual skill loading, bounded advisory handoffs, Nebius constraints
@@ -7521,6 +7748,61 @@ No shared validators, installers, real host configuration or installed skill
 copies were modified by this task.
 
 #### Verification Evidence
+
+Follow-up closed-loop review (2026-11-22): six findings across both skills were
+reproduced before implementation and fixed with matching passing checks. Current
+validation passes 63 helper/contract, 20 diagnostic/accounting and 4 design tests
+(87 distinct tests), scoped Ruff/Markdown, portable/core/Codex/Claude structure,
+troubleshooting stateful structure and diff checks. Nested final code/security
+review finds no remaining blocking finding in the repair scope. The canary proof
+uses same-owner local permission denial at mocked orchestration, not Docker.
+No native model, container or live-provider trial was run; prior distribution
+checks are historical. Managed installation and activation remain pending under
+the accepted qualification gate. Delivery stays implemented, not verified.
+
+Earlier alignment evidence follows.
+
+Changed-scope alignment (2026-11-22): 28 shared-adapter, 4 design-contract,
+19 diagnostic accounting/harness, 58 troubleshooting helper/contract and 97 hook
+tests pass (206 distinct tests). Two added regression tests failed before repair:
+compound shell output could falsely confirm a reference read, and case definitions
+could drift before freezing. Both now pass: skill/resource reads share the strict
+simple-command parser and executed cases come from the validated frozen candidate.
+The existing skills CI job now includes the design preservation suite.
+
+Corrected design case counts and stale single-target evaluator descriptions.
+Portable/core, repository/Codex/Claude and troubleshooting stateful checks pass;
+scoped Ruff, Markdown, workflow YAML/shell syntax and diff checks pass. Disposable
+skills CLI 1.5.26 discovery, resource parity, repeat installation and isolation
+pass for both hosts. Final nested code-review and advisory security review found
+no remaining blocking finding. These checks establish source and distribution
+alignment only. Native trials were not repeated: no supported isolated API-key
+authentication was available, and normal account credentials were not copied.
+Quality/performance, actual Plan Mode, live behavior, managed installation and
+fresh activation remain unverified. Requirements stay active; delivery stays
+implemented until the existing qualification gates pass.
+
+Earlier changed-scope evidence follows.
+
+Prior changed-scope source validation (2026-11-21): 26 shared adapter,
+4 design contract, 19 diagnostic accounting/harness, 58 troubleshoot helper/contract
+and 97 hook tests pass (204 distinct tests). Focused code/security review found no
+remaining blocker after fixing mutation detection, evidence bounds/redaction,
+complete paired grades and large judge inputs. Agent Skills core, Codex and Claude
+structure checks pass for the three changed skills. Scoped Ruff, Markdown and diff
+checks pass. Disposable pinned skills CLI discovery, copied-resource parity,
+repeat installation and isolation pass for both hosts; this is distribution proof.
+
+Isolated Codex and Claude quality smoke attempts returned UNAVAILABLE because no
+native authentication was available in the disposable homes. Existing account
+credentials were not copied. The local container service is available, but a
+reviewed authenticated native benchmark image/route and complete Codex descendant
+accounting remain unqualified. Full paired quality, speed/token improvements,
+actual Plan Mode, live-provider behavior and runtime activation are not verified.
+Do not install the candidate until the declared qualification gates pass.
+Requirements remain active and delivery implemented, not verified.
+
+Historical evidence follows.
 
 Version 4 STATIC_PASS: portable/core and repository/Codex/Claude validators
 passed with required evals; all trigger/quality definitions and fixture/payload
@@ -10956,7 +11238,7 @@ restricted runner. FEAT-068 separately verifies unused LFS configuration with
 sentinel executables; actual LFS content remains unsupported.
 
 <!-- /FEATURE: FEAT-052 -->
-<!-- FEATURE: FEAT-053 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=8 -->
+<!-- FEATURE: FEAT-053 reqs=REQ-054 status=ready delivery=implemented priority=P1 version=9 -->
 ### FEAT-053: GitHub issue selection, review, planning and closure
 
 #### Requirements Covered
@@ -10965,13 +11247,58 @@ sentinel executables; actual LFS content remains unsupported.
 
 #### Context Evidence
 
-The inspected instruction-only baseline uses review-github-issues, one --label,
+Version 9 changes the issue vocabulary in the instruction-only github-issues
+package. Its label policy, callers, evaluations and live repository definitions
+were inspected together; PR automation owns a separate retained label family.
+The version 6 instruction-only baseline used review-github-issues, one --label,
 implicit five-item label batches and boolean --create-plan, with no standalone
 closure. Version 6 intentionally replaces that interface while preserving
 research, classifications, project ownership and saved-plan delivery contracts.
 Existing target edits are the baseline; unrelated work remains untouched.
 
 #### Design Details
+
+Version 9 separates review status from supported type and optional finding.
+The canonical catalog is github-issues/references/labels.md. Reviewed records
+an assessment and retains green 0e8a16; bug retains red d73a4a. Keep gap,
+feature-request, enhancement, documentation and question as the other types.
+Replace feature-enhancement with enhancement. Findings use needs-information,
+already-fixed, already-supported, duplicate, out-of-scope, deferred and
+not-planned without review prefixes. Actionable unresolved work has no special
+finding. Needs-information may coexist with reviewed and no established type.
+Types describe distinct supported claims; only whole-issue findings are mutually
+exclusive. Preserve existing full-claim, version and evidence requirements.
+
+Use explicit maintainer decisions or accepted policy for deferral/rejection.
+Planning eligibility remains evidence-based, independently of reviewed; an
+assessment does not promise feasibility, approval, design or implementation.
+Reassess changed evidence, replace only superseded managed findings and retain
+unrelated labels. If a canonical label triggers forbidden automation, leave
+that effect pending; do not invent a prefixed fallback or bypass closure checks.
+The shared needs-information meaning remains compatible with PR assessment.
+
+Update all current instructions, references, examples, filter and behavior
+cases together. Keep existing actions/selectors and generic literal filtering;
+no runtime, new public cleanup action, aliases or compatibility paths are added.
+Keep the host agent and research/design adviser architecture unchanged.
+
+The separately authorized catalog migration refreshes definitions, issue/PR
+memberships and known consumers, snapshots metadata privately, then creates or
+renames canonical definitions, adds reviewed for evidenced prior assessments,
+merges enhancement memberships and verifies effects before removing old names.
+Preserve closed state without inferring resolution and distinguish migration
+from a fresh review. Correct question versus needs-information descriptions.
+Preserve PR, automation, community, progress and relationship labels. Remove
+unused vague legacy definitions only after proving no memberships or consumers.
+After uncertain writes, read back before retry; a partial result remains partial.
+Regular issue actions still forbid repository-wide rename/deletion/recoloring.
+
+Validation covers independent reviewed status, missing evidence, type boundaries,
+mixed/partially resolved claims, explicit deferral, safe per-label replacement,
+automation collisions and no expanded planning/closure authority. Validate both
+native package policies, changed Markdown/links and paired specs; run focused
+behavior cases, align the changed surfaces, and install only the scoped skill.
+Record static, simulated, installed and live migration evidence separately.
 
 Version 8 admits only an explicitly requested progress-label effect after a
 separate owner has authorized and begun implementation. Reuse `being-fixed`
@@ -11025,7 +11352,7 @@ edits and actual owners; plans never become delivery or closure authority.
 Close uses fresh whole-issue evidence: resolved/supported maps to completed,
 verified duplicate maps to duplicate with the canonical API issue ID, and
 accepted maintainer policy for out-of-scope/not-planned maps to not_planned.
-Deferred, confirmed unresolved, mixed and uncertain outcomes remain open.
+Deferred, evidenced unresolved, mixed and uncertain outcomes remain open.
 Labels, dirty source and unmerged PRs are evidence leads, not resolution proof.
 Check applicable accepted revisions/versions and fresh maintainer objections
 or reopening; do not invent release/live gates. Read back an evidence-backed
@@ -11047,6 +11374,11 @@ provider, scheduler or storage service is introduced.
 
 #### Selected Option
 
+For version 9, one independent reviewed marker records assessment while types
+and optional findings retain their own evidence requirements. Keep one canonical
+catalog without aliases. Align only managed issue vocabulary on GitHub while
+preserving independently owned PR, automation and community labels.
+
 One action selector separates selection from effects and avoids conflicting
 boolean action combinations. One shared research/selection workflow feeds
 three explicit exits. GitHub owns observed issue state; files own requested
@@ -11054,12 +11386,22 @@ plans. Preserve the existing read-only adviser boundary for PR callers.
 
 #### Alternatives Considered
 
+Renaming confirmed alone would omit assessed issues with other findings and
+retain its old actionable-work meaning. Prefix fallbacks preserve synonyms and
+can bypass automation checks. Treating the issue catalog as a repository-wide
+allowlist would remove labels required by other workflows. Reject all three.
+
 Separate action flags allow confusing combinations and multiply validation
 rules. Keeping --label/five-item defaults fails the requested all-match filter.
 Blind label-based closure trusts stale classifications. Legacy aliases create
 two public paths and are not requested. Additional lifecycle actions are deferred.
 
 #### Implementation Boundaries
+
+Version 9 updates the issue skill, its current consumers and evaluation fixtures,
+README and Unreleased notes, plus a separately authorized live catalog migration.
+It adds no routine cleanup action, model/runtime change or issue-state writes.
+The version 6 package migration below is already implemented historical scope.
 
 Rename the package, metadata, public examples and references; update plugin
 manifests, direct callers, catalog and Unreleased notes. Retain historical
@@ -11109,6 +11451,15 @@ checks nor generated responses establish live closure behavior.
 
 #### Implementation Evidence
 
+Version 9 implements independent reviewed status, six supported types and seven
+optional whole-issue findings in the core skill, label/triage policies, affected
+references, examples and templates. The catalog and Unreleased notes agree.
+There are 141 quality definitions and 52 trigger cases, including nine new
+behavior cases. Explicit maintainer deferral/rejection and canonical-label
+automation collision behavior replace the old ambiguous expectations.
+A scoped Codex install copied all 17 payload files; unrelated installed files
+and hook registration remained unchanged. Prior-version evidence below is historical.
+
 Version 8 aligns core instructions, label policy, local and catalog README,
 Unreleased notes and two added quality/trigger definitions. The complete skill
 has 132 quality definitions and 49 trigger cases. No runtime or public action
@@ -11130,6 +11481,28 @@ plugin manifests, catalog, usage docs and Unreleased notes use the new interface
 No executable parser, scheduler or product runtime was introduced.
 
 #### Verification Evidence
+
+Version 9 passed Codex/Claude repository-policy structure checks, current local
+reference links, unique quality/trigger definitions, project-configured Markdown
+and whitespace checks, paired canonical-spec validation, nested read-only review
+and scoped security inspection. Installed payload digests match all 17 source
+files. Native model quality and fresh-session loading remain unverified because
+the isolated runner has no API credentials; static definitions are not executed
+model behavior, and delivery remains implemented rather than native-qualified.
+
+Eight synthetic migration checks passed and were independently rerun: full
+preservation/idempotence, lost write response, existing destination collision,
+state drift, used retirement candidate, withdrawn-label drift, definition drift
+and verified partial-progress resumption. Exact preflight and recorded owned
+checkpoints prevent restoring a maintainer-withdrawn legacy finding.
+
+The authorized live catalog migration independently verified 14 canonical
+name/description/color definitions, updated memberships on 15 previously assessed
+issues, and preserved 14 unrelated definitions. All 286 inspected issue/PR states
+and bodies remained unchanged. No comments, plans, closures or fresh issue
+assessments were attributed to that migration. Historical findings stayed
+historical; closed state was not converted into resolution evidence. These are
+live catalog-operation results, not native issue-review workflow qualification.
 
 Version 8 passed scoped Codex/Claude structure checks, actual pinned npx
 skills discovery, copied payload parity, repeat installation and isolation,
@@ -11244,12 +11617,18 @@ The scoped installed payload was refreshed and verified against source.
 
 #### Rollout And Rollback
 
-Validate old-to-new migration in disposable homes before scoped native install.
-Verify ownership and new payload parity before retiring the old managed skill;
-never delete unmanaged content or introduce aliases. Preserve existing plans.
-Restore only task-owned changes from the captured baseline if necessary,
-retaining concurrent edits and observed external effects. No live effects are
-part of this refactor.
+For version 9, validate source and synthetic migration behavior before scoped
+installation and separately authorized live catalog reconciliation. Refresh the
+known automation, exact definitions and all issue/PR memberships before effects.
+Checkpoint only independently verified owned transitions; unrecorded drift stops
+the next effect. Add destination memberships before removing obsolete labels.
+Keep private metadata snapshots for explicitly requested recovery and preserve
+unrelated labels, states and concurrent work; never automatically reverse live
+effects or introduce compatibility aliases. Keep native workflow qualification
+separate from static, installed and catalog-operation evidence.
+
+The earlier version 6 package rename used ownership-checked disposable install
+migration, preserved existing plans and retired only the old managed package.
 
 <!-- /FEATURE: FEAT-053 -->
 
@@ -11612,7 +11991,7 @@ Final integration validation: 235 workflow-verifier tests, 29 disposable Codex/C
 
 <!-- /FEATURE: FEAT-057 -->
 
-<!-- FEATURE: FEAT-058 reqs=REQ-059 status=ready delivery=implemented priority=P1 version=6 -->
+<!-- FEATURE: FEAT-058 reqs=REQ-059 status=ready delivery=verified priority=P1 version=7 -->
 ### FEAT-058: GitHub activity and open backlog reporting
 
 #### Requirements Covered
@@ -11624,6 +12003,14 @@ Final integration validation: 235 workflow-verifier tests, 29 disposable Codex/C
 The current collector already discovers repository-wide interval activity and open inventory, but builds rows for the authenticated viewer and emits schema v2. The accepted change replaces personal reporting with all-human user groups, a literal login/profile-name selector and one unchanged shared backlog. Existing read-only collection, role/closure proof, folder inference and whole-PR metrics remain authoritative.
 
 #### Design Details
+
+Version 7 adds a deterministic LOC mode beside the existing activity mode. Keep normal collection/finalization unchanged. Validate the mode, owner/repository exclusivity, positive top K and unsupported project combination before checkout/API access. Reuse window and literal user-selection semantics. A dedicated loc_modifications_report.py owns LOC aggregation and rendering; github_api.py owns fixed owner and merged-PR reads, shared budgets and sanitized failures.
+
+Resolve repositoryOwner by stable identity, enumerate its repositories with ownerAffiliations OWNER, and verify each returned repository owner. Include forks, archives and all visible privacy levels, never affiliated repositories. Pass the selected repository list into either report mode; propagate partial owner inventory into final coverage. For LOC, page merged PRs in updatedAt-descending order with bounded pages, validating monotonic order and updatedAt at least mergedAt before a lower-bound stop. Reconcile one bounded updated-since-observation pass by stable PR ID; moved or changed records/counts remain provisional. Bind repository names and stable IDs in both directions and to owner inventory. Filter exact mergedAt instants against the frozen interval. Deduplicate stable identities; retain observed evidence and mark pagination, scope, identity and metric failures partial.
+
+Aggregate nonnegative integer additions plus deletions per stable User author across all selected repositories, counting zero-diff PRs. API User is an account-type proxy for a human, not proof of employment; service accounts may remain. Do not credit coauthors or reviewers with the whole diff. Apply user substring selection and then descending LOC order with casefold login/stable-ID tie breaking. Optional top K truncates only the rendered selection after collection and reports excluded ties. Missing metrics produce known lower bounds and provisional ranking, never fabricated zero totals. Render Rank, Contributor, LOC Modifications and Merged PRs, scope/interval, access/collection limits and all-file/whole-PR attribution caveats. No backlog, per-item six-column activity tables or separate additions/deletions appear in this mode.
+
+The existing normal-mode design remains:
 
 Collect each repository once. Extend actor and mapped commit-user fragments with User name and actor type; maintain stable node-ID identities independently from authenticated transport identity. Discover users from dated activity and historical PR authors/commit contributors whose delivery qualifies. Exclude non-User actors from groups, never infer users from free-text Git identities. Null public names are valid; explicit name availability distinguishes known null from missing fields. Merge later known profile fields by stable ID without erasing known values on subsequent missing reads. Identity/profile conflicts remain qualified. Unicode line/paragraph separators are rejected in user selectors and normalized in presentation.
 
@@ -11638,6 +12025,8 @@ Render exactly two header lines per repository: User/Repository/optional Folder 
 Reuse the fixed Python/gh collector with one evidence collection and deterministic multiuser projection/finalization. Existing host model only assesses folders and narrates per-user evidence; no new model, runtime, service or persistence.
 
 #### Alternatives Considered
+
+For LOC mode, per-commit sums were rejected because squash/merge histories, coauthors and repeated diffs require a different attribution contract. Reusing full activity enrichment needlessly collects comments/reviews/backlog. Search-only ranking was rejected as a coverage authority because of indexing and result caps. Source-code-only filtering and project-specific LOC remain outside this mode until exclusions are defined consistently.
 
 Keeping authenticated-user defaults does not satisfy the accepted all-user requirement. Rerunning collection per user multiplies API cost and observations. Author-only grouping loses reviews and other evidenced collaboration. Duplicating backlog per user hides its shared scope. None is retained as an alternate mode.
 
@@ -11675,9 +12064,13 @@ Source, canonical pair, help, docs, evals and installed payload agree; focused t
 
 #### Implementation Evidence
 
+Version 7 implements the dedicated LOC module, shared owner selector, optional top K, exact-zero and lower-bound handling, stable identity aggregation, bounded pagination reconciliation, deterministic equal ranks and one displayed LOC Modifications column. Normal-mode finalization retains owner inventory uncertainty, including empty inventories. Public help, metadata, README, references, catalog and seventeen trigger/nine quality definitions agree. The scoped installer refreshed seventeen matching payload files with canonical single-skill provenance and no hook payload or registration change. Existing normal-mode baseline evidence follows.
+
 Version 6 implements schema-v3 shared items/users and per-user attribution, all-User defaults excluding API-identified bots, casefold login/public-name substring filtering, login-sorted worked groups, one shared backlog independent of user filter, distinct repository totals and the two-line User/Date header. Actor and commit-user reads include profile identity; stable-ID field merging preserves later known names. Private finalization validates user/attribution references and keeps folder assessment item-scoped. Source help, README, metadata, references, template, thirteen trigger cases and seven synthetic output cases agree. All fourteen managed installed payload files match source; the ownership marker and unrelated skills/hooks/config remain unchanged.
 
 #### Verification Evidence
+
+Version 7: all 104 existing and 24 focused offline tests pass from source and installed payload. Ruff check/format, target Markdown, core/Codex/Claude structure, both catalogs and whitespace checks pass. Disposable skills@1.5.26 discovery, both copied payloads, repeated installation and isolation pass. Independent nested code/security review found and verified repairs for LOC-01 (owner coverage lost by normal finalization) and LOC-02 (repository identity drift). Live read-only owner-wide collection completed with no coverage limits and agreed with independent aggregate totals; final installed code also completed a separate repository smoke check. These are observed reads, not an atomic historical archive or proof of inaccessible repositories. Fresh Codex and Claude trigger attempts were UNAVAILABLE because isolated homes lacked authentication; comparative native quality remains unavailable for the same reason, without credential changes. The deterministic implementation and installed payload are verified; native activation and model narration remain separate. Existing baseline evidence follows.
 
 All 104 offline behavioral tests pass from source and installed payload, including the original 86 tests and eighteen multiuser cases. Tests cover shared backlog invariance, unique counts, individual roles and issue-fix credit, earlier contributors, profile name recovery/nulls, Unicode separator rejection, filtered late linked-read failure, collection-call invariance and schema-v3 private stdin round trip. Ruff check/format, target Markdown, portable/core and repository Codex/Claude structure, both native catalogs and spec-pair validation pass. Root changelog retains a preexisting duplicate Changed heading; no new Markdown finding was introduced. Disposable skills@1.5.26 discovery, both copied payloads, repeat install and isolation pass. Independent report-only code/security review found GR-001 through GR-003, all repaired; the reviewer reran the original reproductions and eighteen multiuser tests with no blocking findings. Fresh Codex and Claude trigger attempts returned UNAVAILABLE because isolated homes have no authentication; comparative narrative quality is likewise unavailable. No credentials were copied/changed and no live GitHub report was collected. These checks prove source and installed behavior within offline coverage, not native/live completeness.
 
@@ -16083,6 +16476,174 @@ model-driven activation are not claimed. No commit, push or release mutation was
 performed by this implementation task.
 
 <!-- /FEATURE: FEAT-085 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-086 reqs=REQ-087 status=ready delivery=implemented priority=P0 version=4 -->
+### FEAT-086: Unattended design package extraction and research coverage
+
+#### Requirements Covered
+
+- REQ-087: Unattended research-backed design extraction
+
+#### Context Evidence
+
+Existing design phases, research methodology, source_bundle validator, workflow_program
+graph checks and paired spec transaction define the authoritative owners.
+
+#### Design Details
+
+Full-skill review corrections: enforce supplementary artifact byte bounds while
+reading, before retaining further files or publishing target artifacts. Extraction
+publication evals declare required sibling skills; the evaluator checks the frozen
+catalog and reports unavailable prerequisites before either native arm, preserving
+all publication and readiness assertions.
+
+Alignment follow-up: preserve omitted progress fields across stage/resume updates,
+require precise source-level finding locators and an explicitly planning-related
+finding for a missing roadmap, and validate an item's requirements against the
+union of its mapped features while retaining each feature's readiness check.
+These corrections enforce REQ-087 AC-003, AC-004, AC-005 and AC-006.
+
+Add an explicit documentation-only extraction mode, item/evidence ledger, immutable
+source inventory, reviewed phase roadmap and measured progress. Keep semantic research
+with the agent and deterministic identity, coverage, graph and transaction checks in
+small helpers. Unresolved findings remain draft/blocked and never yield an admissible
+source manifest. Extend the same paired transaction with a discriminated filesystem
+target and separate receipt schema; preserve strict registered Git workflow guards.
+
+#### Selected Option
+
+Reuse existing owners with focused extraction instructions and tested pure helpers.
+Resolve technical gaps without asking design questions; aggregate remaining decisions at
+completion.
+
+#### Alternatives Considered
+
+Raw copying omits research; per-phase re-extraction loses a stable baseline; a new
+coordinator duplicates SDLC. Fresh lookup per item repeats evidence; grouped research
+retains explicit item coverage.
+
+#### Implementation Boundaries
+
+Design and research skills, canonical spec target/publication owner, shared pure roadmap
+checks, focused tests/evals/docs and scoped installation. No user application
+implementation, Git initialization or commits.
+
+#### Test-First Success Criteria
+
+- TDD-001: Exercise plain-folder publication, full evidence coverage and source-bound
+  unattended findings before claiming readiness.
+
+#### Validation Plan
+
+Run focused unittest suites, canonical-pair validation, skill structure/trigger checks,
+lint, align-skill and align. Use disposable native quality fixtures where available.
+
+#### Test Plan
+
+Git and filesystem CAS/replay/rollback, mode and policy drift, stable inventory/reruns,
+partial source coverage, evidence freshness, DAG/phase coverage, elapsed reporting and
+execution boundaries.
+
+#### Evaluation Plan
+
+Use trace-backed native cases for research consultation, no clarification, report
+quality and default target. Static tests do not certify native behavior.
+
+#### Rollout And Rollback
+
+Snapshot existing working bytes; validate source and disposable installation before
+scoped owner installation. Preserve failed trial evidence and report unavailable native
+qualification.
+
+#### Done Definition
+
+Source, contracts, help, docs, tests and installed payload agree; report native/runtime
+limits explicitly.
+
+#### Implementation Evidence
+
+Full-skill review resolved DESIGN-01 (late artifact size rejection) and DESIGN-02
+(publication evals without their required owner catalog). Added focused negative
+controls, incremental byte accounting and validated required_skills declarations
+with a pre-launch check. Cases 29 and 30 require maintain-project-specs, its shared
+runtime, research, worktree and system-design-rules. Updated tests, trigger examples,
+references, READMEs and changelog; no native invocation policy changed.
+
+Follow-up alignment fixed four P2 discrepancies: progress no longer resets
+omitted fields; canonical coverage uses the union of mapped features; omitted
+roadmaps require unresolved planning findings; source-level findings require
+precise locators, including honest whole-file locations when content is unreadable.
+Focused regression tests, references, README and changelog were updated. The
+scoped installer refreshed design on both hosts and preserved unrelated payloads,
+hooks and settings.
+
+Implemented the public extraction action and research caller contract, with source
+inventory, item/evidence ledger, original-source findings, reviewed roadmap and measured
+progress. Private helpers enforce source identity, coverage, readiness mappings, resumed
+timing and immutable supplementary artifacts, including interrupted-link recovery. The
+canonical owner now supports discriminated filesystem targets through the paired
+CAS/journal/rollback publisher without granting Git workflow authority. Workflow
+programs reuse the pure roadmap checks. Updated help, READMEs, changelog, quality
+fixtures, deterministic docs-only evaluator policy and CI registration. Scoped
+installation exposed a shared host-adapter defect; Claude projection now omits the
+Codex-only additionalContextLimit field while retaining managed-command checks and
+unrelated settings. Aligned the data-only config checker, native plugin checker and
+Claude manifest with the same host projection.
+
+Scoped repository-installer checks passed in disposable Codex and Claude homes,
+including repeat convergence and unchanged unrelated settings/payloads. The seven
+changed packages were installed through the canonical installer and source parity
+checked separately. No application extraction, implementation, Git initialization,
+commit or push was performed.
+
+#### Verification Evidence
+
+Full-skill review and alignment passed 58 focused tests: design 26, native evaluator
+30 and docs-only policy 2. An additional 62 validator self-checks passed. Both fixes
+have observed failing negative controls and passing corrected proofs; an initial
+schema-test path error was repaired in the fixture before establishing its expected
+failure. Portable core, Codex and Claude structure checks, strict frontmatter,
+lint, manifests and actual npx distribution checks passed for design and its
+changed evaluator owner. Scoped repeat installation and exact payload parity passed
+for both hosts with unrelated skills, hooks and settings unchanged. Installed
+design 26 and evaluator 30 tests also passed independently on each host.
+
+The real evaluator entry point reported UNAVAILABLE for missing required siblings
+on both hosts without launching either model arm. This is prerequisite-check proof,
+not native quality evidence. Isolated API authentication is still unavailable;
+fresh activation, model routing and semantic extraction quality remain unverified.
+Final read-only code and security reviews found no remaining actionable finding.
+
+Follow-up alignment passed all 228 selected tests in completed suites: canonical
+owner 61, spec hooks 38, workflow programs 25, design 24, docs-only evaluator 2,
+configuration checker 34 and the complete shared-runtime/installation suite 44.
+The installed design suite also passed all 24 tests independently on each host.
+Changed Python/Markdown lint, native manifests, CI YAML, canonical pair validation,
+seven skill structures, and the updated design package's npx distribution checks
+passed. Independent code/security and consistency reviews found no remaining
+issue in the repaired scope. Native end-to-end extraction remains unverified;
+prior isolated trials lacked authentication and were not repeated without it.
+
+Passed 147 core tests: 61 canonical-owner, 38 hook, 25 workflow-program, 21
+design/helper and 2 docs-only evaluator checks. The 44-case shared-runtime/installation
+suite exposed two installed-checker subtest failures from the same host-projection
+mismatch; after aligning the dependent checker, its targeted case passed on both hosts.
+The other 43 cases passed in the full run. All 34 configuration-checker tests and both
+native manifest/catalog checks passed after the repair. The 21 design/helper checks also
+passed from each installed host catalog. Changed Python lint, Markdown lint, workflow
+YAML, canonical pair validation and all seven skill structures passed for both hosts.
+Actual pinned npx discovery, copied payloads, repeat installation and isolation passed
+on both hosts.
+
+Independent risk review found no remaining serious issue after source-coverage, target-
+binding and interrupted-publication fixes. Isolated Codex and Claude extraction quality
+trials were UNAVAILABLE because native authentication was absent; no credentials were
+copied or authentication repaired. These tests establish local and installed behavior
+only. Autonomous semantic research quality, native skill loading, end-to-end extraction
+and fresh-session activation remain unverified. Delivery is implemented, not verified.
+
+<!-- /FEATURE: FEAT-086 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

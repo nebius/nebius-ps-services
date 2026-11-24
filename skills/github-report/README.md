@@ -24,6 +24,37 @@ last 90 times 24 hours. `--date` starts at local midnight on today or earlier;
 the end is frozen at collection start. `--repo` is one comma-separated list
 with optional spaces around commas. Reporting stays read-only.
 
+## LOC Modifications
+
+```text
+$github-report --loc-modifications-report --owner example-org --top 3 --date 2025-11-24
+$github-report --loc-modifications-report --repo example-org/api,example-org/web --user engineer
+```
+
+`--loc-modifications-report` aggregates merged PRs across the selected scope,
+then ranks their authors by **LOC Modifications = additions + deletions**.
+The table contains Rank, Contributor, LOC Modifications and Merged PRs, with no
+separate additions/deletions columns. A replacement counts twice; all tracked
+file types, imports and repeated changes are included. Whole-PR attribution is
+not proof of personal line ownership, source-code-only output or productivity.
+
+`--owner OWNER` selects an organization or account's **owned, visible**
+repositories, including private repositories, forks and archives. It works in
+both report modes and excludes `--repo`. Access does not prove coverage of
+hidden repositories. With neither selector, use the current checkout.
+
+`--top K` is a positive integer, valid only in LOC mode; omit it to show all
+matching accounts. Collect all selected repositories before applying `--user`
+and top K. Equal totals share ranks, with login/stable-ID ordering and an explicit
+notice if the cutoff splits a tie. `--project` is rejected in LOC mode because
+folder-specific LOC is not defined. Normal activity reporting stays unchanged.
+
+`--date` remains the **start** date, with the end frozen when collection starts.
+For the prior year as of November 24, 2026, use `--date 2025-11-24`.
+Incomplete reads produce a provisional observed ranking; missing metrics stay
+unknown or lower bounds. API User accounts exclude App bots but may include
+service accounts. See [counting and coverage rules](references/loc-modifications.md).
+
 ## Users and shared backlog
 
 `--user TEXT` is a case-insensitive literal substring of GitHub login or public
@@ -116,6 +147,7 @@ release or deployment. Unknown metrics never become zero.
 
 - `SKILL.md`: public interface, workflow and safety/output contract.
 - `scripts/github_report.py`: collection entrypoint and orchestration.
+- `scripts/loc_modifications_report.py`: deterministic scope-wide LOC aggregation/rendering.
 - `scripts/github_api.py`: fixed reads, pagination and repository context.
 - `scripts/report_model.py`: dates, attribution, membership facts and shared tables.
 - `scripts/report_finalization.py`: assessment validation, filtering and counts.
@@ -128,6 +160,7 @@ From the skills catalog root:
 
 ```bash
 python3 -B github-report/scripts/test_github_report.py
+python3 -B github-report/scripts/test_loc_modifications_report.py
 ruff check --no-cache github-report/scripts
 python3 align-skill/scripts/validate-skill-structure.py --policy agentskills --agent core github-report
 python3 align-skill/scripts/validate-skill-structure.py --policy repository --agent codex --require-evals github-report

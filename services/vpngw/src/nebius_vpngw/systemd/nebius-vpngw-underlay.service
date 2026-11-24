@@ -1,7 +1,9 @@
 [Unit]
 Description=Nebius VPNGW persistent physical-route preparation
-After=network-online.target nebius-vpngw-vm-ha-guard.service
-Wants=network-online.target
+# FRR precedes network.target; waiting for network-online.target here cycles.
+# Wait for physical networkd readiness before preparing routes and starting FRR.
+After=systemd-networkd-wait-online.service nebius-vpngw-vm-ha-guard.service
+Wants=systemd-networkd-wait-online.service
 Before=strongswan.service frr.service nebius-vpngw-agent.service nebius-vpngw-vm-ha.service
 ConditionPathExists=/etc/nebius-vpngw/config-resolved.yaml
 

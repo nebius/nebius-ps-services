@@ -118,8 +118,8 @@ def host(tmp_path, monkeypatch):
                     if route not in self.routes:
                         self.routes.append(route)
             elif argv in (
-                ["ip", "-j", "-4", "-details", "rule", "show"],
-                ["ip", "-j", "-6", "-details", "rule", "show"],
+                ["ip", "-j", "-4", "-details", "-N", "rule", "show"],
+                ["ip", "-j", "-6", "-details", "-N", "rule", "show"],
             ):
                 output = json.dumps(
                     [{"priority": 0, "src": "all", "table": "local", "protocol": "kernel"}]
@@ -165,7 +165,7 @@ def test_reconfigure_rejects_unobserved_foreign_routing(cfg, host, monkeypatch, 
     )
 
     def run(argv, **kwargs):
-        normalized = [arg for arg in argv if arg != "-details"]
+        normalized = [arg for arg in argv if arg not in {"-details", "-N"}]
         if normalized[:5] == ["ip", "-j", family, kind, "show"]:
             host.calls.append(argv)
             rows = list(host.routes) if family == "-4" and kind == "route" else []
@@ -234,6 +234,7 @@ def test_network_preparation_rebuilds_stale_generated_file_before_route_admissio
             ),
         )
         cfg["vm_ha"] = {
+            "cluster_id": "cluster",
             "runtime_binding": binding.model_dump(mode="json"),
             "node": {"node_id": "node-0"},
         }

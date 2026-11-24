@@ -129,6 +129,64 @@ def test_repair_lifecycle_identity_crosses_real_ha_lock_boundary(tmp_path, monke
         authority.allow_activation(owner.instances["gateway-0"], owner.operation)
 
 
+def test_repair_binds_current_route_effect_observation_scope(tmp_path, monkeypatch):
+    owner, _stored, _calls = bound_repair(tmp_path, monkeypatch)
+    repair_activation.bind_ha(owner)
+    manager = owner.admission.manager
+    assert manager._stable_vm_ha_effect_observation() == {
+        "shared_allocation": {"allocation_id": "allocation"},
+        "route_targets": [],
+    }
+    assert manager._vm_ha_effect_spec is owner.admission.plan.gateway_group
+
+
+def test_repair_activation_supplies_pending_route_transition_owner(tmp_path, monkeypatch):
+    from nebius_vpngw.deploy import ha_enforced_activation
+    from nebius_vpngw.deploy.ha_enforced_rebind import PLAN_KEY
+
+    owner, _stored, _calls = bound_repair(tmp_path, monkeypatch)
+    owner.admission.artifact = object()
+    owner.admission.ssh = NS(_ssh_policy=object())
+    owner.admission.local = {"gateway_group": {}}
+    plan = {"retained": "exact-pending-plan"}
+    journal = NS(
+        state=NS(
+            status=vm_ha_lifecycle.VMHALifecycleStatus.ACTIVATING,
+            project_id="project",
+            gateway_name="gateway",
+            transaction=NS(resource_bindings=((PLAN_KEY, json.dumps(plan)),)),
+        )
+    )
+    binding = NS(shared_allocation_id="allocation")
+    monkeypatch.setattr(repair_activation, "bind_ha", lambda _owner: (binding, journal, None))
+    monkeypatch.setattr(
+        ha_enforced_activation,
+        "TableJournal",
+        lambda *_a: NS(snapshot=lambda: {"transaction": {"plan": plan, "phase": "prepared"}}),
+    )
+    sdk = object()
+    monkeypatch.setattr(owner.admission.manager, "_get_client", lambda: sdk)
+
+    class TransitionReached(Exception):
+        pass
+
+    def transition(client, _journal, actual_plan, **kwargs):
+        assert client is sdk and actual_plan == plan
+        assert kwargs["allocation"] == "allocation"
+        raise TransitionReached
+
+    monkeypatch.setattr(ha_enforced_activation, "Transition", transition)
+    monkeypatch.setattr(
+        cli,
+        "_activate_bound_vm_ha",
+        lambda **kwargs: ha_enforced_activation.prepare(
+            kwargs.get("vm_manager"), kwargs["lifecycle_journal"], kwargs["vm_ha_runtime_binding"]
+        ),
+    )
+    with pytest.raises(TransitionReached):
+        repair_activation.activate_ha(owner, NS())
+
+
 @pytest.mark.parametrize("change", ["execution", "intent"])
 def test_repair_ha_operation_cannot_cross_confirmed_authority(tmp_path, monkeypatch, change):
     owner, stored, _calls = bound_repair(tmp_path, monkeypatch)

@@ -6,16 +6,79 @@ import json
 import os
 from typing import TYPE_CHECKING
 
-from ..apply_approval import digest
+from ..apply_approval import SCHEMA, digest
 from . import package_reservation
 from .apply_command import CommandJournal
 from .apply_plan import CommandPlan, Progress
 from .operator_guest import finish_publication, publish, read_file
 from .operator_keys import protected_directory
-from .vm_ha_lifecycle import VMHALifecycleStatus
+from .vm_ha_lifecycle import VMHALifecycleStatus, vm_ha_effective_resource_bindings
 
 if TYPE_CHECKING:
     from .destroy import NebiusDestroyBackend, VMHADestroyJournal
+    from .vm_ha_lifecycle import VMHALifecycleState
+
+
+def _created_compute_targets(
+    state: VMHALifecycleState, transaction: dict, plan: CommandPlan, intent: dict
+) -> set[str]:
+    """Resolve creation tokens using retained publication authority, never by name.
+
+    Destruction retains these immutable bindings while replacing the lifecycle
+    transaction. The original creation receipt identifies the exact Compute IDs
+    whose absence must still be observed before cancelling command admission.
+    """
+    from .ha_created_packages import PREFIX
+
+    assert state.transaction is not None
+    raw = dict(state.transaction.resource_bindings)
+    effective = vm_ha_effective_resource_bindings(raw)
+    packages = intent["packages"]
+    saved = json.loads(raw.get(PREFIX + packages["parent"], "null"))
+    members = {m.instance_name: m for m in state.members}
+    if (
+        not isinstance(saved, dict)
+        or set(saved) != {"authority", "manifests"}
+        or not isinstance(saved["authority"], dict)
+        or set(saved["authority"]) != {"execution", "operation", "artifact", "lineage"}
+        or not isinstance(saved["manifests"], dict)
+        or set(saved["manifests"]) != set(members)
+        or raw.get("runtime-command-execution") != transaction["execution_id"]
+        or raw.get("heartbeat-initial-artifact") != plan.artifact_sha256
+        or json.loads(raw.get("runtime-package-manifests", "null")) != packages["manifests"]
+        or json.loads(raw.get("runtime-command-approval", "null"))
+        != {"schema": SCHEMA, "approval": intent["approval"], "scope": intent["runtime_scope"]}
+    ):
+        raise RuntimeError("Created command retirement lacks its exact publication receipt")
+    authority = saved["authority"]
+    lineage = authority["lineage"]
+    if (
+        authority["execution"] != transaction["execution_id"]
+        or authority["operation"] != packages["parent"]
+        or authority["artifact"] != plan.artifact_sha256
+        or not isinstance(lineage, dict)
+        or set(lineage) != set(members)
+    ):
+        raise RuntimeError("Created command retirement changed publication authority")
+    for name, member in members.items():
+        row = lineage[name]
+        manifest = saved["manifests"][name]
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"compute", "disk", "node", "creation", "configuration"}
+            or not member.compute_id
+            or not member.disk_id
+            or row["compute"] != member.compute_id
+            or row["disk"] != member.disk_id
+            or row["node"] != member.node_id
+            or row["creation"] != f"provision-{name}-compute"
+            or effective.get(f"compute:{name}") != member.compute_id
+            or effective.get(f"disk:{name}") != member.disk_id
+            or not isinstance(manifest, dict)
+            or manifest.get("wheel_sha256") != plan.artifact_sha256
+        ):
+            raise RuntimeError("Created command retirement changed member lineage")
+    return {m.compute_id for m in members.values()}
 
 
 def retire(
@@ -65,8 +128,8 @@ def retire(
         if any(target.startswith("create:") for target in targets):
             from .ha_members import targets as member_targets
 
-            # A failed reprovision can start command admission before publishing
-            # its first lifecycle. Its creation tokens are not Compute identities.
+            # Creation tokens are never Compute identities. Resolve only the
+            # exact created lineage, or prove that provisioning never began.
             terminal_members = {member.instance_name: member for member in state.members}
             packages = intent.get("packages")
             if (
@@ -74,7 +137,6 @@ def retire(
                 or set(members) != set(terminal_members)
                 or not set(members) <= set(destruction.plan.expected_compute_names)
                 or not isinstance(packages, dict)
-                or packages.get("checkpoint") != state.record_sha256
                 or any(
                     not isinstance(member, dict)
                     or set(member)
@@ -92,7 +154,11 @@ def retire(
                 or tuple(sorted(targets)) != member_targets(members)
             ):
                 raise RuntimeError("Pending creation targets lack exact terminal authority")
-            compute_targets = set()
+            compute_targets = (
+                set()
+                if packages.get("checkpoint") == state.record_sha256
+                else _created_compute_targets(state, transaction, plan, intent)
+            )
         elif members is not None and any(
             member["compute_id"] not in targets for member in members.values()
         ):

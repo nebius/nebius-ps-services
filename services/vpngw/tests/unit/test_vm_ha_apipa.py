@@ -308,7 +308,12 @@ def test_actual_collector_admits_only_active_bgp_with_all_existing_checks(
         runner=runner,
         bgp_peer_routes=e["peers"],
         physical_interface="eth0",
-        destination_protection=SimpleNamespace(protected_prefixes=protected, ready=lambda: True),
+        destination_protection=SimpleNamespace(
+            protected_prefixes=protected,
+            ready=lambda: True,
+            policies=(),
+            enforced=lambda: SimpleNamespace(read=lambda: {}),
+        ),
         underlay_verifier=lambda: case != "underlay",
         static_tunnel_names=("static",) if case in {"static", "mixed"} else (),
     )

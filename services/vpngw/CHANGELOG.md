@@ -11,6 +11,96 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.7.1] - 2026-11-24
+
+- Preserve interrupted stop-only HA handoff recovery before a package receipt
+  exists, while continuing to reject unsafe saved receipt files. Stream the
+  standalone route-projection test through stdin to respect Linux argument limits.
+- Require learned and native routes for enforced-only BGP readiness, and permit
+  ordinary recreation after a completed enforced HA destroy. Recover exactly
+  bound legacy blocked Start operations without requiring newer result files.
+  Ignore malformed optional diagnostics, reject malformed revalidation evidence,
+  and persist retry spacing before submission so interruption cannot bypass it.
+- Remove the systemd ordering cycle between physical-route preparation, FRR and
+  network-online readiness. Wait directly for networkd readiness while retaining
+  HA boot fencing and route verification before routing services start.
+- Revalidate standby restoration against current ownership without rewriting
+  promotion receipts, independent of preferred-active role. Observe accepted
+  Compute starts before stale restoration guards and retain terminal outcomes.
+- Preserve a five-minute transient Start retry window with five-second spacing,
+  stable operation identity and a separate standby-readiness deadline.
+  Persist retry intent and delay safely across interruption, and retain the first
+  transient failure and exact recovery bindings in sanitized support bundles.
+- Convert older recovery state during normal apply upgrades and preserve unknown
+  history for explicit operator recovery through the same workflow. Include
+  sanitized recovery diagnostics and v0.6.9/v0.7.0 upgrade fixtures.
+  Resume observation when a pre-existing Start succeeds, and durably retire the
+  completed apply recovery transaction.
+
+- Add optional per-connection `enforced_routing` with explicit workload source
+  subnets and destination CIDRs, including Internet defaults. Normal `apply`
+  owns guest policy routing, persistent drop protection and private cloud-table
+  cutover; BGP uses exact advertised prefixes and static routing uses declared
+  destinations. Keep gateway transport on its physical Internet route. The
+  configuration wizard defaults to No, and policy removal restores only proven
+  displaced routes. Preserve ordinary routes for unselected sources when finite
+  destinations appear in both ordinary and enforced intent; recover HA table
+  preparation across provider allocation revision changes and lost route replies.
+  Reconcile the same receipt-owned revision when activation resumes an interrupted
+  preparation, before rebuilding the runtime binding.
+  Retire predecessor guest-ledger targets under the stopped-writer cutover barrier,
+  preserving unchanged targets and the cloud transaction's cleanup history.
+  Permit later routing changes after receipt-proven completed HA restoration,
+  retaining historical records while rejecting unfinished or foreign authority.
+  Resume pending activation after proven configuration completion without
+  restarting healthy services. Bound owner verification by meaningful controller
+  progress, a two-minute stall window and a five-minute operation limit.
+  Order selected destinations by prefix length and reject broader table routes
+  after an explicit finite route withdraws, including when a VPN default remains.
+  Keep resumed activation payloads stable after private-table cutover and validate
+  HA route health against each source subnet’s committed enforcement policy.
+  Report private table creation and subnet attachment changes in HA apply impact.
+  Verify native BGP nexthop objects against the exact tunnel path and retire
+  obsolete routes by their observed nexthop ID.
+  Retire obsolete routes across routing-mode and tunnel-path changes even when
+  destinations are unchanged, preserving successor routes and checking native
+  postconditions before committing the new ownership record.
+  Admit fresh enforced routing when recreating a destroyed gateway only against
+  its new approved observation and workload target identities.
+  Share canonical BGP import bindings with passive readiness so enforced
+  connections do not trigger repeated materialization and FRR restarts.
+  Normalize FRR's within-clause statement ordering when comparing import policy,
+  preserving exact clause boundaries, actions, filters and neighbor bindings.
+  Retire interrupted creation commands after verified destroy using their exact
+  retained package-publication and member identities.
+  Document ordinary BGP behavior after enforcement removal and route-table quota
+  headroom for candidate copies and retained tables.
+  Clarify that customer-side HA return routes must follow the active peer;
+  preferred stale static routes can override an otherwise correct BGP path.
+  Carry the confirmed repair deployment scope into pending enforced-table
+  preparation and cutover, retaining exact receipts and stopped-writer checks.
+  Include enforced-only Static destinations in cold tunnel preparation and
+  readiness without publishing ordinary routes for unselected subnets.
+  Keep Static backup native proof budgets separate from fresh cloud ownership
+  checks, preventing valid slow ownership reads from masking a reachable backup.
+  Restore kernel destination protection during fenced Static candidate preparation
+  so a restarted standby can pass route admission before forwarding is enabled.
+  Separate tunnel-authority observation from full route-proof collection so
+  slow redundant cloud reads cannot indefinitely expire healthy backup confirmations;
+  retain fresh authority gates and full controller/heartbeat evidence.
+  Take the first fresh post-activation Static verification sample immediately,
+  preserving the fixed deadline and requiring a second later sample, so routine
+  writer contention does not unnecessarily roll back a healthy backup.
+  Sample native controller readiness after cloud route-proof collection, avoiding
+  stale health decisions when routing hygiene recovers or deteriorates during
+  those reads. Preserve strict Static APIPA checks and reject unknown evidence.
+
+- Document live-checked Security Group requirements for SSH, IKE/NAT-T, optional
+  ICMP ping and private HA TCP 9443, including source scopes, workload/egress
+  prerequisites and private-IP routing. Keep BGP inside the tunnel and require
+  coordinated HA attachment updates; distinguish NAT-T from native ESP and
+  inbound echo requests from stateful echo replies.
+
 ## [nebius-vpngw-v0.7.0] - 2026-11-21
 
 - Avoid unnecessary active BGP VM-HA self-fencing during DHCP renewal when
