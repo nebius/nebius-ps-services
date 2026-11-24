@@ -35,7 +35,8 @@ mutation authority and does not need another confirmation.
 For managed generation, the workflow:
 
 - Replays the shared owner's specification receipt before trusting project
-  requirements, design, or traceability.
+  requirements, design, or traceability. Linked project policy directories fail
+  this validation before native instruction discovery runs.
 - Evaluates only durable, project-specific, actionable rules supported by
   tracked repository evidence.
 - Compares those rules with the effective inherited instruction chain without

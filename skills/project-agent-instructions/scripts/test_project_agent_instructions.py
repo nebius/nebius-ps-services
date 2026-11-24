@@ -2989,7 +2989,15 @@ class ProjectAgentInstructionsTests(unittest.TestCase):
         (self.repo / ".codex").symlink_to(outside, target_is_directory=True)
         with self.assertRaises(contracts.ProjectInstructionsError) as caught:
             self.inspect()
+        self.assertEqual(caught.exception.code, "SPEC_VALIDATION_REQUIRED")
+        # The spec owner rejects the linked policy directory before discovery;
+        # retain direct coverage of discovery's independent no-follow guard.
+        with self.assertRaises(contracts.ProjectInstructionsError) as caught:
+            discovery._codex_settings(
+                self.agent_home, self.repo, self.repo, self.runtime_path
+            )
         self.assertEqual(caught.exception.code, "DISCOVERY_CONTEXT_UNVERIFIED")
+        self.assertFalse((self.repo / "AGENTS.md").exists())
 
     def test_create_io_failure_removes_only_owned_partial_file(self) -> None:
         target = self.repo / "AGENTS.md"

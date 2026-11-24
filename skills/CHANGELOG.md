@@ -4,6 +4,8 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Align project-instruction symlink tests with the spec owner's earlier policy
+  rejection and retain direct coverage of discovery's independent no-follow guard.
 - Add GitHub LOC Modifications reporting with `--loc-modifications-report`,
   organization/user-owned repository selection through `--owner`, and optional
   `--top K`. Aggregate merged-PR additions plus deletions into one column;
