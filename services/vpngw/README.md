@@ -203,13 +203,35 @@ preserved. An older agent can be upgraded even when it lacks the new ordinary
 confirmation capability. An actual update may interrupt VPN traffic.
 
 Install the new CLI release, then run `nebius-vpngw apply -c <config.yaml>` to
-upgrade the existing gateways. An unchanged apply reconciles supported drift or
+upgrade the existing gateways. VM-HA upgrades also convert retained standby recovery
+state through the same apply transaction. Both gateways use the exact CLI release;
+a stopped standby is restored through the serving owner's rearm service before
+its package upgrade. No separate state-migration command is needed. An unchanged apply reconciles supported drift or
 succeeds without unnecessary package installation or service restart. A release
 change alone does not require `--repair`. Interrupted updates keep their original
 artifact and operation records; apply settles the prior owners before admitting a
 new package update. Changes to resources, credentials, trust or interruption scope
 still require review. Uncertain writers and cloud operations remain explicit
 prerequisites.
+
+Standby auto-healing applies to either surviving owner, independent of the
+preferred-active configuration. Restoring the stopped VM leaves traffic on the
+current owner. A newer Compute revision requires a separate, freshly validated
+recovery proof; the original promotion receipt remains unchanged. Missing or
+changed ownership history cannot be treated as uninterrupted ownership. Normal
+apply can establish fresh operator recovery authority after verifying the exact
+pair and enabled policy, including after conversion from v0.6.9 or v0.7.0.
+
+Transient Start failures receive a 300-second submission window from the first
+eligible request, with five seconds between a failed request and its retry.
+Accepted operations are observed without resubmission. Restarts and automatic
+revalidation do not reset the budget; permanent errors remain blocked. Once
+Compute reports Running, a separate 300-second deadline covers standby readiness.
+Support bundles retain sanitized recovery authority, operation outcomes, timing
+and the first failure even when the stopped peer is unreachable.
+Interrupted recovery preserves its request identity, elapsed budget and retry delay.
+If a previously accepted Start has already succeeded, apply observes the existing
+recovery through standby readiness without submitting another Start.
 
 Apply can convert a validated legacy SSH trust receipt after proving the exact VM
 identities and pinned keys. A changed host key requires independent authenticated
@@ -259,6 +281,11 @@ exact owned recovery before installation can proceed.
 Subsequent ordinary applies recognize the exact product-owned underlay service
 dependency. Its contents remain part of environment identity; altered or unrelated
 management dependency drop-ins still block changes.
+The underlay service waits directly for networkd readiness before preparing
+physical routes and starting FRR. It does not wait for the aggregate network-online
+target: FRR precedes the network target, so that dependency would create a boot
+and shutdown ordering cycle. HA guard and physical-route verification remain
+required before controller and routing activation.
 
 First conversion initializes the canonical HA lock directories after excluding
 existing writers. Package verification can then use the same locks as HA repair,
@@ -2038,21 +2065,19 @@ tombstone, reconcile apply-owned drift, observe controller progress, or ask the
   replacement and directs the operator to `apply`, which owns the exact
   creation approval.
 
-One additional apply-owned recovery is supported for the recurring
-post-failover/failback skew: an exact ACTIVE cluster with one Running serving
-owner that is stale only because its controller lacks standby restoration, and
-one alias-free Stopped non-owner. The approved `artifact-standby-recovery`
-plan installs and reproves the bound artifact on the owner first, uses only the
-owner-side rearm service to restore Compute and SSH, installs the identical
-artifact on the standby, then resumes canonical non-owner-first apply and the
-normal two-sample health proof. It never grants the CLI direct Compute, route,
-allocation, or forwarding authority. The legacy owner's policy view is accepted
-only when rearm is inhibited specifically because the stopped peer cannot
-provide live policy evidence with blocked policy status, or a pre-v2 runtime
-rejected an already committed transfer after its mutable latest agreement
-refreshed during cutover while durable policy status remains transitional.
-Disabled, changing, invalid, or otherwise blocked policy and any additional
-drift stop the lane.
+Normal `apply` also handles an exact ACTIVE cluster with one Running owner and
+one alias-free Stopped peer when the owner needs the new restoration capability.
+The approval binds the exact CLI artifact, identities, policy and retained history.
+It observes any accepted Start to a terminal outcome before fencing the owner,
+records the predecessor, installs an exact apply lock, drains writers and upgrades
+the owner through guarded package installation. It then activates and verifies the
+fenced runtime, releases the exact lock, and lets the controller prove fresh recovery
+authority. Only the owner's rearm service starts the peer. The same approved request
+is observed through retry delays and CLI restarts without renewing its allowance.
+After Compute, SSH and standby readiness are proven, coordinated non-owner-first
+apply upgrades both gateways to the same artifact and verifies normal two-sample
+health. Unknown identity, disabled/conflicting policy, foreign writers or changed
+artifact bytes remain blocking. Promotion receipts are never rewritten.
 
 Because that composite recovery upgrades the serving owner before resuming
 canonical apply, it remains approval-required. Its concise impact states that
@@ -2630,11 +2655,13 @@ it targets whichever exact member is currently the non-owner through that
 owner-side reconciler and returns only after fresh current-boot
 `standby_ready` evidence less than 10 seconds old is available. Automatic rearm
 never changes ownership. Retryable or ambiguous provider failures retain one
-logical operation identity for five total submissions separated by 5, 15, 30,
-and 60 seconds; a permanent failure or exhausted retry budget closes the
-authorization as blocked. `apply` can reopen only that same exact blocked
-receipt under the unchanged committed-enabled policy. A crash after cloud
-acceptance is recovered only by exact terminal operation lookup. Apply,
+logical operation identity for a 300-second elapsed window, with five seconds
+between failed submissions and at most 60 submissions. Permanent errors block
+immediately. Process restart, reboot and automatic revalidation do not refill
+this budget. Accepted operations are observed by exact operation/resource identity
+and retained until their outcome is durably consumed; they are never resubmitted.
+Normal `apply` can create one fresh, policy-bound operator recovery while preserving
+the original promotion receipt and predecessor history. Apply,
 removal, retry submission, and rearm share one writer lock, so maintenance
 cannot race the final pre-start inhibition check. Deactivation keeps that
 root-only lock file and directory in place, removing only sibling HA state, so
@@ -2847,7 +2874,7 @@ healthy owner/standby pair and follows the selected text or JSON output format.
 
 Before `apply` can report healthy or a planned VM transfer can publish its
 request, each current controller must advertise
-`vm-ha-standby-restoration-v2`. The configuration-independent installed-agent
+`vm-ha-standby-restoration-v3`. The configuration-independent installed-agent
 capability document advertises the same feature for standby-policy recovery.
 Missing capability is treated as apply-owned artifact drift even when package
 versions and configuration generations match: deploy the current artifact with
@@ -2856,7 +2883,7 @@ transfer. VM-HA package preparation requires a current build or explicit local
 wheel; it never falls back to the wheel recorded by the existing installation.
 The uploader binds the local SHA-256, uses an isolated remote staging directory,
 verifies the remote bytes before installation, and accepts the installation only
-after a fresh capability probe advertises `vm-ha-standby-restoration-v2`.
+after a fresh capability probe advertises `vm-ha-standby-restoration-v3`.
 
 The latest two-member agreement is admission evidence only. Once a planned
 failover or failback is armed, later healthy heartbeats may refresh that cache
@@ -3429,7 +3456,9 @@ these forwarding rules.
 
 For BGP, the customer peer must advertise every exact enforced destination and
 the existing inbound allowlist must permit it. Configuration does not synthesize
-a default or widen a filter. For static routing, the destination list supplies
+a default or widen a filter. HA readiness requires those destinations to be both
+learned and usable through their native tunnel routes, even without an ordinary
+`remote_prefixes` list. For static routing, the destination list supplies
 the required route intent, so an enforcement-only connection does not also need
 `remote_prefixes`. The customer firewall must supply onward Internet access,
 NAT where needed, and return routes to the selected workload subnets.
@@ -3493,7 +3522,8 @@ allocation revision caused by those routes. Unrelated cloud drift still blocks
 the resume. Retained workload route tables are preserved by
 `destroy`; it restores their displaced routes before deleting gateway resources.
 A later `apply` can recreate the gateway with a newly approved enforcement
-policy; previous cutover receipts do not authorize the new deployment.
+policy or ordinary routing; completed destruction history does not block ordinary
+discovery, and previous cutover receipts do not authorize the new deployment.
 
 See [Nebius routing](https://docs.nebius.com/vpc/routing/overview) and
 [custom gateway routing](https://docs.nebius.com/vpc/routing/custom-nat-gateway)
@@ -6068,7 +6098,8 @@ python3 tests/systemd/run.py --historical-package-upgrades \
   --report /path/to/qualification/package-matrix.json
 ```
 
-The checked-in release manifest pins five authentic stable source wheels.
+The checked-in release manifest pins authentic stable source wheels, including
+v0.6.9 and v0.7.0; qualification derives its cases from that manifest.
 Baseline dependencies are resolved from current repositories and recorded; this
 rebuilds the source release's environment, not its original release-date image.
 Each source release is installed into a cached predecessor image using its own

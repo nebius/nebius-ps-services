@@ -53,6 +53,38 @@ def _target(suffix: str = "a") -> VMHARouteTarget:
     )
 
 
+@pytest.mark.parametrize(
+    "learned,usable", [(False, False), (True, False), (False, True), (True, True)]
+)
+def test_enforced_only_bgp_destination_requires_learned_native_route(learned, usable):
+    from nebius_vpngw.agent.vm_ha.runtime import BoundRouteRuntime, LocalDataPlaneObservation
+
+    runtime = object.__new__(BoundRouteRuntime)
+    runtime.bgp_policies = [
+        {
+            "connection": "peer",
+            "remote_prefixes": [],
+            "enforced_routing": {
+                "source_subnets": ["10.0.1.0/24"],
+                "destinations": ["0.0.0.0/0"],
+            },
+        }
+    ]
+    runtime.expected_import_policy_digest = "exact"
+    prefixes = frozenset({"0.0.0.0/0"})
+    observed = LocalDataPlaneObservation(
+        True,
+        True,
+        frozenset(),
+        frozenset({"169.254.1.2"}),
+        frozenset({"169.254.1.2"}),
+        prefixes if learned else frozenset(),
+        prefixes if usable else frozenset(),
+        "exact",
+    )
+    assert runtime._bgp(observed).promotion_ready is (learned and usable)
+
+
 @pytest.mark.parametrize("available", [False, True])
 def test_enforced_intent_is_per_subnet_and_survives_bgp_loss(available):
     destinations = frozenset({"0.0.0.0/0", "172.20.0.0/16"})

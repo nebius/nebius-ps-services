@@ -178,7 +178,7 @@ def _write_vm_ha_agent_wheel(wheel: Path) -> None:
             b"    main()\n"
         ),
         "nebius_vpngw/agent/vm_ha/restoration.py": (
-            b'STANDBY_RESTORATION_CAPABILITY = "vm-ha-standby-restoration-v2"\n'
+            b'STANDBY_RESTORATION_CAPABILITY = "vm-ha-standby-restoration-v3"\n'
         ),
         "nebius_vpngw/agent/vm_ha/inhibition.py": (
             b'LIVE_PEER_REPLACEMENT_CAPABILITY = "vm-ha-live-peer-replacement-v5"\n'
@@ -1425,7 +1425,15 @@ def test_artifact_recovery_admits_only_exact_pre_v2_policy_deadlocks() -> None:
     )
 
 
-def test_artifact_recovery_admits_only_writer_owned_restoration_progress() -> None:
+@pytest.mark.parametrize(
+    "recovery_reason",
+    [
+        "compute-start-retry-scheduled",
+        "cloud-operation-finalization-failed",
+        "compute-start-permanent-failure",
+    ],
+)
+def test_artifact_recovery_admits_only_writer_owned_restoration_progress(recovery_reason) -> None:
     owner = {
         "state": "active",
         "promotion_ready": True,
@@ -1459,6 +1467,14 @@ def test_artifact_recovery_admits_only_writer_owned_restoration_progress() -> No
         owner_node_id="node-0",
         allow_rearm_progress=True,
     )
+    owner["promotion_committed"] = False
+    owner["rearm_reason"] = recovery_reason
+    assert _vm_ha_artifact_recovery_owner_is_safe(
+        owner, owner_node_id="node-0", allow_rearm_progress=True, recovery_verified=True
+    )
+    assert not _vm_ha_artifact_recovery_owner_is_safe(
+        owner, owner_node_id="node-0", allow_rearm_progress=True
+    )
 
 
 @pytest.mark.parametrize(
@@ -1466,7 +1482,6 @@ def test_artifact_recovery_admits_only_writer_owned_restoration_progress() -> No
     (
         None,
         "owner-target",
-        "standby-target",
         "wire-break",
         "standby-wire-break",
         "owner-refresh-disconnect",
@@ -1505,7 +1520,7 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
     context = _VMHAArtifactRecoveryContext(
         local_config={"gateway_group": {"vm_spec": {}}},
         plan=SimpleNamespace(),  # type: ignore[arg-type]
-        lifecycle=SimpleNamespace(record_sha256="f" * 64),  # type: ignore[arg-type]
+        lifecycle=SimpleNamespace(record_sha256="f" * 64, cluster_id="cluster-a"),  # type: ignore[arg-type]
         owner_instance=owner,
         standby_instance=standby,
         owner_role="active",
@@ -1562,6 +1577,20 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
         def refresh_vm_ha_control_services(self, target, *_args, **_kwargs) -> None:
             order.append(f"refresh:{target}")
 
+    def bootstrap(ssh, target, instance, local, *, prepare_package, **_kwargs):
+        prepare_package({"operation_id": report.digest})
+        ssh.refresh_vm_ha_control_services(target, instance, local)
+
+    monkeypatch.setattr("nebius_vpngw.deploy.restoration_apply.bootstrap", bootstrap)
+
+    monkeypatch.setattr("nebius_vpngw.deploy.restoration_apply.control", lambda *_args: {})
+    monkeypatch.setattr("nebius_vpngw.deploy.restoration_apply.identity", lambda *_args: {})
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.checkpoint_conversion.context", lambda *_args, **_kw: {}
+    )
+    monkeypatch.setattr(
+        "nebius_vpngw.deploy.restoration_apply.wait_ready", lambda *_args, **_kw: None
+    )
     safe_owner = {
         "state": "active",
         "promotion_ready": True,
@@ -1582,7 +1611,7 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
             "accepted_start": True,
         },
         "mtls": {"state": "healthy", "operation_id": None, "inhibited": False},
-        "controller_capabilities": ["vm-ha-standby-restoration-v2"],
+        "controller_capabilities": ["vm-ha-standby-restoration-v3"],
     }
 
     monkeypatch.setattr(
@@ -1593,7 +1622,10 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
         lambda *_a, **_k: (report, context),
     )
     monkeypatch.setattr("nebius_vpngw.cli.SSHPush", Push)
-    monkeypatch.setattr("nebius_vpngw.cli._vm_ha_status_runtime_binding", lambda *_a: object())
+    monkeypatch.setattr(
+        "nebius_vpngw.cli._vm_ha_status_runtime_binding",
+        lambda *_a: SimpleNamespace(cluster_id="cluster-a"),
+    )
     monkeypatch.setattr(
         "nebius_vpngw.cli._validate_vm_ha_planned_status",
         lambda payload, **_kwargs: payload,
@@ -1609,6 +1641,8 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
     monkeypatch.setattr("nebius_vpngw.cli._wait_for_vm_ha_agent_status", wait_for_owner)
 
     def prepare(**_kwargs):
+        assert _kwargs["request_rearm"] is False
+        assert callable(_kwargs["rearm_request_progress_is_exact"])
         order.append("owner-side-rearm")
         return SimpleNamespace(outcome="standby-ssh-ready")
 
@@ -1634,7 +1668,7 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
         saved = receipts.read(tmp_path / "command")
         assert saved["phase"] == "owner-ready"
         object.__setattr__(context, "recovery_record", saved)
-        context.owner_record["controller_capabilities"].append("vm-ha-standby-restoration-v2")
+        context.owner_record["controller_capabilities"].append("vm-ha-standby-restoration-v3")
         failed_target = None
 
     if failed_target == "standby-wire-break":
@@ -1679,8 +1713,6 @@ def test_artifact_recovery_upgrades_owner_before_rearm_and_reuses_artifact(
         "refresh:owner-target",
         "reprove-owner",
         "owner-side-rearm",
-        "install:standby-target",
-        "refresh:standby-target",
         "canonical-plan",
         "canonical-apply",
     ]

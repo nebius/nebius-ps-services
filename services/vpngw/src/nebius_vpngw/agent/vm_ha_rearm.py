@@ -34,6 +34,7 @@ from nebius_vpngw.deploy.vm_ha_cloud import (
     ComputeObservation,
     InstanceCloudState,
     NebiusSDKCloudClient,
+    PendingHACloudOperation,
     PermanentHACloudError,
     RetryableHACloudError,
     VMHACloudOperationJournal,
@@ -59,6 +60,7 @@ from .vm_ha.inhibition import standby_replacement_inhibition_operation_id
 from .vm_ha.mtls import ManagedMTLSStore
 from .vm_ha.restoration import (
     RestorationPhase,
+    RestorationSource,
     StandbyRestorationAuthorization,
     StandbyRestorationError,
     StandbyRestorationReason,
@@ -173,6 +175,8 @@ class RearmCloudPort(Protocol):
 
     def finalize_accepted_start(self, operation: AcceptedCloudOperation) -> None: ...
 
+    def acknowledge_accepted_start(self, operation: AcceptedCloudOperation) -> None: ...
+
 
 class RearmCloudObservationUnavailable(RuntimeError):
     """An exact provider read failed without granting rearm mutation authority."""
@@ -221,15 +225,30 @@ class SDKRearmCloudPort:
         return allocation_observation(allocation_id, allocation)
 
     def start_instance(self, instance_id: str, operation_id: str) -> None:
-        self.calls.start_instance(instance_id, operation_id)
+        from ..deploy.vm_ha_cloud import VMHACloudAdapter
+
+        VMHACloudAdapter._call(
+            "restore standby", lambda: self.calls.submit_start(instance_id, operation_id)
+        )
 
     def accepted_operation(self) -> AcceptedCloudOperation | None:
         return self.journal.load()
 
+    def acknowledge_accepted_start(self, operation: AcceptedCloudOperation) -> None:
+        self.journal.clear(operation)
+
     def finalize_accepted_start(self, operation: AcceptedCloudOperation) -> None:
         if operation.kind != "start-instance":
             raise RuntimeError("accepted VM-HA operation is not a Compute start")
-        self.calls.finalize_accepted_operation(operation)
+        if self.binding is None:
+            raise RuntimeError("accepted Start requires an exact runtime binding")
+        checkpoint = _read_checkpoint(self.journal.path.with_name(REARM_CHECKPOINT_PATH.name))
+        if checkpoint is None or checkpoint.operation_id != operation.action_operation_id:
+            raise RuntimeError("accepted Start checkpoint differs")
+        target = next(
+            node for node in self.binding.nodes if node.node_id == checkpoint.target_node_id
+        )
+        self.calls.observe_accepted_start(operation, target.compute_id)
 
 
 def _promotion_receipt(
@@ -395,34 +414,16 @@ def _request_matches(
     if not path.exists():
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if not (
-        isinstance(payload, dict)
-        and set(payload)
-        == {
-            "cluster_id",
-            "owner_node_id",
-            "node_id",
-            "generation_id",
-            "promotion_receipt_id",
-            "request_id",
-            "requested_at",
-            "schema",
-            "target_node_id",
-        }
-        and payload.get("schema") == "nebius-vpngw/vm-ha-rearm-request-v1"
-        and payload.get("cluster_id") == receipt.cluster_id
-        and payload.get("owner_node_id") == receipt.owner_node_id
-        and payload.get("node_id") == receipt.owner_node_id
-        and payload.get("generation_id") == receipt.generation_id
-        and payload.get("target_node_id") == target_node_id
-        and payload.get("promotion_receipt_id") == receipt.receipt_id
-        and isinstance(payload.get("request_id"), str)
-        and bool(payload["request_id"])
-        and isinstance(payload.get("requested_at"), (int, float))
-        and not isinstance(payload.get("requested_at"), bool)
-        and math.isfinite(float(payload["requested_at"]))
-    ):
-        raise ValueError("VM-HA rearm request is invalid or stale")
+    from .vm_ha.rearm_request import validate_request
+
+    validate_request(
+        payload,
+        cluster=receipt.cluster_id,
+        owner=receipt.owner_node_id,
+        peer=target_node_id,
+        generation=receipt.generation_id,
+        receipt=receipt.receipt_id,
+    )
     return RearmRetryRequest(
         cluster_id=str(payload["cluster_id"]),
         owner_node_id=str(payload["owner_node_id"]),
@@ -493,6 +494,8 @@ class RearmRuntime:
         clock: Callable[[], float] = time.time,
         auto_healing_inhibition_provider: Callable[[], str | None] | None = None,
         peer_binding_provider: Callable[[], VMHARuntimeNodeBinding] | None = None,
+        monotonic: Callable[[], float] | None = None,
+        boot_id: Callable[[], str] | None = None,
     ) -> None:
         self.binding = binding
         self.local = local
@@ -501,8 +504,11 @@ class RearmRuntime:
         self.state_dir = state_dir
         self.enabled_path = enabled_path
         self.clock = clock
+        self.monotonic = monotonic or (time.monotonic if clock is time.time else clock)
+        self.boot_id = boot_id or (_boot_id if clock is time.time else lambda: "test-clock")
         self.auto_healing_inhibition_provider = auto_healing_inhibition_provider
         self.peer_binding_provider = peer_binding_provider
+        self.last_owner_epoch: str | None = None
 
     def _status(
         self,
@@ -524,7 +530,51 @@ class RearmRuntime:
         }
         if persist:
             _atomic_write_json(self.state_dir / REARM_STATUS_PATH.name, payload)
+            self._record_diagnostics(payload, receipt)
         return payload
+
+    def _record_diagnostics(
+        self, status: dict[str, object], receipt: PromotionReceipt | None
+    ) -> None:
+        path = self.state_dir / "restoration-diagnostics.json"
+        try:
+            old = json.loads(path.read_text()) if path.exists() else {}
+            if not isinstance(old, dict):
+                old = {}
+            receipt_id = None if receipt is None else receipt.receipt_id
+            first = (
+                old.get("first_failure") if old.get("promotion_receipt_id") == receipt_id else None
+            )
+            if first is None and (
+                status["phase"] in {"blocked", "inhibited"}
+                or status["reason"] == "compute-start-retry-scheduled"
+            ):
+                first = {key: status[key] for key in ("phase", "reason", "updated_at")}
+            authority = StandbyRestorationStore(self.state_dir).load()
+            _atomic_write_json(
+                path,
+                {
+                    "schema": "nebius-vpngw/vm-ha-restoration-diagnostics-v1",
+                    "promotion_receipt_id": receipt_id,
+                    "first_failure": first,
+                    "last_transition": {
+                        key: status[key] for key in ("phase", "reason", "updated_at")
+                    },
+                    "original_epoch": None if receipt is None else receipt.ownership_epoch,
+                    "current_epoch": self.last_owner_epoch,
+                    "attempt_count": None if authority is None else authority.attempt_count,
+                    "retry_window": None
+                    if authority is None or authority.retry_window is None
+                    else authority.retry_window.to_dict(),
+                    "next_attempt_at": None if authority is None else authority.next_attempt_at,
+                    "standby_deadline_at": None
+                    if authority is None
+                    else authority.standby_deadline_at,
+                },
+            )
+        except (OSError, ValueError, StandbyRestorationError):
+            # Presentation cannot grant authority or interrupt the controller.
+            pass
 
     def _inhibition_reason(self) -> str | None:
         if not self.enabled_path.exists():
@@ -729,17 +779,62 @@ class RearmRuntime:
             raise AutoHealingPolicyError(inhibition)
         return None
 
+    def _revalidated_owner(self, receipt: PromotionReceipt, owner: ComputeObservation) -> bool:
+        from .vm_ha.restoration_revalidation import permits
+
+        return permits(
+            self.state_dir,
+            receipt_id=receipt.receipt_id,
+            current_epoch=owner.ownership_epoch,
+            boot_id=self.boot_id(),
+        )
+
     def _stable_owner_observation(
-        self, receipt: PromotionReceipt
+        self, receipt: PromotionReceipt, *, allow_running: bool = False
     ) -> tuple[ComputeObservation, ComputeObservation]:
         allocation = self.cloud.observe_allocation(receipt.allocation_id)
         owner = self.cloud.observe_instance(self.local.compute_id)
         target = self.cloud.observe_instance(self.peer.compute_id)
+        self.last_owner_epoch = owner.ownership_epoch
+        authority = StandbyRestorationStore(self.state_dir).load()
+        baseline_known = authority is None
+        operator_ready = True
+        if authority is not None:
+            from .vm_ha_checkpoint import controller_checkpoint_from_dict
+
+            try:
+                controller = controller_checkpoint_from_dict(
+                    json.loads((self.state_dir / "controller-checkpoint.json").read_text())
+                )
+                baseline_known = (
+                    authority.ownership_incarnation == controller.ownership_incarnation
+                    and not controller.ownership_continuity_invalidated
+                )
+            except (OSError, ValueError, TypeError):
+                baseline_known = False
+            request = _request_matches(
+                self.state_dir / REARM_REQUEST_PATH.name,
+                receipt=receipt,
+                target_node_id=self.peer.node_id,
+            )
+            operator_ready = request is None or (
+                authority.source is RestorationSource.OPERATOR_RESTORATION
+                and authority.request_fingerprint == request.request_id
+            )
         exact_owner = AllocationOwner(self.local.compute_id, self.local.network_interface_name)
         if not (
             allocation.owner == exact_owner
             and owner.state is InstanceCloudState.RUNNING
-            and owner.ownership_epoch == receipt.ownership_epoch
+            and (
+                (allow_running and target.state is InstanceCloudState.RUNNING)
+                or (
+                    operator_ready
+                    and (
+                        (baseline_known and owner.ownership_epoch == receipt.ownership_epoch)
+                        or self._revalidated_owner(receipt, owner)
+                    )
+                )
+            )
             and owner.has_alias_allocation(self.local.network_interface_name, receipt.allocation_id)
             and not target.has_alias_allocation(
                 self.peer.network_interface_name, receipt.allocation_id
@@ -787,14 +882,6 @@ class RearmRuntime:
                 return self._status("blocked", "promotion-receipt-invalid")
             if receipt is None:
                 return self._status("idle", "promotion-receipt-unavailable")
-            try:
-                _owner, target = self._stable_owner_observation(receipt)
-            except RearmCloudObservationUnavailable:
-                return self._status(
-                    "blocked", "rearm-cloud-observation-unavailable", receipt=receipt
-                )
-            except RuntimeError:
-                return self._status("blocked", "ownership-or-alias-drift", receipt=receipt)
             checkpoint_path = self.state_dir / REARM_CHECKPOINT_PATH.name
             try:
                 checkpoint = _read_checkpoint(checkpoint_path)
@@ -838,6 +925,39 @@ class RearmRuntime:
                     )
                 try:
                     self.cloud.finalize_accepted_start(accepted_operation)
+                except PendingHACloudOperation:
+                    return self._status(
+                        "starting",
+                        "cloud-operation-pending",
+                        receipt=receipt,
+                        checkpoint=checkpoint,
+                    )
+                except PermanentHACloudError:
+                    store = StandbyRestorationStore(self.state_dir)
+                    record = store.load()
+                    if (
+                        record is not None
+                        and record.phase is not RestorationPhase.BLOCKED
+                        and checkpoint.receipt_id == receipt.receipt_id
+                    ):
+                        store.block(
+                            receipt_id=receipt.receipt_id,
+                            reason="compute-start-permanent-failure",
+                            updated_at=self.clock(),
+                        )
+                    blocked = replace(
+                        checkpoint,
+                        phase="blocked",
+                        failure_reason="compute-start-permanent-failure",
+                    )
+                    _write_checkpoint(checkpoint_path, blocked)
+                    self.cloud.acknowledge_accepted_start(accepted_operation)
+                    return self._status(
+                        "blocked",
+                        "compute-start-permanent-failure",
+                        receipt=receipt,
+                        checkpoint=blocked,
+                    )
                 except Exception:
                     return self._status(
                         "blocked",
@@ -845,22 +965,19 @@ class RearmRuntime:
                         receipt=receipt,
                         checkpoint=checkpoint,
                     )
-                try:
-                    _owner, target = self._stable_owner_observation(receipt)
-                except RearmCloudObservationUnavailable:
-                    return self._status(
-                        "blocked",
-                        "rearm-cloud-observation-unavailable",
-                        receipt=receipt,
-                        checkpoint=checkpoint,
-                    )
-                except RuntimeError:
-                    return self._status(
-                        "blocked",
-                        "ownership-or-alias-drift",
-                        receipt=receipt,
-                        checkpoint=checkpoint,
-                    )
+                if checkpoint.receipt_id != receipt.receipt_id:
+                    # An exact older operation is terminal. Its retained result
+                    # cannot authorize or block this new promotion's Start.
+                    self.cloud.acknowledge_accepted_start(accepted_operation)
+                    accepted_operation = None
+            try:
+                _owner, target = self._stable_owner_observation(receipt, allow_running=True)
+            except RearmCloudObservationUnavailable:
+                return self._status(
+                    "blocked", "rearm-cloud-observation-unavailable", receipt=receipt
+                )
+            except RuntimeError:
+                return self._status("blocked", "ownership-or-alias-drift", receipt=receipt)
             if target.state is InstanceCloudState.RUNNING:
                 if (
                     checkpoint is not None
@@ -972,7 +1089,15 @@ class RearmRuntime:
                             receipt=receipt,
                             checkpoint=checkpoint,
                         )
+                if accepted_operation is not None:
+                    self.cloud.acknowledge_accepted_start(accepted_operation)
                 return self._status("running", None, receipt=receipt, checkpoint=checkpoint)
+            if accepted_operation is not None:
+                # Terminal success may precede a consistent Compute read. Keep
+                # acceptance until Running is durably recorded; never resubmit.
+                return self._status(
+                    "starting", "cloud-operation-pending", receipt=receipt, checkpoint=checkpoint
+                )
             if target.state in {
                 InstanceCloudState.ERROR,
                 InstanceCloudState.STOPPING,
@@ -1132,9 +1257,11 @@ class RearmRuntime:
                             "standby restoration start identity changed",
                             reason=StandbyRestorationReason.START_IDENTITY_CHANGED,
                         )
-                    if (
-                        restoration.next_attempt_at is not None
-                        and self.clock() < restoration.next_attempt_at
+                    if not restoration_store.retry_due(
+                        restoration,
+                        updated_at=self.clock(),
+                        monotonic_at=self.monotonic(),
+                        boot_id=self.boot_id(),
                     ):
                         return self._status(
                             "starting",
@@ -1154,11 +1281,55 @@ class RearmRuntime:
             self._status("starting", None, receipt=receipt, checkpoint=starting)
             try:
                 if restoration is not None:
-                    restoration_store.record_submission(
+                    restoration = restoration_store.record_submission(
                         receipt_id=receipt.receipt_id,
                         updated_at=self.clock(),
+                        monotonic_at=self.monotonic(),
+                        boot_id=self.boot_id(),
                     )
-                self.cloud.start_instance(self.peer.compute_id, starting.operation_id)
+                from ..deploy.vm_ha_cloud import vm_ha_observation_budget
+                from .vm_ha.retry_window import WINDOW_SECONDS
+
+                remaining = WINDOW_SECONDS - (
+                    restoration.retry_window.elapsed
+                    if restoration is not None and restoration.retry_window is not None
+                    else 0.0
+                )
+                with vm_ha_observation_budget(seconds=remaining):
+                    _owner, verified_target = self._stable_owner_observation(receipt)
+                    if (
+                        verified_target.state is not InstanceCloudState.STOPPED
+                        or verified_target.resource_version != starting.stopped_revision
+                    ):
+                        return self._status(
+                            "blocked",
+                            "standby-restoration-start-identity-changed",
+                            receipt=receipt,
+                            checkpoint=starting,
+                        )
+                    if self._inhibition_reason() is not None:
+                        return self._status(
+                            "inhibited",
+                            "restoration-admission-changed",
+                            receipt=receipt,
+                            checkpoint=starting,
+                        )
+                    self._policy_start_admission(
+                        receipt=receipt,
+                        target=verified_target,
+                        rearm_operation_id=starting.operation_id,
+                    )
+                    self.cloud.start_instance(self.peer.compute_id, starting.operation_id)
+            except PendingHACloudOperation:
+                return self._status(
+                    "starting", "cloud-operation-pending", receipt=receipt, checkpoint=starting
+                )
+            except StandbyRestorationError as error:
+                blocked = replace(starting, phase="blocked", failure_reason=error.reason_code)
+                _write_checkpoint(checkpoint_path, blocked)
+                return self._status(
+                    "blocked", error.reason_code, receipt=receipt, checkpoint=blocked
+                )
             except PermanentHACloudError as error:
                 if restoration is not None:
                     restoration_store.block(
@@ -1187,6 +1358,8 @@ class RearmRuntime:
                     receipt_id=receipt.receipt_id,
                     reason=type(error).__name__,
                     updated_at=self.clock(),
+                    monotonic_at=self.monotonic(),
+                    boot_id=self.boot_id(),
                 )
                 retrying = RearmCheckpoint(
                     **{
@@ -1232,13 +1405,17 @@ class RearmRuntime:
                     checkpoint=blocked,
                 )
             try:
-                _owner, target = self._stable_owner_observation(receipt)
+                _owner, target = self._stable_owner_observation(receipt, allow_running=True)
             except RearmCloudObservationUnavailable:
                 return self._status(
                     "blocked",
                     "rearm-cloud-observation-unavailable",
                     receipt=receipt,
                     checkpoint=starting,
+                )
+            except RuntimeError:
+                return self._status(
+                    "blocked", "ownership-or-alias-drift", receipt=receipt, checkpoint=starting
                 )
             if target.state is InstanceCloudState.RUNNING:
                 if restoration is not None:
@@ -1416,6 +1593,12 @@ def request_rearm_retry(
         )
         if receipt is None:
             raise RuntimeError("VM-HA rearm retry requires a committed promotion receipt")
+        request_path = state_dir / REARM_REQUEST_PATH.name
+        existing = _request_matches(
+            request_path,
+            receipt=receipt,
+            target_node_id=peer.node_id,
+        )
         restoration_store = StandbyRestorationStore(state_dir)
         restoration = restoration_store.load()
         if restoration is not None and restoration.phase is RestorationPhase.BLOCKED:
@@ -1436,20 +1619,8 @@ def request_rearm_retry(
                 and policy_authorizes_restoration(policy, restoration)
             ):
                 raise RuntimeError("blocked standby restoration requires committed enabled policy")
-            restoration_store.restart_blocked(
-                receipt_id=receipt.receipt_id,
-                updated_at=time.time(),
-            )
-        request_path = state_dir / REARM_REQUEST_PATH.name
-        existing = _request_matches(
-            request_path,
-            receipt=receipt,
-            target_node_id=peer.node_id,
-        )
-        if existing is not None:
-            return _retry_request_payload(existing)
         requested_at = time.time()
-        request = RearmRetryRequest(
+        request = existing or RearmRetryRequest(
             cluster_id=receipt.cluster_id,
             owner_node_id=receipt.owner_node_id,
             node_id=receipt.owner_node_id,
@@ -1465,7 +1636,16 @@ def request_rearm_retry(
             requested_at=requested_at,
         )
         payload = _retry_request_payload(request)
-        _atomic_write_json(request_path, payload)
+        if existing is None:
+            _atomic_write_json(request_path, payload)
+        # Intent must survive before the predecessor becomes eligible for controller
+        # reproof. Replaying this request finishes an interrupted transition without
+        # granting a new allowance; only controller publication may renew the budget.
+        if restoration is not None and restoration.phase is RestorationPhase.BLOCKED:
+            restoration_store.restart_blocked(
+                receipt_id=receipt.receipt_id,
+                updated_at=requested_at,
+            )
         return payload
     finally:
         os.close(lock)
@@ -1497,7 +1677,7 @@ def run_rearm_service(
                 status.get("operation_id"),
                 attempt_count,
             )
-            if transition != last_transition:
+            if status.get("reason") != "rearm-writer-busy" and transition != last_transition:
                 print(
                     "[VM-HA-REARM] "
                     + json.dumps(

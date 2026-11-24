@@ -4085,7 +4085,7 @@ and BGP, but its first failover trial failed the zero-loss baseline before any
 transfer action. The prior-generation restoration reproducer therefore remains
 unverified live; historical verification below does not qualify this repair.
 
-Add a separate strict `standby-restoration-authorization-v1` authority rather than extending the heartbeat TTL or overloading the maintenance-only auto-healing recovery record. A replay-bound enabled-policy agreement certificate is captured while both members still agree. Planned transfer request admission records that certificate under `rearm.lock`; automatic transfer dispatch captures it and arms authorization immediately before the first effect. The existing rearm service consumes only the exact committed authorization and remains the sole Compute-start writer. The mutable latest-agreement file is admission evidence only: after authorization is armed, a later fresh heartbeat may update that cache but cannot revoke or replace the exact accepted transfer authority.
+Use the canonical strict `standby-restoration-authorization-v2` authority rather than extending the heartbeat TTL or overloading the maintenance-only auto-healing recovery record. A replay-bound enabled-policy agreement certificate is captured while both members still agree. Planned transfer request admission records that certificate under `rearm.lock`; automatic transfer dispatch captures it and arms authorization immediately before the first effect. The existing rearm service consumes only the exact committed authorization and remains the sole Compute-start writer. The mutable latest-agreement file is admission evidence only: after authorization is armed, a later fresh heartbeat may update that cache but cannot revoke or replace the exact accepted transfer authority.
 
 **Artifact approval and recovery boundary:** `cli.py` adds one private `artifact-standby-recovery` apply-plan kind and one immutable local artifact descriptor carrying a regular-file path, SHA-256, source class, and verified capability set. The public result remains `nebius-vpngw/vm-ha-result-v1`; artifact-changing approval objects add `artifact_sha256`, and the internal command-approval domain advances to v2. Planning resolves the exact CLI-compatible artifact through the shared provenance resolver, including a frozen editable-source build when needed, and retains immutable cached bytes. It never deletes or replaces referenced artifacts. Replanning under `VMHAApplyLock` rehashes the same file, and the apply engine receives that descriptor rather than selecting or rebuilding a wheel. The private remote staging directory preserves the validated wheel basename so pip receives a valid wheel filename; exact-byte hashing and shell quoting remain independent of that name. Package preparation also installs service assets directly from the remotely rehashed wheel. Staged activation requires the same immutable descriptor, rechecks it locally, and performs no second build, selection, package upload, or local-source asset copy.
 
@@ -4093,17 +4093,17 @@ Add a separate strict `standby-restoration-authorization-v1` authority rather th
 
 **Transfer ordering:** `agent/main.py` verifies planned ARMED evidence or late-arms automatic evidence in the existing transfer-effect callback before the handler. It never uses transfer-progress state. The terminal promotion path writes and rereads the promotion receipt first, then advances the exact authorization to `COMMITTED` before leaving the shared writer boundary; a restart may repair only an exact receipt-plus-`ARMED` pair. Apply-owner adoption is explicitly excluded. Manual request, effect dispatch, receipt commit, rearm, apply/removal, mTLS, policy, and replacement admission retain the existing stable-inode writer lock.
 
-**Rearm ordering and retries:** `agent/vm_ha_rearm.py`, controller status, and explicit retry use one shared local-policy-to-authorization predicate. Every source accepts exact committed-enabled operation and decision identity. Only a committed automatic-failover authorization may additionally survive an exact prepared-disable race whose predecessor is the accepted enabled-policy digest; prepared enable, committed disabled, another predecessor, and planned transfer variants fail closed. Rearm validates the exact active authorization without rereading the mutable latest-agreement cache, then bypasses only peer-heartbeat age. It writes the existing `start-requested` checkpoint, advances authorization to `START_ACCEPTED`, writes `starting`, and then calls the existing journaled SDK start with the same logical operation. Retryable and ambiguous failures retain that operation and schedule five total submissions at 5, 15, 30, and 60-second gaps; permanent failure blocks immediately and final transient exhaustion records `automatic-retry-exhausted`. Accepted cloud operations are finalized before any resubmission. Running Compute advances through `RUNNING` to `AWAITING_STANDBY`; the owner controller advances to `COMPLETED` only from current promotion receipt plus fresh exact redundancy evidence, or to `BLOCKED` after the independent 300-second readiness deadline.
+**Rearm ordering and retries:** `agent/vm_ha_rearm.py`, controller status, and explicit retry use one shared local-policy-to-authorization predicate. Every source accepts exact committed-enabled operation and decision identity. Only a committed automatic-failover authorization may additionally survive an exact prepared-disable race whose predecessor is the accepted enabled-policy digest; prepared enable, committed disabled, another predecessor, and planned transfer variants fail closed. Rearm validates the exact active authorization without rereading the mutable latest-agreement cache, then bypasses only peer-heartbeat age. It writes the existing `start-requested` checkpoint, advances authorization to `START_ACCEPTED`, writes `starting`, and then calls the existing journaled SDK start with the same logical operation. Retryable and ambiguous failures retain that operation within a 300-second elapsed window, at five-second gaps after failures and at most 60 submissions. Each submission uses one SDK attempt with the remaining time limit. Permanent failure blocks immediately and exhaustion records `automatic-retry-exhausted`. Exactly bound accepted operations are observed before owner revision guards; terminal results and accepted journals remain durable until checkpoint settlement is acknowledged. No pending operation is resubmitted. Running Compute advances through `RUNNING` to `AWAITING_STANDBY`; the owner controller advances to `COMPLETED` only from current promotion receipt plus fresh exact redundancy evidence, or to `BLOCKED` after the independent 300-second readiness deadline.
 
 **Operator workflow:** The existing planned CLI restoration deadline is an observation budget and never cancellation authority. Timeout remains nonzero but says durable background retries continue. `apply` joins an active authorization and, only for an exact inert `BLOCKED` record under committed enabled policy, renders and executes the existing approval-bound recovery path as a new `operator-restoration` authorization. Missing, corrupt, disabled, or split policy continues through the explicit `--standby-auto-healing enabled` transaction. Conversion, JSON result, public status rows, default-No confirmation, and exit classes remain unchanged.
 
-**Capability admission:** `agent/main.py` advertises `vm-ha-standby-restoration-v2` in both its configuration-independent private capability document and every current controller status, including blocked status. `cli.py` requires that controller capability whenever an active lifecycle runtime binding is validated, so ordinary status projection marks an older installed runtime as `agent-status-stale`; `apply` consequently plans apply-owned convergence instead of reporting healthy. The private standby-policy action probe requires the fixed feature as well as the v2 policy capability. Planned preparation reuses the same status validator and therefore stops before publishing a failover/failback request or admitting any external transfer effect. Version strings and configuration-generation parity are deliberately insufficient because editable and previously built artifacts may share them. Package preparation resolves only a current frozen build, explicit override, bundled wheel, or verified CLI installation artifact, binds its SHA-256, uploads it below a fresh mode-0700 temporary directory, verifies the remote bytes before installation, and runs the configuration-independent capability document in a fresh process before emitting its package receipt. An artifact recorded by the existing gateway installation is not a convergence fallback; exact current CLI installation provenance is an authoritative source. One canonical exported capability constant is shared by runtime advertisement, CLI status admission, local wheel inspection, upload receipt, and fresh remote proof, so a v1-only wheel is rejected before approval.
+**Capability admission:** `agent/main.py` advertises `vm-ha-standby-restoration-v3` in both its configuration-independent private capability document and every current controller status, including blocked status. `cli.py` requires that controller capability whenever an active lifecycle runtime binding is validated, so ordinary status projection marks an older installed runtime as `agent-status-stale`; `apply` consequently plans apply-owned convergence instead of reporting healthy. The private standby-policy action probe requires the fixed feature as well as the v2 policy capability. Planned preparation reuses the same status validator and therefore stops before publishing a failover/failback request or admitting any external transfer effect. Version strings and configuration-generation parity are deliberately insufficient because editable and previously built artifacts may share them. Package preparation resolves only a current frozen build, explicit override, bundled wheel, or verified CLI installation artifact, binds its SHA-256, uploads it below a fresh mode-0700 temporary directory, verifies the remote bytes before installation, and runs the configuration-independent capability document in a fresh process before emitting its package receipt. An artifact recorded by the existing gateway installation is not a convergence fallback; exact current CLI installation provenance is an authoritative source. One canonical exported capability constant is shared by runtime advertisement, CLI status admission, local wheel inspection, upload receipt, and fresh remote proof, so a v1-only wheel is rejected before approval.
 
 **Concurrency and failure policy:** Active phases inhibit competing writers. `COMPLETED` is inert; `BLOCKED` carries no automatic effect authority and is disposable only through exact current-authority recovery. A partially prepared disable does not revoke an already armed automatic restoration when promotion wins; the policy operation replans after redundancy is restored. If a terminal automatic promotion cannot commit its exact restoration authority, the same writer lock durably discards that unusable authorization so the terminal receipt remains authoritative and restoration is disabled. The equivalent planned-transfer failure propagates and retains lineage. Restoration and policy failures cross the durable status boundary only as a closed identity-free reason code shared with the CLI allowlist; exception messages remain internal and never become `rearm_reason`. The generic `controller-reported-condition` projection is reserved for malformed, foreign, or unknown evidence. Transition-only structured logs publish phase, attempt, and closed reason without resource identities, raw exceptions, or loop spam.
 
 #### Selected Option
 
-Add a separate strict `standby-restoration-authorization-v1` authority rather than extending the heartbeat TTL or overloading the maintenance-only auto-healing recovery record. A replay-bound enabled-policy agreement certificate is captured while both members still agree. Planned transfer request admission records that certificate under `rearm.lock`; automatic transfer dispatch captures it and arms authorization immediately before the first effect. The existing rearm service consumes only the exact committed authorization and remains the sole Compute-start writer. The mutable latest-agreement file is admission evidence only: after authorization is armed, a later fresh heartbeat may update that cache but cannot revoke or replace the exact accepted transfer authority.
+Use the canonical strict `standby-restoration-authorization-v2` authority rather than extending the heartbeat TTL or overloading the maintenance-only auto-healing recovery record. A replay-bound enabled-policy agreement certificate is captured while both members still agree. Planned transfer request admission records that certificate under `rearm.lock`; automatic transfer dispatch captures it and arms authorization immediately before the first effect. The existing rearm service consumes only the exact committed authorization and remains the sole Compute-start writer. The mutable latest-agreement file is admission evidence only: after authorization is armed, a later fresh heartbeat may update that cache but cannot revoke or replace the exact accepted transfer authority.
 
 #### Alternatives Considered
 
@@ -13651,6 +13651,13 @@ inventing an archive content manifest absent from older repairs. Include the
 underlay service in all guard and writer inventories. Strengthen a predecessor
 guard under exact repair authority before requiring the complete current guard.
 
+Order underlay preparation after systemd-networkd-wait-online.service and the HA
+boot guard, before FRR and the HA controller. FRR precedes network.target on the
+supported Ubuntu runtime, so waiting for network-online.target here creates a
+cycle. Direct networkd readiness removes that cycle while retaining independent
+physical-route verification and default cloud-init ordering. Validate the composed
+loaded dependency graph and systemd manager journal, not just one unit in isolation.
+
 A successor must preserve access to a stopped guest already protected by a settled
 predecessor. Resolve only the exact `previous` digest chain and unchanged retained
 bindings; intermediate confirmed operations without a member guard may be traversed.
@@ -14178,7 +14185,10 @@ and the existing ordinary route/lifecycle owners.
 
 The HA dry-run impact identifies private route-table preparation and workload
 subnet attachment changes as resource creation. Completed historical cutovers
-do not become new creation work in later plans.
+do not become new creation work in later plans. Completed enforced destruction
+tombstones permit ordinary rediscovery without treating retired history as a
+pending cutover. Enforced-only BGP destinations require learned and usable native
+routes for readiness, while cloud enforcement remains persistent during withdrawal.
 
 The installed FRR observer compares independent statement ordering within each
 clause while preserving clause sequence, actions, duplicate detection, filters
@@ -14367,6 +14377,227 @@ resources absent in the first project and 61 in the second, in addition to
 product destruction and twenty separately verified quota-recovery removals.
 
 <!-- /FEATURE: FEAT-048 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-049 reqs=REQ-047 status=ready delivery=verified priority=P0 version=1 -->
+### FEAT-049: Durable standby recovery revalidation and apply-owned state conversion
+
+#### Requirements Covered
+
+- REQ-047: Role-neutral restoration, durable retry window and normal-apply upgrade.
+
+#### Context Evidence
+
+The v0.6.9/v0.7.0 recovery path required the promotion-time owner revision before
+observing an accepted Start. Compute specification versions are not ownership terms.
+Those records lacked the original controller incarnation and used five submission
+attempts. This feature changes those boundaries together with guarded normal-apply
+conversion; the historic cause of a particular revision change remains unproven.
+
+#### Design Details
+
+Use canonical restoration authorization v2 with immutable original receipt binding,
+original controller ownership incarnation and durable retry-window evidence. A
+separate revalidation transaction binds the original authority, current revision,
+unchanged incarnation, policy/generation, exact members and current route authority.
+The controller owns proof publication; rearm alone owns Start. Recheck under the
+shared writer lock before submission. Missing/changed history cannot be renewed
+automatically.
+
+Observe an exactly bound accepted operation before restoration admission; preserve
+terminal outcomes before retiring journals. Starting/Running peers are observed
+without a second Start. The 300-second submission allowance begins at first eligible
+submission, uses five-second spacing after failure, one SDK attempt per submission,
+and remaining-time request limits. Keep the separate Running-to-ready deadline.
+Monotonic elapsed time is authoritative within a boot; uncertain cross-boot clock
+history blocks automatic retry instead of replenishing it. Explicit retry intent is
+durable before a blocked predecessor becomes eligible for reproof; replay finishes
+that transition without changing its identity or budget. Only controller-published
+operator authorization renews the allowance. Retry scheduling persists the elapsed
+clock and either the complete delay or exhausted state in one atomic write.
+
+Normal apply owns atomic resumable v1 conversion with stopped writers and the exact
+CLI artifact. It first settles accepted Start by exact operation/resource identity,
+retaining its result before blocking old authority and clearing only that journal.
+A candidate-owned pre-lock transaction validates receipt/policy/config identity,
+archives predecessor bytes and parks active recovery in its installed schema. The
+existing exact apply lock, forwarding fence and stopped-writer package workflow
+remain mandatory. Conversion retains unknown legacy baseline/timing as unknown.
+Fenced startup, native runtime release and exact lock removal precede controller
+reproof. A deterministic apply request grants a new allowance only after controller
+publication. Observation through retry delays and CLI resume never creates another
+request. Wait for completed standby restoration before normal pair apply locks;
+canonical apply owns both package versions and final health. After parent completion,
+archive the one-member transaction so later independent recoveries remain possible.
+Synchronize the containing directory before reporting retirement complete. If a
+pre-existing Start succeeds before operator reproof, the released apply transaction,
+validated predecessor identity and exact Running checkpoint retain observation
+through standby readiness. This path grants no Start authority and never renews
+the retry allowance; consumed request files are not the sole progress evidence.
+
+Original-epoch Start also requires unchanged current checkpoint incarnation and no
+observed ownership loss. Explicit operator authority may request route reproof after
+invalidation; only successful route reconciliation clears it. An exact apply lock
+may materialize the local passive dataplane without granting route/forwarding/Start
+permission. Recovery proof and original promotion receipt remain separate.
+
+No extra CLI command or legacy runtime reader is introduced. Transient predecessor
+format handling exists only in the approved stopped-writer deployment converter.
+
+#### Selected Option
+
+Fresh narrow recovery proof and one-time apply conversion; preserve original
+promotion evidence and existing fencing, public interfaces and non-HA behavior.
+
+#### Alternatives Considered
+
+Increasing retries alone leaves the revision guard blocked. Ignoring revision drift
+or rewriting receipts loses ownership evidence. Requiring manual state repair
+violates the normal-apply upgrade contract.
+
+#### Implementation Boundaries
+
+Restoration store owns state/clock accounting; controller owns incarnation and
+revalidation; rearm owns accepted-operation settlement and Start; shared cloud code
+owns error classification and request limits; apply owns conversion and operator
+recovery. Support bundles expose sanitized evidence with explicit coverage.
+
+#### Test-First Success Criteria
+
+- Synthetic revision mismatch recovers only with valid proof. Both roles behave the
+same. Ownership loss, missing history, identity/policy drift and conflicting writers
+remain blocked. Accepted Start is never duplicated. Conversion/restart preserves
+history, operation identity and budgets; new CLI apply converges both package sets.
+
+#### Validation Plan
+
+Focused unit/composed integration tests, local native historical-package checks,
+make check, release build and capability/provenance verification. The original
+implementation checkpoint excludes live testing. The separately authorized
+follow-up below covers both unplanned shutdown directions on one retained HA/BGP
+pair, with no manual Start or other recovery intervention during each trial.
+
+#### Test Plan
+
+Deterministic clocks, authority/ABA failures, accepted operations and interrupted
+state/package upgrades using synthetic data and authentic release fixtures.
+
+#### Evaluation Plan
+
+Separate source implementation, local verification and deployment proof. Preserve
+unknown historical causes and never present local tests as customer recovery.
+
+#### Risks and Mitigations
+
+Legacy records lack baseline evidence: convert without inventing it and use fresh
+apply-owned recovery. New schema requires capability admission and excludes old
+writers. Clock ambiguity blocks with an actionable reason. Preserve exact records
+through interrupted conversion; refuse automatic downgrade to an unaware writer.
+
+#### Rollout And Rollback
+
+Install the new CLI and run ordinary apply. Same-artifact interruption resumes
+existing work. Package/state rollback is permitted only before new state activation
+under the same quiescent transaction; afterward use forward recovery, not old code.
+
+#### Done Definition
+
+Implemented behavior, passing local checks, aligned canonical docs/README/changelog,
+and verified candidate wheel. Publication and full release qualification are outside
+scope. Keep the separately authorized focused live follow-up distinct from the
+original local implementation checkpoint.
+
+#### Implementation Evidence
+
+Implemented in restoration/retry-window/request/revalidation modules, controller and
+rearm wiring, exact Compute outcome handling, apply-owned state conversion and
+resumable guarded package bootstrap, and sanitized support-bundle projections.
+First transient failures remain in diagnostics after recovery. Closed projections
+retain authority and route/policy bindings while excluding raw exception text.
+Optional diagnostics tolerate non-object JSON; malformed revalidation evidence
+denies Start. Submission persists its retry delay before the external effect.
+Apply can observe an exactly bound blocked legacy Start without a newer result
+file, while validating any existing result and preserving settlement ordering.
+Runtime capability is vm-ha-standby-restoration-v3. The historical release manifest
+pins authentic v0.6.9 and v0.7.0 wheels; runtime readers accept only canonical v2.
+
+#### Verification Evidence
+
+The release review reproduced five findings before repair and passed all 38
+finding-specific cases afterward. The affected recovery, route, controller and
+cloud suites passed 924 tests; source lint and type checks passed. These are local
+regression results; this review did not rerun live tests.
+
+At the original implementation checkpoint, make check passed with 8,846 unit
+tests; 76 focused integration tests passed. Ruff, mypy, Markdown lint,
+CLI help/capability smoke and wheel build/source-parity checks passed.
+Six native Ubuntu 24.04 Linux arm64 HA package cases passed against authentic
+v0.6.9/v0.7.0 on this exact wheel, including interrupted native-package and product
+wheel updates.
+Selected historical HA coverage is not the complete multi-version/topology release
+matrix. No live testing, customer deployment, commit or release publication ran
+at that checkpoint.
+
+That checkpoint candidate is nebius_vpngw-0.7.1.dev5-py3-none-any.whl, SHA-256
+`1906377f7bd32896f4c27cd92e3cf17c201a37c022125b5356cfd89bb52bb145`.
+Its packaged Python source matches that implementation checkpoint and its capability
+probe advertises vm-ha-standby-restoration-v3.
+
+The alignment pass reproduced and repaired explicit-request interruption, partial
+retry scheduling, lost apply observation after an already accepted Start succeeds,
+and unsynchronized apply transaction retirement. It also repaired omitted recovery
+bindings and first-transient-failure retention in diagnostics. Each repair had a
+failing regression before its source change and a passing check afterward. The
+final independent code/security review found no remaining blocker in these paths.
+
+Synthetic tests cover both roles, ownership ABA/revision drift, missing baseline,
+pending operator proof, elapsed clocks, accepted-operation replay, every legacy
+settlement write, real package lock/fence admission, prepared-lock replay, history
+retirement and readiness before pair apply. New interruption cases retain the same
+request, authority and budget before controller proof, preserve five-second retry
+spacing, and observe an already Running peer without a duplicate Start. Source and
+local qualification do not claim the customer has upgraded.
+
+A separately authorized retained HA/BGP live follow-up found a composed systemd
+ordering cycle between FRR, aggregate network readiness and underlay preparation.
+The REQ-044/FEAT-046 ordering correction replaces the aggregate dependency with
+physical networkd readiness; the guard and route-verification boundaries remain.
+The regression fails with the original dependency and passes with the correction.
+The corrected source passes make check with 8,847 unit tests, Ruff and mypy, plus
+289 focused unit/integration checks. Its frozen 0.7.1.dev5 wheel has SHA-256
+`313f704475a128ac6b226fa21bfcfae886ce255d968b2f62f01d6ae57dfddfb6`.
+Normal apply installs that exact artifact on both retained gateways; independent
+hashes match all 282 packaged Python/systemd files on each guest and the installed
+underlay unit. Both loaded dependency graphs are acyclic, and complete systemd
+manager journal observations cover both shutdown/reboot transitions without an
+ordering cycle or deleted cycle-breaking job.
+
+Clean product-only shutdown trials on the corrected artifact cover each serving
+role. Stopping the configured passive while it owns traffic restores full standby
+readiness in 157.6 seconds; stopping the configured active after it takes ownership
+restores readiness in 153.7 seconds. Each uses one Start submission, leaves traffic
+on the survivor and passes a subsequent 35-second readiness observation. Compute
+Stop, shared-allocation transfer, forwarding and readiness are independently
+observed. No manual Start, service restart, apply or state edit occurs during the
+automatic transitions. Both remain Running with enabled committed auto-healing,
+one forwarding owner and one ready passive standby. Five managed route tables
+retain the exact configured remote destinations through the shared allocation.
+
+At 5 Hz with 56-byte ICMP payloads, transition interruptions last about 71 seconds
+in each direction. A single isolated post-readiness loss also occurs in the first
+trial; stopped continuous probes disclose their in-flight tail separately. The
+subsequent complete steady interval sends 600 probes per direction and receives
+599 in each, with durations 120.060 and 120.081 seconds: 0.167 percent measured
+loss per direction, below REQ-023's one-percent limit. This is not a zero-loss
+claim or proof that restoration caused no packet loss.
+
+This follow-up begins from installed 0.6.10.dev6 and exercises normal apply plus
+both unplanned shutdown scenarios; it is not a live v0.6.9 customer reproduction.
+The six historical native package cases above belong to the earlier wheel, not
+the corrected systemd artifact. Full topology/native release qualification,
+customer deployment and release publication remain outside this focused scope.
+
+<!-- /FEATURE: FEAT-049 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->
@@ -15624,71 +15855,26 @@ net.ipv6.conf.default.accept_ra = 0
 
 ### Systemd Service Ordering
 
-**Boot Sequence:**
+The canonical packaged units and managed drop-ins own these dependencies:
 
-```text
-network-online.target
-    ↓
-cloud-init.service
-    ↓
-sysctl --system (loads 99-zzz-vpngw.conf)
-    ↓
-ufw.service (firewall)
-    ↓
-nebius-vpngw-esp4-preflight.service
-    ↓
-strongswan.service (charon-systemd, product-owned configuration loading)
-    ↓
-frr.service (BGP)
-    ↓
-nebius-vpngw-agent.service (routing guard + agent)
-```
+- Ingress protection and UFW precede `network-pre.target`.
+- Physical network readiness comes from `systemd-networkd-wait-online.service`.
+  The underlay service waits for that service and the HA boot guard, then verifies
+  the physical routes before FRR and the HA controller can start.
+- The HA controller publishes fenced bootstrap readiness before protocol daemons;
+  systemd readiness does not wait for VICI.
+- FRR precedes `network.target`, which precedes `network-online.target`.
+  Consequently, underlay preparation cannot wait for `network-online.target`.
+  Waiting directly for networkd preserves physical readiness without a cycle.
+- StrongSwan follows ESP4 preflight, ingress protection, UFW and network-online
+  readiness. Rearm follows the HA controller and network-online readiness.
+- The product agent follows FRR and strongSwan. Product owners load configuration
+  and prove readiness; ordering alone does not grant forwarding or promotion.
 
-**Configuration Files:**
-
-Each service has a systemd override in `/etc/systemd/system/<service>.d/override.conf`:
-
-```ini
-# /etc/systemd/system/ufw.service.d/override.conf
-[Unit]
-After=network-online.target cloud-init.service
-Wants=network-online.target
-
-# /etc/systemd/system/strongswan.service.d/override.conf
-[Unit]
-After=nebius-vpngw-esp4-preflight.service nebius-vpngw-ingress.service ufw.service network-online.target
-Wants=ufw.service
-Requires=nebius-vpngw-esp4-preflight.service
-
-[Service]
-ExecStartPost=
-ExecStartPost=/usr/bin/chmod 0600 /run/charon.vici
-ExecReload=
-
-# /etc/systemd/system/frr.service.d/override.conf
-[Unit]
-After=strongswan.service
-Wants=strongswan.service
-
-# /etc/systemd/system/nebius-vpngw-agent.service.d/override.conf
-[Unit]
-After=strongswan.service frr.service
-Wants=strongswan.service frr.service
-```
-
-**Why This Ordering Matters:**
-
-- **UFW after cloud-init**: Prevents cloud-init network changes from racing with UFW
-- **ESP4 preflight before strongSwan**: Ensures the IPv4 ESP kernel module is
-  loadable before strongSwan tries to install CHILD_SAs into XFRM
-- **strongSwan after UFW**: Ensures netfilter framework is initialized before IPsec tunnels
-- **FRR after strongSwan**: BGP needs XFRM interfaces created by strongSwan
-- **Agent after FRR**: Routing guard validates routes installed by FRR
-
-HA additionally requires guard/bootstrap readiness before daemon startup.
-Controller systemd readiness does not wait for VICI. The canonical packaged
-units and HA ordering drop-ins own this dependency graph; configuration loading
-remains with the product agent and controller.
+Shutdown reverses these ordering constraints. Regression coverage composes the
+product underlay unit with the distribution's FRR/networkd graph to reject cycles.
+Normal apply installs these assets from the exact selected wheel and retains the
+existing guard, quiescence and activation checks.
 
 ### Self-Healing Routing Guard
 

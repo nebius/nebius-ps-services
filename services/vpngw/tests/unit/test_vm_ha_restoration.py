@@ -152,6 +152,24 @@ def _completed(tmp_path: Path) -> StandbyRestorationStore:
     return store
 
 
+def test_interrupted_submission_preserves_retry_spacing(tmp_path):
+    store, _ = _committed(tmp_path)
+    store.accept_start(
+        receipt_id=RECEIPT_ID,
+        stopped_revision="revision-20",
+        rearm_operation_id="rearm-operation",
+        updated_at=104.0,
+    )
+    submitted = store.record_submission(receipt_id=RECEIPT_ID, updated_at=105.0)
+    # Restart after submission, before a transient failure can be scheduled.
+    resumed = StandbyRestorationStore(tmp_path)
+    record = resumed.require_receipt(RECEIPT_ID)
+    assert not resumed.retry_due(record, updated_at=106.0)
+    assert resumed.retry_due(record, updated_at=110.0)
+    assert record.rearm_operation_id == submitted.rearm_operation_id
+    assert record.attempt_count == 1
+
+
 def _prepared_disable(
     tmp_path: Path,
     *,
@@ -226,16 +244,16 @@ def test_prepared_disable_predecessor_is_automatic_failover_only(tmp_path: Path)
     )
 
 
-def test_authorization_v1_shape_remains_readable(tmp_path: Path) -> None:
+def test_authorization_uses_only_canonical_v2_shape(tmp_path: Path) -> None:
     store, committed = _committed(tmp_path)
 
     assert committed.to_dict()["schema"] == (
-        "nebius-vpngw/vm-ha-standby-restoration-authorization-v1"
+        "nebius-vpngw/vm-ha-standby-restoration-authorization-v2"
     )
     assert store.load() == committed
 
 
-def test_restoration_reuses_one_start_identity_and_exhausts_five_attempts(
+def test_restoration_reuses_one_start_identity_for_five_minute_window(
     tmp_path: Path,
 ) -> None:
     store, _committed_record = _committed(tmp_path)
@@ -247,7 +265,7 @@ def test_restoration_reuses_one_start_identity_and_exhausts_five_attempts(
     )
 
     due_at = 104.0
-    for attempt, delay in enumerate((5.0, 15.0, 30.0, 60.0), start=1):
+    for attempt, delay in enumerate((5.0,) * 59, start=1):
         submitted = store.record_submission(
             receipt_id=RECEIPT_ID,
             updated_at=due_at,
@@ -264,7 +282,7 @@ def test_restoration_reuses_one_start_identity_and_exhausts_five_attempts(
         due_at += delay
 
     fifth = store.record_submission(receipt_id=RECEIPT_ID, updated_at=due_at)
-    assert fifth.attempt_count == 5
+    assert fifth.attempt_count == 60
     blocked = store.schedule_retry(
         receipt_id=RECEIPT_ID,
         reason="AmbiguousHACloudError",
@@ -462,12 +480,49 @@ def test_operator_recovery_restarts_only_the_same_blocked_receipt(tmp_path: Path
     restarted = store.restart_blocked(receipt_id=RECEIPT_ID, updated_at=106.0)
 
     assert restarted.phase is RestorationPhase.START_ACCEPTED
-    assert restarted.source is RestorationSource.OPERATOR_RESTORATION
-    assert restarted.authorization_id != blocked.authorization_id
-    assert restarted.attempt_count == 0
+    assert restarted.source is blocked.source
+    assert restarted.authorization_id == blocked.authorization_id
+    assert restarted.attempt_count == blocked.attempt_count
+    assert restarted.retry_window == blocked.retry_window
     assert restarted.stopped_revision == blocked.stopped_revision
     assert restarted.rearm_operation_id == blocked.rearm_operation_id
     assert StandbyRestorationStore(tmp_path).load() == restarted
+
+
+@pytest.mark.parametrize("elapsed", [1.0, 296.0])
+def test_retry_schedule_crash_persists_delay_or_exhaustion_atomically(
+    tmp_path, monkeypatch, elapsed
+):
+    store, _ = _committed(tmp_path)
+    store.accept_start(
+        receipt_id=RECEIPT_ID,
+        stopped_revision="revision-20",
+        rearm_operation_id="rearm-operation",
+        updated_at=104.0,
+    )
+    store.record_submission(receipt_id=RECEIPT_ID, updated_at=104.0)
+    original_write = store._write
+
+    def crash_after_write(record):
+        original_write(record)
+        raise RuntimeError("simulated crash")
+
+    monkeypatch.setattr(store, "_write", crash_after_write)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        store.schedule_retry(
+            receipt_id=RECEIPT_ID,
+            reason="compute-start-failed",
+            updated_at=104.0 + elapsed,
+        )
+    resumed = StandbyRestorationStore(tmp_path)
+    record = resumed.load()
+    assert record.retry_window.elapsed == elapsed
+    if elapsed == 296.0:
+        assert record.phase is RestorationPhase.BLOCKED
+        assert record.blocked_reason == "automatic-retry-exhausted"
+    else:
+        assert not resumed.retry_due(record, updated_at=105.0 + elapsed)
+        assert resumed.retry_due(record, updated_at=109.0 + elapsed)
 
 
 def test_non_armed_authorization_parser_remains_filesystem_independent(tmp_path: Path) -> None:

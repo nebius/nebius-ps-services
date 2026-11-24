@@ -525,7 +525,7 @@ def test_controller_status_proves_processed_quiescent_mtls_inhibition(tmp_path: 
         "vm-ha-mtls-rotation-quiescence-v1",
         "vm-ha-live-peer-replacement-v5",
         "vm-ha-standby-replacement-inhibition-v2",
-        "vm-ha-standby-restoration-v2",
+        "vm-ha-standby-restoration-v3",
     ]
     assert status["transfer_inhibition_operation_id"] == operation_id
     assert status["transfer_inhibition_quiescent"] is True

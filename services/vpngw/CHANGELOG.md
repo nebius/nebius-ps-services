@@ -11,6 +11,29 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+## [nebius-vpngw-v0.7.1] - 2026-11-24
+
+- Require learned and native routes for enforced-only BGP readiness, and permit
+  ordinary recreation after a completed enforced HA destroy. Recover exactly
+  bound legacy blocked Start operations without requiring newer result files.
+  Ignore malformed optional diagnostics, reject malformed revalidation evidence,
+  and persist retry spacing before submission so interruption cannot bypass it.
+- Remove the systemd ordering cycle between physical-route preparation, FRR and
+  network-online readiness. Wait directly for networkd readiness while retaining
+  HA boot fencing and route verification before routing services start.
+- Revalidate standby restoration against current ownership without rewriting
+  promotion receipts, independent of preferred-active role. Observe accepted
+  Compute starts before stale restoration guards and retain terminal outcomes.
+- Preserve a five-minute transient Start retry window with five-second spacing,
+  stable operation identity and a separate standby-readiness deadline.
+  Persist retry intent and delay safely across interruption, and retain the first
+  transient failure and exact recovery bindings in sanitized support bundles.
+- Convert older recovery state during normal apply upgrades and preserve unknown
+  history for explicit operator recovery through the same workflow. Include
+  sanitized recovery diagnostics and v0.6.9/v0.7.0 upgrade fixtures.
+  Resume observation when a pre-existing Start succeeds, and durably retire the
+  completed apply recovery transaction.
+
 - Add optional per-connection `enforced_routing` with explicit workload source
   subnets and destination CIDRs, including Internet defaults. Normal `apply`
   owns guest policy routing, persistent drop protection and private cloud-table

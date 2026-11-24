@@ -2965,6 +2965,9 @@ class BoundRouteRuntime:
             ):
                 raise ValueError("Committed BGP policy record is invalid")
             required.update(str(prefix) for prefix in policy["remote_prefixes"])
+            enforced = policy.get("enforced_routing")
+            if enforced is not None:
+                required.update(str(prefix) for prefix in enforced["destinations"])
         return BGPRouteReadiness.normalize(
             configured_sessions=observed.configured_bgp_sessions,
             established_sessions=observed.established_bgp_sessions,

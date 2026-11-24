@@ -1103,6 +1103,15 @@ class VMHASnapshotAdapter:
                         0 if episode["exhausted"] else episode["deadline"] - time.time()
                     ),
                 )
+        from .vm_ha.restoration_revalidation import reconciliation_authority
+
+        snapshot = replace(
+            snapshot,
+            restoration_route_authority=reconciliation_authority(
+                self.state_dir,
+                snapshot,
+            ),
+        )
         if include_routes:
             self.last_apply_operation_id = apply_operation_id
             self.last_transfer_inhibition_operation_id = transfer_inhibition_operation_id
@@ -1897,6 +1906,27 @@ def _commit_promotion_receipt(
                 authorization_id=restoration.authorization_id,
             )
     if not receipt_path.exists() or current.get("receipt_id") != receipt_id:
+        checkpoint_path = receipt_path.parent / VM_HA_CHECKPOINT_PATH.name
+        if lineage is not None and checkpoint_path.exists():
+            checkpoint = VMHACheckpointFileStore(checkpoint_path).load()
+            context = checkpoint.established_ownership_context
+            if (
+                checkpoint.pending_action is None
+                and not checkpoint.ownership_continuity_invalidated
+                and context is not None
+                and context.owner_node_id == authority["owner_node_id"]
+                and context.allocation_id == authority["allocation_id"]
+                and context.ownership_epoch == status["ownership_epoch"]
+            ):
+                try:
+                    StandbyRestorationStore(receipt_path.parent).anchor_ownership(
+                        incarnation=checkpoint.ownership_incarnation,
+                        epoch=context.ownership_epoch,
+                    )
+                except (OSError, ValueError, StandbyRestorationError):
+                    # Optional recovery evidence cannot veto an already fenced
+                    # promotion. Missing baseline grants no automatic Start.
+                    print("[VM-HA-RESTORATION] ownership-baseline-unavailable")
         _atomic_write_json(receipt_path, receipt)
     if lineage is not None:
         _finish_committed_transfer(
@@ -3040,6 +3070,21 @@ class DefaultVMHAControllerRuntime:
                                 ),
                                 clock=self.clock,
                             )
+                        if self.promotion_receipt_path is not None:
+                            from .vm_ha.restoration_revalidation import publish
+
+                            try:
+                                publish(
+                                    writer_state_dir, lambda: self.controller.snapshots.observe()
+                                )
+                            except (
+                                OSError,
+                                ValueError,
+                                StandbyRestorationError,
+                                AutoHealingPolicyError,
+                            ):
+                                # Missing or changing evidence never grants recovery authority.
+                                pass
                     finally:
                         os.close(descriptor)
         else:

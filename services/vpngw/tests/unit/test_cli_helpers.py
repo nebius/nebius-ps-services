@@ -8305,7 +8305,7 @@ def test_vm_ha_status_validation_binds_generation_runtime_and_apply_lock() -> No
     )
     payload = {
         "schema": "nebius-vpngw/vm-ha-status-v1",
-        "controller_capabilities": ["vm-ha-standby-restoration-v2"],
+        "controller_capabilities": ["vm-ha-standby-restoration-v3"],
         "cluster_id": "cluster-a",
         "node_id": "node-a",
         "configured_role": "active",
@@ -8417,7 +8417,7 @@ def test_vm_ha_status_validation_uses_runtime_generation_when_psk_is_unresolved(
     )
     payload = {
         "schema": "nebius-vpngw/vm-ha-status-v1",
-        "controller_capabilities": ["vm-ha-standby-restoration-v2"],
+        "controller_capabilities": ["vm-ha-standby-restoration-v3"],
         "cluster_id": "cluster-a",
         "node_id": "node-a",
         "configured_role": "active",
@@ -8497,7 +8497,7 @@ def test_vm_ha_display_status_validates_every_controller_and_rearm_state(
     is_owner = rearm_phase != "not-owner"
     payload = {
         "schema": "nebius-vpngw/vm-ha-status-v1",
-        "controller_capabilities": ["vm-ha-standby-restoration-v2"],
+        "controller_capabilities": ["vm-ha-standby-restoration-v3"],
         "cluster_id": "cluster-a",
         "node_id": "node-b",
         "configured_role": "passive",
@@ -8647,7 +8647,7 @@ def test_vm_ha_planned_status_requires_exact_runtime_and_standby_evidence() -> N
     )
     payload = {
         "schema": "nebius-vpngw/vm-ha-status-v1",
-        "controller_capabilities": ["vm-ha-standby-restoration-v2"],
+        "controller_capabilities": ["vm-ha-standby-restoration-v3"],
         "cluster_id": "cluster-a",
         "node_id": "node-b",
         "configured_role": "passive",
@@ -8926,7 +8926,7 @@ def test_missing_standby_plan_waits_for_exact_identity_preflight(pending_samples
     )
     ready = {
         "schema": "nebius-vpngw/vm-ha-status-v1",
-        "controller_capabilities": ["independent-heartbeat-v6", "vm-ha-standby-restoration-v2"],
+        "controller_capabilities": ["independent-heartbeat-v6", "vm-ha-standby-restoration-v3"],
         "cluster_id": "cluster-a",
         "node_id": "node-a",
         "configured_role": "active",
@@ -9755,7 +9755,7 @@ def _vm_ha_view_record(
     peer_node_id = "node-passive" if node_id == "node-active" else "node-active"
     return {
         "node_id": node_id,
-        "controller_capabilities": ["vm-ha-standby-restoration-v2"],
+        "controller_capabilities": ["vm-ha-standby-restoration-v3"],
         "generation_id": "a" * 64,
         "digests": {
             "configuration": "a" * 64,

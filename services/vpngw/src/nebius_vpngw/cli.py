@@ -3815,6 +3815,9 @@ _VM_HA_SAFE_REASON_CODES = frozenset(
         "checkpointed-action-requires-current-boot-guard",
         "checkpointed-action-requires-passive-dataplane",
         "cloud-operation-finalization-failed",
+        "cloud-operation-pending",
+        "restoration-admission-changed",
+        "restoration-retry-clock-invalid",
         "cloud-operation-journal-invalid",
         "cloud-operation-journal-unbound",
         "cloud-ownership-unavailable",
@@ -21055,9 +21058,13 @@ def _prepare_vm_ha_planned_target(
     before_rearm_request: t.Callable[[str, str, str], None] | None = None,
     on_rearm_authorization_aborted: t.Callable[[], None] | None = None,
     rearm_request_progress_is_exact: t.Callable[[], bool] | None = None,
+    request_rearm: bool = True,
     return_after_ssh: bool = False,
 ) -> _VMHAPlannedPreparation:
     """Prepare the exact non-owner through the owner-side rearm bulkhead."""
+
+    if not request_rearm and rearm_request_progress_is_exact is None:
+        raise ValueError("existing rearm authority requires exact durable progress")
 
     local_cfg = _load_config_with_region_override(
         local_config_file,
@@ -21427,8 +21434,14 @@ def _prepare_vm_ha_planned_target(
             and owner_record.get("observed_owner_node_id") == owner_member.node_id
             and owner_record.get("apply_locked") is False
             and owner_record.get("pending_operation_id") is None
-            and owner_record.get("rearm_phase") in {"starting", "running"}
-            and owner_record.get("rearm_reason") is None
+            and owner_record.get("rearm_phase") in {"starting", "running", "blocked"}
+            and owner_record.get("rearm_reason")
+            in {
+                None,
+                "compute-start-retry-scheduled",
+                "cloud-operation-pending",
+                "ownership-or-alias-drift",
+            }
         )
 
     def wait_for_exact_rearm_progress(error: Exception) -> None:
@@ -21458,7 +21471,11 @@ def _prepare_vm_ha_planned_target(
                 if on_rearm_authorization_aborted is not None:
                     on_rearm_authorization_aborted()
                 raise
-        if target_observation.state is InstanceCloudState.STOPPED:
+        if target_observation.state is InstanceCloudState.STOPPED and not request_rearm:
+            wait_for_exact_rearm_progress(
+                RuntimeError("approved standby recovery is not observable")
+            )
+        elif target_observation.state is InstanceCloudState.STOPPED:
             with _vm_ha_progress_step(
                 progress_sink,
                 _VMHAProgressPhase.REQUEST_REARM,
@@ -23564,6 +23581,7 @@ def _vm_ha_artifact_recovery_owner_is_safe(
     *,
     owner_node_id: str,
     allow_rearm_progress: bool = False,
+    recovery_verified: bool = False,
 ) -> bool:
     auto_healing = record.get("auto_healing")
     mtls = record.get("mtls")
@@ -23572,7 +23590,7 @@ def _vm_ha_artifact_recovery_owner_is_safe(
     if not bool(
         record.get("state") == "active"
         and record.get("promotion_ready") is True
-        and record.get("promotion_committed") is True
+        and (record.get("promotion_committed") is True or recovery_verified)
         and record.get("data_plane_mode") == "active"
         and record.get("observed_owner_node_id") == owner_node_id
         and record.get("apply_locked") is False
@@ -23601,6 +23619,23 @@ def _vm_ha_artifact_recovery_owner_is_safe(
         and rearm_reason in {None, "compute-start-failed", "explicit-retry-required"}
         and (isinstance(accepted_start, bool) if allow_rearm_progress else accepted_start is False)
     )
+    if recovery_verified and (
+        auto_healing_state in {"enabled", "transitioning", "blocked"}
+        and rearm_phase in {"blocked", "idle", "starting", "running"}
+        and rearm_reason
+        in {
+            "ownership-or-alias-drift",
+            "automatic-retry-exhausted",
+            "explicit-retry-required",
+            "cloud-operation-pending",
+            "cloud-operation-finalization-failed",
+            "compute-start-permanent-failure",
+            "compute-start-retry-scheduled",
+            None,
+        }
+        and isinstance(accepted_start, bool)
+    ):
+        return True
     if ordinary_rearm:
         return True
 
@@ -23735,6 +23770,15 @@ def _inspect_vm_ha_artifact_standby_recovery(
         patched["controller_capabilities"] = [
             *set(capabilities).union({STANDBY_RESTORATION_CAPABILITY}),
         ]
+        if saved is not None and saved["phase"] == "owner" and patched.get("apply_locked"):
+            validated = _validate_vm_ha_agent_status(
+                patched,
+                inst_cfg=instance,
+                runtime_binding=runtime_binding,
+                expected_apply_locked=True,
+                expected_operation_id=saved["report"]["digest"],
+            )
+            return {**validated, "controller_capabilities": list(capabilities)}
         validated = _validate_vm_ha_planned_status(
             patched,
             inst_cfg=instance,
@@ -23768,15 +23812,6 @@ def _inspect_vm_ha_artifact_standby_recovery(
     if len(owner_records) != 1:
         raise RuntimeError("artifact standby recovery did not resolve one exact owner")
     owner_record = owner_records[0]
-    if not (
-        saved is not None and saved["phase"] == "canonical"
-    ) and not _vm_ha_artifact_recovery_owner_is_safe(
-        owner_record,
-        owner_node_id=owner_evidence.node_id,
-        allow_rearm_progress=saved is not None
-        and STANDBY_RESTORATION_CAPABILITY in owner_record.get("controller_capabilities", []),
-    ):
-        raise RuntimeError("artifact standby recovery owner evidence is not safely admissible")
     vm_spec = (local_config.get("gateway_group") or {}).get("vm_spec") or {}
     raw_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
     key_path = Path(raw_key).expanduser() if raw_key else None
@@ -23790,8 +23825,58 @@ def _inspect_vm_ha_artifact_standby_recovery(
         require_management_key=True,
         trust_scope=_vm_ha_ssh_trust_scope(local_config, plan),
     )
+    from .deploy import checkpoint_conversion, restoration_apply
+
     artifact = _resolve_vm_ha_agent_artifact(ssh_policy)
     require_replay_window_capability(local_config, artifact.capabilities)
+    recovery_digest = None
+    fenced_resume = False
+    if saved is None or saved["phase"] != "canonical":
+        recovery_identity = restoration_apply.identity(
+            runtime_binding, owner_instance, standby_instance
+        )
+        recovery_ssh = SSHPush(ssh_policy=ssh_policy)
+        if saved is not None:
+            recovery_observation = restoration_apply.control(
+                recovery_ssh,
+                owner_target,
+                owner_instance,
+                local_config,
+                {
+                    "action": "inspect",
+                    "identity": recovery_identity,
+                    "operation": saved["report"]["digest"],
+                    "artifact": artifact.sha256,
+                    "lock": checkpoint_conversion.context(
+                        owner_instance,
+                        saved["report"]["digest"],
+                        cluster_id=runtime_binding.cluster_id,
+                    ),
+                },
+            )
+            recovery_digest = recovery_observation["digest"] or saved["report"]["engine_digest"]
+            fenced_resume = recovery_observation.get("locked") is True or recovery_observation[
+                "phase"
+            ] in {"locked", "installed", "activated"}
+        else:
+            recovery_digest = checkpoint_conversion.inspect_restoration_recovery(
+                recovery_ssh,
+                owner_target,
+                owner_instance,
+                local_config,
+                recovery_identity,
+            )
+    if (
+        not (saved is not None and saved["phase"] == "canonical")
+        and not fenced_resume
+        and not _vm_ha_artifact_recovery_owner_is_safe(
+            owner_record,
+            recovery_verified=recovery_digest is not None,
+            owner_node_id=owner_evidence.node_id,
+            allow_rearm_progress=saved is not None,
+        )
+    ):
+        raise RuntimeError("artifact standby recovery owner evidence is not safely admissible")
     binding = {
         "config": _canonical_digest(local_config),
         "cluster": lifecycle.cluster_id,
@@ -23809,6 +23894,7 @@ def _inspect_vm_ha_artifact_standby_recovery(
     engine_digest = _canonical_digest(
         {
             "domain": "nebius-vpngw/artifact-standby-recovery-engine-v1",
+            "restoration_recovery_digest": recovery_digest,
             "authority_digest": inspection.snapshot.authority_digest,
             "artifact_sha256": artifact.sha256,
             "owner": {
@@ -23979,29 +24065,75 @@ def _execute_vm_ha_artifact_standby_recovery(
         if record["phase"] != "canonical":
             ssh = SSHPush(ssh_policy=context.ssh_policy)
             if record["phase"] == "owner":
-                _prepare_vm_ha_agent_package(
+                from .deploy import restoration_apply
+
+                binding = _vm_ha_status_runtime_binding(context.lifecycle)
+                vm_spec = (context.local_config.get("gateway_group") or {}).get("vm_spec") or {}
+                raw_key = vm_spec.get("ssh_private_key_path") or os.environ.get("VPNGW_SSH_KEY")
+
+                def observe_existing_start(operation_id: str, instance_id: str) -> bool:
+                    from .deploy.vm_ha_cloud import NebiusSDKCloudClient
+
+                    manager = _own_vm_manager(
+                        VMManager(
+                            project_id=context.local_config["project_id"],
+                            region=context.plan.gateway_group.region,
+                            auth_token=_ensure_authentication(required=True, show_progress=False),
+                            tenant_id=str(context.local_config.get("tenant_id") or "").strip()
+                            or None,
+                            region_id=context.plan.gateway_group.region,
+                            ssh_policy=context.ssh_policy,
+                            management_key_path=Path(raw_key).expanduser() if raw_key else None,
+                        )
+                    )
+                    client = manager._get_client()
+                    if client is None:
+                        raise RuntimeError("accepted Start observation client is unavailable")
+                    return NebiusSDKCloudClient(client).read_start_outcome(
+                        operation_id, instance_id
+                    )
+
+                def verify_bootstrap_fenced() -> None:
+                    _wait_for_vm_ha_agent_status(
+                        predicate=lambda payload: _vm_ha_fenced_owner_incomplete(
+                            payload,
+                            owner=context.owner_instance.vm_ha_node.node_id,
+                            operation=approved.digest,
+                        ),
+                        timeout_seconds=_VM_HA_FENCED_VERIFICATION_TIMEOUT_SECONDS,
+                        target=context.owner_target,
+                        hostname=context.owner_instance.hostname,
+                        username=vm_spec.get("ssh_username")
+                        or os.environ.get("VPNGW_SSH_USER", "ubuntu"),
+                        key_path=Path(raw_key).expanduser() if raw_key else None,
+                        client_auth=_gateway_ssh_client_auth(context.local_config),
+                        ssh_policy=context.ssh_policy,
+                        inst_cfg=context.owner_instance,
+                        runtime_binding=binding,
+                        expected_apply_locked=True,
+                        expected_operation_id=approved.digest,
+                    )
+
+                restoration_apply.bootstrap(
                     ssh,
                     context.owner_target,
                     context.owner_instance,
                     context.local_config,
+                    binding=binding,
+                    peer=context.standby_instance,
                     artifact=artifact,
-                    recovery_scope=(
-                        package_recovery.lifecycle_root(context.lifecycle),
-                        approved.digest,
-                        {
-                            "lane": "artifact-standby",
-                            "approval": approved.digest,
-                            "lifecycle": record["binding"]["lifecycle"],
-                            "artifact": artifact.sha256,
-                        },
+                    operation=approved.digest,
+                    verify_fenced=verify_bootstrap_fenced,
+                    observe_start=observe_existing_start,
+                    prepare_package=lambda expected: _prepare_vm_ha_agent_package(
+                        ssh,
+                        context.owner_target,
+                        context.owner_instance,
+                        context.local_config,
+                        artifact=artifact,
+                        checkpoint_conversion=expected,
                     ),
                 )
-                ssh.refresh_vm_ha_control_services(
-                    context.owner_target,
-                    context.owner_instance,
-                    context.local_config,
-                )
-
                 record = recovery_receipt.advance(root, record, "owner-ready")
             vm_spec = (context.local_config.get("gateway_group") or {}).get("vm_spec") or {}
             username = vm_spec.get("ssh_username") or os.environ.get("VPNGW_SSH_USER", "ubuntu")
@@ -24027,6 +24159,7 @@ def _execute_vm_ha_artifact_standby_recovery(
                         validated,
                         owner_node_id=context.owner_instance.vm_ha_node.node_id,
                         allow_rearm_progress=True,
+                        recovery_verified=True,
                     )
                 )
 
@@ -24043,6 +24176,31 @@ def _execute_vm_ha_artifact_standby_recovery(
                 runtime_binding=runtime_binding,
                 expected_apply_locked=False,
             )
+            from .deploy import checkpoint_conversion, restoration_apply
+
+            def existing_recovery_progress() -> bool:
+                return bool(
+                    restoration_apply.control(
+                        ssh,
+                        context.owner_target,
+                        context.owner_instance,
+                        context.local_config,
+                        {
+                            "action": "progress",
+                            "identity": restoration_apply.identity(
+                                runtime_binding, context.owner_instance, context.standby_instance
+                            ),
+                            "operation": approved.digest,
+                            "artifact": artifact.sha256,
+                            "lock": checkpoint_conversion.context(
+                                context.owner_instance,
+                                approved.digest,
+                                cluster_id=runtime_binding.cluster_id,
+                            ),
+                        },
+                    )["progress"]
+                )
+
             preparation = _prepare_vm_ha_planned_target(
                 local_config_file=config_path,
                 target_role=None,
@@ -24051,6 +24209,8 @@ def _execute_vm_ha_artifact_standby_recovery(
                 show_auth_progress=False,
                 progress_sink=progress_sink,
                 return_after_ssh=True,
+                request_rearm=False,
+                rearm_request_progress_is_exact=existing_recovery_progress,
             )
             if preparation.outcome != "standby-ssh-ready":
                 raise RuntimeError("artifact standby recovery did not reach exact standby SSH")
@@ -24059,29 +24219,26 @@ def _execute_vm_ha_artifact_standby_recovery(
                 context.standby_instance,
                 context.local_config,
             )
-            _prepare_vm_ha_agent_package(
+            restoration_apply.wait_ready(
                 ssh,
-                context.standby_target,
-                context.standby_instance,
+                context.owner_target,
+                context.owner_instance,
                 context.local_config,
-                artifact=artifact,
-                recovery_scope=(
-                    package_recovery.lifecycle_root(context.lifecycle),
-                    approved.digest,
-                    {
-                        "lane": "artifact-standby",
-                        "approval": approved.digest,
-                        "lifecycle": record["binding"]["lifecycle"],
-                        "artifact": artifact.sha256,
-                    },
-                ),
+                request={
+                    "identity": restoration_apply.identity(
+                        runtime_binding, context.owner_instance, context.standby_instance
+                    ),
+                    "operation": approved.digest,
+                    "artifact": artifact.sha256,
+                    "lock": checkpoint_conversion.context(
+                        context.owner_instance,
+                        approved.digest,
+                        cluster_id=runtime_binding.cluster_id,
+                    ),
+                },
             )
-            ssh.refresh_vm_ha_control_services(
-                context.standby_target,
-                context.standby_instance,
-                context.local_config,
-            )
-
+            # Both reachable guests now enter the normal coordinated package
+            # transaction. It owns standby installation and exact pair parity.
             record = recovery_receipt.advance(root, record, "canonical")
 
         canonical = _plan_vm_ha_apply_convergence(config_path, region=region)
@@ -24097,6 +24254,27 @@ def _execute_vm_ha_artifact_standby_recovery(
             canonical,
             region=region,
             progress_sink=progress_sink,
+        )
+        from .deploy import checkpoint_conversion, restoration_apply
+
+        restoration_apply.control(
+            SSHPush(ssh_policy=context.ssh_policy),
+            context.owner_target,
+            context.owner_instance,
+            context.local_config,
+            {
+                "action": "complete",
+                "identity": restoration_apply.identity(
+                    _vm_ha_status_runtime_binding(context.lifecycle),
+                    context.owner_instance,
+                    context.standby_instance,
+                ),
+                "operation": approved.digest,
+                "artifact": artifact.sha256,
+                "lock": checkpoint_conversion.context(
+                    context.owner_instance, approved.digest, cluster_id=context.lifecycle.cluster_id
+                ),
+            },
         )
         recovery_receipt.advance(root, record, "complete")
 

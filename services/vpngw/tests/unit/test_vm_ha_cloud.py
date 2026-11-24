@@ -1098,3 +1098,70 @@ def test_pending_postcondition_settlement_preserves_exact_receipt(tmp_path, kind
         client.settle_pending_action(accepted.action_operation_id, kind)
     resume.assert_called_once_with(accepted.cloud_operation_id)
     assert journal.load() is None
+
+
+@pytest.mark.parametrize("succeeded", [True, False])
+def test_accepted_start_records_terminal_outcome_before_retirement(tmp_path, succeeded):
+    import json
+
+    journal = VMHACloudOperationJournal(tmp_path / "rearm-cloud-operation.json")
+    accepted = AcceptedCloudOperation("action-a", "start-instance", "cloud-a")
+    journal.save(accepted)
+    client = NebiusSDKCloudClient(object(), operation_journal=journal)
+    operation = SimpleNamespace(
+        id="cloud-a", resource_id="vm-a", done=lambda: True, successful=lambda: succeeded
+    )
+    with patch.object(client, "_resume_operation", return_value=operation):
+        if succeeded:
+            client.observe_accepted_start(accepted, "vm-a")
+        else:
+            with pytest.raises(PermanentHACloudError):
+                client.observe_accepted_start(accepted, "vm-a")
+    assert journal.load() == accepted
+    result = json.loads((tmp_path / "rearm-operation-result.json").read_text())
+    assert result["successful"] is succeeded
+    assert result["cloud_operation_id"] == "cloud-a"
+
+    # A fresh client consumes the retained terminal result without another API read.
+    restarted = NebiusSDKCloudClient(object(), operation_journal=journal)
+    with patch.object(
+        restarted, "_resume_operation", side_effect=AssertionError("unexpected read")
+    ):
+        if succeeded:
+            restarted.observe_accepted_start(accepted, "vm-a")
+        else:
+            with pytest.raises(PermanentHACloudError):
+                restarted.observe_accepted_start(accepted, "vm-a")
+
+
+def test_accepted_start_pending_or_foreign_never_retires_or_resubmits(tmp_path):
+    journal = VMHACloudOperationJournal(tmp_path / "rearm-cloud-operation.json")
+    accepted = AcceptedCloudOperation("action-a", "start-instance", "cloud-a")
+    journal.save(accepted)
+    client = NebiusSDKCloudClient(object(), operation_journal=journal)
+    operation = SimpleNamespace(id="cloud-a", resource_id="vm-a", done=lambda: False)
+    with patch.object(client, "_resume_operation", return_value=operation):
+        with pytest.raises(PendingHACloudOperation):
+            client.observe_accepted_start(accepted, "vm-a")
+        operation.resource_id = "foreign"
+        with pytest.raises(AmbiguousHACloudError):
+            client.observe_accepted_start(accepted, "vm-a")
+    assert journal.load() == accepted
+    assert not (tmp_path / "rearm-operation-result.json").exists()
+
+
+def test_start_submission_has_one_sdk_attempt_and_no_completion_waiter(tmp_path):
+    journal = VMHACloudOperationJournal(tmp_path / "rearm-cloud-operation.json")
+    client = NebiusSDKCloudClient(object(), operation_journal=journal)
+    operation = SimpleNamespace(id="cloud-a", resource_id="vm-a", done=lambda: False)
+    service = MagicMock()
+    service.start.return_value.wait.return_value = operation
+    with (
+        patch("nebius.api.nebius.compute.v1.InstanceServiceClient", return_value=service),
+        patch("nebius_vpngw.deploy.vm_ha_cloud.wait_vm_ha_operation") as wait,
+        pytest.raises(PendingHACloudOperation),
+    ):
+        client.submit_start("vm-a", "action-a")
+    assert service.start.call_args.kwargs["retries"] == 1
+    wait.assert_not_called()
+    assert journal.load().cloud_operation_id == "cloud-a"

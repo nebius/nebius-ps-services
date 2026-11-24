@@ -190,12 +190,15 @@ class FakeCloud:
             raise ValueError("invalid operation journal")
         return self.accepted
 
+    def acknowledge_accepted_start(self, operation: AcceptedCloudOperation) -> None:
+        assert self.accepted == operation
+        self.accepted = None
+
     def finalize_accepted_start(self, operation: AcceptedCloudOperation) -> None:
         assert operation == self.accepted
         if self.fail_finalize:
             raise RuntimeError("operation status unavailable")
         self.finalized.append(operation)
-        self.accepted = None
         if self.finalize_target_state is not None:
             target = next(
                 instance_id for instance_id in self.instances if instance_id != self.owner
@@ -326,6 +329,13 @@ def _commit_restoration_authority(
         updated_at=101.0,
     )
     receipt = json.loads((tmp_path / PROMOTION_RECEIPT_PATH.name).read_text(encoding="utf-8"))
+    from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_to_dict
+    from nebius_vpngw.agent.vm_ha_controller import ControllerCheckpoint
+
+    (tmp_path / "controller-checkpoint.json").write_text(
+        json.dumps(controller_checkpoint_to_dict(ControllerCheckpoint()))
+    )
+    store.anchor_ownership(incarnation=0, epoch=receipt["ownership_epoch"])
     store.commit(receipt=receipt, updated_at=102.0)
 
 
@@ -622,7 +632,7 @@ def test_restoration_policy_failure_projects_closed_reason_code(tmp_path: Path) 
     assert cloud.starts == []
 
 
-def test_committed_restoration_retries_five_times_with_one_operation_id(
+def test_committed_restoration_retries_for_five_minutes_with_one_operation_id(
     tmp_path: Path,
 ) -> None:
     now = [100.0]
@@ -632,9 +642,9 @@ def test_committed_restoration_retries_five_times_with_one_operation_id(
         clock=lambda: now[0],
     )
     _commit_restoration_authority(tmp_path, owner_node_id="node-a")
-    cloud.start_errors = [RetryableHACloudError("unavailable") for _ in range(5)]
+    cloud.start_errors = [RetryableHACloudError("unavailable") for _ in range(60)]
 
-    for delay in (5.0, 15.0, 30.0, 60.0):
+    for delay in (5.0,) * 59:
         status = runtime.step()
         assert status["phase"] == "starting"
         assert status["reason"] == "compute-start-retry-scheduled"
@@ -644,12 +654,12 @@ def test_committed_restoration_retries_five_times_with_one_operation_id(
 
     assert status["phase"] == "blocked"
     assert status["reason"] == "automatic-retry-exhausted"
-    assert len(cloud.starts) == 5
+    assert len(cloud.starts) == 60
     assert len({operation_id for _instance, operation_id in cloud.starts}) == 1
     authority = StandbyRestorationStore(tmp_path).load()
     assert authority is not None
     assert authority.phase is RestorationPhase.BLOCKED
-    assert authority.attempt_count == 5
+    assert authority.attempt_count == 60
 
 
 def test_committed_restoration_untyped_start_failure_blocks_authority(
@@ -701,7 +711,14 @@ def test_explicit_vm_ha_retry_restarts_exact_blocked_restoration(tmp_path: Path)
         encoding="utf-8",
     )
 
-    request_rearm_retry(config_path=config_path, state_dir=tmp_path)
+    request = request_rearm_retry(config_path=config_path, state_dir=tmp_path)
+    assert runtime.step()["phase"] == "blocked"
+    assert cloud.starts == []
+    assert (tmp_path / REARM_REQUEST_PATH.name).exists()
+    # Controller publication is the sole fresh-authority boundary.
+    store.authorize_operator(
+        request_id=request["request_id"], incarnation=0, epoch="10", updated_at=105.0
+    )
     status = runtime.step()
 
     assert status["phase"] == "running"
@@ -973,7 +990,7 @@ def test_rearm_preserves_authority_when_sdk_observation_fails(
     def should_fail() -> bool:
         nonlocal reads
         reads += 1
-        return reads == (1 if stage == "initial" else 2)
+        return reads == (3 if stage == "after-start" else 1)
 
     def instance(identifier: str) -> ComputeObservation:
         selected = "compute-a" if boundary == "owner" else "compute-b"
@@ -999,7 +1016,7 @@ def test_rearm_preserves_authority_when_sdk_observation_fails(
         assert (path.read_bytes() if path.exists() else None) == baseline
     assert len(cloud.finalized) == (1 if stage == "after-finalize" else 0)
     if stage == "after-finalize":
-        assert cloud.accepted is None
+        assert cloud.accepted is not None
     # A fresh observation completes the original authority without a duplicate Start.
     assert runtime.step()["phase"] == "running"
     assert len(cloud.starts) == (0 if stage == "after-finalize" else 1)
@@ -1747,6 +1764,19 @@ def _record_generation_transfer(
 
 def _commit_generation_transfer(tmp_path: Path, config: dict[str, t.Any]) -> None:
     owner = config["node"]["node_id"]
+    from nebius_vpngw.agent.vm_ha_checkpoint import controller_checkpoint_to_dict
+    from nebius_vpngw.agent.vm_ha_controller import ControllerCheckpoint, HAState, OwnershipContext
+
+    (tmp_path / "controller-checkpoint.json").write_text(
+        json.dumps(
+            controller_checkpoint_to_dict(
+                ControllerCheckpoint(
+                    state=HAState.ACTIVE,
+                    established_ownership_context=OwnershipContext(owner, "allocation-a", "10"),
+                )
+            )
+        )
+    )
     receipt = agent_main._commit_promotion_receipt(
         status={
             "promotion_ready": True,

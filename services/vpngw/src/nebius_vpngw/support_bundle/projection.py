@@ -1592,3 +1592,60 @@ ENUMS |= frozenset(
         "ha",
     }
 )
+
+# Recovery evidence is a closed projection, never raw archived predecessor state.
+VALUE_KEYS |= frozenset(
+    {
+        "blocked_reason",
+        "digests",
+        "first_failure",
+        "last_transition",
+        "retry_window",
+        "attempt_count",
+        "elapsed",
+        "monotonic_at",
+        "successful",
+        "ownership_incarnation",
+    }
+)
+IDENTITY_KEYS |= frozenset(
+    {
+        "original_epoch",
+        "current_epoch",
+        "baseline_epoch",
+        "rearm_operation_id",
+        "action_operation_id",
+        "cloud_operation_id",
+        "stopped_revision",
+        "former_owner_node_id",
+        "first_operation_id",
+        "route_operation_id",
+    }
+)
+HASH_KEYS |= frozenset(
+    {
+        "authorization_id",
+        "promotion_receipt_id",
+        "checkpoint_digest",
+        "route_receipt_digest",
+        "operator_request_id",
+        "policy_digest",
+        "certificate_id",
+        "policy_operation_id",
+        "request_fingerprint",
+    }
+)
+TIME_KEYS |= frozenset({"next_attempt_at", "standby_deadline_at", "observed_at"})
+ENUMS |= frozenset(
+    {
+        "cloud-operation-pending",
+        "restoration-admission-changed",
+        "restoration-retry-clock-invalid",
+        "start-accepted",
+        "awaiting-standby",
+        "automatic-failover",
+        "operator-restoration",
+        "planned-failover",
+        "planned-failback",
+    }
+)

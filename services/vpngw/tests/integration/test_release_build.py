@@ -227,7 +227,7 @@ assert p.read_text() == raw
         timeout=30,
     )
     assert capability.returncode == 0, capability.stderr
-    assert "vm-ha-standby-restoration-v2" in json.loads(capability.stdout)["features"]
+    assert "vm-ha-standby-restoration-v3" in json.loads(capability.stdout)["features"]
     assert "ipsec-replay-window-v1" in json.loads(capability.stdout)["features"]
 
     bootstrap = subprocess.run(

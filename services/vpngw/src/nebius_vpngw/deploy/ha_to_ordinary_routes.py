@@ -6,6 +6,7 @@ source is an exclusion from those copies, never synthetic ordinary ownership.
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 
 from ..apply_approval import digest
@@ -26,9 +27,16 @@ def observe(project, gateway, ordinary, targets, routes):
         verify(value)
         return value
     child = saved["transaction"]
+    bindings = saved["bindings"]
+    if (
+        child is None
+        and set(bindings) == {"destroyed_enforcement"}
+        and isinstance(bindings["destroyed_enforcement"], str)
+        and re.fullmatch(r"[0-9a-f]{64}", bindings["destroyed_enforcement"])
+    ):
+        return None
     if child is None or child["phase"] != "complete":
         raise RuntimeError("Complete the HA enforced table transition before ordinary conversion")
-    bindings = saved["bindings"]
     if not bindings.get("targets"):
         return None
     previous = {

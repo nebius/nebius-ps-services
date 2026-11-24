@@ -24,15 +24,15 @@ from .promotion_receipt import (
     PROMOTION_RECEIPT_SCHEMA,
     promotion_receipt_id_v1,
 )
+from .retry_window import RETRY_SECONDS, WINDOW_SECONDS, RetryWindow
 from .store import atomic_write_json
 
 RESTORATION_AGREEMENT_SCHEMA = "nebius-vpngw/vm-ha-restoration-agreement-v1"
 RESTORATION_AGREEMENT_FILENAME = "standby-restoration-agreement.json"
-RESTORATION_AUTHORIZATION_SCHEMA = "nebius-vpngw/vm-ha-standby-restoration-authorization-v1"
+RESTORATION_AUTHORIZATION_SCHEMA = "nebius-vpngw/vm-ha-standby-restoration-authorization-v2"
 RESTORATION_AUTHORIZATION_FILENAME = "standby-restoration-authorization.json"
-STANDBY_RESTORATION_CAPABILITY = "vm-ha-standby-restoration-v2"
-RESTORATION_MAX_ATTEMPTS = 5
-RESTORATION_RETRY_DELAYS_SECONDS = (5.0, 15.0, 30.0, 60.0)
+STANDBY_RESTORATION_CAPABILITY = "vm-ha-standby-restoration-v3"
+RESTORATION_MAX_ATTEMPTS = 60
 RESTORATION_STANDBY_TIMEOUT_SECONDS = 300.0
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -51,6 +51,7 @@ class StandbyRestorationReason(str, Enum):
     START_IDENTITY_CHANGED = "standby-restoration-start-identity-changed"
     BLOCKED = "standby-restoration-blocked"
     AUTOMATIC_RETRY_EXHAUSTED = "automatic-retry-exhausted"
+    RETRY_CLOCK_INVALID = "restoration-retry-clock-invalid"
     COMPUTE_START_FAILED = "compute-start-failed"
     COMPUTE_START_PERMANENT_FAILURE = "compute-start-permanent-failure"
     STANDBY_READINESS_TIMEOUT = "standby-readiness-timeout"
@@ -59,6 +60,7 @@ class StandbyRestorationReason(str, Enum):
 _PERSISTED_BLOCKED_REASON_CODES = frozenset(
     {
         StandbyRestorationReason.AUTOMATIC_RETRY_EXHAUSTED.value,
+        StandbyRestorationReason.RETRY_CLOCK_INVALID.value,
         StandbyRestorationReason.COMPUTE_START_FAILED.value,
         StandbyRestorationReason.COMPUTE_START_PERMANENT_FAILURE.value,
         StandbyRestorationReason.STANDBY_READINESS_TIMEOUT.value,
@@ -418,8 +420,19 @@ class StandbyRestorationAuthorization:
     blocked_reason: str | None
     created_at: float
     updated_at: float
+    ownership_incarnation: int | None = None
+    baseline_epoch: str | None = None
+    retry_window: RetryWindow | None = None
 
     def __post_init__(self) -> None:
+        if self.ownership_incarnation is not None and (
+            type(self.ownership_incarnation) is not int or self.ownership_incarnation < 0
+        ):
+            raise StandbyRestorationError("ownership incarnation is invalid")
+        if (self.ownership_incarnation is None) != (self.baseline_epoch is None):
+            raise StandbyRestorationError("ownership baseline is incomplete")
+        if self.baseline_epoch is not None:
+            _require_identifier("baseline_epoch", self.baseline_epoch)
         _require_sha256("authorization_id", self.authorization_id)
         _require_identifier("cluster_id", self.cluster_id)
         _require_identifier("owner_node_id", self.owner_node_id)
@@ -450,6 +463,8 @@ class StandbyRestorationAuthorization:
             or not 0 <= self.attempt_count <= RESTORATION_MAX_ATTEMPTS
         ):
             raise StandbyRestorationError("attempt_count is invalid")
+        if self.attempt_count > 0 and self.retry_window is None:
+            raise StandbyRestorationError("submitted restoration retry window is missing")
         _optional_timestamp("next_attempt_at", self.next_attempt_at)
         _optional_timestamp("standby_deadline_at", self.standby_deadline_at)
         if self.blocked_reason is not None:
@@ -512,6 +527,9 @@ class StandbyRestorationAuthorization:
     def to_dict(self) -> dict[str, object]:
         return {
             **self.identity_payload(),
+            "ownership_incarnation": self.ownership_incarnation,
+            "baseline_epoch": self.baseline_epoch,
+            "retry_window": None if self.retry_window is None else self.retry_window.to_dict(),
             "attempt_count": self.attempt_count,
             "authorization_id": self.authorization_id,
             "blocked_reason": self.blocked_reason,
@@ -533,6 +551,9 @@ class StandbyRestorationAuthorization:
         if not isinstance(value, Mapping):
             raise StandbyRestorationError("restoration authorization must be an object")
         expected = {
+            "ownership_incarnation",
+            "baseline_epoch",
+            "retry_window",
             "allocation_id",
             "attempt_count",
             "authorization_id",
@@ -573,6 +594,14 @@ class StandbyRestorationAuthorization:
         def optional_identifier(name: str) -> str | None:
             return None if value[name] is None else _require_identifier(name, value[name])
 
+        try:
+            retry_window = (
+                None
+                if value["retry_window"] is None
+                else RetryWindow.from_mapping(value["retry_window"])
+            )
+        except ValueError as error:
+            raise StandbyRestorationError("restoration retry window is invalid") from error
         request_fingerprint = (
             None
             if value["request_fingerprint"] is None
@@ -605,6 +634,9 @@ class StandbyRestorationAuthorization:
             rearm_operation_id=optional_identifier("rearm_operation_id"),
             phase=phase,
             attempt_count=value["attempt_count"],
+            ownership_incarnation=value["ownership_incarnation"],
+            baseline_epoch=optional_identifier("baseline_epoch"),
+            retry_window=retry_window,
             next_attempt_at=_optional_timestamp("next_attempt_at", value["next_attempt_at"]),
             standby_deadline_at=_optional_timestamp(
                 "standby_deadline_at", value["standby_deadline_at"]
@@ -955,42 +987,194 @@ class StandbyRestorationStore:
             )
         )
 
+    def _observe_retry_window(
+        self,
+        record: StandbyRestorationAuthorization,
+        *,
+        updated_at: float,
+        monotonic_at: float | None,
+        boot_id: str,
+    ) -> RetryWindow:
+        try:
+            return RetryWindow.observe(
+                record.retry_window,
+                now=updated_at,
+                monotonic=updated_at if monotonic_at is None else monotonic_at,
+                boot=boot_id,
+            )
+        except ValueError as error:
+            if record.promotion_receipt_id is not None:
+                self.block(
+                    receipt_id=record.promotion_receipt_id,
+                    reason=StandbyRestorationReason.RETRY_CLOCK_INVALID.value,
+                    updated_at=record.updated_at,
+                )
+            raise StandbyRestorationError(
+                "restoration-retry-clock-invalid",
+                reason=StandbyRestorationReason.RETRY_CLOCK_INVALID,
+            ) from error
+
+    def retry_due(
+        self,
+        record: StandbyRestorationAuthorization,
+        *,
+        updated_at: float,
+        monotonic_at: float | None = None,
+        boot_id: str = "caller-clock",
+    ) -> bool:
+        window = self._observe_retry_window(
+            record, updated_at=updated_at, monotonic_at=monotonic_at, boot_id=boot_id
+        )
+        return (
+            record.next_attempt_at is None
+            or record.retry_window is None
+            or window.elapsed >= record.retry_window.elapsed + RETRY_SECONDS
+            or window.elapsed >= WINDOW_SECONDS
+        )
+
     def record_submission(
-        self, *, receipt_id: str, updated_at: float
+        self,
+        *,
+        receipt_id: str,
+        updated_at: float,
+        monotonic_at: float | None = None,
+        boot_id: str = "caller-clock",
     ) -> StandbyRestorationAuthorization:
         record = self.require_receipt(receipt_id)
         if record.phase is not RestorationPhase.START_ACCEPTED:
             raise StandbyRestorationError("restoration start is not accepted")
-        if record.next_attempt_at is not None and updated_at < record.next_attempt_at:
+        window = self._observe_retry_window(
+            record,
+            updated_at=updated_at,
+            monotonic_at=monotonic_at,
+            boot_id=boot_id,
+        )
+        if not self.retry_due(
+            record, updated_at=updated_at, monotonic_at=monotonic_at, boot_id=boot_id
+        ):
             raise StandbyRestorationError("restoration retry is not due")
-        if record.attempt_count >= RESTORATION_MAX_ATTEMPTS:
-            raise StandbyRestorationError("automatic-retry-exhausted")
+        if window.elapsed >= WINDOW_SECONDS or record.attempt_count >= RESTORATION_MAX_ATTEMPTS:
+            self.block(
+                receipt_id=receipt_id, reason="automatic-retry-exhausted", updated_at=updated_at
+            )
+            raise StandbyRestorationError(
+                "automatic-retry-exhausted",
+                reason=StandbyRestorationReason.AUTOMATIC_RETRY_EXHAUSTED,
+            )
         return self._write(
             replace(
                 record,
                 attempt_count=record.attempt_count + 1,
-                next_attempt_at=None,
+                # Persist spacing before submission: interruption may prevent
+                # the later failure observation from scheduling its retry.
+                next_attempt_at=updated_at + RETRY_SECONDS,
+                retry_window=window,
                 updated_at=updated_at,
             )
         )
 
     def schedule_retry(
-        self, *, receipt_id: str, reason: str, updated_at: float
+        self,
+        *,
+        receipt_id: str,
+        reason: str,
+        updated_at: float,
+        monotonic_at: float | None = None,
+        boot_id: str = "caller-clock",
     ) -> StandbyRestorationAuthorization:
         record = self.require_receipt(receipt_id)
         if record.phase is not RestorationPhase.START_ACCEPTED or record.attempt_count < 1:
             raise StandbyRestorationError("restoration retry cannot be scheduled")
-        if record.attempt_count >= RESTORATION_MAX_ATTEMPTS:
-            return self.block(
-                receipt_id=receipt_id,
-                reason="automatic-retry-exhausted",
-                updated_at=updated_at,
+        try:
+            window = self._observe_retry_window(
+                record, updated_at=updated_at, monotonic_at=monotonic_at, boot_id=boot_id
             )
-        delay = RESTORATION_RETRY_DELAYS_SECONDS[record.attempt_count - 1]
+        except StandbyRestorationError as error:
+            if error.reason is not StandbyRestorationReason.RETRY_CLOCK_INVALID:
+                raise
+            return self.require_receipt(receipt_id)
+        if (
+            window.elapsed + RETRY_SECONDS >= WINDOW_SECONDS
+            or record.attempt_count >= RESTORATION_MAX_ATTEMPTS
+        ):
+            return self._write(
+                replace(
+                    record,
+                    retry_window=window,
+                    phase=RestorationPhase.BLOCKED,
+                    blocked_reason="automatic-retry-exhausted",
+                    next_attempt_at=None,
+                    updated_at=updated_at,
+                )
+            )
         _require_identifier("retry_reason", reason)
         return self._write(
-            replace(record, next_attempt_at=updated_at + delay, updated_at=updated_at)
+            replace(
+                record,
+                retry_window=window,
+                next_attempt_at=updated_at + RETRY_SECONDS,
+                updated_at=updated_at,
+            )
         )
+
+    def anchor_ownership(self, *, incarnation: int, epoch: str) -> None:
+        """Persist the promotion baseline before its immutable receipt is written."""
+        record = self.load()
+        if record is None or record.phase is not RestorationPhase.ARMED:
+            return
+        if record.ownership_incarnation is not None:
+            if record.ownership_incarnation != incarnation or record.baseline_epoch != epoch:
+                raise StandbyRestorationError("restoration ownership baseline changed")
+            return
+        self._write(replace(record, ownership_incarnation=incarnation, baseline_epoch=epoch))
+
+    def authorize_operator(
+        self,
+        *,
+        request_id: str,
+        incarnation: int,
+        epoch: str,
+        updated_at: float,
+    ) -> StandbyRestorationAuthorization:
+        """Called only after the controller proves fresh operator recovery admission."""
+        record = self.load()
+        if record is None or record.phase not in {
+            RestorationPhase.COMMITTED,
+            RestorationPhase.START_ACCEPTED,
+        }:
+            raise StandbyRestorationError("operator recovery predecessor is not quiescent")
+        if (
+            record.source is RestorationSource.OPERATOR_RESTORATION
+            and record.request_fingerprint == request_id
+        ):
+            return record
+        _require_sha256("request_id", request_id)
+        identity = {
+            **record.identity_payload(),
+            "source": RestorationSource.OPERATOR_RESTORATION.value,
+            "request_fingerprint": request_id,
+        }
+        successor = replace(
+            record,
+            authorization_id=hashlib.sha256(canonical_json(identity).encode("ascii")).hexdigest(),
+            source=RestorationSource.OPERATOR_RESTORATION,
+            request_fingerprint=request_id,
+            ownership_incarnation=incarnation,
+            baseline_epoch=epoch,
+            attempt_count=0,
+            retry_window=None,
+            next_attempt_at=None,
+            standby_deadline_at=None,
+            created_at=updated_at,
+            updated_at=updated_at,
+        )
+        archive = self.path.parent / ("restoration-predecessor-" + request_id + ".json")
+        if archive.exists():
+            if json.loads(archive.read_text()) != record.to_dict():
+                raise StandbyRestorationError("operator recovery predecessor changed")
+        else:
+            atomic_write_json(archive, record.to_dict())
+        return self._write(successor)
 
     def mark_running(
         self, *, receipt_id: str, updated_at: float
@@ -1065,27 +1249,17 @@ class StandbyRestorationStore:
     def restart_blocked(
         self, *, receipt_id: str, updated_at: float
     ) -> StandbyRestorationAuthorization:
-        """Create fresh operator-owned retry authority for the same receipt."""
+        """Make retained history eligible for controller reproof, without renewal."""
 
         record = self.require_receipt(receipt_id)
         if record.phase is not RestorationPhase.BLOCKED:
             return record
         if record.stopped_revision is None or record.rearm_operation_id is None:
             raise StandbyRestorationError("blocked restoration has no stable start identity")
-        identity = {
-            **record.identity_payload(),
-            "source": RestorationSource.OPERATOR_RESTORATION.value,
-        }
         restarted = replace(
             record,
-            authorization_id=hashlib.sha256(canonical_json(identity).encode("ascii")).hexdigest(),
-            source=RestorationSource.OPERATOR_RESTORATION,
             phase=RestorationPhase.START_ACCEPTED,
-            attempt_count=0,
-            next_attempt_at=None,
-            standby_deadline_at=None,
             blocked_reason=None,
-            created_at=updated_at,
             updated_at=updated_at,
         )
         return self._write(restarted)

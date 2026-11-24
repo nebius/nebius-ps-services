@@ -1353,6 +1353,10 @@ def test_enforced_destroy_restores_original_after_fencing_with_receipt_replay(
     assert cloud.effects == effects
     assert journal.snapshot()["transaction"] is None
     assert journal.snapshot()["bindings"] == {"destroyed_enforcement": plan.digest}
+    from nebius_vpngw.deploy import ha_to_ordinary_routes as reverse
+
+    monkeypatch.setattr(reverse, "TableJournal", lambda *args: journal)
+    assert reverse.observe("project", "gateway", None, (), {}) is None
     table = cloud.subnets["selected"].spec.route_table_id
     restored = [r for r in cloud.routes.values() if r.metadata.parent_id == table]
     assert len(restored) == 1 and restored[0].spec.next_hop.default_egress_gateway
