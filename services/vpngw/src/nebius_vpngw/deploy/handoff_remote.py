@@ -271,7 +271,13 @@ def inspect(expected: dict[str, Any], *, inhibited: bool = False) -> dict[str, A
 
     from nebius_vpngw.enforced_handoff import evidence as enforcement_evidence
 
-    handoff_binding = repair.read_json(STAGING / (journal["id"] + ".json")) if pending else None
+    handoff_binding = None
+    if pending:
+        binding_path = STAGING / (journal["id"] + ".json")
+        # Stop-only handoffs have no package binding. Present evidence still
+        # uses the strict reader, including dangling links and malformed files.
+        if binding_path.exists() or binding_path.is_symlink():
+            handoff_binding = repair.read_json(binding_path)
     enforcement = enforcement_evidence(
         repair, yaml.safe_load(remote.CONFIG.read_bytes()), binding=handoff_binding
     )

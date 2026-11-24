@@ -417,6 +417,8 @@ If a package worker is still running after a CLI interruption, the resumed comma
 waits for guest deployment exclusion before continuing the same recorded work.
 For an interrupted HA handoff, confirmed repair can release an idle worker after
 verifying its original identity and every submitted request's completed outcome.
+Stop-only handoffs can resume before package staging creates a receipt; any saved
+receipt must still pass strict validation.
 It preserves the evidence without executing obsolete activation steps. Active
 work still receives bounded waiting; unknown ownership or process state reports
 the prerequisite to resolve before resuming repair.

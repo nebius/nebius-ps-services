@@ -296,7 +296,11 @@ def test_pure_projection_matches_renderer_and_streams_without_installed_product(
     )
     code += f"assert sys.modules['_vpngw_ordinary_routes'].projection({cfg!r}) == {routes.projection(cfg)!r}"
     result = subprocess.run(
-        [sys.executable, "-I", "-B", "-c", code], cwd=tmp_path, capture_output=True, text=True
+        [sys.executable, "-I", "-B", "-"],
+        input=code,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, result.stderr
 

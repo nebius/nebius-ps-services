@@ -144,6 +144,50 @@ def conversion(tmp_path, sample_config, monkeypatch):
     )
 
 
+@pytest.mark.parametrize("binding_state", ["missing", "receipt", "malformed", "symlink"])
+def test_pending_ordinary_inspection_admits_stop_only_and_validates_saved_receipt(
+    conversion, monkeypatch, tmp_path, binding_state
+):
+    from nebius_vpngw.deploy import handoff_remote as guest
+
+    f = conversion
+    journal = {"id": "holder", "state": "active", "purpose": "ha-handoff", "owner": {}}
+    config = tmp_path / "resolved.yaml"
+    config.write_text(yaml.safe_dump(f.cfg))
+    monkeypatch.setattr(guest, "repair", f.repair)
+    monkeypatch.setattr(guest, "STAGING", f.binding_path.parent)
+    monkeypatch.setattr(guest, "MARKER", tmp_path / "absent-marker")
+    monkeypatch.setattr(guest.remote, "CONFIG", config)
+    monkeypatch.setattr(guest.ops, "BOOT", f.ops.BOOT)
+    monkeypatch.setattr(guest.ops, "Journal", lambda: NS(read=lambda: journal))
+    monkeypatch.setattr(
+        guest.ops, "Manager", lambda _: NS(stopped=lambda _: True, network=lambda: {})
+    )
+    monkeypatch.setattr(guest.ops, "alive", lambda _: False)
+    monkeypatch.setattr(guest.ops, "handoff_recoverable", lambda *a, **kw: True)
+    monkeypatch.setattr(guest, "runtime_routes", lambda: {"journal": None})
+    f.binding_path.unlink()
+    if binding_state == "receipt":
+        f.repair.publish(
+            f.binding_path,
+            handoff.receipt_bytes(
+                {handoff.KEY: {"before": f.before, "prepared": f.before, "phase": "prepared"}}
+            ),
+        )
+    elif binding_state == "malformed":
+        f.repair.publish(f.binding_path, b"[]")
+    elif binding_state == "symlink":
+        f.binding_path.symlink_to(tmp_path / "absent-target")
+    if binding_state in {"malformed", "symlink"}:
+        with pytest.raises((RuntimeError, OSError)):
+            guest.inspect({})
+    else:
+        observed = guest.inspect({})
+        assert observed["pending"]
+        assert observed["enforced_routing"] == f.before
+    assert not f.effects
+
+
 def test_conversion_preserves_guard_and_replays_partial_rule_install(conversion):
     x = conversion
     x.kernel.fail_add = True

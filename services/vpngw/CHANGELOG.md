@@ -13,6 +13,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [nebius-vpngw-v0.7.1] - 2026-11-24
 
+- Preserve interrupted stop-only HA handoff recovery before a package receipt
+  exists, while continuing to reject unsafe saved receipt files. Stream the
+  standalone route-projection test through stdin to respect Linux argument limits.
 - Require learned and native routes for enforced-only BGP readiness, and permit
   ordinary recreation after a completed enforced HA destroy. Recover exactly
   bound legacy blocked Start operations without requiring newer result files.
