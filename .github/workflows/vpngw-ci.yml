@@ -258,7 +258,15 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: vpngw-package-history-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/vpngw-history/
+          path: ${{ runner.temp }}/vpngw-history/matrix.json
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Preserve package qualification diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: vpngw-package-history-diagnostics-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vpngw-history/matrix-evidence/
           retention-days: 14
           if-no-files-found: warn
 

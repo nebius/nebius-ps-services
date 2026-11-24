@@ -11,6 +11,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Keep historical-package qualification within the verifier's archive limits by
+  storing detailed case diagnostics separately from the complete matrix report.
+  Retain all cases, repeats and diagnostics.
+
 ## [nebius-vpngw-v0.7.1] - 2026-11-24
 
 - Preserve interrupted stop-only HA handoff recovery before a package receipt
