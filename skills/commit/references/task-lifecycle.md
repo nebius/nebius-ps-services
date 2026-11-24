@@ -33,6 +33,16 @@ Optional repeated `--dependency <child>:<parent>` freezes an acyclic dependency
 map. `--validation-branch <new-temporary-branch>` reserves a non-publication ref
 for ordered validation. Scope cannot be expanded on retry.
 
+When the user explicitly requests a fresh branch from the remote default while
+starting on another branch, refresh that default ref, then pass private
+`--new-target-from-base <branch>` with the same single `--target <branch>` at
+intake. This requires a clean checkout, absent local and remote-tracking target
+refs, and the default as base. Check the live remote name before intake too.
+The grant freezes that target at the captured default SHA;
+`checkout-target` creates it without changing the previous feature history.
+Do not infer this request from ordinary PR/release intent. Existing tasks cannot
+acquire a new target or change its frozen starting commit on retry.
+
 Only standalone commit supports `--allow-default-branch`, after explicit user
 authorization for that branch. Publication tasks reject default-branch targets.
 

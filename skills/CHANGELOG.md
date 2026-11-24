@@ -4,6 +4,10 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Honor an explicit request for a new publication branch from the remote default
+  while starting on another feature branch. Freeze its starting commit through
+  canonical PR intake and retain clean-checkout, new-name and prior-history checks.
+
 - Align project-instruction symlink tests with the spec owner's earlier policy
   rejection and retain direct coverage of discovery's independent no-follow guard.
 - Add GitHub LOC Modifications reporting with `--loc-modifications-report`,

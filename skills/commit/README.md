@@ -35,6 +35,12 @@ created no commit may be corrected and re-prepared without another user prompt.
 The task allows one actual standalone commit; replay cannot create a second.
 `finish` closes completed, cancelled and zero-commit tasks.
 
+An explicitly requested new publication branch may start from the freshly
+fetched remote default even when the caller is on another feature branch.
+The private PR intake requires a clean checkout and a new name, freezes the
+default commit before branch creation, and preserves the previous feature ref.
+Ordinary release/PR requests still reuse their current selected branch.
+
 Capture failures report a fixed nonblocking reason: `PROMPT_UNAVAILABLE`,
 `NATIVE_IDENTITY_UNAVAILABLE`, `REPOSITORY_UNAVAILABLE`,
 `RECEIPT_WRITE_FAILED`, or `CAPTURE_FAILED`. They expose no raw prompt,

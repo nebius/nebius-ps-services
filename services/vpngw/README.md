@@ -6494,3 +6494,8 @@ Releases use the project profile in `.github/merge-policy.json` and the shared
 [qualification contract](../../skills/publish-release/references/release-qualification.md).
 Required native/offline checks remain enforced. Optional cloud UAT is separate;
 final tagged package and remote asset verification remain part of publication.
+
+CI preserves the complete historical-package matrix in
+`vpngw-package-history-<attempt>` for release verification. Detailed case snapshots
+remain available separately in `vpngw-package-history-diagnostics-<attempt>`;
+both artifacts are retained for 14 days.

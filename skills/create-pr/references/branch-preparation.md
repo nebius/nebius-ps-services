@@ -45,7 +45,13 @@ existing same-repository or fork PRs.
 - If the user provides one or more branch names, process exactly those
   branches. Preserve the user-provided order unless current Git evidence shows
   a safer dependency order.
-- If the user provides no branch name and the current branch is non-default,
+- If the user explicitly requests a fresh branch from the remote default, use
+  their name or derive an unambiguous task name. Refresh the remote default and
+  use canonical intake's private `--new-target-from-base <branch>` with that
+  single target before any checkout movement. Require clean state and a new
+  name; `checkout-target` owns creation from the captured default commit.
+- If the user provides no branch name, does not request a fresh branch, and the
+  current branch is non-default,
   treat the current branch as the only target branch. Do not create a new
   branch, do not switch to another branch before committing current work, and
   make that branch conflict-free against the default branch after the local

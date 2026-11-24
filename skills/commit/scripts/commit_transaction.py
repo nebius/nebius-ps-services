@@ -1821,6 +1821,14 @@ def begin(arguments: argparse.Namespace) -> dict[str, object]:
         path = _task_path(root, arguments.session_id, arguments.intent_sha256)
         if path.exists() or path.is_symlink():
             path, grant, _ = _task_from_arguments(arguments, root)
+            new_branch = getattr(arguments, "new_target_from_base", None)
+            if new_branch and (
+                grant["requested_action"] != "create-pr"
+                or grant["targets"] != {
+                    f"refs/heads/{new_branch}": {"head": grant["base_head"], "kind": "new"}
+                }
+            ):
+                raise TransactionError("new target basis cannot change", "scope_changed")
             if selectors and selectors != {
                 ref: {k: item[k] for k in ("repository", "number")}
                 for ref, item in grant["pr_targets"].items()
@@ -1924,6 +1932,20 @@ def begin(arguments: argparse.Namespace) -> dict[str, object]:
         )
         if action == "create-pr" and base_ref is None:
             raise TransactionError("PR task requires a base", "scope_changed")
+        new_branch = getattr(arguments, "new_target_from_base", None)
+        if new_branch and (
+            action != "create-pr"
+            or arguments.target != [new_branch]
+            or selectors
+            or arguments.dependency
+            or arguments.validation_branch
+            or base_ref != default_ref
+            or _status(root)
+        ):
+            raise TransactionError(
+                "new target from default requires one explicit target and a clean checkout",
+                "scope_changed",
+            )
         targets = {}
         pr_targets = {}
         for branch in arguments.target or [identity["branch"]]:
@@ -1952,7 +1974,14 @@ def begin(arguments: argparse.Namespace) -> dict[str, object]:
                 ("rev-parse", "--verify", f"refs/remotes/origin/{branch}^{{commit}}"),
                 check=False,
             )
-            if ref in selectors:
+            if new_branch:
+                if local.returncode == 0 or remote.returncode == 0:
+                    raise TransactionError("new target already exists", "scope_changed")
+                targets[ref] = {
+                    "head": _git_text(root, "rev-parse", f"{base_ref}^{{commit}}"),
+                    "kind": "new",
+                }
+            elif ref in selectors:
                 if action != "create-pr":
                     raise TransactionError("PR selection requires create-pr ownership", "scope_changed")
                 binding, head = _pr.intake(root, _run_git, selectors[ref], arguments.pr_base)
@@ -4419,6 +4448,11 @@ def _parser() -> argparse.ArgumentParser:
             task_parser.add_argument("--validation-branch")
             task_parser.add_argument("--pr-base")
             task_parser.add_argument("--allow-default-branch", action="store_true")
+            if name == "begin":
+                task_parser.add_argument(
+                    "--new-target-from-base",
+                    help="Private explicit new-branch request from the captured remote default",
+                )
         elif name == "finish":
             task_parser.add_argument(
                 "--outcome", required=True, choices=("completed", "cancelled")

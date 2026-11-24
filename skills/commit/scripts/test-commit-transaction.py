@@ -484,6 +484,44 @@ class CommitTransactionTest(TransactionFixture):
         )
         self.assertEqual(self.finish()["status"], "completed")
 
+    def test_explicit_new_target_from_default_preserves_feature_history(self):
+        self.configure_origin()
+        base = git(self.root, "rev-parse", "HEAD")
+        (self.root / "feature-only.txt").write_text("local history\n")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "unmerged local feature")
+        original = git(self.root, "rev-parse", "HEAD")
+        self.authorize("Create a new release branch from current origin main")
+        options = dict(pr_base="main", target=["release/test"],
+                       new_target_from_base="release/test", checkout_policy="preserve")
+        first = self.begin("create-pr", **options)
+        self.assertEqual(self.begin("create-pr", **options)["task"], first["task"])
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), original)
+        self.run_helper(*self.task_args("checkout-target"), "--branch", "release/test")
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), base)
+        self.assertEqual(git(self.root, "rev-parse", "feature/test"), original)
+        self.assertFalse((self.root / "feature-only.txt").exists())
+        self.assertEqual(git(self.root, "status", "--porcelain"), "")
+
+    def test_explicit_new_target_rejects_dirty_existing_and_nondefault_base(self):
+        self.configure_origin()
+        self.authorize("Create a new release branch from current origin main")
+        args = ["begin", "--repo-root", str(self.root), "--session-id", "session-1",
+                "--requested-action", "create-pr", "--intent-sha256",
+                self.request_assertions["session-1"][-1], "--pr-base", "main",
+                "--target", "release/test", "--new-target-from-base", "release/test"]
+        (self.root / "untracked.txt").write_text("preserve\n")
+        self.assertIn("clean checkout", self.run_helper(*args, expected=2)["reason"])
+        self.assertEqual((self.root / "untracked.txt").read_text(), "preserve\n")
+        (self.root / "untracked.txt").unlink()
+        git(self.root, "branch", "release/test")
+        self.assertIn("already exists", self.run_helper(*args, expected=2)["reason"])
+        git(self.root, "branch", "-d", "release/test")
+        git(self.root, "update-ref", "refs/remotes/origin/develop", "HEAD")
+        args[args.index("--pr-base") + 1] = "develop"
+        self.assertIn("from default", self.run_helper(*args, expected=2)["reason"])
+        self.assertEqual(git(self.root, "branch", "--show-current"), "feature/test")
+
     def test_standalone_commit_push_retries_but_cannot_create_second_commit(self):
         self.configure_origin()
         self.seed_multi_project_diff()
