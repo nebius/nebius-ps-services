@@ -1,0 +1,26 @@
+# Paths resolve relative to this file. Use a new run_dir for each fresh run.
+model_dir: ./assets/model
+data_dir: ./assets/data
+run_dir: ./runs/example
+
+task: classification
+device: cuda
+batch_size: 16
+learning_rate: 0.00002
+num_epochs: 3
+grad_accum_steps: 1
+max_length: 512
+num_labels: 2
+num_warmup_steps: 0
+text_column: text
+label_column: label
+validation_split: validation
+allow_no_validation: false
+use_amp: true
+num_workers: 0
+pin_memory: true
+ddp_timeout_seconds: 600
+tensorboard_logging: true
+save_final_model: true
+seed: 42
+deterministic: false

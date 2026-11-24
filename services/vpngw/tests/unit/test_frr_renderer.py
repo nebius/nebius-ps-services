@@ -36,6 +36,82 @@ def _bgp_config(sample_config: dict) -> dict:
     return sample_config
 
 
+@pytest.mark.parametrize(
+    "defect",
+    [
+        None,
+        "table",
+        "preference",
+        "match",
+        "binding",
+        "extra-action",
+        "moved-action",
+        "duplicate-action",
+        "clause-action",
+        "sequence",
+    ],
+)
+@pytest.mark.parametrize("native_order", [False, True])
+def test_enforced_import_readiness_checks_rendered_table_policy(
+    sample_config, defect, native_order
+):
+    from nebius_vpngw.agent.vm_ha.runtime import (
+        _expected_import_policy_digest,
+        _observed_import_policy_digest,
+    )
+    from nebius_vpngw.enforced_routing import compile_policies
+
+    cfg = _bgp_config(sample_config)
+    conn = cfg["connections"][0]
+    conn["remote_prefixes"] = ["0.0.0.0/0", "172.20.0.0/16"]
+    conn["enforced_routing"] = {
+        "source_subnets": ["10.0.1.0/24", "10.0.2.0/24"],
+        "destinations": ["0.0.0.0/0"],
+    }
+    rendered = {}
+    FRRRenderer().render_and_apply(cfg, activate=False, rendered_files=rendered)
+    text = rendered[frr_renderer.FRR_CONF]
+    table = compile_policies(cfg)[0].table
+    expected = _expected_import_policy_digest(
+        cfg, [{"connection": conn["name"], "remote_prefixes": conn["remote_prefixes"]}]
+    )
+    if native_order:
+        # FRR 10.7 serializes these independent actions in this order, even
+        # when the configuration was submitted in the opposite order.
+        for preference in (100, 200):
+            text = text.replace(
+                f" set table {table}\n set local-preference {preference}",
+                f" set local-preference {preference}\n set table {table}",
+            )
+    if defect == "table":
+        text = text.replace(f" set table {table}", " set table 254")
+    elif defect == "preference":
+        text = text.replace(" set local-preference 200", " set local-preference 150")
+    elif defect == "match":
+        text = text.replace(f" match ip address prefix-list ENFORCED-{table}\n", "")
+    elif defect == "binding":
+        text = text.replace(f"route-map ENFORCED-{table}-200 in", "route-map SET-LOCAL-PREF-200 in")
+    elif defect == "extra-action":
+        text = text.replace(
+            f" set table {table}", f" set table {table}\n set ip next-hop 192.0.2.9"
+        )
+    elif defect == "moved-action":
+        text = text.replace(f" set table {table}\n", "").replace(
+            f"route-map ENFORCED-{table}-200 permit 20\n",
+            f"route-map ENFORCED-{table}-200 permit 20\n set table {table}\n",
+        )
+    elif defect == "duplicate-action":
+        text = text.replace(f" set table {table}", f" set table {table}\n set table {table}")
+    elif defect == "clause-action":
+        text = text.replace(f"ENFORCED-{table}-200 permit 20", f"ENFORCED-{table}-200 deny 20")
+    elif defect == "sequence":
+        text = text.replace(f"ENFORCED-{table}-200 permit 20", f"ENFORCED-{table}-200 permit 30")
+    actual = _observed_import_policy_digest(
+        text, frozenset(t["inner_remote_ip"] for t in conn["tunnels"])
+    )
+    assert (actual == expected) == (defect is None)
+
+
 def test_ensure_bgpd_enabled_creates_daemons_file(tmp_path, monkeypatch) -> None:
     daemons_file = tmp_path / "frr" / "daemons"
     monkeypatch.setattr(frr_renderer, "DAEMONS_FILE", daemons_file)

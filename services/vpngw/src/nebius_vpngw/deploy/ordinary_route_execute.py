@@ -15,6 +15,20 @@ def request_from_record(record: dict) -> Any:
     return resolve(record, {}, {})
 
 
+def _commit_predecessors(journal: RouteJournal, plan: dict) -> None:
+    if plan.get("ha_conversion"):
+        journal.state["ha_route_source"] = plan["ha_conversion"]["source_sha256"]
+    if "enforced_predecessors_next" not in plan:
+        return
+    from .enforced_predecessors import committed
+
+    records = committed(plan, journal.state["transaction"]["operations"])
+    if records:
+        journal.state["enforced_predecessors"] = records
+    else:
+        journal.state.pop("enforced_predecessors", None)
+
+
 def _inventory(observation: dict, plan: dict, infrastructure: dict | None = None) -> dict[str, Any]:
     infrastructure = infrastructure if infrastructure is not None else plan["infrastructure"]
     if (
@@ -45,6 +59,13 @@ def _admit(
     from copy import deepcopy
 
     observation = observe()
+    if plan.get("ha_conversion") is not None:
+        from .ha_to_ordinary_routes import verify as verify_ha_conversion
+
+        verify_ha_conversion(plan["ha_conversion"])
+    from .enforced_predecessors import verify_restoration
+
+    verify_restoration(cloud.sdk, plan)
     operations = deepcopy(cloud.records)
     # An uncertain subnet CAS may already be visible. It still requires its
     # authoritative receipt; this projection only permits exact replay after
@@ -137,9 +158,14 @@ def execute(
             "observed"
         ]:
             raise RuntimeError("Route state changed after unchanged planning")
-        if transaction is not None and transaction["phase"] == "pending":
+        predecessor_change = (
+            "enforced_predecessors_next" in plan
+            and plan["enforced_predecessors_next"] != journal.enforced_predecessors()
+        )
+        if predecessor_change or transaction is not None and transaction["phase"] == "pending":
             with journal:
                 journal.begin(plan, approval=approval)
+                _commit_predecessors(journal, plan)
                 journal.state["transaction"]["phase"] = "complete"
                 journal.save()
         return
@@ -245,5 +271,6 @@ def execute(
             journal.state["bindings"].pop(identifier, None)
         for identifier in plan["released"]:
             journal.state["bindings"].pop(identifier, None)
+        _commit_predecessors(journal, plan)
         journal.state["transaction"]["phase"] = "complete"
         journal.save()

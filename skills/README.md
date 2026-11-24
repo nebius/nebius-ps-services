@@ -208,7 +208,7 @@ Plugin invocation uses `/skills:skill-name`; local Claude skills use
 
 | Skill | Invocation | Description |
 | --- | --- | --- |
-| `github-report` | Implicit allowed | Report completed GitHub activity grouped by human contributor and one shared open backlog; filter users by login/profile-name substring and retain dated roles, folder evidence, unique item counts and whole-PR metrics. |
+| `github-report` | Implicit allowed | Report contributor activity and shared backlog, or rank merged-PR authors by LOC Modifications; support owner/repository scope, user filters and top K with explicit coverage limits. |
 | `commit` | Implicit allowed | Create one local commit with task-scoped safe retries for the complete repository diff; reports receipt-capture failures, stages with repo-root `git add -A` inside the exact transaction and never pushes. |
 | `commit-push` | Implicit allowed | Commit all current feature-branch changes with safe no-commit retries and push the branch to `origin` without opening a pull request. |
 | `create-branch` | Explicit only | Update origin’s local default safely and switch to a new named or generated branch; preserve previous feature history and local work. |
@@ -237,7 +237,7 @@ measuring performance.
 | `app-stack` | Implicit allowed | Select the smallest justified application technology stack and emit schema-v2 logical component classes and exact technology decisions for approved scaffold handoffs. |
 | `apply-security` | Implicit allowed | Advise on, review, and safely remediate security issues across design, implementation, infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD, shell, and application code. |
 | `container` | Implicit allowed | Build, review, harden, troubleshoot, and validate OCI images, Docker/BuildKit workflows, Compose stacks, runtime contracts, multi-platform and GPU containers, and supply-chain evidence. |
-| `design` | Implicit allowed | Plan software changes and portable HTML artifacts against project docs/code with evidence-checked patterns and bounded decision search; include README hierarchy when relevant. Use `nebius`, `ai-agent-design`, `ai-stack` and `app-stack` for applicable decisions without duplicate selection; use official-first `research` fallback when a specialist is missing. Implement only on explicit request; canonical documents remain with `maintain-project-specs`. |
+| `design` | Implicit allowed | Research software/HTML designs and extract draft packages with `--extract-once`; plan against project docs/code with evidence-checked patterns and bounded decision search; include README hierarchy when relevant. Use `nebius`, `ai-agent-design`, `ai-stack` and `app-stack` for applicable decisions without duplicate selection; use official-first `research` fallback when a specialist is missing. Implement only on explicit request; canonical documents remain with `maintain-project-specs`. |
 | `frontend-project` | Implicit allowed | Materialize exact React, TypeScript, and Vite frontend files from fixed decisions, including deterministic candidate manifests and public environment schemas. |
 | `github-workflows` | Implicit allowed | Create, review, or standardize GitHub Actions for PR/merge CI, merge automation, reusable workflows, permissions, and release/image YAML. |
 | `gitignore` | Implicit allowed | Create or update stack-aware `.gitignore` files with sensible macOS, VS Code, and detected language/tool defaults. |
@@ -412,7 +412,7 @@ $create-learning-course Create a public-safe course for engineers learning Kuber
 
 $research Research Kubernetes Gateway API, search internal Slack and Confluence context first if relevant, explain how it works internally, identify limitations and alternatives, and recommend when we should or should not use it.
 
-$design Design this new feature before implementation: read the requirements, inspect the existing code and docs, route unfamiliar topic and technology research through $research, use $app-stack for undecided application layers, use $ai-stack for undecided AI layers, apply $system-design-rules to the non-trivial design decisions, compare options, and create a /plan handoff.
+$design Design this new feature before implementation: read the requirements, inspect the existing code and docs, research every requirement and design decision through $research, use $app-stack for undecided application layers, use $ai-stack for undecided AI layers, apply $system-design-rules to the non-trivial design decisions, compare options, and create a /plan handoff.
 
 $app-stack Select the smallest justified stack for this application, mark optional components with their adoption triggers, and coordinate implementation through matching specialist skills.
 
@@ -605,11 +605,19 @@ ideation, `design` for solution design and `/plan` handoff, and
 
 ### `design`
 
+`$design --extract-once <source-folder> [--project-root <target-folder>]` performs
+unattended research-backed extraction into target `docs/`, defaulting to invocation
+cwd. It preserves source provenance and phase dependencies, resolves supported
+gaps, publishes canonical specs through their owner, and reports remaining
+source-linked decisions together. Plain folders are supported without Git setup.
+Every design reports measured elapsed time and longer work includes chat progress.
+See [document extraction](design/references/document-extraction.md).
+
 `design` turns requirements, existing-system evidence, and `research`-backed
 topic, requirement, and technology due diligence into a concrete software
 design before implementation. It follows a phased workflow: understand
 requirements, understand the existing system or greenfield context, route
-missing knowledge through `research` when available, route undecided
+every requirement and decision through `research` at proportional depth, route undecided
 application-stack or layer technology choices through `app-stack`, route
 undecided agent-subsystem choices through `ai-agent-design` and its scoped
 `ai-stack` handoff, design the solution, apply
@@ -1739,6 +1747,12 @@ Shared work repeats with each contributor's role; repository totals count
 unique GitHub items. The header contains only User/Repository/optional Folder
 and Date. Reporting is read-only and does not save files or publish. See
 [usage and evidence boundaries](github-report/README.md).
+
+Use `--loc-modifications-report --owner example-org --top 3` for one aggregate
+LOC Modifications ranking across all visible owned repositories. The total is
+whole-PR additions plus deletions for merges in the interval, attributed to PR
+authors, including non-code files. `--owner` also works for normal reporting;
+`--top` is LOC-only and `--project` is activity-only. `--date` is the start date.
 
 ### `jira-report`
 

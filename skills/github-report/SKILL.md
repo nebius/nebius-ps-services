@@ -1,6 +1,6 @@
 ---
 name: github-report
-description: "Report GitHub activity grouped by human contributor and one shared open backlog. Accept --user login/name substring, --date, comma-separated --repo and folder filter --project; default to all users, current repo and last 90 days. Read-only reporting, not issue triage, PR code review or contributor ranking."
+description: "Report GitHub activity by contributor with a shared open backlog, or rank merged-PR authors by LOC Modifications. Accept --loc-modifications-report, --owner, --top, --user, --date, --repo and activity-only --project. Defaults: all users, current repo, last 90 days. Read-only evidence, not productivity assessment, issue triage or PR review."
 ---
 
 # GitHub Report
@@ -22,15 +22,19 @@ authorization.
 ## Public Usage
 
 ```text
-$github-report [--date YYYY-MM-DD] [--repo OWNER/REPO[,OWNER/REPO...]] [--project FOLDER] [--user TEXT]
+$github-report [--date YYYY-MM-DD] [--repo OWNER/REPO[,OWNER/REPO...] | --owner OWNER] [--project FOLDER] [--user TEXT]
+$github-report --loc-modifications-report [--date YYYY-MM-DD] [--repo OWNER/REPO[,OWNER/REPO...] | --owner OWNER] [--top K] [--user TEXT]
 $github-report --help
 $github-report -h
 ```
 
 - Default action: report all human contributors' completed activity grouped by repository/user and one shared open backlog per repository, in chat.
 - `--date YYYY-MM-DD`: start activity at local midnight on today or an earlier date; default to the preceding 90 times 24 hours. Open Backlog has no age cutoff.
-- `--repo`: one comma-separated list of GitHub.com `OWNER/REPO` values; allow spaces around commas. Without it, resolve the current checkout.
-- `--project FOLDER`: filter by one repository-relative folder in each selected repo; retain genuinely uncertain membership inline.
+- `--repo`: one comma-separated list of GitHub.com `OWNER/REPO` values; allow spaces around commas. Without `--repo` or `--owner`, resolve the current checkout.
+- `--loc-modifications-report`: rank merged-PR authors across the selected scope by whole-PR additions plus deletions, displayed as one LOC Modifications total.
+- `--owner OWNER`: select every accessible repository owned by one GitHub organization or user, including forks and archives; mutually exclusive with `--repo`, in either mode.
+- `--top K`: positive integer limiting displayed LOC-mode contributors after full collection and user filtering; omitted means all matches, invalid in activity mode.
+- `--project FOLDER`: activity mode only; filter by one repository-relative folder in each selected repo; retain genuinely uncertain membership inline.
 - `--user TEXT`: select every eligible contributor whose login or public profile name contains this literal text, case-insensitively; default to all GitHub User accounts, excluding API-identified bots. The shared backlog stays unchanged.
 - `-h, --help`: explain this public interface and stop before tools or other reads.
 - No positional arguments or additional public flags.
@@ -38,11 +42,22 @@ $github-report -h
 These are skill arguments, not a separately installed executable. Use
 `$github-report` in Codex, `/github-report` in Claude Code, or
 `/skills:github-report` in the Claude plugin. Implicit invocation is allowed
-for contributor activity and backlog reporting. Use the same public selectors
+for contributor activity, backlog and LOC-modification reporting. Use the same public selectors
 for natural-language requests; do not silently restore authenticated-user defaults.
-Do not activate for team rankings, implementation, issue disposition or PR review.
+Infer LOC mode for an explicit lines-changed ranking request. Do not infer a metric for vague best-contributor or productivity rankings. Do not activate for implementation, issue disposition or PR review.
 
 ## Workflow
+
+For LOC mode, read [LOC collection and output](references/loc-modifications.md),
+validate all selectors, then use the bundled collector's matching mode with
+existing authentication. Discover a connector first; use it only when it supplies
+complete owned-repository and merged-PR pagination, stable author identity and
+metrics with equivalent coverage checks. Bind mixed transports to one numeric
+viewer ID. Render the deterministic LOC table and limitations, then stop; do not
+run activity enrichment, backlog collection or the activity finalizer.
+
+For normal activity reports, follow the steps below. With `--owner`, enumerate
+owned repositories first and propagate inventory uncertainty into final coverage.
 
 1. Read [collection rules](references/collection.md) before collecting evidence
    and [reporting rules](references/reporting.md) before writing the report.
@@ -72,6 +87,10 @@ Do not activate for team rankings, implementation, issue disposition or PR revie
 
 ## Boundaries
 
+The activity attribution and backlog rules below apply to normal mode. LOC mode
+uses author attribution and its dedicated reference; all modes retain read-only,
+identity, unknown-data and publication safeguards.
+
 - Read-only reporting: never post, comment, close, review or merge, alter Git,
   save reports automatically, configure tools, repair auth or run repository code.
 - All users means eligible GitHub User accounts observed in the scoped evidence,
@@ -99,6 +118,14 @@ Do not activate for team rankings, implementation, issue disposition or PR revie
   customer data. Private repository links belong only in the authorized report.
 
 ## Output Contract
+
+LOC mode has one scope-wide table: Rank, Contributor, LOC Modifications, Merged
+PRs. Use its deterministic `markdown` output, exact totals and equal ranks. State
+the interval, visible-repository scope and whole-PR/all-file definition; retain
+provisional coverage, lower bounds and cutoff ties. Never split additions and
+deletions into separate displayed columns or call this individual productivity.
+
+Normal activity mode:
 
 Exactly two header lines per repository: User plus Repository and optional Folder;
 Date with local start/end timestamps and numeric offsets. Use All users without

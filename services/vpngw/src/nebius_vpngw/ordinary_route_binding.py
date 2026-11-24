@@ -54,7 +54,7 @@ def validate_intent(value: dict) -> dict:
         if re.fullmatch(r"[a-f0-9]{64}", value["generation"]) is None:
             raise ValueError
         infrastructure = value["infrastructure"]
-        if set(infrastructure) != {
+        if set(infrastructure) - {"enforced_sources"} != {
             "project",
             "network_id",
             "network_spec_sha256",
@@ -112,11 +112,18 @@ def validate_intent(value: dict) -> dict:
         policy = value["policy"]
         Policy.parse(policy)
         if (
-            set(policy) != {"connections", "excluded_prefixes", "summarize"}
+            set(policy) - {"enforced"} != {"connections", "excluded_prefixes", "summarize"}
             or policy["excluded_prefixes"] != infrastructure["excluded_prefixes"]
         ):
             raise ValueError
         if any(item["instance_index"] != 0 for item in policy["connections"]):
+            raise ValueError
+        enforced = policy.get("enforced", ())
+        sources = infrastructure.get("enforced_sources", {})
+        if set(sources) != {p["connection"] for p in enforced} or any(
+            not ids or ids != sorted(set(ids)) or not set(ids) <= subnets
+            for ids in sources.values()
+        ):
             raise ValueError
     except (KeyError, TypeError, AttributeError, ValueError):
         raise ValueError(

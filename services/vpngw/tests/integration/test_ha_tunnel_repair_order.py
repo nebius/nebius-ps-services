@@ -42,7 +42,7 @@ def composed_runtime(tmp_path, monkeypatch):
         ),
     )
 
-    def observe():
+    def observe(*, publish=True):
         episode = read_state(tmp_path / "tunnel-selection.json")["episode"]
         snapshot = _snapshot(
             now=now[0],
@@ -58,10 +58,12 @@ def composed_runtime(tmp_path, monkeypatch):
         )
         snapshot = replace(snapshot, **overrides)
         snapshot = replace(snapshot, routes_reconciled_context=_reconciled(snapshot))
-        snapshots.last_snapshot = snapshot
+        if publish:
+            snapshots.last_snapshot = snapshot
         return snapshot
 
     snapshots.observe = observe
+    snapshots.observe_tunnel_authority = lambda: observe(publish=False)
     runtime = VMHAControllerRuntime(
         snapshots=snapshots,
         effects=SimpleNamespace(apply=vm_effects.append),

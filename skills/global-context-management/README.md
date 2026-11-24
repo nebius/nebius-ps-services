@@ -1,6 +1,9 @@
 # Global Context Management
 
 Execution supports Codex and Claude through the selected native host context.
+Managed Claude hook projection omits Codex's `additionalContextLimit` field;
+timeouts and unrelated registration policy remain intact. See the
+[Claude hook field reference](https://code.claude.com/docs/en/hooks#common-fields).
 See `SKILL.md` for invocation, required setup and evidence boundaries.
 
 A compact native global rule also routes encountered repository-owned skill,
@@ -18,6 +21,8 @@ Workers inherit that setup context. Immediate monitor completion has no session
 handle; inspect its output and exit status before retaining or polling a handle.
 Cleanup verifies the recorded task/workspace owner as well as process identity.
 See [host memory guidance](references/host-memory.md).
+Linux systemd login scopes use native container detection before reading host
+`MemAvailable`; a non-root cgroup alone does not establish container execution.
 
 Shared runtime loading and source-only permission inspection follow the
 [trusted runtime contract](references/trusted-runtime.md). Install and use each

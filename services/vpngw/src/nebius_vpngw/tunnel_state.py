@@ -5,11 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 try:
+    from _vpngw_enforced_routing import (  # type: ignore[import-not-found]
+        route_table,
+        static_destinations,
+    )
     from _vpngw_ha_tunnel_policy import (  # type: ignore[import-not-found]
         connection_policies,
         selections,
     )
 except ModuleNotFoundError:
+    from .enforced_routing import route_table, static_destinations
     from .ha_tunnel_policy import connection_policies, selections
 
 
@@ -119,6 +124,8 @@ def collect_tunnel_state(
             if not tunnel_remote_prefixes:
                 # Fall back to connection-level remote_prefixes
                 tunnel_remote_prefixes = conn.get("remote_prefixes", []) or []
+            if tun_mode == "static":
+                tunnel_remote_prefixes = static_destinations(conn, tun)
             if conn.get("name") in selected_destinations:
                 tunnel_remote_prefixes = selected_destinations[conn["name"]]
 
@@ -157,6 +164,11 @@ def collect_tunnel_state(
                     else tunnel_remote_prefixes
                 ),
                 "if_id": base_if_id + idx,
+                **(
+                    {"route_tables": {p: route_table(conn, p) for p in tunnel_remote_prefixes}}
+                    if conn.get("enforced_routing")
+                    else {}
+                ),
             }
 
             interface_endpoints.append(interface_info)

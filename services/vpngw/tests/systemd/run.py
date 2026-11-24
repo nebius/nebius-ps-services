@@ -231,6 +231,14 @@ def main() -> None:
             if result.returncode == 0:
                 break
             if time.monotonic() >= deadline:
+                # Preserve this isolated fixture's boot failure before cleanup.
+                # Without it, a manager failure leaves only evidence-unavailable.
+                logs = subprocess.run(
+                    ["docker", "logs", "--tail", "100", name],
+                    capture_output=True,
+                    timeout=10,
+                )
+                evidence.with_suffix(".boot.log").write_bytes(logs.stdout + logs.stderr)
                 raise RuntimeError("isolated systemd did not become ready")
             time.sleep(0.2)
         command = [

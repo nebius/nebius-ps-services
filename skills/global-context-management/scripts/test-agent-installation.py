@@ -132,6 +132,22 @@ class RuntimeTests(unittest.TestCase):
                     self.assertEqual(agent_home(), Path(f"/tmp/{agent}-home"))
                     self.assertEqual(native_session_id(), f"{agent}-session")
 
+    def test_claude_projection_omits_codex_context_limit_only(self):
+        home = Path("/tmp/home")
+        hooks = {"SessionStart": [{"hooks": [{
+            "type": "command", "command": "python3 /tmp/home/hooks/project_specs_lifecycle.py",
+            "timeout": 30, "additionalContextLimit": 1600,
+        }]}]}
+        codex = project_hook_entries(hooks, home, "codex")
+        self.assertEqual(codex["SessionStart"][0]["hooks"][0]["additionalContextLimit"], 1600)
+        claude = project_hook_entries(hooks, home, "claude")
+        handler = claude["SessionStart"][0]["hooks"][0]
+        self.assertNotIn("additionalContextLimit", handler)
+        self.assertEqual(handler["timeout"], 30)
+        self.assertEqual(project_hook_entries(claude, home, "claude"), claude)
+        handler["additionalContextLimit"] = 1600
+        self.assertNotIn("additionalContextLimit", project_hook_entries(claude, home, "claude")["SessionStart"][0]["hooks"][0])
+
     def test_native_prompt_identity_and_invocation(self):
         payload = {"session_id": "session", "prompt_id": PROMPT_ID,
                    "hook_event_name": "UserPromptSubmit", "prompt": "/skills:commit"}

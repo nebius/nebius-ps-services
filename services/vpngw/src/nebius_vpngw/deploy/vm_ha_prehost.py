@@ -69,6 +69,10 @@ def validate_retained_route_scope(
         )
         != state.route_runtime_id
     ):
+        from .ha_enforced_resume import admit
+
+        if admit(state, observation):
+            return
         raise ValueError(
             "VM-HA managed route scope cannot change during apply; "
             "restore the local prefixes selecting the retained route targets"
@@ -421,6 +425,8 @@ def _cloud_observation(leaves: tuple[tuple[str, str], ...]) -> dict[str, Any]:
         }
     )
     observation["project_id"] = json.loads(dict(leaves).get("/project_id", "null"))
+    if "/enforced_table_plan" in dict(leaves):
+        observation["enforced_table_plan"] = json.loads(dict(leaves)["/enforced_table_plan"])
     if normalize_vm_ha_observation(observation) != leaves:
         raise ValueError("VM-HA pre-host recovery cloud observation is incomplete")
     return observation

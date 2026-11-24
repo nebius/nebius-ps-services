@@ -28,6 +28,7 @@ from ..deploy.vm_ha_cloud import vm_ha_observation_budget, vm_ha_request_kwargs
 from ..ha_tunnel_policy import connection_policies
 from ..vm_ha_credentials import credential_ids_from_payload, read_vm_ha_credential_source
 from . import ordinary
+from .enforced_routing import table_matches
 from .local_commands import CURRENT, CommandBudget, run
 from .ordinary_route_authority import ROOT, RouteAuthority
 from .ordinary_selection import require_quiescent
@@ -188,11 +189,25 @@ class RuntimeDiscovery(Discovery):
 def encrypted_routes(cfg: dict, selected, *, output=None) -> None:
     """Shared read-only exact CHILD/XFRM, BGP session and kernel route proof."""
     output = output or _output
-    routes = json.loads(output(["ip", "-j", "-4", "route", "show", "table", "main"]))
-    observer = NativeTunnelObserver(output)
     policies = connection_policies(cfg)
+    routes = json.loads(
+        output(
+            [
+                "ip",
+                "-j",
+                "-4",
+                "route",
+                "show",
+                "table",
+                "all" if any(p.enforced_destinations for p in policies) else "main",
+            ]
+        )
+    )
+    observer = NativeTunnelObserver(output)
     for prefix in selected:
-        entries = [r for r in routes if route_destination(r) == prefix]
+        owners = [p for p in policies if prefix in p.enforced_destinations]
+        table = owners[0].table_for(prefix) if owners else 254
+        entries = [r for r in routes if route_destination(r) == prefix and table_matches(r, table)]
         if len(entries) != 1 or entries[0].get("nexthops"):
             raise RuntimeError("Destination kernel route is ambiguous")
         entry = entries[0]

@@ -450,6 +450,66 @@
         "Does not present an approved scaffold execution handoff before architecture and stack approval."
       ],
       "fixture_policy": "unchanged"
+    },
+    {
+      "id": 29,
+      "required_skills": [
+        "maintain-project-specs",
+        "global-context-management",
+        "research",
+        "worktree",
+        "system-design-rules"
+      ],
+      "prompt": "Use $design --extract-once evals/fixtures/extraction/source. The current workspace is the plain-folder target. Use only the supplied local intent; no vendor stack is selected and external calls are unavailable. Produce the complete source-linked documentation baseline, preserve the supplied phases, and stop.",
+      "expected_output": "Source-backed design output with explicit authority and evidence boundaries.",
+      "files": [
+        "evals/fixtures/extraction/source/draft.md"
+      ],
+      "fixture_policy": "docs-only",
+      "assertions": [
+        "Loads the extraction reference and research skill when available, with explicit item evidence coverage.",
+        "Uses current workspace as target and publishes canonical requirements/design through maintain-project-specs without creating Git.",
+        "Preserves CAT identifiers and Core/Discovery dependencies while planning vertical slices.",
+        "Reports layers, source locators, gaps or limitations and observed elapsed time, without asking design questions.",
+        "Creates only documentation and no application code or SDLC run."
+      ]
+    },
+    {
+      "id": 30,
+      "required_skills": [
+        "maintain-project-specs",
+        "global-context-management",
+        "research",
+        "worktree",
+        "system-design-rules"
+      ],
+      "prompt": "Use $design --extract-once evals/fixtures/extraction/source. This is an unattended extraction; resolve what the supplied local evidence supports and consolidate unresolved product decisions at the end. No external calls are available.",
+      "expected_output": "Source-backed design output with explicit authority and evidence boundaries.",
+      "files": [
+        "evals/fixtures/extraction/source/draft.md",
+        "evals/fixtures/extraction/source/conflict.md"
+      ],
+      "fixture_policy": "docs-only",
+      "assertions": [
+        "Reports the conflicting VIS-001 definitions with both source sections and affected canonical records.",
+        "Researches the conflict but does not invent stakeholder precedence or ask clarification questions.",
+        "Leaves dependent design records draft or blocked and does not publish a valid complete source bundle with erased conflicts.",
+        "Reports independent supported scope, source coverage, total time and Unresolved Design Decisions and Evidence Gaps."
+      ]
+    },
+    {
+      "id": 31,
+      "prompt": "Use $design to plan a simple deterministic project-name validation rule from the supplied draft. Return the plan only; use local evidence for product intent and report research coverage and elapsed time. Do not make external calls or write files.",
+      "expected_output": "Source-backed design output with explicit authority and evidence boundaries.",
+      "files": [
+        "evals/fixtures/extraction/source/draft.md"
+      ],
+      "fixture_policy": "unchanged",
+      "assertions": [
+        "Applies research at proportional depth even though the design is small and the intent is local.",
+        "Separates accepted intent from feasibility assumptions and planned tests.",
+        "Returns an actionable plan with measured elapsed time and no writes."
+      ]
     }
   ]
 }

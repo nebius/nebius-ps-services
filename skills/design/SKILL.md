@@ -1,6 +1,6 @@
 ---
 name: design
-description: "Design non-SDLC features, architectures, ADRs, proven contract-changing remediations, or standalone portable HTML artifacts. Ground plans in code and docs; implement only on explicit request. Use research for due diligence, ai-agent-design for AI behavior, app-stack/ai-stack for stack choices, and nebius for Nebius constraints. Route unknown failures to troubleshoot and checklist reviews to system-design-rules."
+description: "Design non-SDLC features, architectures, ADRs, or portable HTML; extract and research local draft packages into project specs with --extract-once. Ground plans in code and docs; implement only on explicit request. Use research for due diligence, ai-agent-design for AI behavior, app-stack/ai-stack for stack choices, and nebius for Nebius constraints. Route unknown failures to troubleshoot and checklist reviews to system-design-rules."
 ---
 
 # Design
@@ -24,8 +24,11 @@ authorization.
 Public usage: `$design <design request>` plans by default;
 `$design <design request> and implement it` also requests the optional
 implementation continuation. The request is natural-language task scope, not
-a mode flag. `$design --help` and `$design -h` show help only. No additional
-public flags.
+a mode flag. `$design --extract-once <source-folder> [--project-root <target-folder>]`
+researches and reconciles one frozen draft package into project documentation,
+then reports and stops. The target defaults to invocation cwd. This explicitly
+requests documentation writes only; never combine it with implementation.
+`$design --help` and `$design -h` show help only. These are the only public flags.
 
 ## Agent Compatibility
 
@@ -50,7 +53,9 @@ including unused prototypes with existing code, and for standalone artifacts.
 ## Execution And Document Ownership
 
 Default to non-mutating design/plan work, whether invoked explicitly or
-implicitly. Read files and run safe non-mutating checks; return the design and
+implicitly. The explicit `--extract-once` action permits documentation-only
+publication through the owners below when host mode allows writes. Read files
+and run safe non-mutating checks; return the design and
 plan in the response. Do not implement code, tests, configuration, migrations,
 infrastructure, or workflows merely because the plan describes those changes.
 
@@ -65,8 +70,11 @@ host Plan Mode permits planning only. This skill cannot switch or override it.
 document updates. Supply it with decisions, conflicts and delivery evidence;
 do not directly write project design documents, even when persistence is
 requested. During read-only planning, return that handoff without executing
-publication. When implementation is authorized and permitted, use the owner
-for canonical reconciliation before implementation and evidence afterward.
+publication. When extraction documentation or implementation is authorized and
+permitted,
+use the owner for canonical reconciliation; return delivery evidence afterward
+only for actual implementation. Extraction may prepare supplementary contracts
+and reports, never bypass canonical pair publication.
 If the owner is unavailable, report the pending handoff without inventing a
 second writer. Preserve its advisory status and any enclosing workflow's gates.
 
@@ -135,6 +143,13 @@ second writer. Preserve its advisory status and any enclosing workflow's gates.
   handoff, or `/plan` handoff; explicit implementation intent when present.
 
 ## Required Reads
+
+For `--extract-once`, first read `references/document-extraction.md` and follow
+its unattended intake, source/research coverage, publication and reporting contract.
+Apply all seven phases with extraction outputs; stop after documentation/reporting.
+Do not ask design questions during extraction: research resolutions and aggregate
+remaining decisions with original-source locators for final review. Operational
+access/permission and host safety limits remain binding.
 
 Before proposing any solution, resolve the exact selected project and read:
 
@@ -219,18 +234,20 @@ before the unused-greenfield exception; missing docs/code do not prove non-use.
 Ask if usage is unknown and the decision depends on it.
 Exit: evidence-grounded boundaries, conflicts and explicit gaps.
 
-### Phase 3: Use `research` For Missing Knowledge
+### Phase 3: Research Every Requirement And Design Item
 
-List unfamiliar or version-sensitive facts that affect this design. Use `research`
-when installed and relevant; it owns due diligence, while design owns synthesis.
-Direct lookup is for tiny clarifications or unavailable/inapplicable research.
-Verify current official sources, using available vendor documentation tools first,
-then Tavily official-source Search/Extract, then disclosed official-web fallback.
-Do not install integrations for lookup. Record only decision-relevant constraints,
-supported patterns, limits, security/migration implications and unknowns.
-Reuse still-valid findings. Stop expanding research when requirements and tradeoffs
-are covered and no decision-changing gap remains; otherwise expose the gap.
-Exit: verified evidence or explicit decision-limiting uncertainty.
+Always load and apply `research`, including for simple or source-free design.
+Assess every requirement, design decision and technical claim at proportional
+depth. Group related questions and reuse applicable evidence; retain explicit
+item coverage. Local intent is validated against supplied goals and acceptance;
+version-sensitive vendor behavior needs current primary evidence. Research owns
+due diligence and design owns synthesis. Follow vendor tools, Tavily, then
+disclosed official-web fallback. Do not install integrations for lookup.
+If research is unavailable, disclose it, apply its source hierarchy where
+possible and keep unsupported material decisions unresolved. Never claim actual
+skill use from a name alone. Stop expanding only when decisive gaps are resolved
+or further available retrieval cannot resolve them. Exit: evidence-backed item
+assessments, uncertainties, and follow-up validation needs.
 
 ### Phase 4: Use Specialist Skills
 
@@ -295,10 +312,17 @@ one-way; missing decisions return to their owner, never recursive invocation or
 automatic Agentic SDLC startup.
 Exit: a complete actionable plan, or named blockers preventing readiness.
 
+## Progress
+
+For every design, measure elapsed wall time from intake through the final report.
+Use `references/design-workflow.md` for stage/layer/counter updates and timing;
+small designs can report start and completion. Never fabricate percentages or
+runtime validation. Extraction uses the supporting progress helper in its reference.
+
 ## Optional Implementation Continuation
 
 After Phase 7, use the following continuation only when implementation was
-explicitly requested and the host permits writes:
+explicitly requested and the host permits writes, and `--extract-once` is absent:
 
 1. Recheck the affected code and conflict findings if the workspace changed
    since planning; preserve unrelated edits.
@@ -353,7 +377,9 @@ URLs, customer data, raw logs, or one-off local state.
 Return the shape that best fits the task, but include these elements unless a
 short answer is explicitly requested:
 
-- Requirements summary and assumptions.
+- Requirements summary and assumptions; measured total elapsed time.
+- For extraction, the source-linked layer summary and consolidated unresolved
+  decisions/evidence-gap report from its reference, then stop.
 - Selected project, documents and implemented paths inspected, evidence gaps,
   and confirmed usage status when the greenfield exception is relevant.
 - Document/code discrepancies with source references and code as the baseline;
@@ -385,6 +411,7 @@ short answer is explicitly requested:
 
 ## References
 
+- Read `references/document-extraction.md` for the explicit unattended extraction action.
 - Read `references/design-workflow.md` for the detailed phase checklist,
   brownfield and greenfield paths, `research`, `app-stack`,
   `ai-agent-design`, `ai-stack`, and `nebius` handoffs and research fallbacks,

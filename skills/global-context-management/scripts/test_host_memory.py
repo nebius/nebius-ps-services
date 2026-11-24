@@ -57,6 +57,20 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(result["status"], "unknown")
         self.assertNotIn("secret-token-value", str(result))
 
+    def test_linux_systemd_session_is_not_itself_a_container(self):
+        for code, output, expected in [(1, b"none\n", "normal"),
+                                       (0, b"docker\n", "unknown"),
+                                       (1, b"", "unknown"), (2, b"none\n", "unknown")]:
+            with self.subTest(code=code, output=output), \
+                    mock.patch.object(memory.sys, "platform", "linux"), \
+                    mock.patch.object(Path, "exists", return_value=False), \
+                    mock.patch.object(memory, "_read", side_effect=[
+                        "0::/user.slice/user-1000.slice/session-3.scope\n",
+                        "MemTotal: 8000000 kB\nMemAvailable: 6000000 kB\n"]), \
+                    mock.patch.object(memory.subprocess, "run", return_value=
+                                      subprocess.CompletedProcess([], code, output, b"")):
+                self.assertEqual(memory.sample()["status"], expected)
+
     def test_unsupported_platform_is_unknown(self):
         with mock.patch.object(memory.sys, "platform", "unsupported"):
             self.assertEqual(memory.sample()["status"], "unknown")

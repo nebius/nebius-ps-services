@@ -914,9 +914,21 @@ class VMManager:
         observation = self.observe_vm_ha_migration_state(spec, local_prefixes)
         transaction = journal.state.transaction
         normalized = normalize_vm_ha_observation(observation)
+        partial_tables = False
         if transaction.pending_effect is None:
             if transaction.observation and normalized != transaction.observation:
-                raise RuntimeError("VM-HA trusted cloud state changed before mutation")
+                from .ha_enforced_preparation import reconcile as reconcile_preparation
+                from .ha_enforced_resume import admit
+
+                changed = vm_ha_observation_changed_paths(transaction.observation, normalized)
+                if changed == frozenset({"/shared_allocation/resource_revision"}):
+                    partial_tables = reconcile_preparation(self, observation)
+                    transaction = journal.state.transaction
+                    assert transaction is not None
+                if not partial_tables:
+                    partial_tables = admit(journal.state, observation)
+                if not partial_tables:
+                    raise RuntimeError("VM-HA trusted cloud state changed before mutation")
         else:
             if transaction.observation_guard is None:
                 raise RuntimeError("VM-HA non-cloud effect cannot resume through provisioning")
@@ -944,6 +956,8 @@ class VMManager:
             observed_bindings.update(self._vm_ha_credentials.resource_bindings())
         expected_bindings = vm_ha_effective_resource_bindings(dict(transaction.resource_bindings))
         for key, value in expected_bindings.items():
+            if partial_tables and key == "route-targets-digest":
+                continue
             if not vm_ha_resource_binding_matches_observation(
                 key,
                 value,
@@ -1089,6 +1103,7 @@ class VMManager:
             transaction.pending_effect == route_effect
             or route_effect in transaction.completed_effects
         )
+        partial_tables = False
         if route_changes_authorized:
             current_non_route = self._without_route_observation(normalized)
             trusted_non_route = self._without_route_observation(transaction.observation)
@@ -1108,7 +1123,19 @@ class VMManager:
             current_without_revisions = self._without_route_revisions(normalized)
             trusted_without_revisions = self._without_route_revisions(transaction.observation)
             if current_without_revisions != trusted_without_revisions:
-                raise RuntimeError("VM-HA cloud state changed before route activation")
+                from .ha_enforced_preparation import reconcile as reconcile_preparation
+                from .ha_enforced_resume import admit
+
+                changed = vm_ha_observation_changed_paths(transaction.observation, normalized)
+                if changed == frozenset({"/shared_allocation/resource_revision"}):
+                    partial_tables = reconcile_preparation(self, before)
+                    state = journal.state
+                    transaction = t.cast(VMHAMigrationTransaction, state.transaction)
+                    assert transaction is not None
+                if not partial_tables:
+                    partial_tables = admit(state, before)
+                if not partial_tables:
+                    raise RuntimeError("VM-HA cloud state changed before route activation")
 
         observed_bindings = self._observation_resource_bindings(before)
         if self._vm_ha_credentials is not None:
@@ -1116,7 +1143,7 @@ class VMManager:
         for key, value in vm_ha_effective_resource_bindings(
             dict(transaction.resource_bindings)
         ).items():
-            if key == "route-runtime-id":
+            if key == "route-runtime-id" or partial_tables and key == "route-targets-digest":
                 continue
             if observed_bindings.get(key) != value:
                 raise RuntimeError(f"VM-HA activation resource identity drifted: {key}")
@@ -1474,6 +1501,9 @@ class VMManager:
         ordinary_receipts = persisted(
             dict(transaction.resource_bindings), self.project_id, spec.name, expected_instance_name
         )
+        from .ha_enforced_rebind import created_route_bindings
+
+        created_routes = created_route_bindings(transaction)
         route_indexes = sorted(
             {
                 int(matched.group(1))
@@ -1501,6 +1531,11 @@ class VMManager:
             if any(not isinstance(value, str) for value in values.values()):
                 raise RuntimeError("VM-HA approved route observation is malformed")
             string_values = t.cast(dict[str, str], values)
+            created = created_routes.get(string_values["route_id"])
+            if created is not None:
+                if any(string_values[field] != value for field, value in created.items()):
+                    raise RuntimeError("VM-HA cutover-created route changed its approved identity")
+                continue
             if string_values["allocation_id"] not in {
                 primary_allocation_id,
                 shared_allocation_id,
@@ -1509,6 +1544,17 @@ class VMManager:
             prefix = string_values["prefix"]
             route_target = targets_by_table.get(string_values["route_table_id"])
             if route_target is None:
+                from .ha_enforced_rebind import PLAN_KEY
+                from .ha_enforced_tables import validate_ordinary_authority
+
+                raw = dict(transaction.resource_bindings).get(PLAN_KEY)
+                approved = json.loads(raw) if raw else None
+                if approved and string_values["route_id"] in approved["ordinary_sources"]:
+                    validate_ordinary_authority(approved, dict(transaction.resource_bindings))
+                    # The private-table receipt creates a canonical HA-owned
+                    # successor. Never fabricate a migration receipt for its
+                    # different resource identity.
+                    continue
                 raise RuntimeError("VM-HA approved migration route target is undeclared")
             legacy_name = f"vpngw-{prefix.replace('/', '-')}"[:63]
             if string_values["allocation_id"] == primary_allocation_id:
@@ -1567,7 +1613,7 @@ class VMManager:
         """Return exact canonical static/BGP names for one managed route identity."""
 
         names: set[str] = set()
-        for route_kind in ("bgp", "static"):
+        for route_kind in ("bgp", "static", "enforced"):
             identity = (
                 f"{cluster_id}:{route_target.route_table_id}:{prefix}:{route_kind}:{allocation_id}"
             )
@@ -1673,6 +1719,7 @@ class VMManager:
             shared_allocation_id=allocation_id,
             nodes=t.cast(tuple[VMHARuntimeNodeBinding, VMHARuntimeNodeBinding], tuple(nodes)),
             route_targets=route_targets,
+            enforced_sources=self._vm_ha_enforced_source_bindings(client, spec),
             migration_routes=self._vm_ha_migration_route_bindings(
                 spec, route_targets, allocation_id
             ),
@@ -1798,7 +1845,16 @@ class VMManager:
                 }
             )
 
-        route_targets = self._resolve_vm_ha_route_targets(client, spec, local_prefixes)
+        from .ha_enforced_inventory import observe as observe_enforced_tables
+
+        enforced_tables = observe_enforced_tables(
+            self, client, spec, local_prefixes, allocation=str(shared.get("allocation_id") or "")
+        )
+        route_targets = (
+            enforced_tables["targets"]
+            if enforced_tables and enforced_tables["plan"] is not None
+            else self._resolve_vm_ha_route_targets(client, spec, local_prefixes)
+        )
         from .route_manager import NebiusSDKRouteBackend, RouteManager
 
         backend = NebiusSDKRouteBackend(client)
@@ -1807,7 +1863,12 @@ class VMManager:
 
         route_rows: list[dict[str, object]] = []
         for target in route_targets:
-            backend.verify_target(target)
+            if (
+                not enforced_tables
+                or enforced_tables["plan"] is None
+                or target.workload_subnet_id not in enforced_tables["plan"]["sources"]
+            ):
+                backend.verify_target(target)
             for route in backend._raw_routes(target.route_table_id):
                 prefix = RouteManager._route_destination_network(route)
                 labels = backend._route_labels(route)
@@ -1842,6 +1903,15 @@ class VMManager:
             "routes": route_rows,
             "route_targets": [target.model_dump(mode="json") for target in route_targets],
             "shared_allocation": shared,
+            **(
+                {
+                    "enforced_table_plan": json.dumps(
+                        enforced_tables["audit"], sort_keys=True, separators=(",", ":")
+                    )
+                }
+                if enforced_tables and enforced_tables["audit"] is not None
+                else {}
+            ),
         }
 
     def build_vm_ha_lifecycle_members(
@@ -1924,6 +1994,64 @@ class VMManager:
             raise RuntimeError("VM-HA final provisioning proof does not match the transaction")
         return members
 
+    def _vm_ha_enforced_source_bindings(
+        self, client: t.Any, spec: GatewayGroupSpec
+    ) -> dict[str, tuple[str, ...]]:
+        from nebius.api.nebius.vpc.v1 import ListSubnetsByNetworkRequest, Subnet
+
+        from ..enforced_routing import Policy, prefixes, resolve_sources
+        from .route_manager import RouteManager
+
+        if spec.vm_ha is None:
+            return {}
+        manifests = spec.vm_ha.generation.logical_manifests
+        policies = tuple(
+            Policy(
+                record["connection"],
+                prefixes(record["enforced_routing"]["source_subnets"]),
+                prefixes(record["enforced_routing"]["destinations"]),
+                0,
+            )
+            for record in [
+                *json.loads(manifests.static_routes_json),
+                *json.loads(manifests.bgp_policy_json),
+            ]
+            if record.get("enforced_routing")
+        )
+        if not policies:
+            return {}
+        _, network_id, _, subnet_client = self._resolve_gateway_network(client, spec)
+        raw_subnets = collect_nebius_pages(
+            lambda token: subnet_client.list_by_network(
+                ListSubnetsByNetworkRequest(
+                    network_id=network_id, page_size=1000, page_token=token
+                ),
+                **vm_ha_request_kwargs(),
+            ),
+            context="Enforced route sources",
+            item_identity=nebius_resource_id,
+        )
+        subnets = t.cast(tuple[Subnet, ...], raw_subnets)
+        gateway_name = str(self._gateway_subnet_settings(spec)["name"])
+        gateway_ids = [str(s.metadata.id) for s in subnets if s.metadata.name == gateway_name]
+        if len(gateway_ids) != 1 or any(
+            s.metadata.parent_id != self.project_id or s.spec.network_id != network_id
+            for s in subnets
+        ):
+            raise RuntimeError(
+                "Enforced routing subnet inventory lacks exact project and gateway identity"
+            )
+        manager = RouteManager(project_id=self.project_id)
+        return resolve_sources(
+            policies,
+            {
+                str(s.metadata.id): tuple(str(p) for p in manager._effective_subnet_cidrs(s))
+                for s in subnets
+                if not s.spec.ipv4_private_pools.use_network_pools
+            },
+            gateway_subnet_id=gateway_ids[0],
+        )
+
     def _resolve_vm_ha_route_targets(
         self,
         client: t.Any,
@@ -1966,6 +2094,39 @@ class VMManager:
         if observe() != first:
             raise RuntimeError("VM-HA route target membership changed during binding")
         return first
+
+    def _prepare_initial_enforced_tables(self, client: t.Any) -> tuple[VMHARouteTarget, ...] | None:
+        """Prepare unattached receipt-bound targets for the first staged generation.
+
+        Runtime writers cannot use them until the normal activation barrier has
+        published and verified every subnet attachment.
+        """
+        journal = self._vm_ha_journal
+        if journal is None or journal.state.transaction is None or journal.state.route_runtime_id:
+            return None
+        from .ha_enforced_rebind import PLAN_KEY
+        from .ha_enforced_tables import TableJournal, Transition
+
+        raw = dict(journal.state.transaction.resource_bindings).get(PLAN_KEY)
+        if raw is None:
+            return None
+        plan = json.loads(raw)
+        spec = self._vm_ha_effect_spec
+        if spec is None:
+            raise RuntimeError("HA enforced table preparation lacks its exact deployment spec")
+        transition = Transition(
+            client,
+            TableJournal(self.project_id or "", plan["gateway"]),
+            plan,
+            allocation=self._vm_ha_shared_allocation_id or "",
+            ordinary_bindings=dict(journal.state.transaction.resource_bindings),
+        )
+        return transition.prepare(
+            admit=lambda: self._verify_vm_ha_transaction_preconditions(
+                spec,
+                self._vm_ha_effect_prefixes,
+            )
+        )
 
     def _attach_vm_ha_shared_allocation_initially(
         self,
@@ -6394,10 +6555,12 @@ class VMManager:
                         spec,
                         provisioning.subnet_id,
                     )
+                    initial_enforced_targets = self._prepare_initial_enforced_tables(client)
                     route_effect = "resolve-authoritative-route-targets"
                     self._begin_vm_ha_effect(route_effect)
-                    self._vm_ha_route_targets = self._resolve_vm_ha_route_targets(
-                        client, spec, local_prefixes
+                    self._vm_ha_route_targets = (
+                        initial_enforced_targets
+                        or self._resolve_vm_ha_route_targets(client, spec, local_prefixes)
                     )
                     self._complete_vm_ha_effect(route_effect)
                 for i in range(spec.instance_count):

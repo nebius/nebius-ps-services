@@ -110,6 +110,41 @@ def external_route(destination="192.168.1.0/24", allocation="allocation"):
     )
 
 
+@pytest.mark.parametrize("learned", [(), ("0.0.0.0/0", "172.20.0.0/16")])
+def test_enforced_routes_persist_selected_and_shared_ordinary_tracks_bgp(learned):
+    policy = Policy(
+        (Connection("peer", "bgp", 0, ("169.254.1.2",), ("0.0.0.0/0", "172.20.0.0/16"), 10),),
+        ("10.0.0.0/16",),
+        enforced=(
+            {
+                "connection": "peer",
+                "source_subnets": ["10.0.1.0/24", "10.0.2.0/24"],
+                "destinations": ["0.0.0.0/0", "172.20.0.0/16"],
+            },
+        ),
+    )
+    result = inspect(
+        project="project",
+        gateway="gateway",
+        policy=policy,
+        learned={"peer": learned},
+        allocations={0: "allocation"},
+        active_tables=("table-a", "table-b", "table-c"),
+        routes={"table-a": (), "table-b": (), "table-c": ()},
+        ownership={},
+        infrastructure={
+            "targets": [{"subnet_id": s, "table_id": "table-" + s} for s in ("a", "b", "c")],
+            "enforced_sources": {"peer": ["a", "b"]},
+        },
+    )
+    creates = [r["request"] for r in result["requests"].values()]
+    assert {(r["metadata"]["parent_id"], r["spec"]["destination"]["cidr"]) for r in creates} == {
+        (table, prefix)
+        for table in ("table-a", "table-b")
+        for prefix in ("0.0.0.0/0", "172.20.0.0/16")
+    } | ({("table-c", "172.20.0.0/16")} if learned else set())
+
+
 def test_existing_matching_legacy_route_satisfies_coverage_without_adoption(world):
     state, journal, _policy, plan, observe = world
     state.routes["external"] = external_route()
@@ -369,21 +404,30 @@ def test_dynamic_summary_withdrawal_restores_static_coverage_before_retirement(w
 
 
 @pytest.mark.parametrize("interruption", ["after-verified", "before-verified", "uncertain"])
-def test_settled_route_prefix_retires_without_submitting_obsolete_remainder(world, monkeypatch, interruption):
+def test_settled_route_prefix_retires_without_submitting_obsolete_remainder(
+    world, monkeypatch, interruption
+):
     from nebius_vpngw.apply_approval import digest
     from nebius_vpngw.deploy.apply_plan import CommandPlan, Effect
     from nebius_vpngw.deploy.ordinary_route_plan import intent
 
     state, journal, _policy, plan, observe = world
     approved = plan(("192.168.1.0/24", "192.168.2.0/24"))
-    route_effect = Effect("routes", "ordinary-routes", "apply", ("table",), digest(intent(approved)), "a" * 64, True)
+    route_effect = Effect(
+        "routes", "ordinary-routes", "apply", ("table",), digest(intent(approved)), "a" * 64, True
+    )
     parent = CommandPlan("project", "gateway", "b" * 64, "c" * 64, (route_effect,))
     save = journal.save
 
     def interrupt():
         save()
         tx = journal.state["transaction"]
-        if interruption == "after-verified" and tx["verified"] or interruption == "before-verified" and journal.state["bindings"]:
+        if (
+            interruption == "after-verified"
+            and tx["verified"]
+            or interruption == "before-verified"
+            and journal.state["bindings"]
+        ):
             raise OSError("injected route prefix interruption")
 
     monkeypatch.setattr(journal, "save", interrupt)
@@ -401,7 +445,9 @@ def test_settled_route_prefix_retires_without_submitting_obsolete_remainder(worl
             assert journal.state["bindings"] == before["bindings"]
         else:
             with pytest.raises(RuntimeError, match="durable-intent-changed"):
-                journal.retire_settled(before, {"approval": parent.approval, "plan": parent.mapping()})
+                journal.retire_settled(
+                    before, {"approval": parent.approval, "plan": parent.mapping()}
+                )
             assert journal.state == before
     assert len(state.effects) == 1
     # The unsubmitted second create remains absent from both cloud and history.

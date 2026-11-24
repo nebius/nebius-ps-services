@@ -270,7 +270,7 @@ def project_identity(project_root: Path) -> tuple[Path, Path, str, str]:
     return project, git_root, scope, head
 
 
-def load_project_config(project_root: Path) -> dict[str, Any]:
+def load_project_config(project_root: Path, *, require_git: bool = True) -> dict[str, Any]:
     path = project_root / CONFIG_RELATIVE_PATH
     try:
         path.lstat()
@@ -293,6 +293,8 @@ def load_project_config(project_root: Path) -> dict[str, Any]:
         raise ProjectSpecError(
             "PROJECT_POLICY_INVALID", "project spec policy has an invalid contract"
         )
+    if not require_git:
+        return value
     git_root = Path(_run_git(project_root, "rev-parse", "--show-toplevel")).resolve()
     try:
         path.relative_to(git_root)
@@ -931,6 +933,10 @@ def _committed_exact(git_root: Path, path: Path, expected: bytes) -> bool:
 
 
 def inspect_project(project_root: Path, *, require_tracked: bool = True) -> dict[str, Any]:
+    from .targets import inspect_filesystem, resolve_target
+    target = resolve_target(project_root)
+    if target.kind == "filesystem":
+        return inspect_filesystem(target)
     project, git_root, _scope, _head = project_identity(project_root)
     # Import lazily because transaction validation itself uses this module's
     # byte-level parser before it acquires the exclusive publication lock.

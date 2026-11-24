@@ -139,6 +139,15 @@ def validate_envelope(report: dict) -> None:
             raise ReportError("INVALID_REPORT", "Invalid user identity.")
     if user_selector(report.get("user_filter")) != report.get("user_filter"):
         raise ReportError("INVALID_REPORT", "User selector must be canonical.")
+    if "owner_inventory" in report:
+        inventory = report["owner_inventory"]
+        if (
+            not isinstance(inventory, dict)
+            or inventory.get("coverage") not in {"complete", "partial"}
+            or not isinstance(inventory.get("limits"), list)
+            or any(not isinstance(limit, str) for limit in inventory["limits"])
+        ):
+            raise ReportError("INVALID_REPORT", "Malformed owner inventory coverage.")
     names = set()
     repository_ids = set()
     for entry in entries:
@@ -371,6 +380,8 @@ def finalize(report: dict, assessments: list[dict] | None = None) -> dict:
     result["coverage"] = (
         "partial"
         if any(e["coverage"] != "complete" for e in result["repositories"])
+        or result.get("owner_inventory", {}).get("coverage", "complete") != "complete"
+        or result.get("owner_inventory", {}).get("limits")
         else "complete"
     )
     result["assessment_count"] = len(accepted)

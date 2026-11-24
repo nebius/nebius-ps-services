@@ -549,6 +549,7 @@ def create(
     ssh: dict | None = None,
     members: dict | None = None,
     artifact_key: str = "heartbeat-upgrade-artifact",
+    enforced_tables: dict | None = None,
 ) -> HACommand:
     intent: dict = {
         "approval": approval,
@@ -559,6 +560,11 @@ def create(
         "packages": deepcopy(packages),
         "activation_recovery": deepcopy(RECOVERY_POLICY),
     }
+    if enforced_tables is not None:
+        from .ha_enforced_tables import validate_plan
+
+        validate_plan(enforced_tables)
+        intent["enforced_tables"] = deepcopy(enforced_tables)
     if admission is not None:
         from .upgrade_admission import validate
 

@@ -121,8 +121,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent claude --hook commit_intent.py --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
-            "timeout": 30,
-            "additionalContextLimit": 1200
+            "timeout": 30
           }
         ]
       },
@@ -140,8 +139,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent claude --hook project_specs_lifecycle.py --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
-            "timeout": 30,
-            "additionalContextLimit": 1600
+            "timeout": 30
           }
         ]
       },
@@ -150,8 +148,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent claude --hook remediation_attempt_guard.py --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
-            "timeout": 30,
-            "additionalContextLimit": 800
+            "timeout": 30
           }
         ]
       }
@@ -173,8 +170,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/global-context-management/scripts/hook_runtime.py\" --agent claude --hook project_specs_lifecycle.py --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
-            "timeout": 30,
-            "additionalContextLimit": 1600
+            "timeout": 30
           }
         ]
       }

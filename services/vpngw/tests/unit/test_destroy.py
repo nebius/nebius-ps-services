@@ -123,6 +123,121 @@ def test_destroy_retires_old_pending_command_without_claiming_completion(pending
     assert command.pending()["execution_id"] != old_execution
 
 
+@pytest.mark.parametrize(
+    "changed",
+    [
+        None,
+        "missing",
+        "execution",
+        "approval",
+        "artifact",
+        "operation",
+        "node",
+        "compute",
+        "disk",
+        "members",
+    ],
+)
+def test_destroy_retires_created_command_only_with_exact_creation_receipt(
+    pending_destroy_command, changed
+):
+    from nebius_vpngw.apply_approval import SCHEMA, digest
+    from nebius_vpngw.deploy.apply_plan import CommandPlan, Effect
+    from nebius_vpngw.deploy.ha_created_packages import PREFIX
+    from nebius_vpngw.deploy.ha_members import intent as member_intent
+    from nebius_vpngw.deploy.ha_members import targets
+
+    command, backend, args, _, previous_plan, _ = pending_destroy_command
+    plan = replace(_plan(topology="vm-ha"), expected_compute_names=("gateway-0", "gateway-1"))
+    backend.build_plan = lambda _: plan
+    lifecycle = _lifecycle(VMHALifecycleStatus.ACTIVATING, plan)
+    members = member_intent(lifecycle.members, created={m.instance_name for m in lifecycle.members})
+    for member in members.values():
+        member["compute_id"] = member["disk_id"] = ""
+    intent = {
+        "attachments": None,
+        "approval": "d" * 64,
+        "runtime_scope": "e" * 64,
+        "packages": {"parent": "operation-before", "checkpoint": "f" * 64, "manifests": {}},
+        "members": members,
+    }
+    effect = Effect(
+        "runtime", "ha-lifecycle", "apply", targets(members), digest(intent), "c" * 64, True
+    )
+    command_plan = CommandPlan(
+        command.project, command.gateway, "a" * 64, previous_plan.artifact_sha256, (effect,)
+    )
+    with command:
+        command.state.update(transaction=None, bindings={})
+        command.save()
+        command.begin(command_plan, intents={"runtime": intent})
+        command.started("runtime")
+    receipt = {
+        "authority": {
+            "execution": command.pending()["execution_id"],
+            "operation": "operation-before",
+            "artifact": command_plan.artifact_sha256,
+            "lineage": {
+                m.instance_name: {
+                    "compute": m.compute_id,
+                    "disk": m.disk_id,
+                    "node": m.node_id,
+                    "creation": f"provision-{m.instance_name}-compute",
+                    "configuration": "a" * 64,
+                }
+                for m in lifecycle.members
+            },
+        },
+        "manifests": {
+            m.instance_name: {"wheel_sha256": command_plan.artifact_sha256}
+            for m in lifecycle.members
+        },
+    }
+    bindings = {
+        "runtime-command-execution": command.pending()["execution_id"],
+        "runtime-command-approval": json.dumps(
+            {"schema": SCHEMA, "approval": intent["approval"], "scope": intent["runtime_scope"]}
+        ),
+        "runtime-package-manifests": "{}",
+        "heartbeat-initial-artifact": command_plan.artifact_sha256,
+        **{
+            f"{kind}:{m.instance_name}": getattr(m, kind + "_id")
+            for m in lifecycle.members
+            for kind in ("compute", "disk")
+        },
+    }
+    if changed in {"execution", "artifact", "operation"}:
+        receipt["authority"][changed] = "foreign"
+    elif changed in {"node", "compute", "disk"}:
+        receipt["authority"]["lineage"]["gateway-0"][changed] = "foreign"
+    elif changed == "members":
+        receipt["manifests"].pop("gateway-1")
+    elif changed == "approval":
+        bindings["runtime-command-approval"] = json.dumps(
+            {"schema": SCHEMA, "approval": "1" * 64, "scope": intent["runtime_scope"]}
+        )
+    if changed != "missing":
+        bindings[PREFIX + "operation-before"] = json.dumps(receipt)
+    lifecycle = replace(
+        lifecycle,
+        transaction=replace(
+            lifecycle.transaction, resource_bindings=tuple(sorted(bindings.items()))
+        ),
+    )
+    store = VMHALifecycleStore(args["config_path"])
+    store.path.unlink()  # Replace the fixture's initial state before exercising the workflow.
+    store.write_verified(lifecycle, predecessor_sha256=None)
+    before = command.path.read_bytes()
+    if changed:
+        with pytest.raises(DestroyFailure, match="admission could not be retired"):
+            execute_destroy(**args)
+        assert command.path.read_bytes() == before
+    else:
+        execute_destroy(**args)
+        assert command.pending() is None
+        assert backend.old_observations == ["compute-0", "compute-1"] * 2
+
+
 @pytest.mark.parametrize("failure", ["present", "unknown", "second-read"])
 def test_destroy_keeps_old_admission_when_compute_absence_is_unproven(
     pending_destroy_command, failure
@@ -2545,6 +2660,7 @@ def _clean_reprovision(
     destroyed: VMHALifecycleState,
     *,
     initial_resource_bindings: dict[str, str],
+    current_observation: dict | None = None,
 ) -> VMHALifecycleState:
     clean_members = tuple(
         replace(
@@ -2574,7 +2690,7 @@ def _clean_reprovision(
         current_state_digest="3" * 64,
         predecessor_sha256=destroyed.record_sha256,
         initial_resource_bindings=initial_resource_bindings,
-        current_observation={},
+        current_observation=current_observation or {},
     )
 
 
@@ -2616,6 +2732,73 @@ def test_destroyed_vm_ha_lifecycle_can_start_clean_reprovision(tmp_path: Path) -
     assert observed is not None
     assert observed.status is VMHALifecycleStatus.PROVISIONING
     assert observed.cluster_id == "cluster-b"
+
+
+def _fresh_enforced_plan(project="project-a"):
+    from nebius.api.nebius.common.v1 import ResourceMetadata
+    from nebius.api.nebius.vpc.v1 import Subnet, SubnetSpec
+
+    from nebius_vpngw.deploy.ha_enforced_tables import freeze
+    from nebius_vpngw.schema import VMHARouteTarget
+
+    target = VMHARouteTarget(project_id=project, network_id="network",
+                            workload_subnet_id="workload", route_table_id="table")
+    subnet = Subnet(metadata=ResourceMetadata(id="workload", parent_id=project,
+                                             resource_version=1),
+                    spec=SubnetSpec(network_id="network", route_table_id="table"))
+    return freeze(project=project, gateway="gateway", cluster="cluster-b", allocation="",
+                  targets=(target,), subnets={"workload": subnet}, routes={"table": ()},
+                  consumers={"table": {"workload"}}, desired={"workload": ["0.0.0.0/0"]},
+                  previous={})
+
+
+@pytest.mark.parametrize("corruption", [None, "unobserved", "changed-observation", "gateway",
+                                       "cluster", "allocation", "targets", "target-digest",
+                                       "project", "binding-missing"])
+def test_destroyed_reprovision_binds_only_fresh_observed_enforcement(tmp_path, corruption):
+    from nebius_vpngw.apply_approval import digest
+
+    plan = _plan(topology="vm-ha")
+    previous = _lifecycle(VMHALifecycleStatus.ACTIVE, plan)
+    destruction = VMHALifecycleState.start_destruction(
+        previous, operation_id="operation-destroy", approval_digest=plan.digest,
+        desired_state_digest="e" * 64, current_state_digest="f" * 64,
+        destroy_plan_json=plan.to_json(), current_observation={},
+    )
+    destroyed = destruction.with_status(VMHALifecycleStatus.DESTROYED,
+                                        checkpoint="destruction-verified-absent")
+    enforced = _fresh_enforced_plan("foreign" if corruption == "project" else "project-a")
+    assert enforced is not None
+    if corruption in {"gateway", "cluster", "allocation"}:
+        enforced[corruption] = "foreign"
+    raw = json.dumps(enforced, sort_keys=True, separators=(",", ":"))
+    observation = {"enforced_table_plan": raw, "route_targets": enforced["targets"]}
+    bindings = {
+        **vm_ha_destroyed_retained_public_bindings(destroyed),
+        "route-targets-digest": digest(enforced["targets"]), "enforced-route-plan": raw,
+    }
+    if corruption == "unobserved":
+        observation.pop("enforced_table_plan")
+    elif corruption == "changed-observation":
+        observation["enforced_table_plan"] = "{}"
+    elif corruption == "targets":
+        observation["route_targets"] = []
+    elif corruption == "target-digest":
+        bindings["route-targets-digest"] = "f" * 64
+    elif corruption == "binding-missing":
+        bindings.pop("enforced-route-plan")
+    reprovision = _clean_reprovision(destroyed, initial_resource_bindings=bindings,
+                                    current_observation=observation)
+    store = VMHALifecycleStore(tmp_path / "gateway.config.yaml")
+    store.write_verified(previous, predecessor_sha256=None)
+    store.write_verified(destruction, predecessor_sha256=previous.record_sha256)
+    store.write_verified(destroyed, predecessor_sha256=destruction.record_sha256)
+    if corruption is not None:
+        with pytest.raises(ValueError):
+            store.write_verified(reprovision, predecessor_sha256=destroyed.record_sha256)
+    else:
+        store.write_verified(reprovision, predecessor_sha256=destroyed.record_sha256)
+        assert store.read(expected_project_id="project-a", expected_gateway_name="gateway") == reprovision
 
 
 @pytest.mark.parametrize(
@@ -2671,6 +2854,9 @@ def test_destroyed_vm_ha_lifecycle_requires_exact_retained_public_bindings(
         ("route-runtime-id", "route-runtime-stale"),
         ("apply-lock-cycle", "operation-before-destroy"),
         ("ordinary-route-source", "{}"),
+        ("enforced-route-cutover", "{}"),
+        ("enforced-route-preparation", "{}"),
+        ("enforced-route-lock:gateway-0", "{}"),
         ("standby-replacement-disk-name:gateway-1", "gateway-1-boot"),
     ),
 )

@@ -145,6 +145,7 @@ def check(root: Path, catalogs: bool = False) -> None:
                         )
                         if agent == "claude":
                             handler.pop("statusMessage", None)
+                            handler.pop("additionalContextLimit", None)
                     if entry not in expected_hooks.setdefault(event, []):
                         expected_hooks[event].append(entry)
         expected_config = expected_hooks if agent == "claude" else {"hooks": expected_hooks}

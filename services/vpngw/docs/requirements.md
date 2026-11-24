@@ -3127,6 +3127,15 @@ and replacement gateway VMs.
 - The product never creates, modifies or deletes customer groups/rules or broadens
   them when SSH fails. Documentation explains that Nebius's default group allows all
   traffic and that customer cloud policy owns SSH source filtering.
+- Document a complete source-scoped firewall policy: corporate public SSH TCP 22,
+  peer public IKE UDP 500/NAT-T UDP 4500, private bidirectional HA TCP 9443,
+  optional ICMP diagnostics, and required workload/egress traffic. Explain /32
+  IPv4 sources, stateful echo-request/reply handling, public/private NIC filtering,
+  NAT-T versus native ESP protocol 50, tunnel-only BGP TCP 179, and private-address
+  routing prerequisites. Use coordinated apply for HA attachment changes.
+- Qualify published live firewall claims with the deployed artifact and topology,
+  separate unexercised transports/policies, preserve management access, and restore
+  temporary configuration/attachments and remove test-owned rules/groups afterward.
 
 #### Negative Criteria
 
@@ -4929,7 +4938,8 @@ this behavior without new public flags, configuration fields or opt-in workflows
   unrelated unmanaged routes will not be removed.
 - Preserve more-specific VPN routing and withdrawal no-leak protection. Reject
   exact contradictory roles. Keep existing default-route behavior and IPv4,
-  single-primary-interface scope; no full-tunnel, VRF or IPv6 expansion.
+  single-primary-interface scope; no VRF or IPv6 expansion. REQ-046 separately
+  adds explicit source-selected enforced routing, including external IPv4 /0.
 - Ordinary cloud routing admits RFC1918 strict supernets of local exclusions;
   retain equal/contained/special/default exclusions, foreign conflicts and HA
   route selection. Do not split aggregates into synthetic cloud prefixes.
@@ -5052,6 +5062,87 @@ passes are not evidence for the new orchestration. Preserve failed trials and
 classify any recovery intervention before replay.
 
 <!-- /REQUIREMENT: REQ-045 -->
+
+<!-- REQUIREMENT: REQ-046 status=active priority=P0 type=feature -->
+### REQ-046: Declarative source-selected enforced VPN routing
+
+#### User Story
+
+Operators select workload subnets and IPv4 destinations, including Internet
+traffic, that must use one VPN connection or drop. Normal apply owns the full
+configuration lifecycle; the customer peer owns onward routing, NAT and return
+routes. Existing configurations without enforcement keep their behavior.
+
+#### Acceptance Criteria
+
+- Optional connections[].enforced_routing requires nonempty source_subnets and
+  destinations CIDR lists. Every source applies to every destination. Sources
+  resolve to exact whole workload subnets covered by gateway.local_prefixes;
+  reject ambiguity, partial subnet selection and gateway subnet selection.
+- Multiple destinations and 0.0.0.0/0 are supported. Same-VPC traffic retains the
+  provider's immutable internal routing. IPv6, domains, ports and user priorities
+  are outside this feature. Preserve local_prefixes and existing BGP filters.
+- Static enforcement destinations supply route intent. BGP requires each exact
+  destination to be advertised and accepted from the named connection; no
+  synthetic defaults, widened import filters or cross-connection fallback.
+  A withdrawn finite destination cannot borrow a broader enforced route from
+  the same connection.
+- Source/destination/ingress-qualified guest policy routes and persistent guards
+  prevent fallback to direct egress. Gateway-originated control and outer IPsec
+  retain the physical Internet path. Cloud intent persists through path loss.
+- Apply resolves source identities, verifies guest protection, prepares complete
+  private route tables and switches only selected subnet attachments. Default
+  egress displacement is explicit and journaled; preserve unrelated routes and
+  reject conflicting foreign routes. Interrupted operations resume idempotently.
+- Explicit YAML removal restores only a proven unchanged predecessor. Retain old
+  and new enforcement obligations until cloud transition commits. Repair,
+  replacement, HA, conversion and destroy preserve/retire exact ownership.
+- A finite prefix explicitly listed in both remote_prefixes and enforced
+  destinations retains ordinary VPN forwarding for unselected workload sources.
+  Selected sources still use the named connection or drop; never extend an
+  enforced-only default to unselected sources. Preserve ordinary more-specific
+  routes, withdrawal behavior and Internet reply forwarding.
+- Full controller snapshots sample local readiness after cloud route-proof
+  collection, retaining strict rejection of unsafe or unknown native state.
+- VM-HA preserves stopped-former-owner fencing and shared-allocation confirmation.
+  Existing public command contracts and unconfigured behavior remain supported.
+- create-config asks per connection with default No. No omits the block; Yes
+  collects both lists, validates locally and summarizes policy. Preserve offline
+  authoring, cancellation/back/help, hidden secrets and atomic publication.
+- Qualify BGP-HA and Static-HA using wizard-generated configurations in two
+  isolated Nebius projects, multiple sources/destinations, unselected controls,
+  Internet egress, route/path loss, VM failover, normal upgrades and retirement.
+  Automated external firewall fixtures supply customer-side NAT/default routes.
+  Preserve failed evidence, distinguish fixture setup from product transitions,
+  independently verify final artifacts, and delete only campaign-owned resources.
+
+#### Negative Criteria
+
+- Never replace the gateway's physical default with a VPN default, restore direct
+  workload egress on tunnel failure, or permit forwarded workload bypass merely
+  because a public destination is a VPN/control endpoint.
+- No new runtime daemon, hidden manual route step, compatibility shim, or claim
+  of live success from mocked/unit checks. Preserve unrelated user changes.
+
+#### Validation Method
+
+Focused schema/wizard/compiler and lifecycle checks, native Linux/FRR/strongSwan
+packet and restart tests, make check, relevant integration tests, align and code
+review, followed by independently observed BGP-HA and Static-HA live campaigns.
+
+#### Test Method
+
+Cross-product source/destination cases, default-No round trip, exact BGP import,
+static route placement, unsafe foreign state, route withdrawal, interruption,
+configuration retirement, tunnel loss, HA fencing and unchanged-command regression.
+
+#### Evaluation Method
+
+Compare declared intent with cloud attachment/route readback, native rules/routes,
+IPsec/BGP state and independently observed workload egress. Report local, native
+and live coverage separately; retain unmet criteria rather than claiming success.
+
+<!-- /REQUIREMENT: REQ-046 -->
 
 <!-- maintain-project-specs:requirements:end -->
 <!-- markdownlint-enable MD001 MD013 MD024 MD041 -->

@@ -168,7 +168,8 @@ adapter owns substantive design and readiness.
 inspect  --project-root <path>
 validate --project-root <path> [--output <private-path>]
 publish  --project-root <path> --requirements-candidate <path> \
-  --design-candidate <path> --expected-head <sha> \
+  --design-candidate <path> \
+  (--expected-head <sha> | --expected-filesystem-basis <sha>) \
   --expected-requirements-sha256 <sha-or-absent> \
   --expected-design-sha256 <sha-or-absent> --operation-id <id> \
   [--expected-objective-sha256 <sha>] [--expected-basis-sha256 <sha>]
@@ -179,7 +180,8 @@ recover  --project-root <path>
 - `inspect` and `validate` are advisory and return structured observations.
   Validation findings do not create lifecycle authority.
 - `publish` is the only normal repository-write path. It validates the complete
-  candidate pair and compare-and-set checks Git plus both predecessor digests.
+  candidate pair and compare-and-set checks the typed target identity plus both
+  predecessor digests. Git targets retain HEAD and registered workflow checks.
   During prepared workflow execution, supply the current accepted objective and
   immutable basis digests. The paired transaction requires the bound native
   coordinator, quiescent writers and the registered integration checkout. It
@@ -194,6 +196,24 @@ recover  --project-root <path>
   their existing safety, ownership, and rollback checks.
 - `start-prompt`, `plan`, `open`, `seal`, and `waive` are retired. Do not add
   no-op compatibility aliases.
+
+## Standalone Filesystem Targets
+
+Explicit documentation requests may select an existing plain folder. Inspection
+returns `filesystem_basis`, bound to the real root identity and local policy;
+use it with `publish --expected-filesystem-basis`. Publication reuses the pair
+lock, journal/replay, predecessor checks, no-follow writes and safe rollback.
+Filesystem receipts have distinct schemas and never grant Git/SDLC authority.
+Do not initialize Git or make a commit to satisfy this path. Existing Git targets
+still require a committed HEAD; failed, missing, corrupt or unborn Git never
+falls back to filesystem mode. A subfolder inside Git remains a Git target.
+
+Honor local disabled policy. Detect root/policy/Git classification changes at
+write boundaries. Private state stays outside the target and any enclosing Git
+repository. Inspection/validation apply canonical schema and traceability to
+filesystem files without a Git tracking requirement. `validate --output` remains
+Git-lifecycle-only; filesystem inspection/validation returns its receipt directly.
+Legacy migration in a plain folder remains unsupported and is reported explicitly.
 
 ## Canonical Spec Contract
 
@@ -384,7 +404,7 @@ URLs, customer data, raw logs, or one-off local state.
 
 ## Source-Package Coverage
 
-For document-driven SDLC, own the pure source inventory and canonical mapping
+For document-driven SDLC and standalone design extraction, own the pure source inventory and canonical mapping
 validator in `scripts/project_specs_lib/source_bundle.py`. Read the shared
 `../worktree/references/document-delivery.md` contract.
 Source-bundle-v2 carries reviewed supplied/derived planning provenance and
@@ -397,3 +417,10 @@ source digests. Distinguish reviewed prose inventory from mechanically extracted
 catalog completeness, and source coverage from implementation/test completion.
 The SDLC root owns program/slice state and stages only the exact admitted input
 paths. Canonical pair publication remains this skill's sole responsibility.
+
+Standalone `design --extract-once` may prepare immutable supplementary artifacts
+and a reviewed roadmap without SDLC program state. Reuse the pure `roadmap.py`
+checks; Worktree retains program admission, UAT policy and execution checks.
+Keep unresolved extraction inventories separate from source-bundle-v2, which
+continues to require no unresolved normative conflicts. Design owns research and
+semantic coverage; this owner remains the only canonical pair publisher.

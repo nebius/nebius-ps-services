@@ -53,6 +53,59 @@ def _target(suffix: str = "a") -> VMHARouteTarget:
     )
 
 
+@pytest.mark.parametrize("available", [False, True])
+def test_enforced_intent_is_per_subnet_and_survives_bgp_loss(available):
+    destinations = frozenset({"0.0.0.0/0", "172.20.0.0/16"})
+    reconciler = VMHARouteReconciler(
+        cluster_id="cluster-a",
+        node_id="node-b",
+        takeover_hold_down_seconds=0,
+        withdrawal_stability_observations=2,
+        route_targets=(_target("a"), _target("b"), _target("c")),
+        enforced_by_subnet={"subnet-a": destinations, "subnet-b": destinations},
+    )
+    bgp = _bgp(
+        learned=tuple(destinations) if available else (),
+        usable=tuple(destinations) if available else (),
+        required=(),
+    )
+    plan = reconciler.plan(
+        ownership=_owner(),
+        static_manifest=_static_manifest(),
+        bgp=bgp,
+        existing_routes=(),
+        state=RouteTransitionState(0),
+        now=100,
+    )
+    assert {
+        (m.route_target.workload_subnet_id, m.prefix, m.route_kind) for m in plan.mutations
+    } == {
+        (subnet, prefix, ManagedRouteKind.ENFORCED)
+        for subnet in ("subnet-a", "subnet-b")
+        for prefix in destinations
+    }
+    existing = tuple(
+        ManagedRouteSnapshot(
+            route_id=f"route-{i}",
+            prefix=m.prefix,
+            allocation_id=m.allocation_id,
+            ownership=ManagedRouteOwnership(
+                cluster_id=m.cluster_id, kind=m.route_kind, route_target=m.route_target
+            ),
+        )
+        for i, m in enumerate(plan.mutations)
+    )
+    again = reconciler.plan(
+        ownership=_owner(),
+        static_manifest=_static_manifest(),
+        bgp=_bgp(learned=(), usable=(), required=()),
+        existing_routes=existing,
+        state=RouteTransitionState(0),
+        now=100,
+    )
+    assert not again.mutations
+
+
 def test_vm_ha_route_backend_reads_every_page_with_bounded_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2268,3 +2321,49 @@ def test_generation_adapter_consumes_task_one_logical_manifest_shape() -> None:
     manifest = LogicalStaticRouteManifest.from_generation(generation)
 
     assert manifest.prefixes == {"10.10.0.0/16"}
+
+
+def test_shared_bgp_withdrawal_removes_only_unselected_route():
+    prefix = "172.20.0.0/16"
+    targets = (_target("a"), _target("b"))
+    reconciler = VMHARouteReconciler(
+        cluster_id="cluster-a",
+        node_id="node-b",
+        takeover_hold_down_seconds=0,
+        withdrawal_stability_observations=2,
+        route_targets=targets,
+        enforced_by_subnet={"subnet-a": frozenset({prefix, "0.0.0.0/0"})},
+        ordinary_shared=frozenset({prefix}),
+    )
+    common = dict(ownership=_owner(), static_manifest=_static_manifest(), now=100)
+    initial = reconciler.plan(
+        **common,
+        bgp=_bgp(required=(), learned=(prefix,), usable=(prefix,)),
+        existing_routes=(),
+        state=RouteTransitionState(0),
+    )
+    assert {
+        (m.route_target.workload_subnet_id, m.prefix, m.route_kind) for m in initial.mutations
+    } == {
+        ("subnet-a", prefix, ManagedRouteKind.ENFORCED),
+        ("subnet-a", "0.0.0.0/0", ManagedRouteKind.ENFORCED),
+        ("subnet-b", prefix, ManagedRouteKind.BGP),
+    }
+    existing = tuple(
+        ManagedRouteSnapshot(
+            str(i),
+            m.prefix,
+            m.allocation_id,
+            ManagedRouteOwnership(m.cluster_id, m.route_kind, m.route_target),
+        )
+        for i, m in enumerate(initial.mutations)
+    )
+    absent = _bgp(required=(), learned=(), usable=())
+    first = reconciler.plan(
+        **common, bgp=absent, existing_routes=existing, state=RouteTransitionState(0)
+    )
+    assert not first.mutations
+    second = reconciler.plan(**common, bgp=absent, existing_routes=existing, state=first.next_state)
+    assert [(m.kind, m.route_target.workload_subnet_id, m.prefix) for m in second.mutations] == [
+        (RouteMutationKind.DELETE, "subnet-b", prefix)
+    ]

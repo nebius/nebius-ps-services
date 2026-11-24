@@ -1,5 +1,9 @@
 # Manager-ready reporting
 
+These rules describe normal activity mode. For `--loc-modifications-report`,
+use [the LOC contract](loc-modifications.md). `--owner` scope discovery follows
+that reference in either mode; normal activity output remains per repository.
+
 Describe the problem and evidenced change, investigation or review in one
 concise sentence per row. Do not invent business impact, saved effort,
 deployment, release or personal implementation credit.

@@ -263,6 +263,8 @@ def bind_ha(owner: Any) -> tuple[Any, Any, Any]:
         manager.set_vm_ha_lifecycle_journal(journal)
     elif journal.state != current:
         raise RuntimeError("Repair lifecycle authority changed before runtime binding")
+    manager._vm_ha_effect_spec = plan.gateway_group
+    manager._vm_ha_effect_prefixes = plan.gateway.get("local_prefixes")
     # Recheck current Compute and allocation authority with the persisted route
     # observation attached, before publishing either member's runtime config.
     binding = manager._build_vm_ha_runtime_binding(owner.cloud.sdk, plan.gateway_group)
@@ -353,6 +355,7 @@ def activate_ha(owner: Any, result_report: Any) -> None:
         vm_ha_runtime_binding=binding,
         vm_spec=admission.local["gateway_group"].get("vm_spec", {}),
         repair=authority,
+        vm_manager=admission.manager,
     )
 
 

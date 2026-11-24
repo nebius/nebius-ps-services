@@ -2445,6 +2445,7 @@ def test_vm_ha_deactivation_is_ordered_and_fail_closed() -> None:
     assert removal.index("disable --now nebius-vpngw-vm-ha-rearm.service") < removal.index(
         "rm -f /etc/nebius-vpngw/vm-ha-enabled"
     )
+    assert removal.index("preserve_for_ordinary") < removal.index("rm -f /etc/nebius-vpngw/vm-ha-enabled")
     assert removal.index("30-vm-ha.conf") < removal.index("daemon-reload")
     state_cleanup = (
         "find /var/lib/nebius-vpngw/vm-ha -mindepth 1 -depth "

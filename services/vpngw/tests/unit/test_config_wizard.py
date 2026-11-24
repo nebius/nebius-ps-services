@@ -46,6 +46,7 @@ def _bgp_wizard_input(
         "",  # connection name -> site-1
         "",  # vendor -> generic
         "",  # routing -> bgp
+        "",  # enforcement defaults to No
         "",  # local ASN
         "",  # peer ASN
         "",  # optional BGP prefix allowlist
@@ -79,6 +80,7 @@ def _static_wizard_input(*, psk: str = "literal-secret-123") -> str:
         "",  # connection name
         "",  # vendor
         "static",
+        "",  # enforcement defaults to No
         "",  # remote prefixes
         "",  # paths per instance
         "",  # tunnel name
@@ -120,6 +122,27 @@ def test_forced_wizard_writes_schema_valid_bgp_config(tmp_path: Path) -> None:
     assert "Prepare networking now, or later" in result.output
     assert "--local-config-file" in result.output
     assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+    assert "enforced_routing" not in payload["connections"][0]
+
+
+@pytest.mark.parametrize("mode", ["static", "bgp"])
+def test_wizard_collects_multiple_enforced_sources_and_destinations(tmp_path, mode):
+    answers = (_static_wizard_input() if mode == "static" else _bgp_wizard_input()).splitlines()
+    answers[15:16] = ["yes", "10.0.1.0/24,10.0.2.0/24", "172.20.0.0/16,172.21.0.0/16"]
+    if mode == "static":
+        answers[18] = ""  # Enforcement alone supplies static route intent.
+    path = tmp_path / "enforced.config.yaml"
+    result = CliRunner().invoke(
+        app, ["create-config", str(path), "--interactive"], input="\n".join(answers) + "\n"
+    )
+    assert result.exit_code == 0, result.output
+    cfg = yaml.safe_load(path.read_text())
+    VPNGatewayConfig.model_validate(cfg)
+    assert cfg["connections"][0]["enforced_routing"] == {
+        "source_subnets": ["10.0.1.0/24", "10.0.2.0/24"],
+        "destinations": ["172.20.0.0/16", "172.21.0.0/16"],
+    }
+    assert "Use this connection or drop" in result.output
 
 
 def test_wizard_explains_creation_only_subnet_prefix(tmp_path: Path) -> None:
@@ -190,8 +213,8 @@ def test_mixed_connection_phase_asks_local_asn_once_at_first_bgp() -> None:
         def ask_choice(self, label, _choices, **_kwargs):
             return next(self.routing_modes) if label == "Routing mode" else "generic"
 
-        def ask_bool(self, _label, **_kwargs):
-            return True
+        def ask_bool(self, label, **_kwargs):
+            return not label.startswith("Enforce routing")
 
     candidate = _base_candidate()
     prompt = ScriptedPrompt()

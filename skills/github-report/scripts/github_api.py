@@ -350,6 +350,114 @@ class GitHub:
             stop if start is not None else None,
         )
 
+    def owner_repositories(self, owner: str) -> dict:
+        """Enumerate owned repositories, never the viewer's affiliations."""
+        identity = self.query(
+            "query($owner:String!){repositoryOwner(login:$owner){id login __typename}}",
+            {"owner": owner},
+        ).get("repositoryOwner")
+        if not isinstance(identity, dict) or not identity.get("id"):
+            raise ReportError(
+                "INACCESSIBLE", "Owner is inaccessible with existing authentication."
+            )
+        if (
+            identity.get("__typename") not in {"Organization", "User"}
+            or str(identity.get("login", "")).casefold() != owner.casefold()
+        ):
+            raise ReportError(
+                "OWNER_IDENTITY_MISMATCH",
+                "Supply the current organization or user login.",
+            )
+        query = """query($owner:String!,$cursor:String){repositoryOwner(login:$owner){
+          repositories(first:100,after:$cursor,ownerAffiliations:[OWNER],orderBy:{field:NAME,direction:ASC}){
+            nodes{id nameWithOwner isPrivate isFork isArchived owner{id login}}
+            pageInfo{hasNextPage endCursor} totalCount
+          }}}"""
+        result = self.pages(
+            query, {"owner": owner}, ("repositoryOwner", "repositories")
+        )
+        valid = []
+        names = set()
+        for node in result["nodes"]:
+            try:
+                name = repositories([node["nameWithOwner"]])[0]
+                if (
+                    (node.get("owner") or {}).get("id") != identity["id"]
+                    or name.split("/")[0].casefold() != owner.casefold()
+                    or name.casefold() in names
+                ):
+                    raise ValueError
+                if not isinstance(node.get("id"), str) or not node["id"]:
+                    raise ValueError
+                names.add(name.casefold())
+                valid.append(node)
+            except (ReportError, KeyError, TypeError, ValueError, AttributeError):
+                result["limits"].append(
+                    "invalid or conflicting owned repository identity"
+                )
+        result.update(nodes=valid, owner=identity)
+        result["limits"] = sorted(set(result["limits"]))
+        result["coverage"] = "partial" if result["limits"] else "complete"
+        return result
+
+    def merged_prs(self, repo: str, start: str, observed: str) -> dict:
+        """Bounded metrics-only pages plus a pass for concurrent page movement."""
+        owner, name = repo.split("/")
+        query = """query($owner:String!,$name:String!,$cursor:String){
+          repository(owner:$owner,name:$name){pullRequests(
+            first:25,after:$cursor,states:[MERGED],orderBy:{field:UPDATED_AT,direction:DESC}){
+            nodes{id number url mergedAt updatedAt additions deletions
+              repository{id nameWithOwner} author{ACTOR}}
+            PAGE
+          }}}""".replace("ACTOR", ACTOR).replace("PAGE", PAGE)
+
+        def scan(boundary):
+            previous = None
+
+            def stop(node):
+                nonlocal previous
+                updated, merged = (
+                    timestamp(node.get("updatedAt")),
+                    timestamp(node.get("mergedAt")),
+                )
+                if (
+                    updated is None
+                    or merged is None
+                    or updated < merged
+                    or (previous is not None and updated > previous)
+                ):
+                    raise ValueError
+                previous = updated
+                return updated < timestamp(boundary)
+
+            return self.pages(
+                query,
+                {"owner": owner, "name": name},
+                ("repository", "pullRequests"),
+                stop,
+            )
+
+        result = scan(start)
+        # Rate/budget failures remain partial, without an unbounded retry loop.
+        if {"RATE_LIMIT", "REQUEST_BUDGET", "INACCESSIBLE"} & set(result["limits"]):
+            return result
+        recent = scan(observed)
+        result["limits"].extend(recent["limits"])
+        if result["total"] != recent["total"]:
+            result["limits"].append("merged inventory changed during reconciliation")
+        by_id = {node.get("id"): node for node in result["nodes"]}
+        for node in recent["nodes"]:
+            key = node.get("id")
+            if key not in by_id or by_id[key] != node:
+                result["limits"].append(
+                    "PR changed or moved during collection; snapshot is provisional"
+                )
+            by_id[key] = node
+        result["nodes"] = list(by_id.values())
+        result["limits"] = sorted(set(result["limits"]))
+        result["coverage"] = "partial" if result["limits"] else "complete"
+        return result
+
     def connection(self, item: dict, name: str, fields: str) -> dict:
         typename = "PullRequest" if item["kind"] == "pr" else "Issue"
         arguments = "first:100, after:$cursor"

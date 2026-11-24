@@ -89,6 +89,7 @@ def activate(
                 "settled": True,
                 "observed": observed,
                 "received": recovery.clock(),
+                "unlock_only": True,
                 "diagnosis": Diagnosis("unlock", digest(request)),
             }
         while True:
@@ -117,13 +118,27 @@ def activate(
                     "materialization-unavailable" if settled else "services-still-transitioning",
                 )
             time.sleep(min(0.2, remaining))
-        complete = (
+        configured = (
             settled
             and not failed
             and observed["materialized"] is True
             and observed["complete"] is True
-            and phase_complete is None
         )
+        if configured and phase_complete is not None and phase_effect is not None:
+            # The native receipt proves configuration completion, not the later
+            # forwarding phase. Resume that phase without repairing healthy
+            # services. A fenced member needs the existing activation permit for
+            # controller-owned origination/reconciliation; an already-active
+            # member above needs only the narrower own-lock release permit.
+            return {
+                "complete": False,
+                "settled": True,
+                "observed": observed,
+                "received": recovery.clock(),
+                "unlock_only": False,
+                "diagnosis": Diagnosis("unlock", digest(request)),
+            }
+        complete = configured and phase_complete is None
         action = "service" if failed else "configuration"
         return {
             "complete": complete,
@@ -167,7 +182,7 @@ def activate(
             "arm",
             deadline=recovery.clock() + 30,
             identity=identity(attempt),
-            unlock_only=attempt["action"] == "unlock",
+            unlock_only=observation["unlock_only"] if attempt["action"] == "unlock" else False,
             started_at=observation["observed"]["clock"],
         )
         if attempt["action"] == "unlock":

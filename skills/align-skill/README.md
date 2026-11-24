@@ -196,6 +196,8 @@ Run from this skill directory. The native runner uses disposable homes and
 workspaces, bounded processes, actual tool traces and an independent quality
 judge. Quality trials require an explicit model, alternate three paired runs by
 default and optionally use a frozen sibling-only catalog via `--catalog-dir`.
+Cases can declare `required_skills`; an absent or partial catalog yields
+`UNAVAILABLE` before either native arm starts, preserving the case's assertions.
 Schema v2 reports include complete package fingerprints, bounded redacted tool
 records and separate agent/judge metrics. Executed case definitions come from
 the validated frozen candidate; reference-read evidence uses the same strict
@@ -209,6 +211,12 @@ A missing CLI, credentials, trace, baseline or valid independent grade is
 `UNAVAILABLE`. Malformed assertion collections are invalid grades; well-formed
 assertion lists with failed or missing results remain `FAIL`. Deterministic
 adapter tests are separate from model evidence.
+
+Fixture policy `unchanged` rejects all workspace mutations. Policy `docs-only`
+allows regular documentation files under `docs/`, while deterministically
+rejecting deletions, links, executable files and changes outside that directory.
+The model judge cannot waive either boundary. These policies test local effects;
+they do not grant external publication or application implementation authority.
 See [agent portability](references/agent-portability.md) and the
 [evaluation guide](references/evaluation-guide.md).
 

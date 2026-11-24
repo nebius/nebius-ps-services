@@ -205,3 +205,25 @@ skill's existing workflow and higher-priority host rules:
 
 Record actual tool calls separately from instruction-level reasoning. Static
 fixtures alone do not prove native tool access or model routing quality.
+
+## Unattended extraction qualification
+
+Cases 29 and 30 require a frozen sibling catalog containing maintain-project-specs,
+global-context-management, research, worktree and system-design-rules. Pass it with
+`--catalog-dir`; the runner checks each case's `required_skills` before starting
+either native arm. An absent or partial catalog yields `UNAVAILABLE`, not a
+publication failure or a passing extraction result. Keep publication and readiness
+assertions unchanged when all prerequisites are present.
+
+Use disposable plain-folder and committed-Git targets, with complete and conflicting
+source packages. Prove original source bytes unchanged, actual research consultation,
+full item/source dispositions, stable REQ/FEAT IDs, preserved phases, no design
+questions, correct draft/blocked readiness, exact source locators and elapsed reports.
+Replay unchanged extraction and a changed-source revision; retain prior evidence.
+
+The native evaluator's `docs-only` oracle rejects mutations outside docs, deletions,
+links and executable outputs independently of its model judge. Offline quality cases
+use local frozen evidence and no external services. A separate live-source trial is
+needed for current vendor retrieval; offline results do not establish that behavior.
+Actual host Plan Mode needs a real read-only-mode trial. Source checks, installed
+parity and native execution remain distinct evidence lanes.

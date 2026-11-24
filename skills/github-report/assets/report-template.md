@@ -1,3 +1,4 @@
+<!-- Normal activity mode only; LOC mode is rendered by loc_modifications_report.py. -->
 # GitHub activity and backlog report
 
 ## {{owner/repository}}

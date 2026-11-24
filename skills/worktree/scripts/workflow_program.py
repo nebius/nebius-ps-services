@@ -14,6 +14,7 @@ SPEC_SCRIPTS = Path(__file__).resolve().parents[2] / "maintain-project-specs" / 
 if str(SPEC_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SPEC_SCRIPTS))
 from project_specs_lib.source_bundle import validate_bundle  # noqa: E402
+from project_specs_lib.roadmap import check_schedule  # noqa: E402
 
 SCHEMA = "workflow/program-v2"
 SLICE = re.compile(r"SLICE-[0-9]{3,}\Z")
@@ -32,26 +33,6 @@ def _ids(value, pattern, *, empty=False):
             or len(value) != len(set(value))):
         reject("program identifiers must be unique bounded lists")
     return set(value)
-
-
-def _acyclic(rows):
-    remaining = {r["id"]: len(r["depends_on"]) for r in rows}
-    children = {k: [] for k in remaining}
-    for row in rows:
-        for parent in row["depends_on"]:
-            if parent not in children:
-                reject("unknown program dependency")
-            children[parent].append(row["id"])
-    queue = [k for k, n in remaining.items() if not n]
-    visited = 0
-    while queue:
-        visited += 1
-        for child in children[queue.pop()]:
-            remaining[child] -= 1
-            if not remaining[child]:
-                queue.append(child)
-    if visited != len(rows):
-        reject("program dependency cycle")
 
 
 def validate_definition(value, coverage, planning):
@@ -112,27 +93,7 @@ def validate_definition(value, coverage, planning):
         for criterion in row["criteria"]:
             if not set(obligations[criterion]["features"]) <= features or not set(obligations[criterion]["requirements"]) <= requirements:
                 reject("slice mappings do not cover its declared criteria")
-    _acyclic(value["phases"])
-    _acyclic(value["slices"])
-    phases = {r["id"]: r for r in value["phases"]}
-    for phase_id, phase in phases.items():
-        members = [s for s in value["slices"] if s["phase"] == phase_id]
-        coverage_ids = {c for s in members for c in s["criteria"] + s["regression_criteria"]}
-        if members and not set(phase["exit_criteria"]) <= coverage_ids:
-            reject("phase exit criteria must be executed by its delivery slices")
-    for index, row in enumerate(value["slices"]):
-        ancestors, pending = set(), list(phases[row["phase"]]["depends_on"])
-        while pending:
-            parent = pending.pop()
-            if parent not in ancestors:
-                ancestors.add(parent)
-                pending.extend(phases[parent]["depends_on"])
-        if any(later["phase"] in ancestors for later in value["slices"][index:]):
-            reject("slice declaration order violates a phase barrier")
-    # Every required obligation remains scheduled, even when detailed tasks are deferred.
-    scheduled = {c for r in value["phases"] for c in r["exit_criteria"]} | {c for r in value["slices"] for c in r["criteria"]}
-    if scheduled != set(obligations):
-        reject("required source obligations are missing from program coverage")
+    check_schedule(value["phases"], value["slices"], obligations, reject)
     return value
 
 

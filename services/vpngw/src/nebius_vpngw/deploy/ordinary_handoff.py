@@ -153,7 +153,11 @@ class PackageJob:
     def submit(self, request: dict) -> dict:
         from ..package_worker import digest as phase_digest
 
-        if request.get("action") == "verify-prepared":
+        if request.get("action") in {
+            "verify-prepared",
+            "prepare-enforcement",
+            "verify-enforcement",
+        }:
             request = dict(request, observation=os.urandom(16).hex())
         self.submitted[request["action"]] = request
         try:
@@ -342,7 +346,7 @@ def inspect(ssh: Any, target: str, instance: Any, local: dict) -> dict:
     with _connection(ssh, target, instance, local) as client:
         _stdin, stdout = _start(client, {"action": "inspect", "ha": _ha_identity(instance)})
         value = _receive(stdout)
-        if set(value) != {
+        if set(value) - {"enforced_routing"} != {
             "journal",
             "pending",
             "environment",
@@ -425,6 +429,30 @@ class Handoff:
 
     def exchange(self, request: dict) -> dict:
         return self.job.submit(request)
+
+    def enforcement_barrier(self, *, receipt, binding, operation: str, install: bool) -> dict:
+        from dataclasses import asdict
+
+        from .vm_ha_upgrade_recovery import UNITS
+
+        result = self.exchange(
+            {
+                "action": "prepare-enforcement" if install else "verify-enforcement",
+                "receipt": asdict(receipt),
+                "operation": operation,
+                "route_runtime_id": binding.route_runtime_id,
+                "allocation_id": binding.shared_allocation_id,
+                "units": UNITS,
+            }
+        )
+        expected = {**self.ha, "operation_id": operation}
+        if (
+            set(result) != {"boot_id", "lock"}
+            or not result["boot_id"]
+            or any(result["lock"].get(k) != v for k, v in expected.items())
+        ):
+            raise RuntimeError("Enforced handoff stopped-writer receipt differs")
+        return result
 
     def _peer_request(self) -> dict:
         if self.peer_observer is None:

@@ -191,8 +191,13 @@ class DestroyPlan:
     retained_public_allocations: tuple[DestroyResource, ...]
     retained_route_table_ids: tuple[str, ...]
     blockers: tuple[str, ...] = ()
+    enforced_restore: dict | None = None
 
     def __post_init__(self) -> None:
+        if self.enforced_restore is not None:
+            from .enforced_destroy import validate
+
+            validate(self.enforced_restore)
         if self.topology not in {"ordinary", "vm-ha", "vm-ha-unbound"}:
             raise ValueError("Destroy topology is invalid")
         if (
@@ -280,6 +285,11 @@ class DestroyPlan:
             "retained_route_table_ids": list(self.retained_route_table_ids),
             "routes": [item.to_dict() for item in self.routes],
             "topology": self.topology,
+            **(
+                {"enforced_restore": self.enforced_restore}
+                if self.enforced_restore is not None
+                else {}
+            ),
         }
 
     def to_json(self) -> str:
@@ -306,7 +316,7 @@ class DestroyPlan:
             "routes",
             "topology",
         }
-        if not isinstance(value, dict) or set(value) != expected:
+        if not isinstance(value, dict) or set(value) - {"enforced_restore"} != expected:
             raise ValueError("Destroy plan is malformed")
         string_fields = ("config_digest", "gateway_name", "project_id", "topology")
         list_fields = expected - set(string_fields)
@@ -350,6 +360,7 @@ class DestroyPlan:
             ),
             retained_route_table_ids=tuple(t.cast(list[str], value["retained_route_table_ids"])),
             blockers=tuple(t.cast(list[str], value["blockers"])),
+            enforced_restore=value.get("enforced_restore"),
         )
 
     @classmethod
@@ -1247,6 +1258,10 @@ class DestroyCoordinator:
                 postcondition=route_absent,
                 submit=delete_route,
             )
+        if plan.enforced_restore is not None:
+            from .enforced_destroy import execute
+
+            execute(self.backend, plan)
         for resource in plan.compute:
 
             def compute_absent(resource: DestroyResource = resource) -> bool:
@@ -1319,6 +1334,10 @@ class DestroyCoordinator:
                 "destroy-terminal-verification-failed",
                 "Destroy verification changed between fresh observations",
             )
+        if plan.enforced_restore is not None:
+            from .enforced_destroy import retire
+
+            retire(self.backend, plan)
         self.journal.finish()
         if self.repair is not None:
             self.repair.retire(self.journal)
@@ -1563,8 +1582,14 @@ class NebiusDestroyBackend:
             return False
         from nebius_vpngw.schema import VMHARouteTarget
 
+        from .ha_enforced_tables import TableJournal
+        from .ordinary_route_ownership import snapshot
         from .route_manager import NebiusSDKRouteBackend
 
+        history = TableJournal(state.project_id, state.gateway_name).snapshot()
+        retired = history["bindings"].get("retired_routes", {}) if history else {}
+        if _resource_id(route) in retired:
+            return retired[_resource_id(route)] == snapshot(route)
         labels = self._route_labels(route)
         authority_labels = set(labels) & NebiusSDKRouteBackend._AUTHORITY_LABEL_KEYS
         if authority_labels and not (labels.keys() >= NebiusSDKRouteBackend._AUTHORITY_LABEL_KEYS):
@@ -1579,7 +1604,7 @@ class NebiusDestroyBackend:
                     raise RuntimeError("VM-HA route target is malformed") from error
                 if target.route_table_id != route_table_id:
                     continue
-                for kind in ("bgp", "static"):
+                for kind in ("bgp", "static", "enforced"):
                     expected = NebiusSDKRouteBackend._authority_labels(
                         cluster_id=state.cluster_id,
                         allocation_id=state.allocation_id,
@@ -2030,6 +2055,8 @@ class NebiusDestroyBackend:
                 )
             )
 
+        from .enforced_destroy import freeze as freeze_enforced_restore
+
         return DestroyPlan(
             project_id=self.project_id,
             gateway_name=self.spec.name,
@@ -2049,6 +2076,7 @@ class NebiusDestroyBackend:
             ),
             retained_route_table_ids=tuple(sorted(retained_route_tables)),
             blockers=tuple(sorted(set(blockers))),
+            enforced_restore=freeze_enforced_restore(self, routes, ha=ha),
         )
 
     def _strict_resource(self, resource: DestroyResource) -> object | None:
@@ -2117,6 +2145,10 @@ class NebiusDestroyBackend:
     def preflight(self, plan: DestroyPlan, *, require_revisions: bool = False) -> None:
         if plan.project_id != self.project_id or plan.gateway_name != self.spec.name:
             raise RuntimeError("Destroy plan scope changed")
+        if plan.enforced_restore is not None:
+            from .enforced_destroy import verify_sources
+
+            verify_sources(self, plan.enforced_restore)
         planned_names = {
             "compute": {resource.name for resource in plan.compute},
             "disk": {resource.name for resource in plan.disks},
@@ -2374,6 +2406,10 @@ class NebiusDestroyBackend:
         )
 
     def _verification_observation(self, plan: DestroyPlan) -> str:
+        if plan.enforced_restore is not None:
+            from .enforced_destroy import verify
+
+            verify(self, plan)
         present: list[str] = []
         for name in plan.expected_compute_names:
             if self._get_instance_by_name(name) is not None:

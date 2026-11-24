@@ -106,6 +106,7 @@ def harmless_dhcp_route(
     run: Callable[..., Result],
     ip_command: str,
     networkctl_command: str,
+    owned_rule: Callable[[dict], bool] | None = None,
 ) -> bool:
     """No effects, grace, inferred ownership, or forced output-interface lookup."""
 
@@ -138,7 +139,18 @@ def harmless_dhcp_route(
             return False
         # A generic route-get cannot model TCP ports, FRR uid, marks, or other
         # policy selectors. Admit only the canonical RPDB for this exception.
-        rules = read(ip_command, "-j", "-4", "rule", "show")
+        rules = read(ip_command, "-j", "-4", *(("-details", "-N") if owned_rule else ()), "rule", "show")
+        if owned_rule:
+            # Exact persisted ownership plus physical ingress means these rules
+            # cannot select gateway-local BGP sockets or outer IKE traffic.
+            rules = [r for r in rules if not (r.get("iif") == interface and owned_rule(r))]
+            rules = [
+                {k: v for k, v in r.items() if k != "protocol"}
+                if r.get("protocol") in ("kernel", "2", 2)
+                else r
+                for r in rules
+            ]
+        rules = [{**r, "table": {"255": "local", "254": "main", "253": "default"}.get(str(r.get("table")), r.get("table"))} for r in rules]
         if rules != [
             {"priority": 0, "src": "all", "table": "local"},
             {"priority": 32766, "src": "all", "table": "main"},

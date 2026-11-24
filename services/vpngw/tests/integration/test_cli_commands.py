@@ -158,6 +158,7 @@ def _static_wizard_input() -> str:
         "onprem-static",
         "cisco",
         "static",
+        "no",  # enforcement
         "192.168.0.0/16, 192.169.0.0/16",
         "1",  # tunnel paths per VM
         "",  # generated tunnel name
@@ -205,6 +206,7 @@ def _vm_ha_wizard_input() -> str:
         "ha-static",
         "generic",
         "static",
+        "no",  # enforcement
         "172.20.0.0/16",
         "1",  # one path per VM
         "",  # VM 0 tunnel name

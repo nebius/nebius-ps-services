@@ -3,7 +3,7 @@
 `design` is an implicit, non-SDLC skill for software and standalone portable HTML
 design before implementation. It reads requirements, inspects existing code or greenfield
 context, routes topic, requirement, and technology due diligence through
-`research` when available, consults `nebius` for relevant provider constraints,
+`research` for every requirement and design item, at proportional depth, consults `nebius` for relevant provider constraints,
 routes undecided AI subsystem behavior, topology, policy, and contracts through
 `ai-agent-design`, consumes its scoped `ai-stack` component decision, then uses
 `app-stack` for remaining application choices. It applies `system-design-rules` to
@@ -59,6 +59,8 @@ making it immutable or declaring a defect correct.
 ```text
 $design Design this feature against the project's design documents and code.
 $design Design this feature and implement it.
+$design --extract-once /path/to/drafts
+$design --extract-once /path/to/drafts --project-root /path/to/project
 $design Plan this project's README structure and quick start from its code.
 $design Plan a standalone offline HTML report with findings, evidence and print layout.
 $design Plan an AI support service on Nebius, including provider constraints and undecided stack layers.
@@ -66,8 +68,33 @@ $design --help
 $design -h
 ```
 
-The request describes the desired work in natural language. No additional
-public flags. Help performs no project reads or changes after loading the skill.
+Ordinary requests describe work in natural language. Extraction takes one source
+folder and an optional target; the target defaults to invocation cwd. Help lists
+these flags and performs no project reads or changes after loading the skill.
+
+## Unattended extraction and progress
+
+`--extract-once` freezes and inventories the whole draft package, researches every
+item with reusable evidence, resolves supported technical gaps, preserves supplied
+phases or derives a dependency roadmap, and publishes documentation only. It asks
+no design questions during extraction. Remaining decisions are consolidated as
+**Unresolved Design Decisions and Evidence Gaps — Review Required**, with original
+file/section/contract locators, affected REQ/FEAT IDs and actionable follow-up.
+
+Canonical requirements/design remain with `maintain-project-specs`; detailed
+contracts and reports live in versioned subdirectories under target `docs/`.
+Plain targets do not need Git initialization. Failed/unborn Git and legacy specs
+retain their existing safety boundaries. Repeated runs preserve identities and
+unknown edits; changed inputs produce a reviewed revision. Completion of extraction
+is separate from design readiness and implementation verification.
+Artifact packages stop at the aggregate byte limit before publication, without
+buffering the remaining files.
+
+Every design reports measured elapsed time. Longer runs show the stage, layer,
+reviewed-item progress bar and open findings; the bar is coverage, not an ETA.
+Stage and resume updates retain the last reported counts unless explicitly revised.
+See [the extraction contract](references/document-extraction.md) for helper usage,
+review-ledger fields, artifact ownership, resume behavior and output details.
 
 When the approved design needs a complete or multi-component repository
 skeleton, the handoff may include the component/materialization/runtime graph
@@ -90,6 +117,8 @@ for original/editorial/framework comparisons and installation gates.
 
 ## Files
 
+- `references/document-extraction.md`: unattended research, source coverage and publication.
+- `scripts/design_intake.py`: source snapshots, review validation, progress and immutable assets.
 - `references/readme-design.md`: conditional README structure, information
   hierarchy, TOC, examples, formatting, documentation boundaries and checks.
 - `references/portable-html-design.md`: shared portability/theme guidance,
@@ -169,8 +198,8 @@ conditional reference reads and the help short circuit.
 
 Portable HTML cases cover all three layout profiles, the shared theme and
 portability contract, report snapshot/filter semantics and presentation fallback.
-The definitions contain 49 trigger cases (30 positive, 19 negative) and 28
-quality cases. Offline `file://`, no-JavaScript, relocation, request, keyboard,
+The trigger and quality catalogs include extraction, unresolved-decision and
+ordinary-design research cases alongside the existing design scenarios. Offline `file://`, no-JavaScript, relocation, request, keyboard,
 responsive and print checks require an actual implemented artifact; these
 planning cases do not establish browser behavior.
 
@@ -178,7 +207,12 @@ Structure and fixture checks are static evidence. Fresh trigger and comparative
 quality runs require native authenticated runners; do not copy real host
 credentials into disposable evaluation homes. By default, the isolated runner
 installs only this skill; absent specialists use the documented research fallback
-and spec-owner handoffs remain explicit. Its optional frozen sibling catalog
+and spec-owner handoffs remain explicit. Extraction publication cases 29 and 30
+declare `required_skills`: maintain-project-specs, global-context-management,
+research, worktree and system-design-rules. Supply these through `--catalog-dir`;
+without the complete catalog, the runner reports `UNAVAILABLE` before launching
+either arm. Successful publication assertions remain mandatory in that lane.
+The optional frozen sibling catalog for other cases
 supports multi-skill cases in fresh sessions, with successful loading traces
 required for actual specialist use. Single-skill results
 do not prove ordering, result reuse or absence of recursive selection.

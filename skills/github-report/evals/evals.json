@@ -95,6 +95,29 @@
         "The shared backlog remains visible despite no user match.",
         "No fabricated user groups or implementation credit; unknown metrics remain unknown."
       ]
+    },
+    {
+      "id": 8,
+      "prompt": "Offline simulation only; no tools or writes. Use github-report --loc-modifications-report --owner example-org --top 2. Complete visible inventory has two repositories including an archived fork. Three API User authors: alpha has merged PR diffs +40/-10 and +20/-30 across both repos, beta has +100/-0, gamma has +90/-0. A Bot has +9000/-0. All merges fall inside January-March 2026 UTC; no unknown metrics.",
+      "expected_output": "Alpha and beta both rank 1 with LOC Modifications 100, with 2 and 1 merged PRs; bot excluded. One scope-wide table and all-file/visible-scope caveats.",
+      "files": [],
+      "assertions": [
+        "Show one LOC Modifications column, no separate additions and deletions columns.",
+        "Aggregate across repositories before top selection; alpha and beta both have rank 1.",
+        "Exclude the Bot and avoid productivity or individual-line ownership claims.",
+        "No activity/backlog tables or invented hidden-repository coverage."
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Offline simulation only; no tools or writes. Use github-report --loc-modifications-report --owner example-org --top 1. Owner repository pagination failed. Observed User alpha has one merged PR +20/-5 and another merged PR with unknown additions/deletions. Another merged PR has unknown author. User beta has one known +20/-0 PR. Frozen interval January-March 2026 UTC.",
+      "expected_output": "Provisional ranking among observed accounts, alpha with at least 25 LOC Modifications, 2 merged PRs, and explicit missing inventory/author/metrics limits.",
+      "files": [],
+      "assertions": [
+        "Show a known lower bound for alpha rather than an exact total or missing metrics as zero.",
+        "Do not claim a definitive owner-wide winner or exhaustive human inventory.",
+        "Keep a single LOC Modifications column and explain partial coverage."
+      ]
     }
   ]
 }

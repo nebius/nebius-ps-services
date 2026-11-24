@@ -1,5 +1,9 @@
 # Collection rules
 
+These rules describe normal activity mode. For `--loc-modifications-report`,
+use [the LOC contract](loc-modifications.md). `--owner` scope discovery follows
+that reference in either mode; normal activity output remains per repository.
+
 ## Inputs and identity
 
 Use a single frozen interval. The default starts exactly 90 times 24 hours
@@ -9,7 +13,7 @@ report. Dates, malformed repo identifiers and duplicate flags fail before
 network access. The selector accepts one comma-separated list, including
 `--repo example-org/api, example-org/web`; whitespace without a comma is invalid.
 
-An explicit repository overrides checkout context. Without it, cross-check Git
+An explicit repository or owner overrides checkout context. Without either, cross-check Git
 remotes against `gh repo view`; ambiguous remotes or overridden CLI defaults
 require an explicit selector. Outside a readable Git checkout, return
 `NO_CHECKOUT` and request `--repo`; missing remotes request `--repo` as well,

@@ -21,6 +21,7 @@ import yaml
 
 from ... import ipsec_observation
 from ...deploy.vm_ha_cloud import AmbiguousHACloudError, RetryableHACloudError
+from ...enforced_routing import bgp_import_map_name, compile_policies
 from ...ha_tunnel_policy import (
     ConnectionPolicy,
     connection_policies,
@@ -28,6 +29,7 @@ from ...ha_tunnel_policy import (
     tunnel_exports,
     tunnel_preferred,
 )
+from ..enforced_routing import table_matches
 from ..frr_renderer import FRR_CONF, FRRRenderer
 from ..strongswan_renderer import (
     SWANCTL_CONF,
@@ -36,7 +38,7 @@ from ..strongswan_renderer import (
     authorized_configuration,
 )
 from ..vm_ha_checkpoint import controller_checkpoint_from_dict
-from ..vm_ha_controller import ActionKind, ControllerAction, DataPlaneMode
+from ..vm_ha_controller import ActionKind, ControllerAction, ControllerSnapshot, DataPlaneMode
 from . import kernel_teardown
 from .diagnostics import diagnostic
 from .diagnostics import scope as diagnostic_scope
@@ -492,6 +494,10 @@ class NativeTunnelEffects(Generic[AuthorityT]):
             diagnostic("inner-ping-returned", connection=policy.name, target=target)
             # Preserve the existing authority-before-final-observation order.
             if self.active(authority):
+                # Cloud ownership validation has its own bounded I/O. Start a
+                # separate budget for this fresh, read-only native proof so a
+                # slow valid authority read cannot expire it before it starts.
+                self.effect_deadline = self.clock() + 5
                 health = self.observe(policy, target, selected=False)
                 diagnostic(
                     "backup-probe-result",
@@ -871,10 +877,24 @@ class NativeTunnelEffects(Generic[AuthorityT]):
                 if set(loaded) & names != names:
                     return False
                 path = next(p for p in policy.paths if p.name == target)
-                routes = json.loads(self.run(("ip", "-j", "-4", "route", "show", "table", "main")))
+                routes = json.loads(
+                    self.run(
+                        (
+                            "ip",
+                            "-j",
+                            "-4",
+                            "route",
+                            "show",
+                            "table",
+                            "all" if policy.enforced_destinations else "main",
+                        )
+                    )
+                )
                 return all(
                     any(
-                        route_destination(r) == prefix and r.get("dev") == path.interface
+                        route_destination(r) == prefix
+                        and r.get("dev") == path.interface
+                        and table_matches(r, policy.table_for(prefix))
                         for r in routes
                     )
                     for prefix in policy.destinations
@@ -1013,7 +1033,12 @@ class NativeTunnelEffects(Generic[AuthorityT]):
         path = next(path for path in policy.paths if path.name == target)
         with tempfile.NamedTemporaryFile(mode="w", dir=self.state_dir) as batch:
             for destination in sorted(policy.destinations):
-                batch.write(f"route replace {destination} dev {path.interface}\n")
+                table = policy.table_for(destination)
+                batch.write(
+                    f"route replace {destination} dev {path.interface}"
+                    + (f" table {table}" if table != 254 else "")
+                    + "\n"
+                )
             batch.flush()
             if not self.revalidate(authority):
                 raise RuntimeError("HA tunnel route authority changed")
@@ -1061,9 +1086,25 @@ class NativeTunnelEffects(Generic[AuthorityT]):
                 health = self.observe(policy, path.name, selected=False)
                 if health is not Health.HEALTHY:
                     return health
-            routes = json.loads(self.run(("ip", "-j", "-4", "route", "show", "table", "main")))
+            routes = json.loads(
+                self.run(
+                    (
+                        "ip",
+                        "-j",
+                        "-4",
+                        "route",
+                        "show",
+                        "table",
+                        "all" if policy.enforced_destinations else "main",
+                    )
+                )
+            )
             for prefix in policy.destinations:
-                matches = [r for r in routes if route_destination(r) == prefix]
+                matches = [
+                    r
+                    for r in routes
+                    if route_destination(r) == prefix and table_matches(r, policy.table_for(prefix))
+                ]
                 if (
                     len(matches) != 1
                     or matches[0].get("protocol") != "bgp"
@@ -1180,6 +1221,7 @@ class ControllerTunnelRuntime:
         self.restart_pending = True
         self.preferred_observations: dict[str, Any] = {}
         self.static_recovery_observations: dict[str, Any] = {}
+        self._last_authority_snapshot: ControllerSnapshot | None = None
 
     def prepare_daemon_reload(self, action: ControllerAction, deadline: float) -> None:
         """Complete one admitted component repair without entering selector authority."""
@@ -1295,9 +1337,10 @@ class ControllerTunnelRuntime:
         if self.ports.data_plane.mode() is not DataPlaneMode.PASSIVE:
             return True
         effective = load_effective_config(self.cfg, self.state_dir)
+        enforced = {p.connection: p for p in compile_policies(effective)}
         expected = {
-            str(t.get("bgp", {}).get("remote_ip") or t["inner_remote_ip"]): (
-                "SET-LOCAL-PREF-200" if tunnel_preferred(effective, c, t) else "SET-LOCAL-PREF-100"
+            str(t.get("bgp", {}).get("remote_ip") or t["inner_remote_ip"]): bgp_import_map_name(
+                enforced.get(c["name"]), 200 if tunnel_preferred(effective, c, t) else 100
             )
             for c in effective.get("connections", [])
             if c.get("routing_mode") == "bgp"
@@ -1427,14 +1470,16 @@ class ControllerTunnelRuntime:
         # Owner and fenced-preparation checks keep separate change histories.
         authority_scope = "preparation" if preparation else "owner"
         checkpoint = self.controller.controller.checkpoints.load()
+        self._last_authority_snapshot = None
         try:
-            snapshot = self.controller.snapshots.observe()
+            snapshot = self.controller.snapshots.observe_tunnel_authority()
         except (AmbiguousHACloudError, RetryableHACloudError) as error:
             # Only a pure authority read may defer tunnel work. A separate
             # signal bypasses native-effect RuntimeError handlers, preserving
             # admitted intent and preventing an unknown read from selecting a
             # repair or using last_snapshot as confirmed ownership drift.
             raise _AuthorityObservationUnavailable from error
+        self._last_authority_snapshot = snapshot
         state = read_state(self.state_dir / STATE_NAME)
         operation = state["operation"]
         policy = next(
@@ -1699,7 +1744,7 @@ class ControllerTunnelRuntime:
             self._consume_request(selector, authority)
             if authority is None:
                 diagnostic("step-skipped", reason="authority-unavailable")
-                snapshot = self.controller.snapshots.last_snapshot
+                snapshot = self._last_authority_snapshot
                 if (
                     snapshot is not None
                     and snapshot.cloud.authoritative

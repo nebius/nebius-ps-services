@@ -1,5 +1,6 @@
 from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -157,3 +158,172 @@ def test_stopped_readback_never_substitutes_for_missing_authority(stopped_guest,
         repair.publish(repair.STATE / "controller-checkpoint.json", json.dumps(record).encode())
     with pytest.raises((RuntimeError, ValueError)):
         observe(request, repair, upgrade, manager)
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "rearm-cloud-operation.json",
+        "standby-restoration-authorization.json",
+        "standby-auto-healing-recovery.json",
+        "transfer-lineage.json",
+        "mtls/inhibition.json",
+    ],
+)
+def test_stopped_continuity_rejects_durable_external_writer(stopped_guest, filename):
+    from nebius_vpngw.deploy.stopped_upgrade import verify_continuity
+
+    request, _, _ = stopped_guest
+    repair.publish(repair.STATE / filename, b"{}")
+    with pytest.raises(RuntimeError, match="competing writer"):
+        verify_continuity(
+            repair,
+            upgrade,
+            boot=request["boot_id"],
+            expected=request["expected"],
+            allocation_id=request["allocation_id"],
+            installed={},
+            unstarted=True,
+        )
+
+
+@pytest.fixture
+def completed_stopped_guest(tmp_path, monkeypatch):
+    import json
+
+    from test_ha_activation import _restoration_authority
+
+    from nebius_vpngw import ha_activation
+
+    store, request = _restoration_authority(tmp_path, monkeypatch)
+    tmp_path.chmod(0o700)
+    monkeypatch.setattr(repair, "STATE", tmp_path)
+    checkpoint_path = tmp_path / "controller-checkpoint.json"
+    checkpoint_path.write_text(
+        json.dumps(controller_checkpoint_to_dict(ControllerCheckpoint(sequence=1)))
+    )
+    checkpoint_path.chmod(0o600)
+    installed = yaml.safe_load(ha_activation.CONFIG.read_text())["vm_ha"]
+    expected = {**request["lock"], "generation_id": "c" * 64}
+    (tmp_path / "apply.lock").write_text(json.dumps(expected))
+    return store, {
+        "boot": "boot",
+        "expected": expected,
+        "allocation_id": installed["runtime_binding"]["shared_allocation_id"],
+        "installed": installed,
+    }
+
+
+@pytest.mark.parametrize("older", [False, True])
+@pytest.mark.parametrize("node", ["node-a", "node-b"])
+def test_stopped_completed_history_survives_new_apply_generation(
+    completed_stopped_guest, older, node
+):
+    from nebius_vpngw.deploy.stopped_upgrade import verify_continuity
+
+    store, kwargs = completed_stopped_guest
+    kwargs["expected"]["node_id"] = kwargs["installed"]["node"]["node_id"] = node
+    if older:
+        generation = kwargs["installed"]["generation"]
+        generation["generation_id"] = generation["digests"]["configuration"] = "b" * 64
+        binding = kwargs["installed"]["runtime_binding"]
+        binding["generation_id"] = binding["configuration_digest"] = "b" * 64
+    before = {p: p.read_bytes() for p in (store.path, store.receipt_path)}
+    verify_continuity(repair, upgrade, **kwargs)
+    assert {p: p.read_bytes() for p in before} == before
+
+
+@pytest.mark.parametrize(
+    "change", ["running", "blocked", "receipt", "unsafe", "allocation", "node"]
+)
+def test_stopped_completed_history_never_waives_authority_checks(completed_stopped_guest, change):
+    import json
+
+    from nebius_vpngw.deploy.stopped_upgrade import verify_continuity
+
+    store, kwargs = completed_stopped_guest
+    if change in {"running", "blocked"}:
+        record = json.loads(store.path.read_text())
+        record["phase"] = change
+        if change == "blocked":
+            record["blocked_reason"] = "standby-restoration-blocked"
+        store.path.write_text(json.dumps(record))
+        assert store.load().phase.value == change
+    elif change == "receipt":
+        store.receipt_path.unlink()
+    elif change == "unsafe":
+        store.path.chmod(0o644)
+    elif change == "allocation":
+        kwargs["allocation_id"] = "foreign"
+    else:
+        kwargs["expected"]["node_id"] = "foreign"
+    with pytest.raises((RuntimeError, ValueError, OSError)):
+        verify_continuity(repair, upgrade, **kwargs)
+
+
+def test_transfer_progress_is_not_writer_authority(stopped_guest):
+    from nebius_vpngw.deploy.stopped_upgrade import verify_continuity
+
+    request, _, _ = stopped_guest
+    progress = repair.STATE / "transfer-progress.json"
+    repair.publish(progress, b"{}")
+    verify_continuity(
+        repair,
+        upgrade,
+        boot=request["boot_id"],
+        expected=request["expected"],
+        allocation_id=request["allocation_id"],
+        installed=yaml.safe_load(Path(request["config_path"]).read_text())["vm_ha"],
+    )
+    assert progress.read_bytes() == b"{}"
+
+
+def test_table_barrier_streams_operator_continuity(completed_stopped_guest, monkeypatch):
+    """A pending package cannot select the installed predecessor's old guard."""
+    import contextlib
+    import io
+    import json
+
+    from nebius_vpngw.deploy import ha_enforced_barrier, stopped_upgrade
+
+    _, kwargs = completed_stopped_guest
+    expected = kwargs["expected"]
+    monkeypatch.setattr(
+        stopped_upgrade,
+        "verify_continuity",
+        lambda *args, **kwargs: pytest.fail("used installed predecessor guard"),
+    )
+
+    def inspect(target, hostname, local, *, script):
+        scope = {}
+        setup, call = script.rsplit("print(", 1)
+        exec(setup, scope)
+
+        def observation(request, *, continuity):
+            continuity(repair, upgrade, **kwargs)
+            return {"boot_id": "boot", "lock": request["expected"]}
+
+        scope["namespace"]["observe"] = observation
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            exec("print(" + call, scope)
+        return json.loads(output.getvalue())
+
+    result = ha_enforced_barrier.verify(
+        SimpleNamespace(_inspect_vm_ha_host=inspect),
+        instance=SimpleNamespace(
+            hostname="gateway", vm_ha_node=SimpleNamespace(node_id=expected["node_id"])
+        ),
+        target="gateway",
+        local={},
+        binding=SimpleNamespace(
+            cluster_id=expected["cluster_id"],
+            shared_allocation_id=kwargs["allocation_id"],
+            route_runtime_id="runtime",
+        ),
+        receipt=SimpleNamespace(
+            generation_id=expected["generation_id"], staged_file_sha256="d" * 64
+        ),
+        operation=expected["operation_id"],
+    )
+    assert result["lock"]["generation_id"] == expected["generation_id"]

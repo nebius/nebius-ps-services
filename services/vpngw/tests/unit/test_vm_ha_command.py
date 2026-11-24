@@ -658,6 +658,17 @@ def test_vm_ha_apply_plan_impact_is_typed_and_fail_closed(
     assert impact.approval_required is True
 
 
+def test_vm_ha_enforced_table_creation_is_visible_in_apply_impact() -> None:
+    impact = _vm_ha_apply_plan_impact(
+        "apply-convergence", has_destructive_changes=False, private_route_tables=2
+    )
+    assert impact.resource_creation is True
+    assert impact.destructive is False
+    assert impact.vpn_traffic_interruption is True
+    assert "2 private workload route tables" in impact.summary
+    assert "switches the corresponding subnet attachments" in impact.summary
+
+
 def test_vm_ha_destructive_apply_impact_overrides_plan_kind() -> None:
     impact = _vm_ha_apply_plan_impact(
         "apply-convergence",

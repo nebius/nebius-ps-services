@@ -115,9 +115,17 @@ def _sample() -> dict:
     if sys.platform.startswith("linux"):
         # Guest-visible /proc alone cannot establish physical-host headroom.
         groups = _read(Path("/proc/self/cgroup"))
-        if (Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
-                or any(line.rsplit(":", 1)[-1] != "/" for line in groups.splitlines())):
+        if Path("/.dockerenv").exists() or Path("/run/.containerenv").exists():
             raise MeasurementError("host visibility unavailable")
+        if any(line.rsplit(":", 1)[-1] != "/" for line in groups.splitlines()):
+            # Normal systemd login/service scopes also have non-root cgroups.
+            # Require a positive native non-container result, not that path alone.
+            detector = subprocess.run(
+                ["/usr/bin/systemd-detect-virt", "--container"],
+                stdin=subprocess.DEVNULL, capture_output=True, timeout=2,
+                env={"LC_ALL": "C", "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"})
+            if detector.returncode != 1 or detector.stdout.strip() != b"none" or detector.stderr:
+                raise MeasurementError("host visibility unavailable")
         return {"available_bytes": parse_linux(_read(Path("/proc/meminfo"))),
                 "method": "linux_memavailable", "pressure_advisory": "not_observed"}
     raise MeasurementError("unsupported host measurement")

@@ -15,7 +15,8 @@ class DesignContractTests(unittest.TestCase):
         paths = set(re.findall(r"references/[a-z-]+\.md", core))
         self.assertEqual(paths, {"references/design-workflow.md",
                                  "references/readme-design.md",
-                                 "references/portable-html-design.md"})
+                                 "references/portable-html-design.md",
+                                 "references/document-extraction.md"})
         for relative in paths:
             self.assertTrue((ROOT / relative).is_file(), relative)
 
@@ -37,11 +38,23 @@ class DesignContractTests(unittest.TestCase):
     def test_planning_cases_have_a_deterministic_no_write_oracle(self):
         cases = json.loads((ROOT / "evals/evals.json").read_text())["evals"]
         for case in cases:
-            if case["id"] != 8:  # Existing explicitly authorized implementation case.
+            if case["id"] != 8 and case.get("fixture_policy") != "docs-only":  # Existing explicitly authorized implementation case.
                 self.assertEqual(case["fixture_policy"], "unchanged")
+        writable = [case for case in cases if case.get("fixture_policy") == "docs-only"]
+        self.assertTrue(writable)
+        self.assertTrue(all("--extract-once" in case["prompt"] for case in writable))
         groups = {case["id"] for case in cases
                   if case.get("performance_group") == "simple-standard"}
         self.assertEqual(groups, {1, 2, 3, 4, 11, 23, 24, 27})
+
+    def test_extraction_publication_cases_require_the_owner_catalog(self):
+        cases = json.loads((ROOT / "evals/evals.json").read_text())["evals"]
+        for case in cases:
+            if case.get("fixture_policy") == "docs-only":
+                self.assertEqual(set(case.get("required_skills", [])), {
+                    "maintain-project-specs", "global-context-management",
+                    "research", "worktree", "system-design-rules",
+                })
 
 
 if __name__ == "__main__":

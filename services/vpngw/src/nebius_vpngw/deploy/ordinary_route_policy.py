@@ -7,6 +7,7 @@ requires three complete absence observations. This module has no cloud effects.
 from __future__ import annotations
 
 import ipaddress
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 
 
@@ -41,16 +42,20 @@ class Policy:
     connections: tuple[Connection, ...]
     excluded_prefixes: tuple[str, ...]
     summarize: bool = False
+    enforced: tuple[dict, ...] = ()
 
     def mapping(self) -> dict:
-        return asdict(self)
+        value = asdict(self)
+        if not self.enforced:
+            del value["enforced"]
+        return value
 
     @classmethod
     def parse(cls, value: dict) -> Policy:
         """Read generated policy without accepting extra ownership or peer fields."""
         try:
             if (
-                set(value) != {"connections", "excluded_prefixes", "summarize"}
+                set(value) - {"enforced"} != {"connections", "excluded_prefixes", "summarize"}
                 or type(value["summarize"]) is not bool
             ):
                 raise ValueError
@@ -96,13 +101,54 @@ class Policy:
                 or connections != sorted(connections, key=lambda c: c.name)
             ):
                 raise ValueError
-            return cls(tuple(connections), excluded, value["summarize"])
+            enforced = tuple(value.get("enforced", ()))
+            names = {c.name for c in connections}
+            for item in enforced:
+                if (
+                    set(item) != {"connection", "source_subnets", "destinations"}
+                    or item["connection"] not in names
+                ):
+                    raise ValueError
+                for field in ("source_subnets", "destinations"):
+                    if not item[field] or list(item[field]) != sorted(
+                        {prefix(p) for p in item[field]}
+                    ):
+                        raise ValueError
+            if len({e["connection"] for e in enforced}) != len(enforced):
+                raise ValueError
+            return cls(tuple(connections), excluded, value["summarize"], enforced)
         except (KeyError, TypeError, ValueError, AttributeError):
             raise ValueError("Invalid generated ordinary route policy") from None
 
     @property
     def dynamic(self) -> bool:
         return any(connection.mode == "bgp" for connection in self.connections)
+
+    @property
+    def enforced_destinations(self) -> frozenset[str]:
+        return frozenset(p for entry in self.enforced for p in entry["destinations"])
+
+    @property
+    def enforced_only_destinations(self) -> frozenset[str]:
+        shared = {
+            p
+            for entry in self.enforced
+            for c in self.connections
+            if c.name == entry["connection"]
+            for p in set(c.prefixes) & set(entry["destinations"]) - {"0.0.0.0/0"}
+        }
+        return self.enforced_destinations - shared
+
+    def mandatory(
+        self, subnet_ids: tuple[str, ...], resolved: Mapping[str, Sequence[str]]
+    ) -> dict[str, int]:
+        owners = {c.name: c.instance_index for c in self.connections}
+        return {
+            p: owners[entry["connection"]]
+            for entry in self.enforced
+            if set(subnet_ids) & set(resolved[entry["connection"]])
+            for p in entry["destinations"]
+        }
 
     def excluded(self, destination: str) -> bool:
         network = ipaddress.IPv4Network(prefix(destination))
@@ -118,7 +164,7 @@ class Policy:
 
     def retains(self, destination: str, instance_index: int) -> bool:
         """Only authoritative configuration retirement can return false."""
-        if self.excluded(destination):
+        if destination in self.enforced_only_destinations or self.excluded(destination):
             return False
         if self.summarize:
             permitted = [
@@ -149,7 +195,11 @@ class Policy:
             if len(destinations) > connection.max_prefixes:
                 raise RuntimeError("Observed route count exceeds the approved connection limit")
             for destination in sorted(destinations):
-                if not connection.accepts(destination) or self.excluded(destination):
+                if (
+                    destination in self.enforced_only_destinations
+                    or not connection.accepts(destination)
+                    or self.excluded(destination)
+                ):
                     continue
                 previous = result.get(destination)
                 if previous is not None and previous != connection.instance_index:
@@ -168,7 +218,7 @@ class Policy:
 
 def freeze(local: dict, *, network_prefixes: tuple[str, ...], summarize: bool = False) -> Policy:
     """Reuse configured connection ownership and Static selector semantics."""
-    from ..config_loader import connection_static_remote_prefixes
+    from ..enforced_routing import compile_policies, ordinary_prefixes
     from .route_manager import RouteManager
 
     manager = RouteManager(None)
@@ -199,7 +249,7 @@ def freeze(local: dict, *, network_prefixes: tuple[str, ...], summarize: bool = 
             )
             maximum = limit
         elif mode == "static":
-            configured = connection_static_remote_prefixes(item, instance_index=index)
+            configured = ordinary_prefixes(item, "static", instance_index=index)
             maximum = max(1, len(configured))
         else:
             raise ValueError("Unsupported ordinary route mode")
@@ -220,7 +270,12 @@ def freeze(local: dict, *, network_prefixes: tuple[str, ...], summarize: bool = 
     )
     if not excluded:
         raise ValueError("Route policy requires canonical local and VPC exclusions")
-    return Policy(tuple(sorted(connections, key=lambda item: item.name)), excluded, summarize)
+    enforced = tuple({"connection": p.connection, **p.mapping()} for p in compile_policies(local))
+    if enforced and summarize:
+        raise ValueError("Enforced routing requires exact destinations without summarization")
+    return Policy(
+        tuple(sorted(connections, key=lambda item: item.name)), excluded, summarize, enforced
+    )
 
 
 @dataclass(frozen=True)

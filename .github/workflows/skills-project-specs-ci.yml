@@ -380,6 +380,7 @@ jobs:
           set -euo pipefail
           python -B maintain-project-specs/scripts/test_project_specs.py
           python -B maintain-project-specs/scripts/test_project_specs_transaction.py
+          python -B maintain-project-specs/scripts/test_project_specs_filesystem.py
           python -B -m unittest discover \
             -s maintain-project-specs/assets/hooks/tests -p 'test_*.py'
 
@@ -387,6 +388,8 @@ jobs:
         run: |
           set -euo pipefail
           python -B design/scripts/test_skill_contract.py
+          python -B -m unittest discover -s design/scripts -p 'test_design_intake.py'
+          python -B align-skill/scripts/test_docs_only_policy.py
           python -B -m unittest discover -s troubleshoot/scripts -p 'test_*.py'
           python -B -m unittest discover -s troubleshoot/assets/hooks/tests -p 'test_*.py'
           python -B -m unittest discover -s troubleshoot/evals/diagnostic -p 'test_*.py'

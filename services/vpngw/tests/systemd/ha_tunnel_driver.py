@@ -68,7 +68,7 @@ def recover_owner(cfg, config_path, state_dir):
     )
     vm_effects = []
 
-    def observe():
+    def observe(*, publish=True):
         ready = tunnels.static_ready()
         state = read_state(state_dir / "tunnel-selection.json")
         episode = state["episode"]
@@ -110,10 +110,12 @@ def recover_owner(cfg, config_path, state_dir):
                 snapshot.route_reconciliation_context, operation_id="fixture-initial-routes"
             ),
         )
-        snapshots.last_snapshot = snapshot
+        if publish:
+            snapshots.last_snapshot = snapshot
         return snapshot
 
     snapshots.observe = observe
+    snapshots.observe_tunnel_authority = lambda: observe(publish=False)
     runtime = VMHAControllerRuntime(
         snapshots=snapshots,
         effects=SimpleNamespace(apply=vm_effects.append),

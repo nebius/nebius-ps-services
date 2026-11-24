@@ -180,6 +180,8 @@ uses the production authority predicate while observing the real native path.
 Its 120-second convergence cap covers the 30-second loss threshold, five-second
 proof separation, 29-second mutation and 29-second verification windows, and
 fixture overhead. The outer process has 150 seconds for setup and cleanup.
+Automatic Static activation takes its first fresh verification sample immediately
+after persisting the fixed window; a second later sample is still required.
 These fixture limits do not change product timers or establish a recovery SLA.
 These tests do not prove Compute
 fencing, allocation transfer or peer-provider return routing.

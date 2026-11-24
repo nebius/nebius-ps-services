@@ -7486,7 +7486,7 @@ fresh native behavior is still outside the verified scope.
 
 <!-- /FEATURE: FEAT-036 -->
 
-<!-- FEATURE: FEAT-037 reqs=REQ-038 status=ready delivery=implemented priority=P1 version=5 -->
+<!-- FEATURE: FEAT-037 reqs=REQ-038 status=ready delivery=implemented priority=P1 version=6 -->
 ### FEAT-037: Code-grounded software and portable artifact design
 
 #### Requirements Covered
@@ -7516,7 +7516,10 @@ refactor without shims unless requested. Unknown usage does not qualify.
 After all seven phases, an explicit implementation request may continue through
 matching implementation skills, subject to host mode, permissions and existing
 safety boundaries. Design supplies canonical decisions and delivery evidence to
-the spec owner but never publishes project documents itself.
+the spec owner and never writes the canonical pair itself. The explicit
+extraction action in FEAT-086 permits supplementary documentation publication
+and routes canonical reconciliation through maintain-project-specs. All design
+items now require research coverage; related items may share applicable evidence.
 
 Use references/readme-design.md as the sole detailed README guidance owner.
 Load it for new-project design, material user-workflow changes or explicit README
@@ -11988,7 +11991,7 @@ Final integration validation: 235 workflow-verifier tests, 29 disposable Codex/C
 
 <!-- /FEATURE: FEAT-057 -->
 
-<!-- FEATURE: FEAT-058 reqs=REQ-059 status=ready delivery=implemented priority=P1 version=6 -->
+<!-- FEATURE: FEAT-058 reqs=REQ-059 status=ready delivery=verified priority=P1 version=7 -->
 ### FEAT-058: GitHub activity and open backlog reporting
 
 #### Requirements Covered
@@ -12000,6 +12003,14 @@ Final integration validation: 235 workflow-verifier tests, 29 disposable Codex/C
 The current collector already discovers repository-wide interval activity and open inventory, but builds rows for the authenticated viewer and emits schema v2. The accepted change replaces personal reporting with all-human user groups, a literal login/profile-name selector and one unchanged shared backlog. Existing read-only collection, role/closure proof, folder inference and whole-PR metrics remain authoritative.
 
 #### Design Details
+
+Version 7 adds a deterministic LOC mode beside the existing activity mode. Keep normal collection/finalization unchanged. Validate the mode, owner/repository exclusivity, positive top K and unsupported project combination before checkout/API access. Reuse window and literal user-selection semantics. A dedicated loc_modifications_report.py owns LOC aggregation and rendering; github_api.py owns fixed owner and merged-PR reads, shared budgets and sanitized failures.
+
+Resolve repositoryOwner by stable identity, enumerate its repositories with ownerAffiliations OWNER, and verify each returned repository owner. Include forks, archives and all visible privacy levels, never affiliated repositories. Pass the selected repository list into either report mode; propagate partial owner inventory into final coverage. For LOC, page merged PRs in updatedAt-descending order with bounded pages, validating monotonic order and updatedAt at least mergedAt before a lower-bound stop. Reconcile one bounded updated-since-observation pass by stable PR ID; moved or changed records/counts remain provisional. Bind repository names and stable IDs in both directions and to owner inventory. Filter exact mergedAt instants against the frozen interval. Deduplicate stable identities; retain observed evidence and mark pagination, scope, identity and metric failures partial.
+
+Aggregate nonnegative integer additions plus deletions per stable User author across all selected repositories, counting zero-diff PRs. API User is an account-type proxy for a human, not proof of employment; service accounts may remain. Do not credit coauthors or reviewers with the whole diff. Apply user substring selection and then descending LOC order with casefold login/stable-ID tie breaking. Optional top K truncates only the rendered selection after collection and reports excluded ties. Missing metrics produce known lower bounds and provisional ranking, never fabricated zero totals. Render Rank, Contributor, LOC Modifications and Merged PRs, scope/interval, access/collection limits and all-file/whole-PR attribution caveats. No backlog, per-item six-column activity tables or separate additions/deletions appear in this mode.
+
+The existing normal-mode design remains:
 
 Collect each repository once. Extend actor and mapped commit-user fragments with User name and actor type; maintain stable node-ID identities independently from authenticated transport identity. Discover users from dated activity and historical PR authors/commit contributors whose delivery qualifies. Exclude non-User actors from groups, never infer users from free-text Git identities. Null public names are valid; explicit name availability distinguishes known null from missing fields. Merge later known profile fields by stable ID without erasing known values on subsequent missing reads. Identity/profile conflicts remain qualified. Unicode line/paragraph separators are rejected in user selectors and normalized in presentation.
 
@@ -12014,6 +12025,8 @@ Render exactly two header lines per repository: User/Repository/optional Folder 
 Reuse the fixed Python/gh collector with one evidence collection and deterministic multiuser projection/finalization. Existing host model only assesses folders and narrates per-user evidence; no new model, runtime, service or persistence.
 
 #### Alternatives Considered
+
+For LOC mode, per-commit sums were rejected because squash/merge histories, coauthors and repeated diffs require a different attribution contract. Reusing full activity enrichment needlessly collects comments/reviews/backlog. Search-only ranking was rejected as a coverage authority because of indexing and result caps. Source-code-only filtering and project-specific LOC remain outside this mode until exclusions are defined consistently.
 
 Keeping authenticated-user defaults does not satisfy the accepted all-user requirement. Rerunning collection per user multiplies API cost and observations. Author-only grouping loses reviews and other evidenced collaboration. Duplicating backlog per user hides its shared scope. None is retained as an alternate mode.
 
@@ -12051,9 +12064,13 @@ Source, canonical pair, help, docs, evals and installed payload agree; focused t
 
 #### Implementation Evidence
 
+Version 7 implements the dedicated LOC module, shared owner selector, optional top K, exact-zero and lower-bound handling, stable identity aggregation, bounded pagination reconciliation, deterministic equal ranks and one displayed LOC Modifications column. Normal-mode finalization retains owner inventory uncertainty, including empty inventories. Public help, metadata, README, references, catalog and seventeen trigger/nine quality definitions agree. The scoped installer refreshed seventeen matching payload files with canonical single-skill provenance and no hook payload or registration change. Existing normal-mode baseline evidence follows.
+
 Version 6 implements schema-v3 shared items/users and per-user attribution, all-User defaults excluding API-identified bots, casefold login/public-name substring filtering, login-sorted worked groups, one shared backlog independent of user filter, distinct repository totals and the two-line User/Date header. Actor and commit-user reads include profile identity; stable-ID field merging preserves later known names. Private finalization validates user/attribution references and keeps folder assessment item-scoped. Source help, README, metadata, references, template, thirteen trigger cases and seven synthetic output cases agree. All fourteen managed installed payload files match source; the ownership marker and unrelated skills/hooks/config remain unchanged.
 
 #### Verification Evidence
+
+Version 7: all 104 existing and 24 focused offline tests pass from source and installed payload. Ruff check/format, target Markdown, core/Codex/Claude structure, both catalogs and whitespace checks pass. Disposable skills@1.5.26 discovery, both copied payloads, repeated installation and isolation pass. Independent nested code/security review found and verified repairs for LOC-01 (owner coverage lost by normal finalization) and LOC-02 (repository identity drift). Live read-only owner-wide collection completed with no coverage limits and agreed with independent aggregate totals; final installed code also completed a separate repository smoke check. These are observed reads, not an atomic historical archive or proof of inaccessible repositories. Fresh Codex and Claude trigger attempts were UNAVAILABLE because isolated homes lacked authentication; comparative native quality remains unavailable for the same reason, without credential changes. The deterministic implementation and installed payload are verified; native activation and model narration remain separate. Existing baseline evidence follows.
 
 All 104 offline behavioral tests pass from source and installed payload, including the original 86 tests and eighteen multiuser cases. Tests cover shared backlog invariance, unique counts, individual roles and issue-fix credit, earlier contributors, profile name recovery/nulls, Unicode separator rejection, filtered late linked-read failure, collection-call invariance and schema-v3 private stdin round trip. Ruff check/format, target Markdown, portable/core and repository Codex/Claude structure, both native catalogs and spec-pair validation pass. Root changelog retains a preexisting duplicate Changed heading; no new Markdown finding was introduced. Disposable skills@1.5.26 discovery, both copied payloads, repeat install and isolation pass. Independent report-only code/security review found GR-001 through GR-003, all repaired; the reviewer reran the original reproductions and eighteen multiuser tests with no blocking findings. Fresh Codex and Claude trigger attempts returned UNAVAILABLE because isolated homes have no authentication; comparative narrative quality is likewise unavailable. No credentials were copied/changed and no live GitHub report was collected. These checks prove source and installed behavior within offline coverage, not native/live completeness.
 
@@ -16459,6 +16476,174 @@ model-driven activation are not claimed. No commit, push or release mutation was
 performed by this implementation task.
 
 <!-- /FEATURE: FEAT-085 -->
+
+<!-- markdownlint-disable-next-line MD013 -->
+<!-- FEATURE: FEAT-086 reqs=REQ-087 status=ready delivery=implemented priority=P0 version=4 -->
+### FEAT-086: Unattended design package extraction and research coverage
+
+#### Requirements Covered
+
+- REQ-087: Unattended research-backed design extraction
+
+#### Context Evidence
+
+Existing design phases, research methodology, source_bundle validator, workflow_program
+graph checks and paired spec transaction define the authoritative owners.
+
+#### Design Details
+
+Full-skill review corrections: enforce supplementary artifact byte bounds while
+reading, before retaining further files or publishing target artifacts. Extraction
+publication evals declare required sibling skills; the evaluator checks the frozen
+catalog and reports unavailable prerequisites before either native arm, preserving
+all publication and readiness assertions.
+
+Alignment follow-up: preserve omitted progress fields across stage/resume updates,
+require precise source-level finding locators and an explicitly planning-related
+finding for a missing roadmap, and validate an item's requirements against the
+union of its mapped features while retaining each feature's readiness check.
+These corrections enforce REQ-087 AC-003, AC-004, AC-005 and AC-006.
+
+Add an explicit documentation-only extraction mode, item/evidence ledger, immutable
+source inventory, reviewed phase roadmap and measured progress. Keep semantic research
+with the agent and deterministic identity, coverage, graph and transaction checks in
+small helpers. Unresolved findings remain draft/blocked and never yield an admissible
+source manifest. Extend the same paired transaction with a discriminated filesystem
+target and separate receipt schema; preserve strict registered Git workflow guards.
+
+#### Selected Option
+
+Reuse existing owners with focused extraction instructions and tested pure helpers.
+Resolve technical gaps without asking design questions; aggregate remaining decisions at
+completion.
+
+#### Alternatives Considered
+
+Raw copying omits research; per-phase re-extraction loses a stable baseline; a new
+coordinator duplicates SDLC. Fresh lookup per item repeats evidence; grouped research
+retains explicit item coverage.
+
+#### Implementation Boundaries
+
+Design and research skills, canonical spec target/publication owner, shared pure roadmap
+checks, focused tests/evals/docs and scoped installation. No user application
+implementation, Git initialization or commits.
+
+#### Test-First Success Criteria
+
+- TDD-001: Exercise plain-folder publication, full evidence coverage and source-bound
+  unattended findings before claiming readiness.
+
+#### Validation Plan
+
+Run focused unittest suites, canonical-pair validation, skill structure/trigger checks,
+lint, align-skill and align. Use disposable native quality fixtures where available.
+
+#### Test Plan
+
+Git and filesystem CAS/replay/rollback, mode and policy drift, stable inventory/reruns,
+partial source coverage, evidence freshness, DAG/phase coverage, elapsed reporting and
+execution boundaries.
+
+#### Evaluation Plan
+
+Use trace-backed native cases for research consultation, no clarification, report
+quality and default target. Static tests do not certify native behavior.
+
+#### Rollout And Rollback
+
+Snapshot existing working bytes; validate source and disposable installation before
+scoped owner installation. Preserve failed trial evidence and report unavailable native
+qualification.
+
+#### Done Definition
+
+Source, contracts, help, docs, tests and installed payload agree; report native/runtime
+limits explicitly.
+
+#### Implementation Evidence
+
+Full-skill review resolved DESIGN-01 (late artifact size rejection) and DESIGN-02
+(publication evals without their required owner catalog). Added focused negative
+controls, incremental byte accounting and validated required_skills declarations
+with a pre-launch check. Cases 29 and 30 require maintain-project-specs, its shared
+runtime, research, worktree and system-design-rules. Updated tests, trigger examples,
+references, READMEs and changelog; no native invocation policy changed.
+
+Follow-up alignment fixed four P2 discrepancies: progress no longer resets
+omitted fields; canonical coverage uses the union of mapped features; omitted
+roadmaps require unresolved planning findings; source-level findings require
+precise locators, including honest whole-file locations when content is unreadable.
+Focused regression tests, references, README and changelog were updated. The
+scoped installer refreshed design on both hosts and preserved unrelated payloads,
+hooks and settings.
+
+Implemented the public extraction action and research caller contract, with source
+inventory, item/evidence ledger, original-source findings, reviewed roadmap and measured
+progress. Private helpers enforce source identity, coverage, readiness mappings, resumed
+timing and immutable supplementary artifacts, including interrupted-link recovery. The
+canonical owner now supports discriminated filesystem targets through the paired
+CAS/journal/rollback publisher without granting Git workflow authority. Workflow
+programs reuse the pure roadmap checks. Updated help, READMEs, changelog, quality
+fixtures, deterministic docs-only evaluator policy and CI registration. Scoped
+installation exposed a shared host-adapter defect; Claude projection now omits the
+Codex-only additionalContextLimit field while retaining managed-command checks and
+unrelated settings. Aligned the data-only config checker, native plugin checker and
+Claude manifest with the same host projection.
+
+Scoped repository-installer checks passed in disposable Codex and Claude homes,
+including repeat convergence and unchanged unrelated settings/payloads. The seven
+changed packages were installed through the canonical installer and source parity
+checked separately. No application extraction, implementation, Git initialization,
+commit or push was performed.
+
+#### Verification Evidence
+
+Full-skill review and alignment passed 58 focused tests: design 26, native evaluator
+30 and docs-only policy 2. An additional 62 validator self-checks passed. Both fixes
+have observed failing negative controls and passing corrected proofs; an initial
+schema-test path error was repaired in the fixture before establishing its expected
+failure. Portable core, Codex and Claude structure checks, strict frontmatter,
+lint, manifests and actual npx distribution checks passed for design and its
+changed evaluator owner. Scoped repeat installation and exact payload parity passed
+for both hosts with unrelated skills, hooks and settings unchanged. Installed
+design 26 and evaluator 30 tests also passed independently on each host.
+
+The real evaluator entry point reported UNAVAILABLE for missing required siblings
+on both hosts without launching either model arm. This is prerequisite-check proof,
+not native quality evidence. Isolated API authentication is still unavailable;
+fresh activation, model routing and semantic extraction quality remain unverified.
+Final read-only code and security reviews found no remaining actionable finding.
+
+Follow-up alignment passed all 228 selected tests in completed suites: canonical
+owner 61, spec hooks 38, workflow programs 25, design 24, docs-only evaluator 2,
+configuration checker 34 and the complete shared-runtime/installation suite 44.
+The installed design suite also passed all 24 tests independently on each host.
+Changed Python/Markdown lint, native manifests, CI YAML, canonical pair validation,
+seven skill structures, and the updated design package's npx distribution checks
+passed. Independent code/security and consistency reviews found no remaining
+issue in the repaired scope. Native end-to-end extraction remains unverified;
+prior isolated trials lacked authentication and were not repeated without it.
+
+Passed 147 core tests: 61 canonical-owner, 38 hook, 25 workflow-program, 21
+design/helper and 2 docs-only evaluator checks. The 44-case shared-runtime/installation
+suite exposed two installed-checker subtest failures from the same host-projection
+mismatch; after aligning the dependent checker, its targeted case passed on both hosts.
+The other 43 cases passed in the full run. All 34 configuration-checker tests and both
+native manifest/catalog checks passed after the repair. The 21 design/helper checks also
+passed from each installed host catalog. Changed Python lint, Markdown lint, workflow
+YAML, canonical pair validation and all seven skill structures passed for both hosts.
+Actual pinned npx discovery, copied payloads, repeat installation and isolation passed
+on both hosts.
+
+Independent risk review found no remaining serious issue after source-coverage, target-
+binding and interrupted-publication fixes. Isolated Codex and Claude extraction quality
+trials were UNAVAILABLE because native authentication was absent; no credentials were
+copied or authentication repaired. These tests establish local and installed behavior
+only. Autonomous semantic research quality, native skill loading, end-to-end extraction
+and fresh-session activation remain unverified. Delivery is implemented, not verified.
+
+<!-- /FEATURE: FEAT-086 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->

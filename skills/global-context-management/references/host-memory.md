@@ -105,11 +105,12 @@ The Apple implementation subtracts speculative pages from printed free, so
 adding printed speculative once is intentional. Purgeable pages are not added
 again, nor are compressed pages or swap counted as spare RAM.
 
-On Linux, use `MemAvailable`, not `MemFree`. The current conservative observer
-reports unknown for visible container markers or non-root cgroup membership:
-this includes many systemd user sessions. Such hosts need a verified native
-visibility adapter before this helper can admit heavy work; do not represent
-guest `/proc` counters as an outer-host reserve. Other operating systems are
+On Linux, use `MemAvailable`, not `MemFree`. Visible container markers report
+unknown. Non-root cgroup membership, including normal systemd user sessions,
+requires `systemd-detect-virt --container` to return exactly `none` with exit
+status 1 and no error output. A detected container or unavailable detector
+reports unknown; never represent container `/proc` counters as an outer-host
+reserve. Other operating systems are
 currently unsupported and report unknown. Fixed native probes have timeouts
 and bounded accepted output; failures expose only a fixed diagnostic reason.
 
@@ -134,6 +135,7 @@ this policy. Native platform qualification is separate from parser tests.
 - [Apple Activity Monitor memory](https://support.apple.com/guide/activity-monitor/view-memory-usage-actmntr1004/mac)
   explains pressure and memory categories.
 - [Linux proc documentation](https://docs.kernel.org/filesystems/proc.html)
+- [systemd container detection](https://www.freedesktop.org/software/systemd/man/latest/systemd-detect-virt.html)
   defines `MemAvailable`.
 - [Codex global instructions](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
   and [Claude personal instructions](https://code.claude.com/docs/en/memory)

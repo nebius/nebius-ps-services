@@ -244,7 +244,7 @@ def test_authority_gate_reason(tmp_path, capsys, fault, reason):
         snapshot = replace(snapshot, peer_heartbeat=None)
     else:
         snapshot = replace(snapshot, peer_received_at=80)
-    runtime.controller.snapshots.observe = lambda: snapshot
+    runtime.controller.snapshots.observe_tunnel_authority = lambda: snapshot
     assert runtime.authority() is None
     assert any(reason in r.get("reasons", []) for r in events(capsys))
 

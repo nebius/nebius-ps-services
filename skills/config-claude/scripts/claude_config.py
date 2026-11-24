@@ -213,6 +213,7 @@ def projected(hooks: dict, home: Path, *, plugin: bool = False) -> dict:
                 if plugin:
                     handler["command"] += ' --plugin-root "${CLAUDE_PLUGIN_ROOT}"'
                 handler.pop("statusMessage", None)
+                handler.pop("additionalContextLimit", None)
     return result
 
 

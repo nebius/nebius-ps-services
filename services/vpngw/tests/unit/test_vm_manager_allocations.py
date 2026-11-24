@@ -1795,6 +1795,7 @@ def test_set_ha_private_alias_requires_exact_nic() -> None:
 def _ha_spec() -> GatewayGroupSpec:
     generation = SimpleNamespace(
         generation_id="a" * 64,
+        logical_manifests=SimpleNamespace(static_routes_json="[]", bgp_policy_json="[]"),
         digests=SimpleNamespace(
             configuration="a" * 64,
             static_routes="b" * 64,
@@ -2111,6 +2112,55 @@ def test_vm_ha_activation_resume_rebuilds_binding_without_provisioning(
     assert result.vm_ha_runtime_binding is binding
     assert observe.call_count == 2
     build_binding.assert_called_once()
+
+
+@pytest.mark.parametrize("preparation", ["valid", "missing", "invalid", "foreign-drift"])
+def test_vm_ha_activation_resume_reconciles_preparation_revision(tmp_path, preparation) -> None:
+    vm_mgr = VMManager(project_id="project-1", region="eu-north1")
+    journal, observation, binding = _install_vm_ha_activating_journal(vm_mgr, tmp_path)
+    changed = deepcopy(observation)
+    changed["shared_allocation"]["resource_revision"] = "8"
+    if preparation == "foreign-drift":
+        changed["members"][0]["compute_revision"] = "99"
+
+    def reconcile(manager, current):
+        assert manager is vm_mgr and current == changed
+        if preparation == "invalid":
+            raise ValueError("preparation receipt mismatch")
+        if preparation == "missing":
+            return False
+        assert journal.state.transaction is not None
+        journal.state = replace(
+            journal.state,
+            transaction=replace(
+                journal.state.transaction,
+                observation=normalize_vm_ha_observation(current),
+                checkpoint="enforced-route-allocation-revision",
+            ),
+        )
+        return True
+
+    with (
+        patch.object(vm_mgr, "observe_vm_ha_migration_state", return_value=changed),
+        patch.object(vm_mgr, "_build_sdk_client", return_value=object()),
+        patch.object(vm_mgr, "_build_vm_ha_runtime_binding", return_value=binding),
+        patch(
+            "nebius_vpngw.deploy.ha_enforced_preparation.reconcile", side_effect=reconcile
+        ) as prepare,
+        patch("nebius_vpngw.deploy.ha_enforced_resume.admit", return_value=False),
+        patch.object(vm_mgr, "ensure_group", side_effect=AssertionError("must not provision")),
+    ):
+        if preparation == "valid":
+            result = vm_mgr.resume_vm_ha_activation(_ha_spec(), ["10.0.0.0/8"])
+            assert result.vm_ha_runtime_binding is binding
+            assert journal.state.transaction.observation == normalize_vm_ha_observation(changed)
+        elif preparation == "invalid":
+            with pytest.raises(ValueError, match="preparation receipt mismatch"):
+                vm_mgr.resume_vm_ha_activation(_ha_spec(), ["10.0.0.0/8"])
+        else:
+            with pytest.raises(RuntimeError, match="before route activation"):
+                vm_mgr.resume_vm_ha_activation(_ha_spec(), ["10.0.0.0/8"])
+    assert prepare.call_count == (0 if preparation == "foreign-drift" else 1)
 
 
 def test_vm_ha_activation_resume_accepts_exact_verified_credential_bindings(

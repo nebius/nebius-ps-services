@@ -30,6 +30,78 @@ def admitted(state: Any, node: str, artifact: str, *, resumed: bool) -> bool:
     )
 
 
+def verify_continuity(
+    repair, upgrade, *, boot, expected, allocation_id, installed, unstarted=False
+):
+    """Reject writer authority, retaining proven history and local passive intent."""
+    for name in (
+        "accepted-cloud-operation.json",
+        "rearm-cloud-operation.json",
+        "standby-auto-healing-recovery.json",
+        "transfer-lineage.json",
+        "mtls/inhibition.json",
+    ):
+        path = repair.STATE / name
+        if path.exists() or path.is_symlink():
+            raise RuntimeError("stopped upgrade has competing writer authority")
+    restoration = repair.STATE / "standby-restoration-authorization.json"
+    if restoration.exists() or restoration.is_symlink():
+        import yaml
+
+        from nebius_vpngw.ha_activation import require_restoration_quiescent
+
+        try:
+            if installed["runtime_binding"]["shared_allocation_id"] != allocation_id:
+                raise ValueError("restoration predecessor allocation differs")
+            # Validate history against the verified installed predecessor, which
+            # can precede the staged generation. The caller independently proves
+            # the exact current apply lock and current-boot forwarding fence.
+            predecessor = {
+                **expected,
+                "generation_id": installed["generation"]["generation_id"],
+            }
+            require_restoration_quiescent(
+                yaml.safe_dump({"vm_ha": installed}).encode(), predecessor
+            )
+        except (KeyError, OSError, RuntimeError, ValueError) as error:
+            raise RuntimeError("stopped upgrade has competing writer authority") from error
+    # Transfer progress is non-authoritative audit output. Actual unfinished
+    # transfer authority is rejected above and in the canonical checkpoint below.
+    checkpoint_path = repair.STATE / "controller-checkpoint.json"
+    if not checkpoint_path.exists():
+        if (
+            unstarted
+            and not checkpoint_path.is_symlink()
+            and not (repair.STATE / "status.json").exists()
+        ):
+            return
+        raise RuntimeError("stopped upgrade controller checkpoint is missing")
+    checkpoint = repair.read_json(checkpoint_path)
+    upgrade.inspect_checkpoint(checkpoint)
+    if (
+        checkpoint.get("transfer_continuity") is not None
+        or checkpoint.get("repair_attempt") is not None
+    ):
+        raise RuntimeError("stopped upgrade has competing controller continuity")
+    action = checkpoint.get("pending_action")
+    if action is not None and not (
+        isinstance(action, dict)
+        and action.get("kind") == "enter-passive"
+        and action.get("boot_id") == boot
+        and action.get("target_node_id") == expected["node_id"]
+        and action.get("allocation_id") == allocation_id
+        and action.get("generation_id") == installed["generation"]["generation_id"]
+        and action.get("digests") == installed["generation"]["digests"]
+        and type(checkpoint.get("sequence")) is int
+        and checkpoint["sequence"] > 0
+        and action.get("ownership_incarnation") == checkpoint.get("ownership_incarnation")
+        and action.get("operation_id")
+        == f"{boot}:{checkpoint['sequence']}:enter-passive:{expected['node_id']}"
+        and action.get("takeover_fence_required") is False
+    ):
+        raise RuntimeError("stopped upgrade has an unresolved controller effect")
+
+
 def observe(request: dict, repair: Any, upgrade: Any, manager: Any) -> dict:
     """Called under existing guest writer locks; grants no package/effect receipt."""
     import yaml
@@ -64,42 +136,14 @@ def observe(request: dict, repair: Any, upgrade: Any, manager: Any) -> dict:
             raise RuntimeError("stopped upgrade member identity changed")
     if staged["generation"]["generation_id"] != expected["generation_id"]:
         raise RuntimeError("stopped upgrade staged generation changed")
-    for name in (
-        "accepted-cloud-operation.json",
-        "rearm-cloud-operation.json",
-        "standby-restoration-authorization.json",
-        "standby-auto-healing-recovery.json",
-        "transfer-lineage.json",
-        "transfer-progress.json",
-        "mtls/inhibition.json",
-    ):
-        path = repair.STATE / name
-        if path.exists() or path.is_symlink():
-            raise RuntimeError("stopped upgrade has competing writer authority")
-    checkpoint = repair.read_json(repair.STATE / "controller-checkpoint.json")
-    upgrade.inspect_checkpoint(checkpoint)
-    if (
-        checkpoint.get("transfer_continuity") is not None
-        or checkpoint.get("repair_attempt") is not None
-    ):
-        raise RuntimeError("stopped upgrade has competing controller continuity")
-    action = checkpoint.get("pending_action")
-    if action is not None and not (
-        isinstance(action, dict)
-        and action.get("kind") == "enter-passive"
-        and action.get("boot_id") == boot
-        and action.get("target_node_id") == expected["node_id"]
-        and action.get("allocation_id") == request["allocation_id"]
-        and action.get("generation_id") == installed["generation"]["generation_id"]
-        and action.get("digests") == installed["generation"]["digests"]
-        and type(checkpoint.get("sequence")) is int
-        and checkpoint["sequence"] > 0
-        and action.get("ownership_incarnation") == checkpoint.get("ownership_incarnation")
-        and action.get("operation_id")
-        == f"{boot}:{checkpoint['sequence']}:enter-passive:{expected['node_id']}"
-        and action.get("takeover_fence_required") is False
-    ):
-        raise RuntimeError("stopped upgrade has an unresolved controller effect")
+    verify_continuity(
+        repair,
+        upgrade,
+        boot=boot,
+        expected=expected,
+        allocation_id=request["allocation_id"],
+        installed=installed,
+    )
     for unit in request["units"]:
         if unit in request["required_units"] and manager.unit(unit).get("missing"):
             raise RuntimeError("stopped upgrade controller unit is missing")

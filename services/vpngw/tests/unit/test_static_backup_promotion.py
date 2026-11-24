@@ -281,11 +281,8 @@ def test_authority_loss_during_cleanup_prevents_more_configuration_or_routes(nat
     assert len([call for call in native.events if call[:2] == ("swanctl", "--load-all")]) == 1
 
 
-def test_failure_after_route_switch_is_detected_on_next_controller_pass(native):
+def test_failure_after_route_switch_is_detected_in_activation_pass(native):
     native.on_routes = lambda: native.health.update(backup=Health.DOWN)
-    native.selector._advance(AUTH, native.clock)
-    assert native.selector.state["operation"]["phase"] == "verify"
-    native.clock += 1
     native.selector._advance(AUTH, native.clock)
     assert native.selector.state["operation"]["phase"] == "restore"
     assert native.sas["unrelated"] == native.original["unrelated"]
@@ -302,23 +299,103 @@ def test_post_switch_verification_does_not_reuse_a_cached_inner_peer_success(nat
     assert native.sas["backup"] == native.original["backup"]
 
 
+def test_sparse_controller_passes_use_fresh_post_activation_verification(native, monkeypatch):
+    monkeypatch.setattr(tunnels, "monotonic", lambda: native.clock)
+
+    def slow_authority(authority):
+        native.clock += 1
+        return native.valid and authority == AUTH
+
+    native.effects.revalidate = slow_authority
+    native.selector._advance(AUTH, native.clock)
+    operation = native.selector.state["operation"]
+    verification = operation["attempt_deadline"]
+    assert operation["deadline"] == 129
+    assert verification <= 158
+    # One more eligible pass precedes a busy writer interval that outlives the
+    # fixed window. Activation itself is an opportunity for the first fresh
+    # post-route sample; it must not consume another scheduled controller pass.
+    native.clock += 9
+    native.selector._advance(AUTH, native.clock)
+    assert operation["phase"] == "succeeded"
+    assert operation["successes"] == 2
+    assert operation["attempt_deadline"] == verification
+    route_index = next(i for i, event in enumerate(native.events) if "-batch" in event)
+    assert len([event for event in native.events[route_index + 1 :] if event[0] == "ping"]) == 2
+    assert native.sas["backup"] == native.original["backup"]
+    assert native.sas["unrelated"] == native.original["unrelated"]
+
+
+def test_immediate_sample_does_not_count_pre_route_inner_peer_evidence(native):
+    native.on_routes = lambda: setattr(native, "ping_ok", False)
+    native.selector._advance(AUTH, native.clock)
+    operation = native.selector.state["operation"]
+    assert operation["phase"] == "verify"
+    assert operation["successes"] == 0
+    native.ping_ok = True
+    native.clock += 1
+    native.selector._advance(AUTH, native.clock)
+    assert operation["phase"] == "verify"
+    assert operation["successes"] == 1
+
+
+def test_authority_loss_after_activation_defers_first_sample_without_renewal(native):
+    activate = native.effects.activate
+
+    def lose_authority(*args):
+        activate(*args)
+        native.valid = False
+
+    native.effects.activate = lose_authority
+    native.selector._advance(AUTH, native.clock)
+    operation = native.selector.state["operation"]
+    assert operation["phase"] == "verify"
+    assert operation["successes"] == 0
+    verification = operation["attempt_deadline"]
+    assert read_state(native.effects.state_dir / STATE_NAME)["operation"] == operation
+    route_index = next(i for i, event in enumerate(native.events) if "-batch" in event)
+    assert not any(event[0] == "ping" for event in native.events[route_index + 1 :])
+    native.valid = True
+    native.clock += 1
+    native.selector._advance(AUTH, native.clock)
+    assert operation["successes"] == 1
+    assert operation["attempt_deadline"] == verification
+
+
+def test_late_immediate_verification_cannot_commit_or_extend_its_window(native, monkeypatch):
+    monkeypatch.setattr(tunnels, "monotonic", lambda: native.clock)
+    verify = native.effects.verify
+
+    def slow_verification(*args):
+        result = verify(*args)
+        native.clock += 30
+        return result
+
+    native.effects.verify = slow_verification
+    native.selector._advance(AUTH, native.clock)
+    operation = native.selector.state["operation"]
+    assert operation["phase"] == "restore"
+    assert operation["successes"] == 0
+    assert operation["deadline"] == 129
+    assert operation["attempt_deadline"] == 129
+
+
 def test_slow_work_does_not_steal_post_activation_verification_window(tmp_path):
     effects = Effects()
     selector = TunnelController(config(), tmp_path / STATE_NAME, effects)
     selector.bind(AUTH)
     selector._begin(selector.policies["site"], "backup", "automatic-recovery", AUTH, 100)
-    # Native mutation completed near its deadline. The two subsequent slow
-    # controller passes are observations, not renewed mutation authority.
+    # Native mutation completed near its deadline. The immediate sample and
+    # subsequent slow pass are observations, not renewed mutation authority.
     selector._advance(AUTH, 124)
     deadline = selector.state["operation"]["deadline"]
     verification = selector.state["operation"]["attempt_deadline"]
     assert deadline == 129
     assert 153 <= verification <= 158
-    selector._advance(AUTH, 137)
     assert selector.state["operation"]["successes"] == 1
     selector = TunnelController(config(), tmp_path / STATE_NAME, effects)
     assert selector.state["operation"]["attempt_deadline"] == verification
-    selector._advance(AUTH, 149)
+    selector._advance(AUTH, 137)
     assert selector.state["operation"]["phase"] == "succeeded"
     assert effects.calls == [("activate", "backup")]
 
@@ -337,9 +414,8 @@ def test_composed_native_recovery_with_slow_authority_and_controller_passes(nati
     assert operation["deadline"] == 129
     verification_deadline = operation["attempt_deadline"]
     mutation_commands = list(native.events)
-    for _ in range(2):
-        native.clock += 12
-        native.selector._advance(AUTH, native.clock)
+    native.clock = max(native.clock + 12, 130)
+    native.selector._advance(AUTH, native.clock)
     assert native.clock > 129
     assert native.clock < verification_deadline <= 158
     assert native.selector.state["operation"]["phase"] == "succeeded"

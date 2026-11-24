@@ -1555,6 +1555,8 @@ def _vm_ha_initial_resource_bindings(
                 bindings["shared-allocation-owner-compute"] = compute_id
                 bindings["shared-allocation-owner-nic"] = nic
     bindings["route-targets-digest"] = _canonical_digest(observation.get("route_targets", []))
+    if isinstance(observation.get("enforced_table_plan"), str):
+        bindings["enforced-route-plan"] = t.cast(str, observation["enforced_table_plan"])
     if credential_bindings is not None:
         bindings.update(credential_bindings)
     bindings.update(vm_ha_replacement_ownership_bindings(previous))
@@ -1566,12 +1568,20 @@ def _vm_ha_observation_matches_bindings(
     expected: t.Mapping[str, str],
     *,
     credential_bindings: t.Mapping[str, str] | None = None,
+    lifecycle: VMHALifecycleState | None = None,
 ) -> bool:
     current = _vm_ha_initial_resource_bindings(
         observation,
         credential_bindings=credential_bindings,
     )
     expected = vm_ha_effective_resource_bindings(expected)
+    if lifecycle is not None and current.get("route-targets-digest") != expected.get(
+        "route-targets-digest"
+    ):
+        from .deploy.ha_enforced_resume import admit
+
+        if admit(lifecycle, observation):
+            expected = {k: v for k, v in expected.items() if k != "route-targets-digest"}
     return all(
         vm_ha_resource_binding_matches_observation(
             key,
@@ -4567,6 +4577,8 @@ def _wait_for_vm_ha_agent_status(
     poll_seconds: float = 2.0,
     progress_callback: t.Callable[[], None] | None = None,
     observation_callback: t.Callable[[_VMHAWaitObservation], None] | None = None,
+    progress_key: t.Callable[[dict[str, t.Any]], str] | None = None,
+    stall_timeout_seconds: float = 120.0,
     **fetch_kwargs: t.Any,
 ) -> dict[str, t.Any]:
     from .deploy.apply_diagnostics import Failure, VerificationFailure
@@ -4580,6 +4592,17 @@ def _wait_for_vm_ha_agent_status(
         else started + timeout_seconds
     )
     observed_at: float | None = None
+    seen_progress: set[str] = set()
+    last_progress = started
+    if progress_key is not None and not 0 < stall_timeout_seconds < float("inf"):
+        raise ValueError("activation progress window must be finite and positive")
+
+    def observation_deadline() -> float:
+        return (
+            min(deadline, last_progress + stall_timeout_seconds)
+            if progress_key is not None
+            else deadline
+        )
 
     def observe(condition: str | None, *, complete: bool = False) -> None:
         if observation_callback is None:
@@ -4591,7 +4614,7 @@ def _wait_for_vm_ha_agent_status(
                     condition,
                     observed_at,
                     max(0.0, now - started),
-                    max(0.0, deadline - now),
+                    max(0.0, observation_deadline() - now),
                     complete,
                 )
             )
@@ -4602,13 +4625,14 @@ def _wait_for_vm_ha_agent_status(
     observe("status-observation-pending")
     last_error: Exception | None = None
     # This is one read-only evidence window, not the command recovery budget.
-    while (remaining := deadline - time.monotonic()) > 0:
+    while (remaining := observation_deadline() - time.monotonic()) > 0:
         try:
+            read_deadline = observation_deadline()
             payload = _fetch_vm_ha_agent_status(
                 timeout_seconds=min(15.0, remaining), **fetch_kwargs
             )
             observed_at = time.monotonic()
-            if observed_at >= deadline:
+            if observed_at >= read_deadline:
                 latest = Failure(phase, "status-arrived-after-deadline")
                 first = first or latest
                 last_error = _VMHAAgentStatusStale("VM-HA status arrived after the deadline")
@@ -4616,6 +4640,11 @@ def _wait_for_vm_ha_agent_status(
             if predicate(payload):
                 observe(None, complete=True)
                 return payload
+            if progress_key is not None:
+                key = progress_key(payload)
+                if key not in seen_progress:
+                    seen_progress.add(key)
+                    last_progress = observed_at
             latest = Failure(
                 phase,
                 failed_predicate(payload) if failed_predicate else "required-state-not-observed",
@@ -4649,7 +4678,7 @@ def _wait_for_vm_ha_agent_status(
             first = first or latest
             last_error = error
         observe(latest.predicate)
-        remaining = deadline - time.monotonic()
+        remaining = observation_deadline() - time.monotonic()
         if remaining <= 0:
             break
         time.sleep(min(poll_seconds, remaining))
@@ -5553,6 +5582,7 @@ def _vm_ha_apply_plan_impact(
     *,
     has_destructive_changes: bool,
     owner_refresh_required: bool = False,
+    private_route_tables: int = 0,
 ) -> VMHACommandImpact:
     """Classify exact apply impact without parsing presentation effect strings."""
 
@@ -5676,7 +5706,7 @@ def _vm_ha_apply_plan_impact(
             resource_creation=False,
         ),
     }
-    return impacts.get(
+    impact = impacts.get(
         kind,
         VMHACommandImpact(
             summary="Impact is not classified; operator approval is required",
@@ -5685,6 +5715,17 @@ def _vm_ha_apply_plan_impact(
             resource_creation=None,
         ),
     )
+    if private_route_tables:
+        table_label = "table" if private_route_tables == 1 else "tables"
+        return replace(
+            impact,
+            resource_creation=True,
+            summary=(
+                f"{impact.summary}. Prepares {private_route_tables} private workload route "
+                f"{table_label} and switches the corresponding subnet attachments"
+            ),
+        )
+    return impact
 
 
 class _VMHAApplyPlanCaptured(RuntimeError):
@@ -9020,6 +9061,7 @@ def _apply_impl(
                 vm_ha_approval_observation,
                 dict(lifecycle_state.transaction.resource_bindings),
                 credential_bindings=vm_ha_credentials.resource_bindings(),
+                lifecycle=lifecycle_state,
             )
         ):
             try:
@@ -9756,10 +9798,13 @@ def _apply_impl(
                     expected_peer,
                     peer_evidence,
                 )
+        from .deploy.ha_enforced_inventory import private_table_creations
+
         impact = _vm_ha_apply_plan_impact(
             plan_kind,
             has_destructive_changes=has_destructive,
             owner_refresh_required=owner_refresh_required,
+            private_route_tables=private_table_creations(vm_ha_approval_observation or {}),
         )
         if ha_predecessor is not None:
             if corrective_recovery is None and upgrade_recovery is None:
@@ -9813,6 +9858,7 @@ def _apply_impl(
                     vm_ha_approval_observation or {},
                     dict(lifecycle_state.transaction.resource_bindings),
                     credential_bindings=vm_ha_credentials.resource_bindings(),
+                    lifecycle=lifecycle_state,
                 )
             ),
         )
@@ -9910,6 +9956,7 @@ def _apply_impl(
                         if vm_ha_credentials is not None
                         else {}
                     ),
+                    lifecycle=lifecycle_state,
                 ),
                 changes_requested=bool(
                     recreate_gw
@@ -10049,6 +10096,10 @@ def _apply_impl(
                 action_scope=_canonical_digest(ha_intent),
                 targets=ha_targets,
                 approval=apply_report.digest,
+                enforced_tables=json.loads(str(vm_ha_approval_observation["enforced_table_plan"]))
+                if vm_ha_approval_observation is not None
+                and "enforced_table_plan" in vm_ha_approval_observation
+                else None,
                 runtime_scope=_canonical_digest(
                     _vm_ha_command_approval_scope(artifact, local_cfg, intent=ha_intent)
                 ),
@@ -10137,6 +10188,7 @@ def _apply_impl(
                 credential_bindings=vm_ha_credentials.resource_bindings()
                 if vm_ha_credentials is not None
                 else {},
+                lifecycle=lifecycle_state,
             ):
                 raise RuntimeError("Prepared HA cloud authority changed; no no-op is admitted")
             _verify_vm_ha_prepared(
@@ -11236,6 +11288,7 @@ def _apply_impl(
                     fresh_observation,
                     dict(lifecycle_state.transaction.resource_bindings),
                     credential_bindings=vm_ha_credentials.resource_bindings(),
+                    lifecycle=lifecycle_state,
                 )
             ):
                 raise PreparationBlocked("checkpoint-binding-changed")
@@ -11918,6 +11971,7 @@ def _apply_impl(
         pair_phases.reached("originating", command_journal)
     else:
         if _activate_bound_vm_ha(
+            vm_manager=vm_mgr,
             _config_target=_config_target,
             apply_report=apply_report,
             command_journal=command_journal,
@@ -12000,6 +12054,7 @@ def _activate_bound_vm_ha(
     vm_ha_runtime_binding: t.Any,
     vm_spec: t.Any,
     repair: t.Any = None,
+    vm_manager: t.Any = None,
 ) -> bool:
     """Activate exact bound members; return true when the caller must stop.
 
@@ -12008,6 +12063,13 @@ def _activate_bound_vm_ha(
     """
     assert vm_ha_runtime_binding is not None
     assert lifecycle_journal is not None
+    from .deploy.ha_enforced_activation import prepare as prepare_enforced_tables
+
+    enforced_table_transition = prepare_enforced_tables(
+        vm_manager, lifecycle_journal, vm_ha_runtime_binding
+    )
+    if enforced_table_transition is not None:
+        vm_ha_runtime_binding = enforced_table_transition.binding
     current_owner_node_id = _vm_ha_bound_owner_node_id(
         vm_ha_runtime_binding,
         lifecycle_journal.state,
@@ -12418,7 +12480,14 @@ def _activate_bound_vm_ha(
                         runtime_binding=vm_ha_runtime_binding,
                         operation_id=operation_id,
                     )
-                    lifecycle_journal.complete(lock_effect)
+                    lifecycle_journal.complete(
+                        lock_effect,
+                        resource_updates={
+                            f"enforced-route-lock:{receipt.node_id}": lock_receipt.record_sha256
+                        }
+                        if enforced_table_transition is not None
+                        else None,
+                    )
                 locked.append((inst_cfg, target, receipt, lock_receipt))
                 print(
                     f"[green]✓ Locked {receipt.node_id} for operation {operation_id[:12]}[/green]"
@@ -12550,6 +12619,24 @@ def _activate_bound_vm_ha(
         )
         prepare_agent_packages()
         locked = install_apply_locks()
+
+    if enforced_table_transition is not None:
+        if not coordinated_upgrade and not resuming_activation:
+            for inst_cfg, target, _receipt, _lock in locked:
+                if inst_cfg.hostname in ordinary_handoffs:
+                    continue
+                effect = f"stop-upgrade-writers-{inst_cfg.vm_ha_node.node_id}"
+                lifecycle_journal.begin(effect)
+                ssh.stop_vm_ha_mutation_services(target, inst_cfg.hostname, local_cfg)
+                lifecycle_journal.complete(effect)
+        enforced_table_transition.cutover(
+            ssh=ssh,
+            locked=locked,
+            local=local_cfg,
+            operation=operation_id,
+            handoffs=ordinary_handoffs,
+        )
+        lifecycle_state = lifecycle_journal.state
 
     if vm_ha_missing_standby_replacement is None and not resuming_activation:
         try:
@@ -13071,6 +13158,8 @@ def _activate_bound_vm_ha(
         lifecycle_journal.begin("verify-active-forwarding-and-routes")
 
         def activate_owner(attempt_deadline: float | None = None) -> None:
+            from .deploy.controller_observation import activation_progress_key
+
             try:
                 if transition_started:
                     standby_cfg, standby_target, _, _ = passive_entry
@@ -13143,6 +13232,8 @@ def _activate_bound_vm_ha(
                     _wait_for_vm_ha_agent_status(
                         deadline=attempt_deadline,
                         phase="verify-owner-forwarding-and-routes",
+                        timeout_seconds=300.0,
+                        progress_key=activation_progress_key,
                         failed_predicate=lambda payload: (
                             _owner_activation_predicate(
                                 payload, owner=active_node_id, binding=vm_ha_runtime_binding
@@ -15457,6 +15548,13 @@ def _vm_ha_cloud_authority(
     managed_prefixes_by_table: dict[str, set[str]] = {
         t.cast(str, table_id): set() for table_id in target_table_ids if isinstance(table_id, str)
     }
+    from .deploy.ha_enforced_inventory import committed_by_table
+
+    declared_enforcement = committed_by_table(state)
+    enforced_expected = {
+        table: declared_enforcement.get(table, frozenset()) for table in managed_prefixes_by_table
+    }
+    enforced_observed: dict[str, set[str]] = {table: set() for table in managed_prefixes_by_table}
     managed_route_keys: set[tuple[str, str]] = set()
     authority_keys = NebiusSDKRouteBackend._AUTHORITY_LABEL_KEYS
     current_cluster_fingerprint = NebiusSDKRouteBackend._authority_fingerprint(state.cluster_id)
@@ -15497,7 +15595,8 @@ def _vm_ha_cloud_authority(
         labels_well_formed = bool(
             set(labels) == authority_keys
             and labels.get(NebiusSDKRouteBackend._AUTHORITY_MANAGED_LABEL) == "vm-ha-v1"
-            and labels.get(NebiusSDKRouteBackend._AUTHORITY_KIND_LABEL) in {"bgp", "static"}
+            and labels.get(NebiusSDKRouteBackend._AUTHORITY_KIND_LABEL)
+            in {"bgp", "static", "enforced"}
             and all(
                 re.fullmatch(r"[0-9a-f]{32}", labels.get(key, ""))
                 for key in (
@@ -15528,7 +15627,10 @@ def _vm_ha_cloud_authority(
             route_records_exact = False
             continue
         managed_route_keys.add(route_key)
-        managed_prefixes_by_table[route_table_id].add(prefix)
+        if labels[NebiusSDKRouteBackend._AUTHORITY_KIND_LABEL] == "enforced":
+            enforced_observed[route_table_id].add(prefix)
+        else:
+            managed_prefixes_by_table[route_table_id].add(prefix)
         if (
             allocation_id != state.allocation_id
             or labels.get(NebiusSDKRouteBackend._AUTHORITY_ALLOCATION_LABEL)
@@ -15546,6 +15648,19 @@ def _vm_ha_cloud_authority(
         and required_prefix_sets[0]
         and not any(prefixes != required_prefix_sets[0] for prefixes in required_prefix_sets[1:])
     )
+    if any(enforced_expected.values()) or any(enforced_observed.values()):
+        # A selected target overrides an ordinary route of the same prefix.
+        # Other targets retain ordinary intent, so their complete sets may differ.
+        ordinary = set().union(*managed_prefixes_by_table.values())
+        prefix_sets_equal = bool(
+            enforced_observed.keys() == enforced_expected.keys()
+            and all(
+                enforced_observed[table] == enforced_expected[table]
+                and observed == ordinary - enforced_expected[table]
+                for table, observed in managed_prefixes_by_table.items()
+            )
+        )
+        route_prefixes_exact = prefix_sets_equal
     route_reasons: list[str] = []
     if not route_targets_exact:
         route_reasons.append("route-targets-not-exact")

@@ -17,6 +17,39 @@ spec.loader.exec_module(runner)
 
 
 class EvalTests(unittest.TestCase):
+    def test_required_catalog_is_checked_before_native_launch(self):
+        case = {"required_skills": ["spec-owner", "research"]}
+        with tempfile.TemporaryDirectory() as temporary:
+            catalog = Path(temporary).resolve()
+            (catalog / "research").mkdir()
+            (catalog / "research/SKILL.md").write_text("Research fixture")
+            for available in (None, catalog):
+                with self.subTest(catalog=available), patch.object(
+                        runner, "run_case", return_value={"state": "UNAVAILABLE"}) as run:
+                    result = runner.evaluate("codex", Path("design"), case,
+                                             "quality", Path("baseline"), catalog=available)
+                    run.assert_not_called()
+                    self.assertEqual(result["state"], "UNAVAILABLE")
+                    self.assertEqual(result["reason"], "required sibling skills unavailable")
+            (catalog / "spec-owner").mkdir()
+            (catalog / "spec-owner/SKILL.md").write_text("Spec owner fixture")
+            with patch.object(runner, "run_case", return_value={"state": "UNAVAILABLE"}) as run:
+                runner.evaluate("codex", Path("design"), case,
+                                "quality", Path("baseline"), catalog=catalog)
+                self.assertEqual(run.call_count, 2)
+
+    def test_invalid_required_skill_lists_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "evals").mkdir()
+            for required in (None, "owner", [""], [7], ["owner", "owner"],
+                             [f"owner-{index}" for index in range(33)]):
+                (root / "evals/evals.json").write_text(json.dumps({"evals": [
+                    {"id": 1, "prompt": "Fixture", "required_skills": required}]}))
+                with self.subTest(required=required), self.assertRaisesRegex(
+                        ValueError, "required skills"):
+                    runner.cases(root, "quality")
+
     def test_malformed_short_quality_grade_is_unavailable_without_crashing(self):
         current = {"state": "RUNTIME_PASS", "response": "fixture", "loaded": True,
                    "models": ["fixture"]}

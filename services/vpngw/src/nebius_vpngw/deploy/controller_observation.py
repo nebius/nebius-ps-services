@@ -6,6 +6,24 @@ from ..agent.vm_ha.progress import validate_transfer_progress
 from ..apply_approval import digest
 
 
+def activation_progress_key(record: dict) -> str:
+    """Project validated agent progress without heartbeat or sampling clocks."""
+    return digest(
+        {
+            key: record.get(key)
+            for key in (
+                "state",
+                "data_plane_mode",
+                "pending_operation_id",
+                "route_reconciliation",
+                "origination",
+                "generation_id",
+                "digests",
+            )
+        }
+    )
+
+
 def progress_key(snapshot) -> str:
     members = []
     for member in snapshot.members:

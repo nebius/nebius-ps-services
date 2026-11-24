@@ -2159,6 +2159,9 @@ fi
 if systemctl is-active --quiet nebius-vpngw-vm-ha-rearm.service 2>/dev/null; then
   exit 46
 fi
+if [ -e /var/lib/nebius-vpngw/vm-ha/enforced-routing.json ] || [ -L /var/lib/nebius-vpngw/vm-ha/enforced-routing.json ]; then
+  /usr/bin/python3 -B -c 'import time,yaml; from pathlib import Path; from nebius_vpngw import ha_repair; from nebius_vpngw.enforced_handoff import preserve_for_ordinary; from nebius_vpngw.ordinary_operations import Manager; from nebius_vpngw.deploy.vm_ha_upgrade_recovery import UNITS; preserve_for_ordinary(ha_repair,yaml.safe_load(Path("/etc/nebius-vpngw/config-resolved.yaml").read_bytes()),Manager(time.monotonic()+30),UNITS)'
+fi
 rm -f /etc/nebius-vpngw/vm-ha-enabled
 for unit in nebius-vpngw-vm-ha.service nebius-vpngw-vm-ha-guard.service; do
   if systemctl list-unit-files --no-legend "$unit" 2>/dev/null | grep -q "^$unit"; then

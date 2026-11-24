@@ -31,6 +31,7 @@ PLAN_SCHEMA = "nebius-vpngw.ordinary-route-plan.v1"
 STORE_SCHEMA = "nebius-vpngw.ordinary-route-store.v1"
 PROOF_KEY = "route_retirement_sha256"
 OWNERSHIP_SOURCES = (
+    "enforced_routing.py",
     "ha_tunnel_policy.py",
     "ordinary_routes.py",
     "tunnel_state.py",
@@ -60,6 +61,7 @@ def require(condition: bool, code: str = "ordinary_route_ownership_unverified") 
 def streamed_bootstrap() -> str:
     from_source = []
     for name, path in (
+        ("_vpngw_enforced_routing", Path(__file__).with_name("enforced_routing.py")),
         ("_vpngw_ha_tunnel_policy", Path(__file__).with_name("ha_tunnel_policy.py")),
         ("_vpngw_tunnel_state", Path(__file__).with_name("tunnel_state.py")),
         ("_vpngw_ordinary_routes", Path(__file__)),
@@ -95,7 +97,13 @@ def projection(cfg: dict[str, Any] | None, *, effective: bool = False) -> list[d
                 "name": endpoint["name"],
                 "if_id": endpoint["if_id"],
                 "mode": mode,
-                "prefixes": sorted({prefix(p) for p in endpoint["remote_prefixes"]})
+                "prefixes": sorted(
+                    {
+                        prefix(p)
+                        for p in endpoint["remote_prefixes"]
+                        if endpoint.get("route_tables", {}).get(p, 254) == 254
+                    }
+                )
                 if mode == "static"
                 else [],
                 "peer": prefix(endpoint["remote_inner_ip"] + "/32")

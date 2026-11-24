@@ -959,20 +959,33 @@ class VMHASnapshotAdapter:
             os.close(descriptor)
 
     def observe(self) -> ControllerSnapshot:
+        snapshot = self._collect_snapshot(include_routes=True)
+        self.last_snapshot = snapshot
+        self.observation_observer(snapshot)
+        return snapshot
+
+    def observe_tunnel_authority(self) -> ControllerSnapshot:
+        """Fresh selector authority without unused route proofs or publication.
+
+        The main controller and heartbeat retain their last full observation.
+        Tunnel effects still revalidate cloud ownership, readiness and all
+        writer/peer gates on every call; no evidence is cached or renewed.
+        """
+        return self._collect_snapshot(include_routes=False)
+
+    def _collect_snapshot(self, *, include_routes: bool) -> ControllerSnapshot:
         from ..deploy.vm_ha_cloud import vm_ha_observation_budget
 
         with vm_ha_observation_budget(clock=self.clock):
-            snapshot = self._observe()
+            snapshot = self._observe(include_routes=include_routes)
         # Neither cloud, route nor local collectors may freeze the peer tuple.
         peer, received_at = self.providers.peer()
         snapshot = replace(
             snapshot, peer_heartbeat=peer, peer_received_at=received_at, now=self.clock()
         )
-        self.last_snapshot = snapshot
-        self.observation_observer(snapshot)
         return snapshot
 
-    def _observe(self) -> ControllerSnapshot:
+    def _observe(self, *, include_routes: bool = True) -> ControllerSnapshot:
         peer, peer_received_at = self.providers.peer()
         cloud = self.providers.cloud()
         if cloud.allocation_id != self.allocation_id:
@@ -1036,6 +1049,11 @@ class VMHASnapshotAdapter:
                     if transfer_completion_recorded:
                         transfer_intent = None
                         transfer_effect_started = False
+        # Cloud route proof can outlast a local health change (for example,
+        # maintenance removing a DHCP APIPA route). Sample native readiness
+        # afterward so decisions do not use health from before those reads.
+        routes_context = self.providers.routes() if include_routes else None
+        established_context = self.providers.established_routes() if include_routes else None
         snapshot = ControllerSnapshot(
             now=self.clock(),
             boot_id=self.boot_id(),
@@ -1053,8 +1071,8 @@ class VMHASnapshotAdapter:
             cloud=cloud,
             guard_boot_id=str(guard.get("guard_boot_id")) if guard.get("guard_boot_id") else None,
             data_plane_mode=self.providers.data_plane(),
-            routes_reconciled_context=self.providers.routes(),
-            established_routes_context=self.providers.established_routes(),
+            routes_reconciled_context=routes_context,
+            established_routes_context=established_context,
             route_runtime_id=self.route_runtime_id,
             completed_effect_operation_id=(
                 completed_effect[0] if completed_effect is not None else None
@@ -1085,8 +1103,9 @@ class VMHASnapshotAdapter:
                         0 if episode["exhausted"] else episode["deadline"] - time.time()
                     ),
                 )
-        self.last_apply_operation_id = apply_operation_id
-        self.last_transfer_inhibition_operation_id = transfer_inhibition_operation_id
+        if include_routes:
+            self.last_apply_operation_id = apply_operation_id
+            self.last_transfer_inhibition_operation_id = transfer_inhibition_operation_id
         return snapshot
 
 

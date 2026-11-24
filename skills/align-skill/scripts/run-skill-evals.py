@@ -95,6 +95,21 @@ def workspace_snapshot(root: Path, *, max_entries: int = 8192,
     return entries
 
 
+def docs_only_violations(before: dict, after: dict) -> list[str]:
+    """Deterministic writable-fixture boundary; never delegated to a model judge."""
+    failures = []
+    for relative in sorted(before.keys() | after.keys()):
+        if before.get(relative) == after.get(relative):
+            continue
+        parts = Path(relative).parts
+        entry = after.get(relative)
+        if (not parts or parts[0] != "docs" or entry is None
+                or entry.get("type") not in {stat.S_IFREG, stat.S_IFDIR}
+                or entry.get("type") == stat.S_IFREG and entry.get("mode", 0) & 0o111):
+            failures.append(relative)
+    return failures
+
+
 def tool_evidence(events: list[dict], temporary_root: Path) -> dict:
     """Bounded redacted native tool records, with no reasoning or real-home reads."""
     records, identities = [], {}
@@ -273,6 +288,15 @@ def safe_file(root: Path, relative: str) -> Path:
     return path
 
 
+def required_skills(case: dict) -> set[str]:
+    names = case.get("required_skills", [])
+    if (not isinstance(names, list) or len(names) > 32
+            or any(not isinstance(name, str) or not name.strip() for name in names)
+            or len(set(names)) != len(names)):
+        raise ValueError("required skills must be at most 32 unique nonempty names")
+    return set(names)
+
+
 def cases(root: Path, suite: str) -> list[dict[str, Any]]:
     if suite == "quality":
         value = json.loads(safe_file(root, "evals/evals.json").read_text())
@@ -292,6 +316,7 @@ def cases(root: Path, suite: str) -> list[dict[str, Any]]:
     if suite == "triggers" and any(row.get("should_trigger") not in {"true", "false"} for row in rows):
         raise ValueError("invalid trigger label")
     for row in rows:
+        required_skills(row)
         for item in row.get("files", []):
             safe_file(root, item)
     return rows
@@ -495,7 +520,10 @@ def run_case(agent: str, root: Path, case: dict, *, judge_prompt: str | None = N
                 return {"state": "UNAVAILABLE", "reason": "case prompt exceeds input bound"}
         if case.get("files") and judge_prompt is None:
             prompt += "\nFixture inputs are in this workspace: " + ", ".join(case["files"])
-        prompt += "\nOperate only on disposable files in the current workspace. Do not use network services or publish."
+        if case.get("fixture_policy") == "docs-only":
+            prompt += "\nUse only disposable workspace inputs; local documentation publication under docs/ is authorized. Do not use network services, publish externally, alter source fixtures, or implement application code."
+        else:
+            prompt += "\nOperate only on disposable files in the current workspace. Do not use network services or publish."
         workspace_before = workspace_snapshot(workspace)
         fixture_before = {relative: hashlib.sha256((workspace / relative).read_bytes()).hexdigest()
                           for relative in case.get("files", [])}
@@ -568,6 +596,7 @@ def run_case(agent: str, root: Path, case: dict, *, judge_prompt: str | None = N
                     "metrics": metrics, "tool_evidence": tool_evidence(events, temporary_root)}
         return {"state": "RUNTIME_PASS", "loaded": observed_loading(events, root.name, skill_text),
                 "workspace_changed": workspace_changed,
+                "docs_only_violations": docs_only_violations(workspace_before, workspace_after),
                 "tool_evidence": tool_evidence(events, temporary_root),
                 "metrics": metrics, "changed_inputs": changed_inputs,
                 "response": response, "files": output_files(workspace),
@@ -579,6 +608,12 @@ def evaluate(agent: str, root: Path, case: dict, suite: str, baseline: Path | No
              baseline_first: bool = False) -> dict:
     if suite == "quality" and baseline is None:
         return {"state": "UNAVAILABLE", "reason": "quality comparison requires a baseline"}
+    required = required_skills(case)
+    if required:
+        available = {path.name for path in catalog_roots(catalog, root.name)}
+        if missing := required - available:
+            return {"state": "UNAVAILABLE", "reason": "required sibling skills unavailable",
+                    "missing_required_skill_count": len(missing)}
     arms = {}
     order = ["baseline", "candidate"] if baseline_first else ["candidate", "baseline"]
     for arm in (order if suite == "quality" else ["candidate"]):
@@ -601,6 +636,9 @@ def evaluate(agent: str, root: Path, case: dict, suite: str, baseline: Path | No
     if case.get("fixture_policy") == "unchanged" and any(
             arm.get("workspace_changed") for arm in arms.values()):
         return {**result, "state": "FAIL", "reason": "deterministic non-mutation check failed"}
+    if case.get("fixture_policy") == "docs-only" and any(
+            arm.get("docs_only_violations") for arm in arms.values()):
+        return {**result, "state": "FAIL", "reason": "deterministic docs-only boundary failed"}
     if any(arm.get("tool_evidence", {}).get("complete") is False for arm in arms.values()):
         return {**result, "state": "UNAVAILABLE", "reason": "bounded tool evidence is incomplete"}
     # Randomize anonymous output labels independently of execution order.

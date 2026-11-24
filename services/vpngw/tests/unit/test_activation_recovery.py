@@ -457,3 +457,56 @@ def test_activation_resume_requires_positive_configuration_evidence(
         assert effects == [] and resumed.history() == []
         assert controls and all(item["action"] == "inspect" for item in controls)
         assert len(controls) > 1 if materialized is None else len(controls) == 1
+
+
+@pytest.mark.parametrize(
+    "phase", ["verify-active-forwarding-and-routes", "verify-passive-unlocked-non-forwarding"]
+)
+def test_configured_fenced_phase_resumes_without_service_repair(tmp_path, phase):
+    from types import SimpleNamespace as NS
+
+    from nebius_vpngw.deploy.activation_driver import activate
+
+    owner = Recovery(tmp_path, execution="a" * 32, authority="b" * 64)
+    owner.initialize()
+    stage = phase + "-node"
+    owner.initial(stage, state="started")
+    for label in ["other-node", stage]:
+        attempt = owner.transition(
+            owner.reserve(label, Diagnosis("configuration", "c" * 64)), "dispatched"
+        )
+        attempt = owner.transition(attempt, "failed")
+        owner.cleaned(attempt)
+    completed = []
+    controls = []
+
+    def control(_target, _instance, _local, request, **_):
+        controls.append(request)
+        assert request["action"] != "service", "Verified configuration must not be repaired"
+        return {
+            "clock": owner.clock(),
+            "boot": "boot",
+            "units": {"unit": {"Job": "", "ControlPID": "0", "ActiveState": "active"}},
+            "materialized": True,
+            "complete": True,
+        }
+
+    activate(
+        NS(activation_control=control),
+        "target",
+        NS(),
+        {},
+        recovery=owner,
+        phase=phase,
+        phase_effect=completed.append,
+        phase_complete=lambda _: Completion.COMPLETE if completed else Completion.INCOMPLETE,
+        staged_receipt=NS(node_id="node", generation_id="c" * 64, staged_file_sha256="d" * 64),
+        runtime_binding=NS(cluster_id="cluster"),
+        apply_operation_id="e" * 64,
+    )
+    assert completed == [None]
+    assert [r["action"] for r in controls] == ["inspect", "arm", "finish"]
+    assert controls[1]["unlock_only"] is False
+    assert len(owner.history()) == 3
+    assert owner.history()[-1]["action"] == "unlock"
+    assert owner.history()[-1]["state"] == "verified"

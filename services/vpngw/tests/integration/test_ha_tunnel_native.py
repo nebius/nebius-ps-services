@@ -39,6 +39,256 @@ pytestmark = [
 DRIVER = "/workspace/tests/systemd/ha_tunnel_driver.py"
 
 
+@pytest.mark.parametrize("shared_ordinary", [False, True])
+def test_enforced_guest_native_rules_guard_and_retirement(tmp_path, shared_ordinary):
+    """Native guest owner qualification, with fixture routes and no cloud claims."""
+    from dataclasses import replace
+
+    from nebius_vpngw.agent.enforced_routing import PolicyRouting
+    from nebius_vpngw.ha_tunnel_policy import ConnectionPolicy, TunnelPath
+
+    namespace = "enforced-" + uuid.uuid4().hex[:8]
+    run("ip", "netns", "add", namespace)
+
+    def kernel(argv, **kwargs):
+        return subprocess.run(["ip", "netns", "exec", namespace, *argv], **kwargs)
+
+    def command(*argv):
+        result = kernel(list(argv), capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    def lookup(source, destination, *, forwarded=True):
+        args = ["ip", "-j", "route", "get", destination, "from", source]
+        if forwarded:
+            args += ["iif", "eth0"]
+        return kernel(args, capture_output=True, text=True, timeout=10)
+
+    try:
+        command("ip", "link", "add", "eth0", "type", "dummy")
+        command("ip", "link", "set", "eth0", "up")
+        command("ip", "address", "add", "192.0.2.1/24", "dev", "eth0")
+        command("ip", "route", "add", "default", "via", "192.0.2.2")
+        command("ip", "link", "add", "xfrm0", "type", "xfrm", "dev", "eth0", "if_id", "100")
+        command("ip", "link", "set", "xfrm0", "up")
+        command("sysctl", "-w", "net.ipv4.ip_forward=1")
+        command("sysctl", "-w", "net.ipv4.conf.all.rp_filter=0", "net.ipv4.conf.eth0.rp_filter=0")
+        policy = ConnectionPolicy(
+            name="site",
+            mode="static",
+            paths=(
+                TunnelPath(
+                    "primary",
+                    "xfrm0",
+                    100,
+                    True,
+                    frozenset(),
+                    "169.254.1.2",
+                    ("192.0.2.1", "192.0.2.2"),
+                ),
+            ),
+            destinations=frozenset({"198.18.0.0/24", "198.19.0.0/24"}),
+            enforced_sources=("10.10.0.0/24", "10.11.0.0/24"),
+            enforced_destinations=frozenset({"198.18.0.0/24", "198.19.0.0/24"}),
+            enforced_table=51002,
+            ordinary_shared=frozenset({"198.18.0.0/24", "198.19.0.0/24"})
+            if shared_ordinary
+            else frozenset(),
+        )
+        owner = PolicyRouting(
+            tmp_path / "native-enforced.json", cluster="fixture", policies=(policy,), run=kernel
+        )
+        owner.install()
+        for source in ("10.10.0.1", "10.11.0.1"):
+            for destination in ("198.18.0.1", "198.19.0.1"):
+                assert lookup(source, destination).returncode != 0
+        for prefix in policy.enforced_destinations:
+            command("ip", "route", "add", prefix, "dev", "xfrm0", "table", "51002")
+        owner.verify()
+        for source in ("10.10.0.1", "10.11.0.1"):
+            for destination in ("198.18.0.1", "198.19.0.1"):
+                assert json.loads(lookup(source, destination).stdout)[0]["dev"] == "xfrm0"
+        assert json.loads(lookup("10.12.0.1", "198.18.0.1").stdout)[0]["dev"] == (
+            "xfrm0" if shared_ordinary else "eth0"
+        )
+        assert (
+            json.loads(lookup("192.0.2.1", "198.18.0.1", forwarded=False).stdout)[0]["dev"]
+            == "eth0"
+        )
+        # Add the broader destination after the finite scopes have been admitted.
+        # Retained scope priorities must still give the finite rule precedence.
+        policy = replace(policy, enforced_destinations=policy.enforced_destinations | {"0.0.0.0/0"})
+        owner = PolicyRouting(owner.path, cluster="fixture", policies=(policy,), run=kernel)
+        owner.install()
+        command("ip", "route", "add", "default", "dev", "xfrm0", "table", "51002")
+        command("ip", "route", "del", "198.18.0.0/24", "table", "51002")
+        owner.verify()
+        for source in ("10.10.0.1", "10.11.0.1"):
+            assert lookup(source, "198.18.0.1").returncode != 0
+            assert json.loads(lookup(source, "203.0.113.1").stdout)[0]["dev"] == "xfrm0"
+        command("ip", "route", "add", "198.18.0.0/24", "dev", "xfrm0", "table", "51002")
+        command("ip", "route", "del", "default", "table", "51002")
+        if shared_ordinary:
+            # Preserve more-specific main/local destinations for unselected traffic.
+            command("ip", "route", "add", "198.18.0.99/32", "via", "192.0.2.2")
+            assert json.loads(lookup("10.12.0.1", "198.18.0.99").stdout)[0]["dev"] == "eth0"
+            assert json.loads(lookup("10.10.0.1", "198.18.0.99").stdout)[0]["dev"] == "xfrm0"
+            command("ip", "route", "del", "198.18.0.99/32")
+            policy = replace(
+                policy, enforced_destinations=policy.enforced_destinations | {"0.0.0.0/0"}
+            )
+            owner = PolicyRouting(owner.path, cluster="fixture", policies=(policy,), run=kernel)
+            owner.install()
+            command("ip", "route", "add", "default", "dev", "xfrm0", "table", "51002")
+            command("ip", "route", "del", "198.18.0.0/24", "table", "51002")
+            owner.verify()
+            # Exact-prefix withdrawal cannot send ordinary traffic down the
+            # enforcement-only default still present in the same connection table.
+            assert json.loads(lookup("10.12.0.1", "198.18.0.1").stdout)[0]["dev"] == "eth0"
+            assert json.loads(lookup("10.12.0.1", "198.19.0.1").stdout)[0]["dev"] == "xfrm0"
+            command("ip", "route", "del", "default", "table", "51002")
+        # Configuration edits retain old protection until the cloud owner commits.
+        policy = replace(
+            policy, enforced_destinations=frozenset({"0.0.0.0/0"}), ordinary_shared=frozenset()
+        )
+        owner = PolicyRouting(owner.path, cluster="fixture", policies=(policy,), run=kernel)
+        owner.install()
+        command("ip", "route", "add", "default", "dev", "xfrm0", "table", "51002")
+        owner.retire()
+        assert len(owner.read()) == 2
+        assert json.loads(lookup("10.10.0.1", "203.0.113.1").stdout)[0]["dev"] == "xfrm0"
+        command("ip", "route", "del", "default", "table", "51002")
+        owner.verify()  # Withdrawal is a valid fail-closed state.
+        assert lookup("10.10.0.1", "203.0.113.1").returncode != 0
+        assert (
+            json.loads(lookup("192.0.2.1", "203.0.113.1", forwarded=False).stdout)[0]["dev"]
+            == "eth0"
+        )
+        command("ip", "route", "add", "default", "via", "192.0.2.2", "table", "51002")
+        with pytest.raises(RuntimeError, match="unowned route"):
+            owner.verify()
+        command("ip", "route", "del", "default", "table", "51002")
+        removed = PolicyRouting(owner.path, cluster="fixture", policies=(), run=kernel)
+        removed.install()
+        assert lookup("10.10.0.1", "203.0.113.1").returncode != 0
+        removed.retire()
+        assert json.loads(lookup("10.10.0.1", "203.0.113.1").stdout)[0]["dev"] == "eth0"
+    finally:
+        run("ip", "netns", "delete", namespace)
+
+
+def test_enforced_guest_native_nexthop_object_verification_and_retirement(tmp_path):
+    """A kernel nexthop ID never substitutes for the exact resolved XFRM path."""
+    from dataclasses import replace
+
+    from nebius_vpngw.agent.enforced_routing import PolicyRouting
+    from nebius_vpngw.ha_tunnel_policy import ConnectionPolicy, TunnelPath
+
+    namespace = "enforced-nh-" + uuid.uuid4().hex[:8]
+    run("ip", "netns", "add", namespace)
+
+    def kernel(argv, **kwargs):
+        return subprocess.run(["ip", "netns", "exec", namespace, *argv], **kwargs)
+
+    def command(*argv):
+        result = kernel(list(argv), capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    try:
+        command("ip", "link", "add", "eth0", "type", "dummy")
+        command("ip", "link", "set", "eth0", "up")
+        command("ip", "address", "add", "192.0.2.1/24", "dev", "eth0")
+        command("ip", "route", "add", "default", "via", "192.0.2.2")
+        main = json.loads(command("ip", "-j", "route", "show", "table", "main"))
+        command("ip", "link", "add", "xfrm0", "type", "xfrm", "dev", "eth0", "if_id", "100")
+        command("ip", "link", "set", "xfrm0", "up")
+        command("ip", "address", "add", "169.254.1.1/30", "dev", "xfrm0")
+        policy = ConnectionPolicy(
+            name="site",
+            mode="bgp",
+            paths=(
+                TunnelPath(
+                    "primary",
+                    "xfrm0",
+                    100,
+                    True,
+                    frozenset(),
+                    "169.254.1.2",
+                    ("192.0.2.1", "192.0.2.2"),
+                ),
+            ),
+            destinations=frozenset({"0.0.0.0/0"}),
+            enforced_sources=("10.10.0.0/24", "10.11.0.0/24"),
+            enforced_destinations=frozenset({"0.0.0.0/0"}),
+            enforced_table=51002,
+        )
+        owner = PolicyRouting(
+            tmp_path / "native-nh.json", cluster="fixture", policies=(policy,), run=kernel
+        )
+        owner.install()
+        command("ip", "nexthop", "add", "id", "17", "via", "169.254.1.2", "dev", "xfrm0")
+        command(
+            "ip",
+            "route",
+            "add",
+            "default",
+            "nhid",
+            "17",
+            "proto",
+            "bgp",
+            "metric",
+            "20",
+            "table",
+            "51002",
+        )
+        observed = json.loads(command("ip", "-j", "route", "show", "table", "51002"))
+        assert observed[0]["nhid"] == 17 and observed[0]["dev"] == "xfrm0"
+        owner.verify()
+        command("ip", "nexthop", "replace", "id", "17", "via", "192.0.2.2", "dev", "eth0")
+        with pytest.raises(RuntimeError, match="unowned route"):
+            owner.verify()
+        command("ip", "nexthop", "replace", "id", "17", "via", "169.254.1.2", "dev", "xfrm0")
+        static = PolicyRouting(
+            owner.path, cluster="fixture", policies=(replace(policy, mode="static"),), run=kernel
+        )
+        static.install()
+        command("ip", "route", "add", "default", "dev", "xfrm0", "table", "51002")
+        before = json.loads(command("ip", "-j", "route", "show", "table", "51002"))
+        assert len(before) == 2
+        boot = next(row for row in before if row.get("protocol", "boot") == "boot")
+        assert "protocol" not in boot and "metric" not in boot
+        static.retire()
+        assert json.loads(command("ip", "-j", "route", "show", "table", "51002")) == [boot]
+        owner.install()
+        command(
+            "ip",
+            "route",
+            "add",
+            "default",
+            "nhid",
+            "17",
+            "proto",
+            "bgp",
+            "metric",
+            "20",
+            "table",
+            "51002",
+        )
+        owner.retire()
+        after = json.loads(command("ip", "-j", "route", "show", "table", "51002"))
+        assert len(after) == 1 and after[0]["protocol"] == "bgp" and after[0]["nhid"] == 17
+        removed = PolicyRouting(owner.path, cluster="fixture", policies=(), run=kernel)
+        removed.install()
+        removed.retire()
+        assert json.loads(command("ip", "-j", "route", "show", "table", "51002")) == []
+        assert all(
+            row in json.loads(command("ip", "-j", "route", "show", "table", "main")) for row in main
+        )
+    finally:
+        run("ip", "netns", "delete", namespace)
+
+
 def test_ha_xfrm_preparation_respects_systemd_filesystem_sandbox():
     """Exercise the real kernel helper under the controller's write restriction."""
     script = """
@@ -778,6 +1028,98 @@ def test_static_switch_removes_orphans_after_real_daemon_crash(native_paths, ope
         if anchor.poll() is None:
             anchor.terminate()
             anchor.wait(timeout=5)
+
+
+@pytest.mark.parametrize("native_paths", ["bgp"], indirect=True)
+def test_enforced_table_frr_capability(native_paths):
+    """Upstream prerequisite: zebra installs/withdraws /0 outside main.
+
+    The direct FRR configuration here is fixture setup, not product apply proof.
+    No route in the policy table is installed by the test itself.
+    """
+    from nebius_vpngw.agent.vm_ha.runtime import _enforced_import_policy
+    from nebius_vpngw.enforced_routing import Policy, bgp_import_map_name, bgp_policy_lines
+
+    gateway, peer, _ = native_paths[0]
+    table = 51001
+    policy = Policy("site", ("10.200.1.1/32",), ("0.0.0.0/0",), table)
+    gateway.command("ip", "route", "replace", "default", "via", "192.0.2.2")
+
+    def configure(endpoint, commands):
+        args = ["vtysh", "-c", "configure terminal"]
+        for command in commands:
+            args.extend(["-c", command])
+        endpoint.command(*args)
+
+    configure(
+        peer,
+        [
+            "ip prefix-list ADVERTISE-LOCAL seq 999 permit 0.0.0.0/0",
+            "router bgp 65002",
+            "address-family ipv4 unicast",
+            "network 0.0.0.0/0",
+        ],
+    )
+    import_lines = []
+    sessions = frozenset({"169.254.1.2", "169.254.2.2"})
+    for index, preference in [(1, 200), (2, 100)]:
+        lines = bgp_policy_lines(policy, preference)
+        binding = (
+            f"neighbor 169.254.{index}.2 route-map {bgp_import_map_name(policy, preference)} in"
+        )
+        import_lines.extend(
+            line
+            for line in lines
+            if not line.startswith("ip prefix-list") or line not in import_lines
+        )
+        import_lines.append(" " + binding)
+        configure(
+            gateway,
+            [
+                f"ip prefix-list ALLOW-FROM-169-254-{index}-2 seq 999 permit 0.0.0.0/0",
+                *(line.strip() for line in lines if line != "!"),
+                "router bgp 65001",
+                "address-family ipv4 unicast",
+                binding,
+            ],
+        )
+    running = gateway.command("vtysh", "-c", "show running-config").stdout
+    assert _enforced_import_policy(running, sessions) == _enforced_import_policy(
+        "\n".join(import_lines), sessions
+    )
+    gateway.command("vtysh", "-c", "clear bgp ipv4 unicast * soft in")
+
+    def defaults():
+        routes = json.loads(
+            gateway.command("ip", "-j", "-4", "route", "show", "table", "all").stdout
+        )
+        return [
+            r
+            for r in routes
+            if str(r.get("table")) == str(table) and r.get("dst") in {"default", "0.0.0.0/0"}
+        ]
+
+    try:
+        wait_until(lambda: len(defaults()) == 1)
+    except AssertionError:
+        pytest.fail(
+            "FRR policy-table evidence: "
+            + gateway.command("vtysh", "-c", "show bgp ipv4 unicast 0.0.0.0/0 json").stdout
+            + gateway.command("ip", "-j", "-4", "route", "show", "table", "all").stdout
+        )
+    route = defaults()[0]
+    assert route["protocol"] == "bgp" and route["dev"] == "xfrm0"
+    assert route["gateway"] == "169.254.1.2" and not route.get("nexthops")
+    routes = json.loads(gateway.command("ip", "-j", "-4", "route", "show", "table", "main").stdout)
+    assert next(r for r in routes if r.get("dst") == "default")["gateway"] == "192.0.2.2"
+    assert any(
+        r.get("dst") in {"10.200.2.1", "10.200.2.1/32"} and r.get("protocol") == "bgp"
+        for r in routes
+    )
+    configure(peer, ["router bgp 65002", "address-family ipv4 unicast", "no network 0.0.0.0/0"])
+    wait_until(lambda: not defaults())
+    configure(peer, ["router bgp 65002", "address-family ipv4 unicast", "network 0.0.0.0/0"])
+    wait_until(lambda: len(defaults()) == 1)
 
 
 @pytest.mark.parametrize("native_paths", ["bgp"], indirect=True)

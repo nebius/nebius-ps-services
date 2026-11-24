@@ -303,7 +303,13 @@ def path_health(
                 observed = [
                     r
                     for r in routes
-                    if route_destination(r) == prefix and r.get("table", "main") in {"main", 254}
+                    if route_destination(r) == prefix
+                    and str(r.get("table", "main"))
+                    in (
+                        {"main", "254"}
+                        if policy.table_for(prefix) == 254
+                        else {str(policy.table_for(prefix))}
+                    )
                 ]
                 if (
                     len(observed) != 1
@@ -355,7 +361,19 @@ class NativeTunnelObserver:
                 states=self.run(("ip", "-j", "xfrm", "state")),
                 policies=self.run(("ip", "-j", "xfrm", "policy")),
                 links=json.loads(self.run(("ip", "-d", "-j", "link", "show", "type", "xfrm"))),
-                routes=json.loads(self.run(("ip", "-j", "-4", "route", "show", "table", "main"))),
+                routes=json.loads(
+                    self.run(
+                        (
+                            "ip",
+                            "-j",
+                            "-4",
+                            "route",
+                            "show",
+                            "table",
+                            "all" if policy.enforced_destinations else "main",
+                        )
+                    )
+                ),
                 require_routes=path_scope(policy, selected=selected) == "routed",
             )
             if health is not Health.HEALTHY or policy.mode == "static":

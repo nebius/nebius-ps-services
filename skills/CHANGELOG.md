@@ -4,6 +4,32 @@ All notable changes to the reusable Agent Skills are tracked here.
 
 ## [Unreleased]
 
+- Add GitHub LOC Modifications reporting with `--loc-modifications-report`,
+  organization/user-owned repository selection through `--owner`, and optional
+  `--top K`. Aggregate merged-PR additions plus deletions into one column;
+  preserve visible-scope, whole-PR attribution, ties and partial-evidence limits.
+  Keep normal activity reporting and shared backlog behavior unchanged.
+
+- Fix host-memory checks in Linux systemd login scopes by requiring native
+  non-container evidence instead of treating every non-root cgroup as a container.
+  Container and unavailable-observation cases continue to block heavy work.
+- Fix design extraction review findings: enforce the artifact byte cap during
+  ingestion and declare required sibling skills for publication evals. Missing
+  eval prerequisites yield `UNAVAILABLE` before native runs; publication assertions
+  remain intact.
+- Align extraction review and progress checks: preserve omitted counters, require
+  precise finding locators and a planning finding for an omitted roadmap, and
+  accept requirement coverage across the union of mapped features.
+- Add unattended `design --extract-once SOURCE [--project-root TARGET]` for a
+  researched, source-traceable documentation baseline and consolidated gap report.
+  Require item-level research coverage and measured progress for every design.
+- Extend canonical paired publication to explicit filesystem targets without Git
+  setup; preserve Git workflow guards, stable identities, CAS and rollback.
+- Share pure roadmap checks and add deterministic extraction, publication and
+  docs-only evaluation boundaries, including unreadable-source and target-drift cases.
+- Omit the Codex-only `additionalContextLimit` field from managed Claude hook
+  projections so scoped skill updates preserve existing Claude registrations.
+
 - Separate GitHub issue assessment status from type and optional finding.
   Green `reviewed` means assessed without design or delivery commitment; keep
   red `bug`, new-capability `feature-request`, and existing-capability

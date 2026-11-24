@@ -88,7 +88,7 @@ class RouteJournal(Journal):
         metadata_only(state)
         try:
             if (
-                set(state)
+                set(state) - {"enforced_predecessors", "enforced_destroyed", "ha_route_source"}
                 != {"schema", "project_id", "gateway_name", "revision", "bindings", "transaction"}
                 or state["schema"] != self.schema
                 or state["project_id"] != self.project
@@ -98,6 +98,19 @@ class RouteJournal(Journal):
                 or not isinstance(state["bindings"], dict)
             ):
                 raise ValueError("Invalid route journal identity")
+            from .enforced_predecessors import validate
+
+            validate(state.get("enforced_predecessors", {}))
+            if (
+                "enforced_destroyed" in state
+                and re.fullmatch(r"[a-f0-9]{64}", state["enforced_destroyed"]) is None
+            ):
+                raise ValueError("Invalid enforced destroy receipt")
+            if (
+                "ha_route_source" in state
+                and re.fullmatch(r"[a-f0-9]{64}", state["ha_route_source"]) is None
+            ):
+                raise ValueError("Invalid HA route conversion receipt")
             for identifier, record in state["bindings"].items():
                 observed = record["snapshot"]
                 if (
@@ -209,6 +222,10 @@ class RouteJournal(Journal):
     def inventory(self) -> dict[str, dict]:
         state = self.snapshot()
         return state["bindings"] if state else {}
+
+    def enforced_predecessors(self) -> dict:
+        state = self.snapshot()
+        return state.get("enforced_predecessors", {}) if state else {}
 
     def retire_settled(self, expected: dict, parent: dict) -> None:
         from .ordinary_replan import require_child_settled

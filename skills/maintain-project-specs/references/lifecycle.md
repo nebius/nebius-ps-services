@@ -77,7 +77,8 @@ instead of inventing completion evidence.
 3. Before implementation, reconcile durable intent into active requirements
    and covering ready designs with delivery `not-started`.
 4. Publish both files through one compare-and-set transaction bound to Git
-   `HEAD` and both predecessor digests. Hold verified no-follow project/docs
+   `HEAD` or an explicitly inspected standalone filesystem basis, plus both
+   predecessor digests. Filesystem receipts never grant workflow authority. Hold verified no-follow project/docs
    directory descriptors, recheck the bound state after each replacement, and
    restore only an unchanged candidate on rollback. Owner-aware inspection
    takes the paired shared lock; unrelated direct file reads are not snapshots.

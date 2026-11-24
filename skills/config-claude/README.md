@@ -56,6 +56,8 @@ and secret disclosure remain outside ordinary task authority.
   and selected Implement storage roots to be actual private directories.
 - Full hook setup reuses the existing complete package and installer, or the
   enabled native plugin. This skill adds no duplicate hook bundle.
+  Its data-only checker matches the host adapter's omission of Codex-only
+  `additionalContextLimit` from Claude hook registrations.
 - Fresh setup creates a disabled delegation policy before hook installation
   unless delegation was selected. Reinstallations preserve operator policy.
 

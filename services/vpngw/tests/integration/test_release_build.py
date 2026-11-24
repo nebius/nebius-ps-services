@@ -342,6 +342,7 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path, monkeypatch)
     for source in (
         "checkpoint_upgrade.py",
         "deploy/stopped_upgrade.py",
+        "deploy/ha_enforced_barrier.py",
         "ipsec_observation.py",
         "tunnel_restart.py",
         "agent/tunnel_iterator.py",
@@ -363,6 +364,7 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path, monkeypatch)
         "packet_health.py",
         "checkpoint_upgrade.py",
         "deploy/stopped_upgrade.py",
+        "deploy/ha_enforced_barrier.py",
         "ipsec_observation.py",
         "tunnel_restart.py",
         "agent/tunnel_iterator.py",
@@ -400,6 +402,7 @@ def test_frozen_binary_starts_and_contains_routing_assets(tmp_path, monkeypatch)
         "ordinary_routes.py",
         "ha_tunnel_policy.py",
         "tunnel_state.py",
+        "enforced_routing.py",
         "deploy/ordinary_remote.py",
     ):
         path = extracted / "nebius_vpngw" / relative

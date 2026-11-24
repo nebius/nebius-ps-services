@@ -6,6 +6,7 @@ import ipaddress
 from dataclasses import dataclass
 from typing import Any, cast
 
+from ..enforced_routing import compile_policies, resolve_sources
 from ..nebius_pagination import collect_nebius_pages, nebius_resource_id
 from .ordinary_route_ownership import RouteJournal
 from .ordinary_route_policy import Policy, freeze, prefix
@@ -82,9 +83,7 @@ class Discovery:
                 "    raise RuntimeError('Routing configuration changed')\n"
                 "print(json.dumps(s.require()))\n"
             )
-            with _connection(
-                ssh, targets[instance.hostname][1], instance, self.local
-            ) as client:
+            with _connection(ssh, targets[instance.hostname][1], instance, self.local) as client:
                 _, stdout, _ = client.exec_command(
                     "sudo -n /usr/bin/python3 -B -c " + shlex.quote(probe), timeout=30
                 )
@@ -168,6 +167,28 @@ class Discovery:
         selected = cast(list[tuple[Any, list[ipaddress.IPv4Network]]], selected_raw)
         if not selected:
             raise RuntimeError("No workload subnets match the approved local-prefix intent")
+        enforcement = compile_policies(self.local)
+        gateway_ids = {
+            resource_id(s)
+            for s in subnets
+            if s.metadata.name == self.routes._gateway_subnet_name(self.local)
+        }
+        if enforcement and len(gateway_ids) > 1:
+            raise RuntimeError("Enforced routing gateway subnet identity is ambiguous")
+        enforced_sources = (
+            resolve_sources(
+                enforcement,
+                {
+                    resource_id(s): tuple(str(p) for p in self.routes._effective_subnet_cidrs(s))
+                    for s in subnets
+                    if s.spec.network_id == network_id
+                    and not s.spec.ipv4_private_pools.use_network_pools
+                },
+                gateway_subnet_id=next(iter(gateway_ids), ""),
+            )
+            if enforcement
+            else {}
+        )
         targets = []
         selected_ids = {resource_id(subnet) for subnet, _ in selected}
         for subnet, _ in selected:
@@ -198,6 +219,7 @@ class Discovery:
         table_ids = sorted(
             set(active_tables)
             | retained_tables
+            | {record["table_id"] for record in self.journal.enforced_predecessors().values()}
             | {record["snapshot"]["parent_id"] for record in ledger.values()}
         )
         tables: dict[str, dict] = {}
@@ -232,9 +254,31 @@ class Discovery:
                 vpc.RouteServiceClient(sdk), vpc.ListRoutesRequest, identifier
             )
             if identifier in active_tables and (
-                self.force_copy or table.status.default or assigned - selected_ids
+                self.force_copy
+                or table.status.default
+                or assigned - selected_ids
+                or enforcement
+                and len(assigned) > 1
+                or any(
+                    prefix(snapshot_route.spec.destination.cidr)
+                    in policy.mandatory(tuple(assigned), enforced_sources)
+                    and resource_id(snapshot_route) not in ledger
+                    for snapshot_route in inventory[identifier]
+                )
             ):
                 conversions.extend(target for target in targets if target["table_id"] == identifier)
+        from .ha_to_ordinary_routes import observe as observe_ha_conversion
+
+        ha_conversion = observe_ha_conversion(
+            project, self.journal.gateway, self.journal.snapshot(), targets, inventory
+        )
+        if ha_conversion is not None:
+            selected_conversion = {t["subnet_id"]: t for t in conversions}
+            ha_ids = {t["workload_subnet_id"] for t in ha_conversion["targets"]}
+            selected_conversion.update(
+                {t["subnet_id"]: t for t in targets if t["subnet_id"] in ha_ids}
+            )
+            conversions = list(selected_conversion.values())
         from .ordinary_route_conversion import copy_inventory
         from .ordinary_route_plan import request_record
         from .vm_ha_cloud import clone_nebius_sdk_message
@@ -267,6 +311,11 @@ class Discovery:
                 "targets": sorted(targets, key=lambda item: item["subnet_id"]),
                 "gateways": {},
                 "excluded_prefixes": list(policy.excluded_prefixes),
+                **(
+                    {"enforced_sources": {k: list(v) for k, v in enforced_sources.items()}}
+                    if enforcement
+                    else {}
+                ),
             },
             "allocations": {},
             "routes": inventory,
@@ -276,6 +325,7 @@ class Discovery:
             "table_resources": table_resources,
             "subnet_resources": subnet_map,
             "policy": policy,
+            **({"ha_conversion": ha_conversion} if ha_conversion is not None else {}),
         }
 
     def observe(self, *, completed: bool = False) -> dict:

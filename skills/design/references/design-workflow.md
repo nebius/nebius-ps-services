@@ -156,17 +156,21 @@ Inspect all relevant prototype code. Only skip source discovery when no
 relevant implementation exists; then design from requirements and intended
 deployment or operating context without inventing local constraints.
 
-### 3. Use `research` For Missing Knowledge
+### 3. Research Every Requirement And Design Item
 
-List unfamiliar or version-sensitive facts before designing. When the
-`research` skill is installed and relevant, use it for topic,
-feature-requirement, architecture-pattern, product, standard, and technology
-due diligence. Bring the resulting evidence back into `design` for synthesis,
-option selection, and `/plan` creation.
+Always load and apply `research` for each design, at proportional depth. Inventory
+requirements, decisions and technical claims; ensure every item has an evidence
+assessment. Group related questions and reuse still-applicable sources instead
+of repeating fresh lookups per item. Validate product intent against accepted
+local evidence and acceptance methods; validate technical feasibility, versions,
+constraints and failure behavior against primary sources. Keep unsupported claims
+explicit. A simple design can use one bounded pass; a draft package uses the
+source-bound review ledger in document-extraction.md.
 
-Only do direct research inside `design` for tiny clarifications or when
-`research` is unavailable or not applicable. In that fallback path, research
-against current official documentation whenever available.
+If the skill is unavailable, disclose that limit, follow its source hierarchy
+with available tools and never claim the required consultation occurred. Do not
+install integrations or guess missing evidence. Research returns facts and
+uncertainty; design owns selected solutions and implementation readiness.
 
 Use official-source priority:
 
@@ -459,3 +463,30 @@ evidence to the spec owner. If that owner is unavailable, report the pending
 handoff rather than writing specs yourself or inventing a lifecycle gate.
 Preserve enclosing workflow gates. Commits, publishing, scaffolding workflows
 and live changes retain their existing owners and authorization boundaries.
+
+## Measured progress for every design
+
+Capture the start timestamp before intake and report total elapsed wall time at
+completion. Use real clock observations, not estimated duration. During work,
+report stage and current layer/item group, reviewed/total items when the denominator
+is known, open findings and elapsed HH:MM:SS. A text bar represents reviewed-item
+coverage, not readiness or time remaining. Before inventory is complete, show
+counts with an unknown denominator. Do not silently reset counts on scope changes.
+The private helper preserves omitted layer, count and finding fields on stage or
+resume updates. Use `--unknown-total` to explicitly clear a known denominator
+when scope discovery resumes; state the reason for any explicit count revision.
+
+Update at stage transitions, material findings and within 60 seconds while the
+agent controls execution. Use yielding calls where available; report delayed
+updates after non-yielding calls. Small designs need only start and completion.
+No terminal animation, background process or custom host widget is required.
+
+The extraction helper records observed wall-clock intervals and phase durations.
+Resumed wall time includes the interruption; explain long gaps and do not sum
+parallel durations. Pass the private helper's `progress --resume` after an
+interruption. The gap contributes to total wall time and `unobserved_seconds`,
+not a phase.
+Keep progress state in private scratch and the concise resume pointer in existing
+task state.
+Research and normal design can use the same helper when available; otherwise
+use observed timestamps and equivalent chat output without inventing precision.

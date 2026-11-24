@@ -1,6 +1,6 @@
 interface:
   display_name: "Design"
-  short_description: "Plan software changes and standalone portable HTML"
-  default_prompt: "Use $design to ground this software or portable HTML design in project evidence, apply relevant specialist decisions, compare justified alternatives and produce an actionable plan. Preserve canonical document ownership; implement only when explicitly requested and host mode permits."
+  short_description: "Research designs and extract draft project specs"
+  default_prompt: "Use $design to research every requirement and decision, report measured progress and produce a grounded plan; use --extract-once SOURCE [--project-root TARGET] for unattended documentation extraction and a final gap report. Preserve canonical document ownership; implement only when explicitly requested and host mode permits."
 policy:
   allow_implicit_invocation: true

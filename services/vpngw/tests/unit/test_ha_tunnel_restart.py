@@ -34,6 +34,7 @@ def restart_runtime(tmp_path, mode=DataPlaneMode.PASSIVE):
     )
     snapshots = SimpleNamespace(
         observe=lambda: snapshot,
+        observe_tunnel_authority=lambda: snapshot,
         last_snapshot=snapshot,
         providers=SimpleNamespace(apply_lock_operation_id=lambda: None),
     )
@@ -108,7 +109,9 @@ def test_origination_intent_recovery_requires_current_authority(tmp_path, condit
         "generation": {"local_generation_id": "b" * 64},
         "boot": {"guard_boot_id": "old-boot"},
     }
-    runtime.controller.snapshots.observe = lambda: replace(snapshot, **changes[condition])
+    runtime.controller.snapshots.observe_tunnel_authority = lambda: replace(
+        snapshot, **changes[condition]
+    )
     before = selector.path.read_bytes()
     runtime.step()
     assert selector.path.read_bytes() == before
@@ -275,7 +278,7 @@ def test_path_selection_defers_component_defect_to_recovery_owner(tmp_path, cond
         else (),
         static_ready=condition != "path-down",
     )
-    runtime.controller.snapshots.observe = lambda: replace(
+    runtime.controller.snapshots.observe_tunnel_authority = lambda: replace(
         snapshot, data_plane_mode=DataPlaneMode.ACTIVE, readiness=health
     )
     assert (runtime.authority() is not None) is (condition in {"healthy", "path-down"})

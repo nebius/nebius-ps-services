@@ -92,6 +92,13 @@ Use observable assertions. Avoid vague claims such as "the output is good" and
 brittle wording checks that reject equally correct phrasing. Include an edge or
 boundary case when it exercises a likely failure.
 
+Cases that require sibling skills declare `required_skills`, a list of at most
+32 unique nonempty sibling folder names. Supply the full set through
+`--catalog-dir`. The runner validates this declaration and returns `UNAVAILABLE`
+before launching either native arm when any required sibling is absent. It never
+installs missing skills or weakens assertions to make a single-target run pass.
+Catalog presence is a prerequisite check, not proof of loading or correct behavior.
+
 ## Baselines And Clean Runs
 
 Before editing an existing writable target, snapshot its current working bytes

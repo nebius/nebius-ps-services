@@ -688,6 +688,22 @@ class BGPConfig(BaseModel):
         return self
 
 
+class EnforcedRoutingConfig(BaseModel):
+    """Selected whole workload subnets must use this connection or drop."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_subnets: list[str] = Field(min_length=1)
+    destinations: list[str] = Field(min_length=1)
+
+    @field_validator("source_subnets", "destinations")
+    @classmethod
+    def validate_prefixes(cls, value: list[str]) -> list[str]:
+        from .enforced_routing import prefixes
+
+        return list(prefixes(value))
+
+
 class ConnectionConfig(BaseModel):
     """VPN connection to a peer."""
 
@@ -716,6 +732,17 @@ class ConnectionConfig(BaseModel):
     )
     bgp: BGPConfig = Field(..., description="BGP configuration")
     tunnels: list[TunnelConfig] = Field(..., min_length=1, description="Tunnel configurations")
+    enforced_routing: EnforcedRoutingConfig | None = Field(
+        default=None,
+        description="Source-selected destinations that must use this connection or drop",
+    )
+
+    @model_serializer(mode="wrap")
+    def serialize_connection(self, handler: SerializerFunctionWrapHandler) -> dict[str, t.Any]:
+        result = handler(self)
+        if self.enforced_routing is None:
+            result.pop("enforced_routing", None)
+        return t.cast(dict[str, t.Any], result)
 
     # Optional escape hatch for custom metadata
     extensions: dict[str, t.Any] = Field(
@@ -734,7 +761,7 @@ class ConnectionConfig(BaseModel):
         """Validate BGP config matches routing mode."""
         # In static mode, require remote_prefixes (connection-level or per-tunnel)
         if self.routing_mode == RoutingMode.STATIC:
-            if not self.remote_prefixes:
+            if not self.remote_prefixes and self.enforced_routing is None:
                 # Check if any tunnel has static_routes.remote_prefixes
                 has_tunnel_remote_prefixes = any(
                     t.static_routes and t.static_routes.remote_prefixes for t in self.tunnels
@@ -1006,6 +1033,7 @@ class VMHARuntimeBinding(BaseModel):
     nodes: tuple[VMHARuntimeNodeBinding, VMHARuntimeNodeBinding]
     route_targets: tuple[VMHARouteTarget, ...]
     migration_routes: tuple[VMHAMigrationRouteBinding, ...] = ()
+    enforced_sources: dict[str, tuple[str, ...]] = Field(default_factory=dict)
     route_runtime_id: str
     generation_id: str
     configuration_digest: str
@@ -1014,6 +1042,23 @@ class VMHARuntimeBinding(BaseModel):
     nebius_project_id: str | None = None
     nebius_service_account_id: str | None = None
     nebius_authorized_key_id: str | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_empty_enforced_sources(self, handler):
+        value = handler(self)
+        if not self.enforced_sources:
+            value.pop("enforced_sources", None)
+        return value
+
+    @model_validator(mode="after")
+    def validate_enforced_source_binding(self) -> VMHARuntimeBinding:
+        targets = {target.workload_subnet_id for target in self.route_targets}
+        if any(
+            not name or not ids or tuple(sorted(set(ids))) != ids or not set(ids) <= targets
+            for name, ids in self.enforced_sources.items()
+        ):
+            raise ValueError("VM-HA enforced sources must bind exact declared workload subnets")
+        return self
 
     @staticmethod
     def derive_route_runtime_id(
@@ -1310,6 +1355,13 @@ class VPNGatewayConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def validate_enforced_routing(self) -> VPNGatewayConfig:
+        from .enforced_routing import compile_policies
+
+        compile_policies(self.model_dump(mode="json"))
+        return self
+
+    @model_validator(mode="after")
     def validate_tunnel_probes(self) -> VPNGatewayConfig:
         tunnels = {
             tunnel.name: (connection, tunnel)
@@ -1333,6 +1385,8 @@ class VPNGatewayConfig(BaseModel):
                 or connection.remote_prefixes
                 or []
             )
+            if connection.enforced_routing is not None:
+                remote = [*remote, *connection.enforced_routing.destinations]
             if not any(
                 ipaddress.ip_address(probe.target_ip) in ipaddress.ip_network(p, strict=False)
                 for p in [tunnel.inner_cidr, *remote]

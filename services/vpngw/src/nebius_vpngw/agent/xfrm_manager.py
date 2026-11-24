@@ -88,7 +88,7 @@ class XFRMManager:
             else:
                 # Static mode: Install kernel routes for remote prefixes
                 if remote_prefixes:
-                    self._add_static_routes(name, remote_prefixes)
+                    self._add_static_routes(name, remote_prefixes, iface.get("route_tables"))
                 else:
                     print(f"[XFRM] WARNING: Static mode interface {name} has no remote_prefixes")
 
@@ -308,11 +308,25 @@ class XFRMManager:
         else:
             print(f"[XFRM] WARNING: Failed to add neighbor {remote_ip} on {name}: {result.stderr}")
 
-    def _add_static_routes(self, name: str, remote_prefixes: list[str]) -> None:
+    def _add_static_routes(
+        self, name: str, remote_prefixes: list[str], tables: dict[str, int] | None = None
+    ) -> None:
         """Add static routes for remote prefixes via XFRM interface."""
         for prefix in remote_prefixes:
             result = run(
-                ["ip", "route", "replace", prefix, "dev", name],
+                [
+                    "ip",
+                    "route",
+                    "replace",
+                    prefix,
+                    "dev",
+                    name,
+                    *(
+                        ["table", str(tables[prefix])]
+                        if tables and tables.get(prefix, 254) != 254
+                        else []
+                    ),
+                ],
                 capture_output=True,
                 text=True,
                 check=False,

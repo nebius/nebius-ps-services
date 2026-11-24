@@ -6251,7 +6251,7 @@ release qualification or a packet-loss causal fix.
 
 <!-- /FEATURE: FEAT-021 -->
 <!-- markdownlint-disable-next-line MD013 -->
-<!-- FEATURE: FEAT-022 reqs=REQ-024 status=ready delivery=implemented priority=P0 version=16 -->
+<!-- FEATURE: FEAT-022 reqs=REQ-024 status=ready delivery=implemented priority=P0 version=17 -->
 ### FEAT-022: Peer-only ingress and customer Security Group attachments
 
 #### Requirements Covered
@@ -6345,6 +6345,16 @@ the journal and inhibition, report the incomplete member and require the custome
 to correct connectivity through their cloud policy. After release has started,
 retain that checkpoint and resume exact release/verification without reinhibition. Never open rules or silently restore a
 wider attachment set. Existing guest ingress, fencing and credentials remain.
+
+The README firewall requirements distinguish public SSH and peer IKE/NAT-T
+from private TCP 9443 between both HA members. Use stateful, source-scoped rules;
+optional public ping needs inbound echo-request admission, with responses covered
+by connection tracking. Nebius exposes ICMP protocol filtering rather than an
+ICMP echo-type selector. Keep workload and outbound requirements explicit, BGP
+inside the tunnel, and native ESP protocol 50 separate from NAT-T. Explain the
+routing needed for private-IP management, selectors when using the VPN, and the combined priority
+semantics of all attached groups. Direct Compute NIC attachment edits bypass HA
+coordination; use YAML and the normal reviewed apply for attachment changes.
 
 #### Selected Option
 
@@ -6478,6 +6488,40 @@ use the actual status writer and execute the emitted guest preparation script;
 missing or stale guard evidence cannot be replaced by an invented boot_id alias.
 The original local reproducer fails before this correction and passes afterward.
 Clean final-artifact live replay remains pending.
+
+On 2026-11-23, an authorized Nebius VM-HA/GCP firewall campaign qualified the
+listed README rules on deployed version 0.6.10.dev6, exact artifact SHA-256
+70ece095b195354f6315d80b4746a0fb02e35c43dbee10453d40352ce64c614b.
+Coordinated attachment of the complete restrictive policy completed with the same
+observed serving owner before and after. Independent checks proved fresh allowed SSH and denied unlisted-source
+SSH on both members (positive reachability controls preceded filtering), public
+ping 0/3 before ICMP admission and 3/3 afterward, and advancing authenticated
+private TCP 9443 heartbeats in both directions. Four IPsec/BGP sessions were
+healthy at verification and workload pings passed 10/10 in each direction.
+
+A fresh establishment of one non-owner tunnel captured two UDP 500 packets,
+36 UDP 4500 packets and 32 ESP-in-UDP packets, followed by healthy four-session
+and bidirectional workload verification. Reauthentication alone used UDP 4500
+for IKE and ESP; its zero UDP 500 count was an observation gap, not a firewall
+failure. Public TCP 179/9443 had no allow rules and probes did not connect;
+those probes alone do not attribute denial to the cloud firewall rather than
+the host. Stateful allow-all egress and configured-local-prefix workload ingress
+were present. Native ESP, unsolicited peer-initiated admission, PMTU, stricter
+egress and the current repository artifact remain unqualified by this campaign.
+
+The first external-NIC-update attempt invalidated active ownership revision
+proof and triggered native fencing/failover. It is failed/intervened evidence,
+not a passing product attachment trial. Both members recovered; a normal apply
+with the exact deployed artifact restored original attachments and a healthy
+baseline before the coordinated qualification. No product source fix was made.
+Final coordinated apply restored the original YAML bytes and original default-group
+memberships. Independent checks confirmed unchanged VM/private/public IP identities,
+both healthy members, four established GCP tunnels and 10/10 workload pings in each
+direction. The two final test groups and all eleven remaining test rules were
+deleted; each returned NOT_FOUND and a complete group inventory found no task-owned
+groups from any trial. No capture processes remained. Real lifecycle journals were
+retained. The native failover's new owner remained active; no additional failback
+or uninterrupted-traffic claim is made.
 
 <!-- /FEATURE: FEAT-022 -->
 <!-- markdownlint-disable-next-line MD013 -->
@@ -11685,6 +11729,13 @@ names, node IDs, indexes and roles. Fresh stable absence must cover those names.
 Creation tokens remain logical targets; never query them as Compute IDs or use
 them to authorize package reservations or attachment effects. Preserve failed
 admission bytes and diagnostics through the normal retirement publisher.
+If the command already created its members, resolve its logical targets only
+through the retained created-package publication receipt. Match the original
+execution, approval, runtime scope, artifact, operation, member set and exact
+Compute/disk/node identities against immutable terminal lifecycle bindings.
+Reobserve every resolved Compute ID as absent twice before cancelling admission;
+never mark the unfinished apply successful or broaden cloud deletion authority.
+Missing or foreign publication evidence leaves the pending command intact.
 Retained and interrupted deployments preserve their existing carry-forward rules.
 
 Regression coverage includes accepted Start/Update and lost replies, unreachable
@@ -13948,6 +13999,374 @@ Generated local deployment, credential and trust files and exact candidate cache
 were removed while preserving operator profiles and the pre-existing release cache.
 
 <!-- /FEATURE: FEAT-047 -->
+
+<!-- FEATURE: FEAT-048 reqs=REQ-046 status=ready delivery=implemented priority=P0 version=6 -->
+### FEAT-048: Source-selected enforced routing through normal apply
+
+#### Requirements Covered
+
+- REQ-046: Declarative source-selected enforced VPN routing.
+
+#### Context Evidence
+
+The baseline schema forbade unknown connection fields and the wizard serialized
+schema-backed candidates. Baseline static and BGP observers assumed main-table
+routing; ordinary non-HA publication excluded /0 and rejected default-egress collisions. Existing private-table conversion, deployment admission, journals,
+underlay ownership and destination guards provide the lifecycle owners to extend.
+Nebius routing documents subnet-attached allocation routes, longest-prefix match
+and immutable same-network routing. Linux ip-rule supports source/destination and
+ingress selection but unsuccessful lookup can fall through. strongSwan documents
+outer-packet recursion with broad XFRM routes; FRR 10.5 route maps document set table.
+
+#### Design Details
+
+One shared typed compiler binds canonical sources, destinations, connection owner
+and generation. Resolve sources to complete actual workload subnet identities,
+not overlap matches against local_prefixes aggregates. Keep no-policy rendering
+and public command behavior unchanged. The new connection block owns listed
+destination placement; preserve unrelated ordinary routing. Explicit finite
+prefixes shared with remote_prefixes retain ordinary forwarding for unselected
+sources through a separate owned physical-ingress lookup tier after all selected
+terminal rules. Preserve more-specific main routes before the shared table lookup;
+suppress broader table routes so withdrawal cannot select an enforced default.
+Keep ordinary cloud intent and destination protection for those shared prefixes;
+selected targets still override ordinary route kind with persistent enforcement.
+A single schema-2 guest ledger records separate selected and ordinary obligations.
+Both selected and ordinary rules use stable prefix-length tiers, with the entire
+selected tier preceding ordinary lookups. Equal rule tuples are deduplicated;
+equal-length disjoint selectors may share a priority. Selected finite lookups
+suppress broader routes before their terminal rejection, so a withdrawn finite
+route cannot borrow the connection's default. Adding a more-specific destination
+does not reorder retained obligations or depend on insertion history. Retire these rules with the existing receipt-backed lifecycle. No new route writer
+or daemon is introduced, and gateway-originated control stays in main. Reject conflicting
+cross-connection ownership instead of introducing VRFs or independent BGP RIBs.
+
+Each opted-in connection uses an owned policy table for exact enforced routes.
+Forwarded source/destination/physical-ingress rules select it, followed by a
+terminal reject. A source-aware nftables guard independently restricts permitted
+output to the selected connection's eligible XFRM paths. Keep local/control and
+outer transport on the physical main path. Extend underlay checks for exact owned
+rules/tables without accepting foreign policy state. Static route writers consume
+the compiled destination union and never duplicate enforced defaults in main.
+Compose exact-prefix FRR table placement with current filters/local preferences;
+require real admitted peer routes and update every route observer/readiness proof.
+Use one canonical connection/preference import-map name in the renderer, installed
+policy fingerprint and passive readiness checker. A selected backup path keeps
+its exact enforced map; stale bindings still require fenced materialization.
+Recognize native BGP nexthop IDs only as bounded unsigned integer metadata while
+requiring the same resolved single gateway, device, table, protocol and XFRM
+identity. Reject multipath and unrecognized route attributes. Retire these routes
+by their observed nexthop ID. Across mode or tunnel-path changes, retain a native
+route only when its full path and protocol are authorized by the desired policy,
+even when the destination and table are unchanged. Delete the exact obsolete
+route, then verify all remaining routes before advancing the guest ownership
+ledger. Interrupted deletion retains predecessor authority. The installed
+iproute2 6.1 route JSON emits this
+field, and FRR 10.7 documents native nexthop groups; see
+[iproute2 route output](https://github.com/iproute2/iproute2/blob/v6.1.0/ip/iproute.c)
+and [FRR Zebra](https://docs.frrouting.org/en/stable-10.7/zebra.html).
+
+Cloud routes represent persistent configured enforcement, not dynamic BGP route
+availability. Admission verifies the exact prepared runtime and guards before
+subnet cutover. Prepare a private complete table, verify preserved routes and
+explicit default displacement, then compare-and-set selected attachments. Journal
+predecessor identities and revisions. When creating an allocation-next-hop route
+advances that allocation revision, a typed parent successor admits only that leaf
+change after exact child request/route readback, complete source/candidate checks
+and a stable parent reread. This also handles a lost creation response without
+requiring a completed receipt before settling its original request. Activation
+resume invokes the same typed verifier before rebuilding the runtime binding
+when interrupted preparation changed only the allocation revision. Admit the
+final creation's revision before the next parent effect. Replaying settled child
+requests still validates their hashes, with full footprint checks at entry and
+exit rather than after every unchanged request. Resume excludes exact current-
+operation cutover-created routes from migration inputs, keeping the staged payload
+identical when completed activation effects are skipped. Existing migration routes
+retain their normal authority checks. Identity, ownership and unrelated drift
+remain strict. At the existing stopped-writer cutover barrier, validate the
+installed predecessor and staged successor bindings against the same cluster,
+allocation and workload subnet identities. Retire only local ledger entries for
+replaced table targets; preserve unchanged targets and reject foreign ledger rows
+or pending effects. The table transaction retains the old cloud route snapshots
+for cleanup, and the successor runtime discovers copied routes through their
+new exact cloud labels. The ledger update is atomic and idempotent. Retain
+source/destination/owner/generation obligations through interrupted edits until
+cloud transitions commit. Removal and
+destroy restore only proven predecessors; drift blocks unsafe restoration. Reuse
+ordinary and HA routing/repair/replacement owners and existing fencing rules.
+After verified destruction, a new provisioning lifecycle may bind a fresh enforced
+plan only when it exactly matches its approved observation, workload target digest
+and observed targets, project, gateway and new cluster, with no old allocation.
+Retained cutover, preparation and lock receipts remain inadmissible as fresh intent.
+
+Wizard No/Enter omits the block, including null. Yes collects canonical IPv4 lists,
+checks local coverage and summarizes peer prerequisites and failure behavior.
+Cloud identity validation belongs to apply. The template documents an inactive
+example. All product enforcement operations remain part of normal apply.
+
+#### Selected Option
+
+Extend existing Python, Linux policy routing, nftables, FRR and strongSwan owners.
+Use exact BGP prefixes in the first version, retaining existing import semantics.
+
+#### Alternatives Considered
+
+Reject destination-only connection configuration because it cannot select local
+subnets; reject a boolean full-tunnel switch because it cannot express multiple
+prefixes. Reject main-table default replacement, fail-open behavior, independent
+controllers, remote-side NAT product expansion and synthesized BGP defaults.
+
+#### Implementation Boundaries
+
+Configuration schema/compiler, wizard/template, loader/digests, route planning,
+private-table transitions, guest route writers/observers/guards, underlay admission,
+ordinary and VM-HA lifecycle/status and scoped destroy. Remote NAT/Internet service
+is customer owned; live fixtures must not patch product-owned routing to pass.
+
+#### Test-First Success Criteria
+
+- Enforced schema and wizard cases fail on the old implementation and pass with
+  multiple sources/destinations, default omission and static-only route intent.
+- Native selected packets use the exact connection while no-route/path loss drops;
+  gateway control and unselected traffic retain their declared paths.
+- Fault-injected cutover and retirement retain predecessor protection and resume.
+
+#### Validation Plan
+
+Run focused tests, make check and relevant integration tests; apply align and code
+review, repair findings and freeze the deployment artifact. Qualify actual kernel,
+FRR and strongSwan versions before cloud activation. Separate mocked from native
+and live evidence. Verify two-site BGP-HA and Static-HA with wizard-generated YAML.
+
+#### Test Plan
+
+Cover source/destination cross products, /0 separately, source controls, conflicting
+routes, exact BGP admission/withdrawal, static selection, restart, stale ownership,
+apply idempotence/interruption, upgrades, policy edits/removal and fenced VM failover.
+Use controlled receivers and automated customer-firewall fixtures for Internet
+NAT/default advertisement. Run no-policy ordinary regressions locally.
+
+#### Evaluation Plan
+
+Read back cloud routes/attachments, guest rules/guards, tunnel/BGP state and packet
+evidence independently. Freeze fixture/product boundaries per trial; causal repairs
+require known-good replay. Preserve failed trials. Clean only campaign-owned assets.
+
+#### Rollout And Rollback
+
+Normal apply prepares guest protection before activating subnet steering. Persist
+journals and resume exact interrupted transitions. Explicit policy retirement
+restores a proven predecessor; tunnel failure never authorizes direct-egress
+restoration. Do not downgrade an actively enforced deployment to an unaware runtime.
+
+#### Done Definition
+
+Implemented coherent configuration-to-dataplane lifecycle, aligned public docs,
+passing focused/regression/native checks, resolved review findings and both live
+HA campaigns with sanitized evidence and campaign-owned resource cleanup.
+
+#### Implementation Evidence
+
+Implemented the shared enforced-routing compiler, schema and wizard; native
+source-qualified policy routing and persistent packet guards; static/BGP table
+placement and observers; ordinary and HA private-table cutover with predecessor
+receipts; guarded ownership transfer in both conversion directions; exact
+restoration on policy removal and destroy. No-policy command behavior is retained.
+The main boundaries are enforced_routing.py, agent/enforced_routing.py,
+deploy/ha_enforced_*.py, deploy/ha_to_ordinary_routes.py, enforced_handoff.py,
+and the existing ordinary route/lifecycle owners.
+
+The HA dry-run impact identifies private route-table preparation and workload
+subnet attachment changes as resource creation. Completed historical cutovers
+do not become new creation work in later plans.
+
+The installed FRR observer compares independent statement ordering within each
+clause while preserving clause sequence, actions, duplicate detection, filters
+and neighbor bindings. HA route health validates each source subnet's committed
+policy rather than requiring identical selected and unselected route sets.
+Completed transfer history remains retained and is accepted only through the
+canonical receipt checks; unfinished or foreign authority still blocks cutover.
+
+Activation resumes a configuration-complete forwarding phase under its existing
+permit rather than restarting healthy services. Own-lock continuation retains
+its narrower permit. Owner verification tracks semantic progress with a
+two-minute stall window and a fixed five-minute limit; timestamps cannot extend
+it. Existing fences, failed-repair history and the shared three-attempt allowance
+remain intact. Verified destruction retires command admission against exact
+retained package-publication and member identities.
+
+Static candidate preparation restores and verifies destination protection under
+the existing passive fence before loading tunnels. The final read-only native
+proof has its own five-second budget after fresh ownership validation. Tunnel
+selection uses the canonical fresh authority projection, retaining cloud ownership,
+local readiness, guard, writer inhibitions, transfer lineage, boot, generation,
+incarnation and peer freshness. It omits only unused reconciled/established route
+contexts and cannot publish or replace the main controller snapshot. Failed reads
+remain unknown; no older authority is reused.
+
+Preserving Static recovery durably enters verification and takes the first fresh
+post-activation native/inner-peer sample immediately. A later pass supplies the
+second confirmation. UNKNOWN cannot count, DOWN retains rollback and late evidence
+cannot renew the fixed window. The 29-second mutation and verification limits,
+admission spacing, writer exclusion, retry cap and BGP/manual sequences remain
+unchanged. Full controller snapshots collect both cloud route contexts before
+sampling local readiness, preventing obsolete health from surviving slow cloud
+reads. Strict Static APIPA rejection remains; no cache, exception, extra probe or
+extended deadline is introduced.
+
+Retained-VM repair passes its confirmed deployment manager into canonical enforced
+table preparation and cutover. After binding the exact current repair lifecycle,
+it installs that deployment's spec and local-prefix observation scope. The same
+receipt, fresh-state and stopped-writer checks remain authoritative. A pending
+table transaction still requires its original source/destination declaration.
+
+Static native readiness uses the union of ordinary and enforced destinations,
+while ordinary cloud publication retains its filtered manifest. This lets an
+enforcement-only connection prepare its tunnels under the existing passive fence.
+Cold-standby admission requires complete suspension and absence of every required
+Static path; partial installation is not cold, and an installed default cannot
+substitute for an explicitly required finite prefix.
+
+Native guest retirement shares the canonical full route ownership predicate with
+admission. A destination shared by old and new policies does not preserve an
+obsolete routing mode or tunnel path. Exact deletion supplies boot protocol and
+zero metric when Linux omits those default fields, preserving a coexisting
+successor route. Remaining routes must be admitted by the desired policy before
+the guest ownership ledger advances; interrupted deletion retains predecessor
+authority for safe replay. Foreign routes remain rejected.
+
+#### Verification Evidence
+
+The requested feature campaign uses actual `create-config` wizard output in two
+isolated Nebius projects. Default No/Enter omits enforcement; enabled cases select
+two workload subnets and two destinations. Native observations and workload probes
+are independent of the product command's exit status. Failed trials and recovery
+remain retained evidence; supported repair establishes a baseline and does not
+substitute for a clean normal-apply trial.
+
+The final frozen development candidate passes 8,797 unit tests, including the
+enforced-only cold-Static regression, six
+readiness-order regressions and two repair-handoff regressions. Focused checks
+include 477 controller/routing cases and 312 composed/readiness cases, plus the
+earlier 112 repair/lifecycle checks. Ruff, type checking, changed-file formatting,
+Markdown and whitespace checks pass. All 28 selected native Linux cases pass setup,
+execution and teardown with no skipped or unrun case; their owned containers and
+images are removed. The earlier CLI/frozen-binary lane passes 35 tests. Subsequent
+changes affect the shared controller/tunnel runtime and canonical repair adapter,
+and are covered
+by the final unit, native and live lanes. Incremental alignment, nested code review
+and security review validate the source changes; unresolved live observations
+remain explicit below.
+
+Normal Static-to-BGP apply on candidate 26 exposed obsolete Static routes retained
+solely because their destination and table matched the new policy. Retirement
+then discarded their ownership records, and subsequent verification correctly
+blocked activation. Four mode/path and failed-deletion regression cases fail the
+old code and pass the repair. A real-kernel counterfactual reproduces the same
+unowned-route failure; the corrected native case passes both mode changes with
+coexisting routes, exact nexthop/protocol/metric deletion and main-route controls.
+The supported repair of the failed prototype remains recovery evidence only.
+A read-only post-apply observer initially compared scopes without computed priorities
+and integer table IDs against their stored forms. The observer alone was corrected;
+the original false-negative record is retained, and fresh native/cloud observations
+confirm the successful apply before fault testing continues. No product state was
+changed by this observer repair.
+Candidate 27 then passes clean normal-apply conversions and the full Internet
+campaigns. Independent native observations confirm both Static boot routes before
+the BGP conversion, only BGP routes afterward, and an exact desired ownership
+ledger on each active owner at baseline and after both HA directions. No guest
+routes, ownership ledgers or services are manually patched
+to satisfy product-owned acceptance criteria.
+
+Private Static-HA qualification on candidate 22 passes the baseline, remote VM
+failover and failback. Each stage passes all 18 cross-site workload flows, eight
+gateway Internet controls, installed policy verification on all four gateways,
+and independent single-owner/both-running checks. The unselected subnet retains
+ordinary routing to finite prefixes shared with enforced intent. The previously
+failing alternate-peer condition now completes with two fresh backup confirmations.
+A cold standby's destination-protection table is independently absent before
+promotion and present afterward, restored by the product while forwarding is fenced.
+Candidate 27 additionally corrects native retirement across mode and tunnel-path
+changes. The final kernel cases cover those changes, and clean normal Static and
+BGP conversions followed by Internet fault and HA trials exercise the affected
+routing boundary. Earlier private-flow results retain their candidate-22 scope.
+
+Candidate 27 passes Static and BGP Internet egress through the customer firewall.
+Each healthy stage checks eight workload/destination combinations: both selected
+sources use remote egress for both destinations, while the unselected workload and
+firewall control use their own egress. Eight gateway-originated Internet probes
+also retain their own egress. Both installed policies and exact cloud ownership
+are independently verified after each normal VM failover and failback. Static
+customer return routes follow the newly active tunnel using a fixture-owned
+CHILD-up hook configured before the trial, with no manual route changes during HA.
+
+Static IPsec loss drops selected traffic and restoration recovers remote egress.
+All six BGP fault/restoration stages pass the workload and gateway oracles:
+finite-prefix withdrawal/restoration, both-prefix withdrawal/restoration and
+IPsec stop/start. A withdrawn finite prefix cannot borrow the remaining VPN
+default. No failed-path case falls back to direct egress; unselected and gateway
+controls continue to pass.
+
+A separate BGP failback trial completed the product transfer and native-route
+checks, but selected-source Internet traffic failed. The customer fixture had
+retained Static return routes to the former owner while BGP correctly selected
+the new owner. Its cleanup compared named route protocol output with a numeric
+ID and missed the old routes; FRR preferred those Static routes over BGP.
+The fixture owner now stops its route writers, inventories numeric protocols,
+removes only exact owned Static routes and verifies their absence before restart.
+This repair is outside the product source. The failed trial remains retained;
+a separate clean BGP trial repeats all six fault stages and both normal HA
+transfers. Independent checks require each of the three customer return prefixes
+to have only its BGP route through the active member, alongside workload and
+gateway traffic checks. Recovery alone is not used as qualification.
+
+Earlier normal-apply trials qualify package/configuration upgrades, source
+narrowing, unchanged reapply and pure block removal. The pure-removal wizard
+candidate changes only the block; customer Internet advertisements are withdrawn
+before apply. Normal apply restores the recorded workload defaults and retires
+native enforcement while the original IPsec connection remains established.
+Ordinary BGP imports remain effective after removal: direct egress is not promised
+while an unrestricted peer still advertises Internet prefixes. Candidate 26 also
+passes normal disable/re-enable from an independently verified empty-policy
+baseline after supported recovery and normal transfers. A fenced standby may
+retain prior drop-only claims until it becomes owner and verifies route
+reconciliation. Both no-policy transfer directions pass direct-egress controls;
+both guests then independently show zero retained scopes, rules and policy routes.
+
+After the additional Static diagnostic, final product destruction runs from the
+verified Static configuration. It restores all three workload defaults on each side,
+retires pending command admission while preserving validated completed history,
+and independently proves gateway VM/disk absence.
+Fixture cleanup verifies every admitted campaign-owned resource absent and all
+unrelated resources and original VPC networks preserved. Captured VM network-interface records bind nine automatically removed IP
+allocations to the exact deleted fixture VMs. The original inventory incorrectly
+classified these dependencies as unrelated; the corrected classification is
+verified afresh without additional cloud mutation. Compute owns this lifecycle
+([networking documentation](https://docs.nebius.com/compute/virtual-machines/network#public-ip-addresses)).
+Earlier quota recovery is separately rechecked for absence. No cleanup uses resource-name prefixes as
+ownership authority.
+
+This is the requested BGP-HA/Static-HA feature qualification. It does not claim
+REQ-034's separate authentic stable-release package/upgrade matrix or additional
+live SingleVM modes. The immutable development artifact and exact cleanup counts
+are recorded in the campaign's protected evidence bundle.
+
+One original uninstrumented Static failover returned a generic safe CLI failure
+at cutover. The pair autonomously restored healthy redundancy; traced transfers
+in both directions subsequently succeeded without a product repair. Clean
+qualification reruns do not establish the cause of that earlier error. The exact
+original exception is unavailable. One additional diagnostic repeats the exact
+IPsec stop/start sequence followed immediately by traced failover; it also
+completes without reproducing the error and passes independent traffic and
+ownership checks. This observation remains unresolved, and REQ-046 remains
+active rather than claiming complete delivery verification.
+
+Frozen wheel: `nebius_vpngw-0.8.0.dev27-py3-none-any.whl`; SHA-256
+`f6037a0af8ea0bdea4f153aa69e9a7e15b91b867667616cae605cac357e5e9ba`. Final fixture cleanup independently verifies 68
+resources absent in the first project and 61 in the second, in addition to
+product destruction and twenty separately verified quota-recovery removals.
+
+<!-- /FEATURE: FEAT-048 -->
 
 <!-- maintain-project-specs:design:end -->
 <!-- markdownlint-enable MD001 MD024 -->
